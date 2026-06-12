@@ -112,7 +112,7 @@ test("apply dispatches to registered handler", async () => {
   assert.deepEqual(body.outputs, { bucket: "x" });
 });
 
-test("GET /v1/runtime-handlers lists registered handlers with auth", async () => {
+test("GET /internal/v1/runtime-handlers lists registered handlers with auth", async () => {
   const registry = new RuntimeHandlerRegistry();
   registry.register({
     provider: "memory",
@@ -132,10 +132,10 @@ test("GET /v1/runtime-handlers lists registered handlers with auth", async () =>
   });
   const app = createRuntimeAgentApp({ registry, token: "tok" });
 
-  const unauthorized = await app.request("/v1/runtime-handlers");
+  const unauthorized = await app.request("/internal/v1/runtime-handlers");
   assert.equal(unauthorized.status, 401);
 
-  const ok = await app.request("/v1/runtime-handlers", {
+  const ok = await app.request("/internal/v1/runtime-handlers", {
     headers: { authorization: "Bearer tok" },
   });
   assert.equal(ok.status, 200);
@@ -149,10 +149,10 @@ test("GET /v1/runtime-handlers lists registered handlers with auth", async () =>
   );
 });
 
-test("/v1/lifecycle/verify rejects missing auth", async () => {
+test("/internal/v1/lifecycle/verify rejects missing auth", async () => {
   const registry = new RuntimeHandlerRegistry();
   const app = createRuntimeAgentApp({ registry, token: "tok" });
-  const res = await app.request("/v1/lifecycle/verify", {
+  const res = await app.request("/internal/v1/lifecycle/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",
@@ -160,7 +160,7 @@ test("/v1/lifecycle/verify rejects missing auth", async () => {
   assert.equal(res.status, 401);
 });
 
-test("/v1/lifecycle/verify reports `no verify hook` for handlers without verify",
+test("/internal/v1/lifecycle/verify reports `no verify hook` for handlers without verify",
   async () => {
     const registry = new RuntimeHandlerRegistry();
     registry.register({
@@ -172,7 +172,7 @@ test("/v1/lifecycle/verify reports `no verify hook` for handlers without verify"
       describe: () => Promise.resolve({ status: "running" as const }),
     });
     const app = createRuntimeAgentApp({ registry, token: "tok" });
-    const res = await app.request("/v1/lifecycle/verify", {
+    const res = await app.request("/internal/v1/lifecycle/verify", {
       method: "POST",
       headers: authHeaders("tok"),
       body: "{}",
@@ -189,7 +189,7 @@ test("/v1/lifecycle/verify reports `no verify hook` for handlers without verify"
   },
 );
 
-test("/v1/lifecycle/verify aggregates ok + fail handlers", async () => {
+test("/internal/v1/lifecycle/verify aggregates ok + fail handlers", async () => {
   const registry = new RuntimeHandlerRegistry();
   registry.register({
     provider: "good",
@@ -215,7 +215,7 @@ test("/v1/lifecycle/verify aggregates ok + fail handlers", async () => {
       }),
   });
   const app = createRuntimeAgentApp({ registry, token: "tok" });
-  const res = await app.request("/v1/lifecycle/verify", {
+  const res = await app.request("/internal/v1/lifecycle/verify", {
     method: "POST",
     headers: authHeaders("tok"),
     body: "{}",
@@ -240,7 +240,7 @@ test("/v1/lifecycle/verify aggregates ok + fail handlers", async () => {
   assert.equal(byProvider.bad.code, "auth_failed");
 });
 
-test("/v1/lifecycle/verify catches thrown errors as network_error",
+test("/internal/v1/lifecycle/verify catches thrown errors as network_error",
   async () => {
     const registry = new RuntimeHandlerRegistry();
     registry.register({
@@ -253,7 +253,7 @@ test("/v1/lifecycle/verify catches thrown errors as network_error",
       verify: () => Promise.reject(new Error("connection refused")),
     });
     const app = createRuntimeAgentApp({ registry, token: "tok" });
-    const res = await app.request("/v1/lifecycle/verify", {
+    const res = await app.request("/internal/v1/lifecycle/verify", {
       method: "POST",
       headers: authHeaders("tok"),
       body: "{}",
@@ -270,7 +270,7 @@ test("/v1/lifecycle/verify catches thrown errors as network_error",
   },
 );
 
-test("/v1/lifecycle/verify filters by shape + provider when supplied",
+test("/internal/v1/lifecycle/verify filters by shape + provider when supplied",
   async () => {
     const registry = new RuntimeHandlerRegistry();
     registry.register({
@@ -292,7 +292,7 @@ test("/v1/lifecycle/verify filters by shape + provider when supplied",
       verify: () => Promise.resolve({ ok: true }),
     });
     const app = createRuntimeAgentApp({ registry, token: "tok" });
-    const res = await app.request("/v1/lifecycle/verify", {
+    const res = await app.request("/internal/v1/lifecycle/verify", {
       method: "POST",
       headers: authHeaders("tok"),
       body: JSON.stringify({ provider: "alt" }),

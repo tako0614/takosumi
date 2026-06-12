@@ -32,7 +32,7 @@ export interface RuntimeHandlerContext {
 
 /**
  * Result of a `RuntimeHandler.verify(...)` smoke test against the provider's API.
- * Operators run this through `POST /v1/lifecycle/verify` (see
+ * Operators run this through `POST /internal/v1/lifecycle/verify` (see
  * `packages/runtime-agent/src/server.ts`) before doing a real `apply`, to
  * catch missing credentials / wrong region / firewall errors early.
  */

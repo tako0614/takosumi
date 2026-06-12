@@ -142,7 +142,7 @@ export class DeploymentQuery {
 
   /**
    * Reads a single Deployment ledger record (spec §21 / §30 `GET
-   * /api/deployments/:id`). A missing id is a typed 404.
+   * /internal/v1/deployments/:id`). A missing id is a typed 404.
    */
   async getDeployment(id: string): Promise<Deployment> {
     requireNonEmptyString(id, "deploymentId");

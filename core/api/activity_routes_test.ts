@@ -1,7 +1,7 @@
 /**
  * Activity HTTP route tests (Core Specification §27 audit_events / §34 Activity).
  *
- *   GET /api/spaces/:spaceId/activity   -> the Space's audit trail, newest first
+ *   GET /internal/v1/spaces/:spaceId/activity   -> the Space's audit trail, newest first
  *
  * Drives the full public surface over an in-memory store. Real flows emit
  * Activity events (Installation created, plan created), and the listing shows
@@ -74,7 +74,7 @@ async function createSpace(
   app: Harness["app"],
   handle: string,
 ): Promise<string> {
-  const res = await app.request("/api/spaces", {
+  const res = await app.request("/internal/v1/spaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -95,7 +95,7 @@ async function createInstallation(
   spaceId: string,
   name: string,
 ): Promise<string> {
-  const sourceRes = await app.request("/api/sources", {
+  const sourceRes = await app.request("/internal/v1/sources", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -122,7 +122,7 @@ async function createInstallation(
   };
   await store.putInstallConfig(config);
 
-  const installRes = await app.request(`/api/spaces/${spaceId}/installations`, {
+  const installRes = await app.request(`/internal/v1/spaces/${spaceId}/installations`, {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -175,7 +175,7 @@ async function listActivity(
   spaceId: string,
   query = "",
 ): Promise<Response> {
-  return await app.request(`/api/spaces/${spaceId}/activity${query}`, {
+  return await app.request(`/internal/v1/spaces/${spaceId}/activity${query}`, {
     headers: headers(),
   });
 }
@@ -190,7 +190,7 @@ test("real flows emit Activity events; listing is space-scoped and newest-first"
 
   // Planning emits run.plan_created.
   const planRes = await app.request(
-    `/api/installations/${installationId}/plan`,
+    `/internal/v1/installations/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(201);

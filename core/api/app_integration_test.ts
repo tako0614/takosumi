@@ -36,10 +36,10 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     ["POST", "/api/public/v1/capabilities"],
     ["POST", "/api/public/v1/deployments"],
     ["POST", "/v1/deployments"],
-    ["POST", "/v1/plan-runs"],
-    ["POST", "/v1/apply-runs"],
-    ["GET", "/v1/runner-profiles"],
-    ["GET", "/v1/installations/inst_abcdef12/deployment-outputs"],
+    ["POST", "/internal/v1/plan-runs"],
+    ["POST", "/internal/v1/apply-runs"],
+    ["GET", "/internal/v1/runner-profiles"],
+    ["GET", "/internal/v1/installations/inst_abcdef12/deployment-outputs"],
   ] as const) {
     const response = await app.request(path, { method });
     assert.equal(response.status, 404, path);
@@ -49,11 +49,15 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   const endpointPaths = capabilities.endpoints.map(
     (endpoint: { path: string }) => endpoint.path,
   );
-  assert.equal(endpointPaths.includes("/v1/plan-runs"), false);
-  assert.equal(endpointPaths.includes("/v1/apply-runs"), false);
-  assert.equal(endpointPaths.includes("/v1/runner-profiles"), false);
+  // The internal ledger seam (plan-runs / apply-runs / runner-profiles /
+  // deployment-outputs) must never surface in the public inventory.
+  assert.equal(endpointPaths.includes("/internal/v1/plan-runs"), false);
+  assert.equal(endpointPaths.includes("/internal/v1/apply-runs"), false);
+  assert.equal(endpointPaths.includes("/internal/v1/runner-profiles"), false);
   assert.equal(
-    endpointPaths.includes("/v1/installations/:installationId/deployments"),
+    endpointPaths.includes(
+      "/internal/v1/installations/:installationId/deployment-outputs",
+    ),
     false,
   );
   assert.equal(
@@ -63,28 +67,22 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(endpointPaths.includes("/v1/deployments"), false);
 
   const openapi = await (await app.request("/openapi.json")).json();
-  assert.equal(openapi.paths["/v1/plan-runs"], undefined);
-  assert.equal(openapi.paths["/v1/apply-runs"], undefined);
-  assert.equal(openapi.paths["/v1/runner-profiles"], undefined);
-  assert.equal(openapi.paths["/v1/installations/{installationId}"], undefined);
+  assert.equal(openapi.paths["/internal/v1/plan-runs"], undefined);
+  assert.equal(openapi.paths["/internal/v1/apply-runs"], undefined);
+  assert.equal(openapi.paths["/internal/v1/runner-profiles"], undefined);
   assert.equal(
-    openapi.paths["/v1/installations/{installationId}/deployments"],
-    undefined,
-  );
-  assert.equal(openapi.paths["/v1/installations"], undefined);
-  assert.equal(
-    openapi.paths["/v1/installations/:installationId/deployments"],
+    openapi.paths["/internal/v1/installations/{installationId}/deployment-outputs"],
     undefined,
   );
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
   assert.equal(openapi.paths["/v1/deployments"], undefined);
-  assert.equal(openapi.paths["/v1/artifacts/kinds"], undefined);
+  assert.equal(openapi.paths["/internal/v1/artifacts/kinds"], undefined);
   assert.equal(
-    openapi.paths["/api/operator-connection-defaults"]?.get?.operationId,
+    openapi.paths["/internal/v1/operator-connection-defaults"]?.get?.operationId,
     "listOperatorConnectionDefaults",
   );
   assert.equal(
-    openapi.paths["/api/operator-connection-defaults"]?.put?.operationId,
+    openapi.paths["/internal/v1/operator-connection-defaults"]?.put?.operationId,
     "putOperatorConnectionDefault",
   );
   assert.equal(

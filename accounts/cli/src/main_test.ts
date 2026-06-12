@@ -6676,7 +6676,7 @@ test("connections set-cloudflare-token reads token file and never prints the sec
     const request = new Request(input, init);
     const body = await request.clone().text();
     requests.push({ request, body });
-    if (request.url.endsWith("/api/operator-connection-defaults")) {
+    if (request.url.endsWith("/internal/v1/operator-connection-defaults")) {
       const payload = JSON.parse(body);
       return Response.json({
         operatorConnectionDefault: {
@@ -6726,7 +6726,7 @@ test("connections set-cloudflare-token reads token file and never prints the sec
     expect(stderr).toEqual([]);
     expect(requests).toHaveLength(2);
     expect(requests[0]?.request.url).toEqual(
-      "https://app.takosumi.test/api/connections/cloudflare/token",
+      "https://app.takosumi.test/internal/v1/connections/cloudflare/token",
     );
     expect(requests[0]?.request.headers.get("authorization")).toEqual(
       "Bearer operator-bearer",
@@ -6900,7 +6900,7 @@ test("connections defaults set calls the operator defaults endpoint", async () =
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.request.url).toEqual(
-      "https://app.takosumi.test/api/operator-connection-defaults",
+      "https://app.takosumi.test/internal/v1/operator-connection-defaults",
     );
     expect(JSON.parse(requests[0]!.body)).toEqual({
       provider: "cloudflare",

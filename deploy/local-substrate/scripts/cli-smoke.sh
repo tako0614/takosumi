@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Exercises the canonical Deploy Control HTTP surface.
 #
-#   1. GET  /v1/runner-profiles.
-#   2. POST /v1/plan-runs.
-#   3. POST /v1/apply-runs.
+#   1. GET  /internal/v1/runner-profiles.
+#   2. POST /internal/v1/plan-runs.
+#   3. POST /internal/v1/apply-runs.
 #   4. GET  /v1/installations/{id}.
 #   5. GET  /v1/installations/{id}/deployments.
 #
@@ -76,10 +76,10 @@ require_code() {
 	fi
 }
 
-PROFILES_RESPONSE="$(get_json "/v1/runner-profiles")"
+PROFILES_RESPONSE="$(get_json "/internal/v1/runner-profiles")"
 require_code "runner profiles" "$PROFILES_RESPONSE" "200"
 
-PLAN_RESPONSE="$(post_json "/v1/plan-runs" "$PLAN_REQUEST")"
+PLAN_RESPONSE="$(post_json "/internal/v1/plan-runs" "$PLAN_REQUEST")"
 require_code "plan run create" "$PLAN_RESPONSE" "201"
 PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
 PLAN_ID="$(printf '%s' "$PLAN_BODY" | python3 -c '
@@ -105,7 +105,7 @@ if [[ -z "$PLAN_DIGEST" ]]; then
 fi
 
 APPLY_REQUEST="{\"planRunId\":\"$PLAN_ID\",\"expected\":{\"planDigest\":\"$PLAN_DIGEST\"}}"
-APPLY_RESPONSE="$(post_json "/v1/apply-runs" "$APPLY_REQUEST")"
+APPLY_RESPONSE="$(post_json "/internal/v1/apply-runs" "$APPLY_REQUEST")"
 require_code "apply run create" "$APPLY_RESPONSE" "201"
 APPLY_BODY="$(response_body "$APPLY_RESPONSE")"
 INSTALLATION_ID="$(printf '%s' "$APPLY_BODY" | python3 -c '

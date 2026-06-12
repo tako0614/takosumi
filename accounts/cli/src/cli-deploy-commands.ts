@@ -3,7 +3,7 @@
  *
  * Unlike the dashboard, the CLI can read the operator's local working
  * directory: it tars the OpenTofu Capsule, uploads it to the control plane as an
- * upload SourceSnapshot, then asks `/api/deploy` to resolve/create the
+ * upload SourceSnapshot, then asks `/internal/v1/deploy` to resolve/create the
  * Installation and plan the snapshot. The heavy work (Capsule Gate / plan /
  * apply) stays server-side in the runner; the CLI only bundles, uploads, and
  * follows the resulting Run.
@@ -14,6 +14,9 @@ import { spawn } from "node:child_process";
 import { optionalStringOption, stringOption } from "./cli-options.ts";
 import { parseJson } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
+import { DEPLOY_PATH } from "takosumi-contract/deploy";
+import { SPACE_UPLOADS_PATH } from "takosumi-contract/sources";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 
 interface UploadSnapshot {
   readonly id: string;
@@ -61,7 +64,7 @@ export async function runDeploy(
   const uploadBody = (await requestDeployControl({
     options: flags,
     method: "POST",
-    path: `/api/spaces/${encodeURIComponent(spaceId)}/uploads`,
+    path: SPACE_UPLOADS_PATH(spaceId),
     binary: archive,
   })) as { snapshot: UploadSnapshot };
   const snapshot = uploadBody.snapshot;
@@ -70,7 +73,7 @@ export async function runDeploy(
   const deploy = (await requestDeployControl({
     options: flags,
     method: "POST",
-    path: "/api/deploy",
+    path: DEPLOY_PATH,
     body: {
       spaceId,
       name,
@@ -98,7 +101,7 @@ export async function runDeployLogs(args: string[], io: CliIo): Promise<number> 
   const flags = parseFlags(rest);
   const body = (await requestDeployControl({
     options: flags,
-    path: `/api/runs/${encodeURIComponent(runId)}/logs`,
+    path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
   })) as { diagnostics?: { severity: string; message: string }[] };
   for (const d of body.diagnostics ?? []) {
     io.stdout(`[${d.severity}] ${d.message}`);
@@ -118,7 +121,7 @@ export async function runDeployStatus(
   const flags = parseFlags(rest);
   const run = (await requestDeployControl({
     options: flags,
-    path: `/api/runs/${encodeURIComponent(runId)}`,
+    path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
   })) as RunRecord;
   io.stdout(`${run.type} ${run.id} ${run.status}`);
   return 0;
@@ -135,7 +138,7 @@ async function pollRun(
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const run = (await requestDeployControl({
       options: flags,
-      path: `/api/runs/${encodeURIComponent(runId)}`,
+      path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
     })) as RunRecord;
     if (run.status !== last) {
       io.stdout(`  ${run.status}`);

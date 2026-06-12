@@ -867,7 +867,7 @@ export interface CreateInstallationPlanInternal {
   /**
    * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
    * Source's latest snapshot for its default ref. Used by the §30 deployment
-   * rollback-plan path (`POST /api/deployments/:id/rollback-plan`) to re-plan an
+   * rollback-plan path (`POST /internal/v1/deployments/:id/rollback-plan`) to re-plan an
    * Installation against the source snapshot a prior Deployment was built from.
    * The snapshot must belong to the Installation's Source.
    */
@@ -4063,7 +4063,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Reads a single Deployment ledger record (spec §21 / §30 `GET
-   * /api/deployments/:id`). A missing id is a typed 404.
+   * /internal/v1/deployments/:id`). A missing id is a typed 404.
    */
   async getDeployment(id: string): Promise<Deployment> {
     return await this.#deployments.getDeployment(id);
@@ -4071,7 +4071,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Creates a rollback PLAN run for a Deployment (spec §30 `POST
-   * /api/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
    * pinned to THAT Deployment's `sourceSnapshotId`. The plan then flows through
    * the normal approval/apply path. Reuses the installation plan path with an
    * internal snapshot override.
@@ -4103,7 +4103,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Lists instance-wide `operator`-scoped Connections (spec §30 `GET
-   * /api/connections` with `?spaceId` omitted). Never includes secret values.
+   * /internal/v1/connections` with `?spaceId` omitted). Never includes secret values.
    */
   async listOperatorConnections(): Promise<ListConnectionsResponse> {
     return await this.#connections.listOperatorConnections();
@@ -4246,7 +4246,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Reads the run-level diagnostics + audit trail for a Run (spec §30 `GET
-   * /api/runs/:runId/logs`). Diagnostics + audit events are recorded on the
+   * /internal/v1/runs/:runId/logs`). Diagnostics + audit events are recorded on the
    * underlying PlanRun / ApplyRun ledger record; a `source_sync` run carries no
    * structured diagnostics, so its single `error`, when present, is surfaced as
    * one error diagnostic. Returns the unified `{ diagnostics, auditEvents }`
@@ -4260,7 +4260,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Reads the run-level audit trail for a Run (spec §30 `GET
-   * /api/runs/:runId/events`). MVP: the run-level audit events only.
+   * /internal/v1/runs/:runId/events`). MVP: the run-level audit events only.
    */
   async getRunEvents(id: string): Promise<RunEventsResponse> {
     requireNonEmptyString(id, "runId");

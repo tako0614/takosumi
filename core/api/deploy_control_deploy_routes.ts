@@ -1,9 +1,9 @@
 /**
  * `takosumi deploy` routes: upload ingest + deploy.
  *
- *   POST /api/spaces/:spaceId/uploads   binary tar(zstd) ingest -> R2_SOURCE ->
- *                                        upload SourceSnapshot
- *   POST /api/deploy                     resolve/create Installation + plan the
+ *   POST /internal/v1/spaces/:spaceId/uploads   binary tar(zstd) ingest ->
+ *                                        R2_SOURCE -> upload SourceSnapshot
+ *   POST /internal/v1/deploy             resolve/create Installation + plan the
  *                                        upload snapshot (the `wrangler deploy`
  *                                        equivalent)
  *
@@ -14,6 +14,7 @@
  */
 
 import type { DeployRequest } from "takosumi-contract/deploy";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import { uploadArchiveObjectKey } from "../domains/sources/mod.ts";
 import { deployUpload } from "../domains/deploy-control/upload_deploy.ts";
 import {
@@ -27,8 +28,9 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 
-const SPACE_UPLOADS_ROUTE = "/api/spaces/:spaceId/uploads" as const;
-const DEPLOY_ROUTE = "/api/deploy" as const;
+const SPACE_UPLOADS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/uploads` as const;
+const DEPLOY_ROUTE = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 /** 64 MiB cap on a single upload archive (mirrors the artifact-route posture). */
 const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;

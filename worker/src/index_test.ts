@@ -37,20 +37,20 @@ test("Cloudflare Worker dispatches service control-plane routes in-process", asy
     "/livez",
     "/readyz",
     "/metrics",
-    // A non-runtime-agent `/api/internal/v1/*` path must dispatch to the
-    // service app (the runtime-agent app only owns `/api/internal/v1/runtime/*`).
-    "/api/internal/v1/probe",
-    "/v1/runner-profiles",
-    "/v1/plan-runs",
-    "/v1/plan-runs/plan_abcdef12",
-    "/v1/apply-runs",
-    "/v1/apply-runs/apply_abcdef12",
-    "/v1/installations/ins_abcdef12",
-    "/v1/installations/ins_abcdef12/deployments",
-    "/v1/installations/ins_abcdef12/deployment-outputs",
-    "/v1/installations/inst_abcdef12",
-    "/v1/installations/inst_abcdef12/deployments",
-    "/v1/installations/inst_abcdef12/deployment-outputs",
+    // A non-runtime-agent `/internal/v1/*` seam path must dispatch to the
+    // service app (the runtime-agent app only owns `/internal/v1/runtime/*`).
+    "/internal/v1/probe",
+    "/internal/v1/runner-profiles",
+    "/internal/v1/plan-runs",
+    "/internal/v1/plan-runs/plan_abcdef12",
+    "/internal/v1/apply-runs",
+    "/internal/v1/apply-runs/apply_abcdef12",
+    "/internal/v1/installations/ins_abcdef12",
+    "/internal/v1/installations/ins_abcdef12/deployments",
+    "/internal/v1/installations/ins_abcdef12/deployment-outputs",
+    "/internal/v1/installations/inst_abcdef12",
+    "/internal/v1/installations/inst_abcdef12/deployments",
+    "/internal/v1/installations/inst_abcdef12/deployment-outputs",
   ]) {
     calls.length = 0;
     const response = await worker.fetch(
@@ -77,7 +77,7 @@ test("Cloudflare Worker dispatches runtime-agent routes to the runtime-agent app
   });
 
   const response = await worker.fetch(
-    new Request("https://worker.example/api/internal/v1/runtime/agents/enroll"),
+    new Request("https://worker.example/internal/v1/runtime/agents/enroll"),
     createEnv(),
   );
 
@@ -96,7 +96,7 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
     audit: { reason: "test" },
   });
   const response = await worker.fetch(
-    new Request("https://worker.example/api/internal/v1/runs?trace=1", {
+    new Request("https://worker.example/internal/v1/runs?trace=1", {
       method: "POST",
       headers: {
         authorization: "Bearer internal-token",
@@ -114,7 +114,7 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   assert.equal(calls.length, 1);
   const call = calls[0];
   assert.equal(call.method, "POST");
-  assert.equal(call.url, "https://worker.example/api/internal/v1/runs?trace=1");
+  assert.equal(call.url, "https://worker.example/internal/v1/runs?trace=1");
   assert.equal(call.headers.get("authorization"), "Bearer internal-token");
   assert.equal(
     call.headers.get("traceparent"),

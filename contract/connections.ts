@@ -1,35 +1,37 @@
 import type { JsonValue } from "./types.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-// Public Connections surface (`/api`, no version prefix). Connection creation
-// is split into kind-specific subroutes; the base path is the operator/space
-// listing.
-export const CONNECTIONS_PATH = "/api/connections" as const;
+// INTERNAL deploy-control seam — Connections surface under `/internal/v1`
+// (reached in-process / by the account plane, NOT edge-public). Connection
+// creation is split into kind-specific subroutes; the base path is the
+// operator/space listing.
+export const CONNECTIONS_PATH = `${INTERNAL_V1_PREFIX}/connections` as const;
 export const CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH =
-  "/api/connections/source/https-token" as const;
+  `${INTERNAL_V1_PREFIX}/connections/source/https-token` as const;
 export const CONNECTIONS_SOURCE_SSH_KEY_PATH =
-  "/api/connections/source/ssh-key" as const;
+  `${INTERNAL_V1_PREFIX}/connections/source/ssh-key` as const;
 export const CONNECTIONS_CLOUDFLARE_TOKEN_PATH =
-  "/api/connections/cloudflare/token" as const;
+  `${INTERNAL_V1_PREFIX}/connections/cloudflare/token` as const;
 export const CONNECTIONS_AWS_ASSUME_ROLE_PATH =
-  "/api/connections/aws/assume-role" as const;
+  `${INTERNAL_V1_PREFIX}/connections/aws/assume-role` as const;
 export const CONNECTIONS_PROVIDER_ENV_SET_PATH =
-  "/api/connections/provider-env-set" as const;
+  `${INTERNAL_V1_PREFIX}/connections/provider-env-set` as const;
 export const CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH =
-  "/api/connections/cloudflare/oauth/start" as const;
+  `${INTERNAL_V1_PREFIX}/connections/cloudflare/oauth/start` as const;
 export const CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH =
-  "/api/connections/cloudflare/oauth/callback" as const;
+  `${INTERNAL_V1_PREFIX}/connections/cloudflare/oauth/callback` as const;
 export const CONNECTIONS_GCP_OAUTH_START_PATH =
-  "/api/connections/gcp/oauth/start" as const;
+  `${INTERNAL_V1_PREFIX}/connections/gcp/oauth/start` as const;
 export const CONNECTIONS_GCP_OAUTH_CALLBACK_PATH =
-  "/api/connections/gcp/oauth/callback" as const;
+  `${INTERNAL_V1_PREFIX}/connections/gcp/oauth/callback` as const;
 export const CONNECTIONS_GCP_IMPERSONATION_PATH =
-  "/api/connections/gcp/impersonation" as const;
+  `${INTERNAL_V1_PREFIX}/connections/gcp/impersonation` as const;
 export const CONNECTION_PATH = (id: string): string =>
-  `/api/connections/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}`;
 export const CONNECTION_TEST_PATH = (id: string): string =>
-  `/api/connections/${encodeURIComponent(id)}/test`;
+  `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/test`;
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
-  `/api/connections/${encodeURIComponent(id)}/revoke`;
+  `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/revoke`;
 
 export type ConnectionAuthMethod =
   | "static_secret"

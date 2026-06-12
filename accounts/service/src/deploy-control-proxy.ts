@@ -1,4 +1,5 @@
 import type { JsonValue } from "takosumi-contract";
+import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import {
   APPLY_RUNS_PATH,
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
@@ -809,7 +810,9 @@ function idFromPath(
   // The contract path helpers encodeURIComponent the id, so reverse the build
   // by trying the decoded segment(s) of the request path. Both deployments and
   // single-installation paths share a prefix; resolve by exact reconstruction.
-  const installationsPrefix = "/v1/installations/";
+  // These prefixes mirror the `/internal/v1` deploy-control seam the contract
+  // path builders (`INSTALLATION_PATH` / `PLAN_RUN_PATH`) emit.
+  const installationsPrefix = `${INTERNAL_V1_PREFIX}/installations/`;
   if (path.startsWith(installationsPrefix)) {
     const remainder = path.slice(installationsPrefix.length);
     const deploymentsSuffix = "/deployments";
@@ -825,7 +828,7 @@ function idFromPath(
     }
     return undefined;
   }
-  const planRunPrefix = "/v1/plan-runs/";
+  const planRunPrefix = `${INTERNAL_V1_PREFIX}/plan-runs/`;
   if (build === PLAN_RUN_PATH && path.startsWith(planRunPrefix)) {
     const remainder = path.slice(planRunPrefix.length);
     if (remainder.length === 0 || remainder.includes("/")) return undefined;

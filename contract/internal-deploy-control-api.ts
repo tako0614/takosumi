@@ -11,6 +11,7 @@
 import type { JsonValue } from "./types.ts";
 import type { PublicInstallation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   ListProviderTemplatesResponse,
   ProviderTemplateResponse,
@@ -18,27 +19,29 @@ export type {
 } from "./providers.ts";
 
 // ---------------------------------------------------------------------------
-// INTERNAL deploy-control seam paths (NOT part of the public
-// `/api` vocabulary). These `/v1/*` routes are the in-process fetch seam the
-// accounts plane + CLI consume (PlanRun / ApplyRun / internal-execution-profile ledgers and
-// the Installation read + its deployments / deployment-outputs reads). They are
-// deliberately kept at `/v1` after the public `/api` cutover; do NOT move them and
-// do NOT add `/v1` aliases for the moved public routes.
+// INTERNAL deploy-control seam paths. These `/internal/v1/*` routes are the
+// in-process fetch seam the accounts plane + CLI consume (PlanRun / ApplyRun /
+// internal-execution-profile ledgers and the Installation read + its
+// deployments / deployment-outputs reads). They live under the unified
+// `/internal/v1` internal-seam prefix and are never edge-public.
 // ---------------------------------------------------------------------------
 
-export const RUNNER_PROFILES_PATH = "/v1/runner-profiles" as const;
-export const PLAN_RUNS_PATH = "/v1/plan-runs" as const;
+export const RUNNER_PROFILES_PATH =
+  `${INTERNAL_V1_PREFIX}/runner-profiles` as const;
+export const PLAN_RUNS_PATH = `${INTERNAL_V1_PREFIX}/plan-runs` as const;
 export const PLAN_RUN_PATH = (id: string): string =>
-  `/v1/plan-runs/${encodeURIComponent(id)}`;
-export const APPLY_RUNS_PATH = "/v1/apply-runs" as const;
+  `${INTERNAL_V1_PREFIX}/plan-runs/${encodeURIComponent(id)}`;
+export const APPLY_RUNS_PATH = `${INTERNAL_V1_PREFIX}/apply-runs` as const;
 export const APPLY_RUN_PATH = (id: string): string =>
-  `/v1/apply-runs/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/apply-runs/${encodeURIComponent(id)}`;
 export const INSTALLATION_PATH = (id: string): string =>
-  `/v1/installations/${encodeURIComponent(id)}`;
+  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(id)}`;
 export const INSTALLATION_DEPLOYMENTS_PATH = (id: string): string =>
-  `/v1/installations/${encodeURIComponent(id)}/deployments`;
+  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(id)}/deployments`;
 export const INSTALLATION_DEPLOYMENT_OUTPUTS_PATH = (id: string): string =>
-  `/v1/installations/${encodeURIComponent(id)}/deployment-outputs`;
+  `${INTERNAL_V1_PREFIX}/installations/${
+    encodeURIComponent(id)
+  }/deployment-outputs`;
 
 export type OpenTofuModuleSourceKind = "git" | "local" | "prepared";
 
@@ -169,7 +172,7 @@ export interface RunnerSecretExposurePolicy {
   readonly blockSensitiveOutputs?: boolean;
 }
 
-/** Legacy DTO name for an internal execution profile on the `/v1/runner-profiles` seam. */
+/** Legacy DTO name for an internal execution profile on the `/internal/v1/runner-profiles` seam. */
 export interface RunnerProfile {
   readonly id: string;
   readonly name: string;
@@ -315,14 +318,16 @@ export interface PlanRun {
    * installation plan path; the apply consumer re-reads the snapshot to verify
    * the producer state generations / pinned values before applying (invariant 9)
    * and the successful Deployment carries it forward. Absent for plans whose
-   * consumer has no dependencies (or for the raw `/v1/plan-runs` path). Projected
+   * consumer has no dependencies (or for the raw `/internal/v1/plan-runs`
+   * path). Projected
    * onto the public Run `dependencySnapshotId`.
    */
   readonly dependencySnapshotId?: string;
   /**
    * RunGroup this plan belongs to. Set when the plan was
-   * created as a member of a Space-update RunGroup (`POST /api/spaces/:id/
-   * plan-update`); the apply that follows carries it onto the public Run so the
+   * created as a member of a Space-update RunGroup (`POST
+   * /internal/v1/spaces/:id/plan-update`); the apply that follows carries it
+   * onto the public Run so the
    * group status can be computed from its member runs. Absent for standalone
    * plans. Projected onto the public Run `runGroupId`.
    */
@@ -368,8 +373,9 @@ export interface PlanRunTemplateBinding {
 }
 
 /**
- * Internal compatibility projection returned by the private `/v1` plan-run
- * seam. Ledger-only authoring conveniences such as `templateBinding` stay
+ * Internal compatibility projection returned by the private `/internal/v1`
+ * plan-run seam. Ledger-only authoring conveniences such as `templateBinding`
+ * stay
  * inside the service; the public contract exposes unified `Run` records
  * instead.
  */
@@ -756,7 +762,7 @@ export interface ListDeploymentOutputsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public supporting DTO re-exports used by the private `/v1` compatibility seam.
+// Public supporting DTO re-exports used by the private `/internal/v1` compatibility seam.
 // ---------------------------------------------------------------------------
 
 export * from "./connections.ts";

@@ -25,6 +25,8 @@
  *   - `service-data.tar.zst.enc`
  */
 
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
 /** Object-key prefix for a Space's control backups in R2_BACKUPS. */
 export const BACKUPS_KEY_PREFIX = (spaceId: string): string =>
   `spaces/${spaceId}/backups`;
@@ -64,11 +66,13 @@ export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
 
 /** Path of the Space-scoped control-backup REST surface. */
 export const SPACE_BACKUPS_PATH = (spaceId: string): string =>
-  `/api/spaces/${encodeURIComponent(spaceId)}/backups`;
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/backups`;
 
 /** Path of the Installation-scoped backup trigger REST surface. */
 export const INSTALLATION_BACKUPS_PATH = (installationId: string): string =>
-  `/api/installations/${encodeURIComponent(installationId)}/backups`;
+  `${INTERNAL_V1_PREFIX}/installations/${
+    encodeURIComponent(installationId)
+  }/backups`;
 
 /**
  * Ledger pointer to one sealed control-backup bundle.
