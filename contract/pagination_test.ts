@@ -14,7 +14,10 @@ import {
   type Page,
   type PageCursor,
   pageFromProbe,
+  pageFromProbeBy,
   pageSorted,
+  pageSortedBy,
+  pageSortedDesc,
 } from "./pagination.ts";
 
 interface Row extends PageCursor {
@@ -134,5 +137,108 @@ describe("pageFromProbe", () => {
     const page = pageFromProbe(rows, 10);
     expect(page.items).toHaveLength(7);
     expect(page.nextCursor).toBeUndefined();
+  });
+});
+
+// A row whose keyset column is NOT literally `createdAt` (a SourceSnapshot keyed
+// by `fetchedAt`): exercises the `…By` projection pagers.
+interface FetchedRow {
+  readonly fetchedAt: string;
+  readonly id: string;
+}
+
+function makeFetchedRows(n: number): readonly FetchedRow[] {
+  return Array.from({ length: n }, (_, i) => ({
+    fetchedAt: `2026-02-02T00:00:00.${String(i).padStart(4, "0")}Z`,
+    id: `snap_${String(i).padStart(4, "0")}`,
+  }));
+}
+
+const fetchedKeyset = (r: FetchedRow): PageCursor => ({
+  createdAt: r.fetchedAt,
+  id: r.id,
+});
+
+describe("pageSortedBy / pageFromProbeBy (projected keyset)", () => {
+  it("caps the default page at DEFAULT_PAGE_LIMIT and emits a cursor", () => {
+    const rows = makeFetchedRows(250);
+    const first = pageSortedBy(rows, {}, fetchedKeyset);
+    expect(first.items).toHaveLength(DEFAULT_PAGE_LIMIT);
+    expect(first.nextCursor).toBeDefined();
+  });
+
+  it("traverses every row with no gaps or dupes across the fetchedAt boundary", () => {
+    const rows = makeFetchedRows(250);
+    const seen: FetchedRow[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < rows.length + 5; guard += 1) {
+      const page: Page<FetchedRow> = pageSortedBy(
+        rows,
+        { limit: 100, ...(cursor ? { cursor } : {}) },
+        fetchedKeyset,
+      );
+      seen.push(...page.items);
+      if (page.nextCursor === undefined) break;
+      cursor = page.nextCursor;
+    }
+    expect(seen.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+  });
+
+  it("pageFromProbeBy drops the probe row and cursors on its predecessor", () => {
+    const rows = makeFetchedRows(11);
+    const page = pageFromProbeBy(rows, 10, fetchedKeyset);
+    expect(page.items).toHaveLength(10);
+    expect(page.nextCursor).toBe(encodeCursor(fetchedKeyset(rows[9]!)));
+    // The probe-less case carries no cursor.
+    expect(pageFromProbeBy(makeFetchedRows(7), 10, fetchedKeyset).nextCursor)
+      .toBeUndefined();
+  });
+});
+
+describe("pageSortedDesc (newest-first keyset)", () => {
+  // Descending input: index 0 is newest, last is oldest (what a backup listing
+  // hands the pager after ORDER BY createdAt DESC, id DESC).
+  function makeRowsDesc(n: number): readonly Row[] {
+    return Array.from({ length: n }, (_, i) => {
+      const seq = n - 1 - i;
+      return {
+        createdAt: `2026-03-03T00:00:00.${String(seq).padStart(4, "0")}Z`,
+        id: `bkp_${String(seq).padStart(4, "0")}`,
+      };
+    });
+  }
+
+  it("caps the default page and emits a cursor", () => {
+    const rows = makeRowsDesc(250);
+    const first = pageSortedDesc(rows, {});
+    expect(first.items).toHaveLength(DEFAULT_PAGE_LIMIT);
+    expect(first.nextCursor).toBeDefined();
+  });
+
+  it("traverses every row newest-first with no gaps or dupes", () => {
+    const rows = makeRowsDesc(250);
+    const seen = drain(rows, (cursor) =>
+      pageSortedDesc(rows, { limit: 100, ...(cursor ? { cursor } : {}) }),
+    );
+    expect(seen.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+  });
+
+  it("omits nextCursor on the final exact-fit page", () => {
+    const rows = makeRowsDesc(100);
+    const page = pageSortedDesc(rows, { limit: 100 });
+    expect(page.items).toHaveLength(100);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it("disambiguates equal createdAt by id (descending)", () => {
+    const rows: readonly Row[] = [
+      { createdAt: "2026-03-03T00:00:00.000Z", id: "c" },
+      { createdAt: "2026-03-03T00:00:00.000Z", id: "b" },
+      { createdAt: "2026-03-03T00:00:00.000Z", id: "a" },
+    ];
+    const seen = drain(rows, (cursor) =>
+      pageSortedDesc(rows, { limit: 1, ...(cursor ? { cursor } : {}) }),
+    );
+    expect(seen.map((r) => r.id)).toEqual(["c", "b", "a"]);
   });
 });

@@ -159,3 +159,88 @@ export function pageFromProbe<T extends PageCursor>(
     ? { items, nextCursor: encodeCursor(last) }
     : { items };
 }
+
+/**
+ * Projects a row onto its `(createdAt, id)` keyset position. Used by the
+ * `…By` pager variants for list reads whose keyset column is NOT literally
+ * `createdAt` (e.g. a SourceSnapshot keyed by `fetchedAt`): the projected
+ * `createdAt` carries that column's value so the opaque cursor stays a
+ * `{ createdAt, id }` token while the underlying row keeps its own field name.
+ */
+export type KeysetOf<T> = (row: T) => PageCursor;
+
+/**
+ * Like {@link pageSorted} but for rows whose keyset column is exposed through a
+ * {@link KeysetOf} projection rather than a literal `createdAt`. The input must
+ * already be sorted ascending by the projected `(createdAt, id)`.
+ */
+export function pageSortedBy<T>(
+  sorted: readonly T[],
+  params: PageParams,
+  keyset: KeysetOf<T>,
+): Page<T> {
+  const limit = clampPageLimit(params.limit);
+  const cursor = decodeCursor(params.cursor);
+  const start = cursor
+    ? sorted.findIndex((row) => {
+        const k = keyset(row);
+        return (
+          k.createdAt > cursor.createdAt ||
+          (k.createdAt === cursor.createdAt && k.id > cursor.id)
+        );
+      })
+    : 0;
+  const from = start === -1 ? sorted.length : start;
+  const window = sorted.slice(from, from + limit);
+  const hasMore = from + limit < sorted.length;
+  const last = window[window.length - 1];
+  return hasMore && last !== undefined
+    ? { items: window, nextCursor: encodeCursor(keyset(last)) }
+    : { items: window };
+}
+
+/**
+ * Like {@link pageFromProbe} but for rows whose `nextCursor` keyset is exposed
+ * through a {@link KeysetOf} projection rather than a literal `createdAt` (e.g.
+ * a SourceSnapshot keyed by `fetchedAt`).
+ */
+export function pageFromProbeBy<T>(
+  rows: readonly T[],
+  limit: number,
+  keyset: KeysetOf<T>,
+): Page<T> {
+  if (rows.length <= limit) return { items: rows };
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return last !== undefined
+    ? { items, nextCursor: encodeCursor(keyset(last)) }
+    : { items };
+}
+
+/**
+ * Descending counterpart of {@link pageSorted} for list reads ordered
+ * newest-first by `(createdAt, id)` DESC (e.g. control backups). The input must
+ * already be sorted descending; a row qualifies when it is strictly BEFORE the
+ * cursor position (`createdAt <`, or equal-createdAt with `id <`).
+ */
+export function pageSortedDesc<T extends PageCursor>(
+  sortedDesc: readonly T[],
+  params: PageParams,
+): Page<T> {
+  const limit = clampPageLimit(params.limit);
+  const cursor = decodeCursor(params.cursor);
+  const start = cursor
+    ? sortedDesc.findIndex(
+        (row) =>
+          row.createdAt < cursor.createdAt ||
+          (row.createdAt === cursor.createdAt && row.id < cursor.id),
+      )
+    : 0;
+  const from = start === -1 ? sortedDesc.length : start;
+  const window = sortedDesc.slice(from, from + limit);
+  const hasMore = from + limit < sortedDesc.length;
+  const last = window[window.length - 1];
+  return hasMore && last !== undefined
+    ? { items: window, nextCursor: encodeCursor(last) }
+    : { items: window };
+}

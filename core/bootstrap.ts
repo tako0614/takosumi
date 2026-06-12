@@ -439,8 +439,12 @@ export interface TakosumiOperations {
       readonly balance?: CreditBalance;
     };
   }>;
-  listSpaceUsage(spaceId: string): Promise<{
+  listSpaceUsage(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
+    readonly nextCursor?: string;
   }>;
   recordMeteredUsage(
     spaceId: string,
@@ -953,7 +957,8 @@ export async function createTakosumiService(
     runGroups: runGroupsService,
     activity: activityService,
     getSpaceBilling: (spaceId) => opentofuController.getSpaceBilling(spaceId),
-    listSpaceUsage: (spaceId) => opentofuController.listSpaceUsage(spaceId),
+    listSpaceUsage: (spaceId, params) =>
+      opentofuController.listSpaceUsage(spaceId, params),
     recordMeteredUsage: (spaceId, input) =>
       opentofuController.recordMeteredUsage(spaceId, input),
     recordManagedResourceUsage: (spaceId, input) =>

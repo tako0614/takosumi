@@ -128,4 +128,10 @@ export interface CreateBackupResponse {
 /** Response body for a control-backup listing (`GET .../backups`). */
 export interface ListBackupsResponse {
   readonly backups: readonly BackupRecord[];
+  /**
+   * Opaque keyset cursor for the next page when the listing was capped (spec §30
+   * pagination; newest-first descending keyset). Absent on the last page.
+   * Additive: readers that ignore it are unaffected.
+   */
+  readonly nextCursor?: string;
 }

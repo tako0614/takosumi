@@ -22,6 +22,7 @@ import {
   ensureSpacePermission,
   errorEnvelope,
   notImplemented,
+  parsePageParams,
   readJsonBody,
   runHandler,
   OUTPUT_SHARE_ID_PATTERN,
@@ -129,12 +130,23 @@ export function mountDeployControlOutputShareRoutes(
         400,
       );
     }
+    const page = parsePageParams(c);
+    if (page.kind === "invalid") return page.response;
     return await runHandler(c, async () => {
       // Listing is gated on the queried Space: the principal must be able to
       // access the Space whose grants (granted OR received) it is reading.
       ensureSpacePermission(auth.principal, spaceId);
-      const shares = await outputSharesService.listForSpace(spaceId);
-      return c.json({ shares }, 200);
+      const { items, nextCursor } = await outputSharesService.listForSpacePage(
+        spaceId,
+        page.value,
+      );
+      return c.json(
+        {
+          shares: items,
+          ...(nextCursor !== undefined ? { nextCursor } : {}),
+        },
+        200,
+      );
     });
   });
 

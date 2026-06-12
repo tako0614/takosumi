@@ -1091,12 +1091,23 @@ export class OpenTofuDeploymentController {
     };
   }
 
-  async listSpaceUsage(spaceId: string): Promise<{
+  async listSpaceUsage(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
+    readonly nextCursor?: string;
   }> {
     requireNonEmptyString(spaceId, "spaceId");
     await this.#requireSpace(spaceId);
-    return { usageEvents: await this.#store.listUsageEvents(spaceId) };
+    const { items, nextCursor } = await this.#store.listUsageEventsPage(
+      spaceId,
+      params ?? {},
+    );
+    return {
+      usageEvents: items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   async recordMeteredUsage(
@@ -4197,8 +4208,9 @@ export class OpenTofuDeploymentController {
 
   async listSourceSnapshots(
     sourceId: string,
+    params?: PageParams,
   ): Promise<ListSourceSnapshotsResponse> {
-    return await this.#sources.listSourceSnapshots(sourceId);
+    return await this.#sources.listSourceSnapshots(sourceId, params);
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot> {

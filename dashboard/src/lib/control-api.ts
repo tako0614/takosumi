@@ -718,10 +718,10 @@ export async function getSpaceBilling(spaceId: string): Promise<SpaceBilling> {
 export async function listSpaceUsage(
   spaceId: string,
 ): Promise<readonly UsageEvent[]> {
-  const body = await controlFetch<{ usageEvents?: readonly UsageEvent[] }>(
+  return await fetchAllPages<UsageEvent>(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/usage`,
+    (body) => (body.usageEvents as readonly UsageEvent[]) ?? [],
   );
-  return body.usageEvents ?? [];
 }
 
 export async function listSpaceCreditReservations(
@@ -926,10 +926,10 @@ export async function putDeploymentProfile(
 export async function listInstallConfigs(
   spaceId?: string,
 ): Promise<readonly InstallConfig[]> {
-  const body = await controlFetch<{
-    installConfigs?: readonly InstallConfig[];
-  }>(`${BASE}/install-configs${query({ spaceId })}`);
-  return body.installConfigs ?? [];
+  return await fetchAllPages<InstallConfig>(
+    `${BASE}/install-configs${query({ spaceId })}`,
+    (body) => (body.installConfigs as readonly InstallConfig[]) ?? [],
+  );
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
@@ -1021,10 +1021,10 @@ export async function createInstallationBackup(
 export async function listSpaceBackups(
   spaceId: string,
 ): Promise<readonly BackupRecord[]> {
-  const body = await controlFetch<{ backups: readonly BackupRecord[] }>(
+  return await fetchAllPages<BackupRecord>(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
+    (body) => (body.backups as readonly BackupRecord[]) ?? [],
   );
-  return body.backups ?? [];
 }
 
 // --- Dependencies ----------------------------------------------------------
@@ -1120,10 +1120,10 @@ export async function syncSource(sourceId: string): Promise<unknown> {
 export async function listSourceSnapshots(
   sourceId: string,
 ): Promise<readonly SourceSnapshot[]> {
-  const body = await controlFetch<{
-    snapshots?: readonly SourceSnapshot[];
-  }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`);
-  return body.snapshots ?? [];
+  return await fetchAllPages<SourceSnapshot>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`,
+    (body) => (body.snapshots as readonly SourceSnapshot[]) ?? [],
+  );
 }
 
 export async function waitForLatestSourceSnapshot(
@@ -1430,10 +1430,10 @@ export async function listProviderTemplates(): Promise<
 export async function listOutputShares(
   spaceId: string,
 ): Promise<readonly OutputShare[]> {
-  const body = await controlFetch<{ shares?: readonly OutputShare[] }>(
+  return await fetchAllPages<OutputShare>(
     `${BASE}/output-shares${query({ spaceId })}`,
+    (body) => (body.shares as readonly OutputShare[]) ?? [],
   );
-  return body.shares ?? [];
 }
 
 export async function createOutputShare(input: {
