@@ -1,24 +1,23 @@
 /**
- * Source-assertion regression tests for the Members 画面 (ControlMembersView).
- * Pure-source assertions (no DOM / SolidJS), in the same style as
- * `installation-deployments_test.ts`: they read the view source and lock in the
- * load-bearing access-control wiring so a future edit that drops the owner-only
- * gates, the last-owner guard, or the plain-Japanese labels fails loudly.
+ * Source-assertion regression tests for the Members tab (MembersTab).
+ * Pure-source assertions (no DOM / SolidJS): they read the view source and
+ * lock in the load-bearing access-control wiring so a future edit that drops
+ * the owner-only gates or the last-owner guard fails loudly.
  *
  * The membership surface is access-control sensitive, so these assertions are
  * the UI-side backstop to the server gate in
- * packages/accounts-service/src/control-routes.ts (list = member 可; invite =
+ * accounts/service/src/control-routes.ts (list = member 可; invite =
  * owner/admin; role change + remove = owner-only + last-owner guard).
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const source = readFileSync(
-  new URL("./ControlMembersView.tsx", import.meta.url),
+  new URL("./MembersTab.tsx", import.meta.url),
   "utf8",
 );
 
-describe("ControlMembersView access-control surface", () => {
+describe("MembersTab access-control surface", () => {
   test("uses the four membership client fns (no ad-hoc fetch)", () => {
     expect(source).toContain("listMembers");
     expect(source).toContain("inviteMember");
@@ -39,7 +38,7 @@ describe("ControlMembersView access-control surface", () => {
     expect(source).toMatch(/canInvite = \(\) =>[\s\S]*?"owner"[\s\S]*?"admin"/);
     expect(source).toMatch(/canManage = \(\) =>[\s\S]*?"owner"/);
     // The 操作 column (役割変更・削除) is owner-only.
-    expect(source).toContain("<Show when={canManage()}>");
+    expect(source).toContain("<Show when={canManage()}");
   });
 
   test("only an owner may offer the owner role in the invite form", () => {
@@ -54,18 +53,17 @@ describe("ControlMembersView access-control surface", () => {
     expect(source).toMatch(/disabled=\{[^}]*isLastOwner\(member\)/g);
   });
 
-  test("the spaceId comes from shared state, never from the row/client body", () => {
-    expect(source).toContain("currentSpaceId");
-    // Mutations pass the resolved spaceId + the member's accountId only.
-    expect(source).toMatch(/setMemberRole\(id, member\.accountId/);
-    expect(source).toMatch(/removeMember\(id, member\.accountId\)/);
+  test("the spaceId comes from the settings container, never from a body", () => {
+    // The tab receives the globally-selected Space via props; mutations pass it
+    // as the path segment plus the member's accountId only.
+    expect(source).toMatch(/setMemberRole\(props\.spaceId, member\.accountId/);
+    expect(source).toMatch(/removeMember\(props\.spaceId, member\.accountId\)/);
   });
 
-  test("labels are plain Japanese (メンバー / 招待 / 役割)", () => {
-    expect(source).toContain("メンバー");
-    expect(source).toContain("招待");
-    expect(source).toContain("役割");
-    expect(source).toContain('owner: "オーナー"');
-    expect(source).toContain('member: "メンバー"');
+  test("labels go through the locale dictionary (no hardcoded copy)", () => {
+    expect(source).toContain('"members.role.owner"');
+    expect(source).toContain('"members.role.member"');
+    expect(source).toContain('t("members.invite.cta")');
+    expect(source).toContain('t(ROLE_KEY[');
   });
 });

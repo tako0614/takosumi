@@ -4,6 +4,29 @@
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { ActivityEvent } from "./control-api.ts";
 
+/**
+ * Presentation status for an Installation, folding the read-time `freshness`
+ * field into the status vocabulary: an `active` app whose freshness is `stale`
+ * presents as `stale` (再デプロイが必要). Compatible with both the
+ * stored-`stale` backend and the derived-freshness backend.
+ */
+export function effectiveInstallationStatus(inst: {
+  readonly status: string;
+  readonly freshness?: "fresh" | "stale";
+}): string {
+  if (inst.freshness === "stale" && inst.status === "active") return "stale";
+  return inst.status;
+}
+
+/** True when the app needs attention (error or stale under either model). */
+export function needsAttention(inst: {
+  readonly status: string;
+  readonly freshness?: "fresh" | "stale";
+}): boolean {
+  const status = effectiveInstallationStatus(inst);
+  return status === "error" || status === "stale";
+}
+
 /** True for a string value that looks like an http(s) address worth linking. */
 export function isUrlString(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value.trim());

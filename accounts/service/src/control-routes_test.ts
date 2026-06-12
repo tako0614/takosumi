@@ -767,8 +767,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/api/v1/spaces/space_a/billing"],
     ["GET", "/api/v1/spaces/space_a/usage"],
     ["GET", "/api/v1/spaces/space_a/credit-reservations"],
-    ["POST", "/api/v1/spaces/space_a/credits/top-up"],
-    ["POST", "/api/v1/spaces/space_a/subscription/change"],
+    ["GET", "/api/v1/billing/plans"],
     ["POST", "/api/v1/spaces/space_a/plan-update"],
     ["GET", "/api/v1/installations/inst_1"],
     ["GET", "/api/v1/installations/inst_1/deployment-profile"],
@@ -1014,61 +1013,67 @@ test("POST /api/v1/spaces/:id/backups creates a Space backup", async () => {
   expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
 });
 
-test("POST /api/v1/spaces/:id/credits/top-up forwards credit amount", async () => {
+test("session surface refuses billing mutations (operator-only, spec §32)", async () => {
+  // Billing mode is operator-selected and credits enter through paid checkout;
+  // the operator mutations live on the bearer-gated /internal/v1 surface. A
+  // session caller must not be able to top-up credits or flip the billing
+  // mode — both former routes now fall through to the spaces-family 404.
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request(
-    "POST",
-    "/api/v1/spaces/space_a/credits/top-up",
-    { cookie, body: { credits: 50 } },
-  );
-  const response = await handleControlRoute({
-    request: req,
-    url,
-    store,
-    operations,
-  });
-  expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as {
-    balance: { availableCredits: number };
-  };
-  expect(body.balance.availableCredits).toEqual(50);
-  expect(operations.calls.topUpSpaceCredits).toEqual([
-    "space_a",
-    { credits: 50 },
-  ]);
+  for (const [path, body] of [
+    ["/api/v1/spaces/space_a/credits/top-up", { credits: 50 }],
+    [
+      "/api/v1/spaces/space_a/subscription/change",
+      { billingSettings: { mode: "disabled" } },
+    ],
+  ] as const) {
+    const { request: req, url } = request("POST", path, { cookie, body });
+    const response = await handleControlRoute({
+      request: req,
+      url,
+      store,
+      operations,
+    });
+    expect(response?.status, path).toEqual(404);
+    await response?.body?.cancel();
+  }
+  expect(operations.calls.topUpSpaceCredits).toBeUndefined();
+  expect(operations.calls.changeSpaceSubscription).toBeUndefined();
 });
 
-test("POST /api/v1/spaces/:id/subscription/change forwards billing settings", async () => {
+test("GET /api/v1/billing/plans serves the public operator catalog", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const billingSettings = {
-    mode: "enforce",
-    provider: "manual",
-    reservationRequired: true,
-  };
-  const { request: req, url } = request(
-    "POST",
-    "/api/v1/spaces/space_a/subscription/change",
-    { cookie, body: { billingSettings } },
-  );
+  const { request: req, url } = request("GET", "/api/v1/billing/plans", {
+    cookie,
+  });
   const response = await handleControlRoute({
     request: req,
     url,
     store,
     operations,
+    billingPlans: [
+      {
+        id: "starter",
+        kind: "subscription",
+        stripePriceId: "price_starter",
+        credits: 500,
+        name: { ja: "スターター", en: "Starter" },
+        priceDisplay: { ja: "¥1,000 / 月", en: "$8 / mo" },
+      },
+    ],
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    billing: { settings: typeof billingSettings };
+    plans: Array<Record<string, unknown>>;
   };
-  expect(body.billing.settings).toEqual(billingSettings);
-  expect(operations.calls.changeSpaceSubscription).toEqual([
-    "space_a",
-    { billingSettings },
-  ]);
+  expect(body.plans).toHaveLength(1);
+  expect(body.plans[0]!.id).toEqual("starter");
+  expect(body.plans[0]!.credits).toEqual(500);
+  // The public projection must NOT leak the Stripe price id.
+  expect(body.plans[0]!.stripePriceId).toBeUndefined();
 });
 
 test("GET /api/v1/spaces filters out spaces the session cannot access", async () => {

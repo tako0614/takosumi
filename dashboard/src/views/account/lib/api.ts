@@ -1,26 +1,15 @@
 /**
- * Typed RPC client for the takos account-plane screens (folded from the
- * takosumi dashboard SPA).
+ * Typed RPC client for the ACCOUNT-PLANE endpoints the dashboard still needs:
+ * session, auth (upstream OAuth / passkey), Stripe billing checkout/portal,
+ * and personal access tokens. The legacy `/v1/app-installations` plane and the
+ * legacy `/v1/connections` group are gone — apps and connections live entirely
+ * on the session-authed control surface (`lib/control-api.ts`).
  *
- * A thin, fully-typed wrapper over the in-process account plane REST API. The
- * account plane is mounted at the worker origin root (`/v1/*` — see
- * takos/src/worker/web.ts), so every method talks same-origin with the HttpOnly
- * `takosumi_session` cookie (`credentials: "include"`). Every method goes
- * through {@link apiFetch} (transport in ./http) and uses contract-mirrored
- * paths (./paths).
- *
- * This is the load-bearing shared module for the account/installations screens.
- * Do NOT reuse the takos product `lib/rpc.ts` (that is the Hono `/api` client
- * for the product surface — different base + auth).
- *
- * Usage: `import { rpc, ApiError } from "./lib/api.ts";` then e.g.
- * `await rpc.installations.get(id)`.
- *
- * Ported from takosumi dashboard-ui/src/lib/rpc/index.ts.
+ * Every method talks same-origin with the HttpOnly `takosumi_session` cookie
+ * (`credentials: "include"`) via {@link apiFetch} (transport in ./http) and
+ * uses contract-mirrored paths (./paths).
  */
 import { clearSession, refreshSession } from "./session.ts";
-import * as installations from "./installations.ts";
-import * as connections from "./connections.ts";
 import * as tokens from "./tokens.ts";
 import * as billing from "./billing.ts";
 import * as auth from "./auth.ts";
@@ -31,27 +20,6 @@ export const rpc = {
     me: refreshSession,
     /** Clear the local cache and ask the server to revoke the cookie. */
     signOut: clearSession,
-  },
-  installations: {
-    list: installations.listInstallationsForSpace,
-    get: installations.getInstallation,
-    plan: installations.planInstallation,
-    create: installations.createInstallation,
-    uninstall: installations.uninstallInstallation,
-    services: installations.listInstallationServices,
-    serviceCatalog: installations.listWorkloadServices,
-    rotateServiceToken: installations.rotateInstallationServiceToken,
-    materialize: installations.materializeInstallation,
-    requestExport: installations.requestInstallationExport,
-    getExportOperation: installations.getInstallationExportOperation,
-    exportDownloadUrl: installations.installationExportDownloadUrl,
-    events: installations.listInstallationEvents,
-  },
-  connections: {
-    list: connections.listConnections,
-    create: connections.createConnection,
-    test: connections.testConnection,
-    remove: connections.removeConnection,
   },
   tokens: {
     list: tokens.listTokens,
@@ -74,41 +42,20 @@ export const rpc = {
 
 export { ApiError } from "./http.ts";
 
+// Provider presentation descriptors (guided token flows / field catalogs) for
+// the connections tab. Pure client-side presentation data — the connection
+// CRUD itself goes through lib/control-api.ts.
 export {
   CLOUDFLARE_CREATE_TOKEN_URL,
   PROVIDERS,
   providerDescriptor,
 } from "./connections.ts";
 export type {
-  Connection,
-  ConnectionAuthMethod,
-  ConnectionOwner,
-  ConnectionScope,
-  ConnectionStatus,
-  ConnectionTestResult,
-  CreateConnectionInput,
   ProviderDescriptor,
   ProviderEnvField,
   ProviderTokenHelper,
 } from "./connections.ts";
 
-export type {
-  CreateInstallationInput,
-  InstallationOutput,
-  ExportInput,
-  ExportOperation,
-  Installation,
-  InstallationEvent,
-  InstallationEventsResult,
-  InstallationPlanInput,
-  InstallationPlanResponse,
-  MaterializeInput,
-  OidcClientConfig,
-  RotateWorkloadServiceTokenResult,
-  WorkloadService,
-  WorkloadServiceDescriptor,
-  WorkloadServiceStatus,
-} from "./installations.ts";
 export type {
   CreateTokenInput,
   CreateTokenResult,

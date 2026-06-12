@@ -29,7 +29,9 @@ import {
   type SpaceGraph,
 } from "../../lib/control-api.ts";
 import {
+  effectiveInstallationStatus,
   launchUrlFromOutputs,
+  needsAttention,
   staleReasonFromActivity,
 } from "../../lib/installations-ui.ts";
 import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
@@ -111,12 +113,9 @@ function Inner() {
     return map;
   });
 
-  /** Apps currently needing attention (status error / stale). */
+  /** Apps currently needing attention (error / stale under either model). */
   const attentionCount = createMemo(
-    () =>
-      (installations() ?? []).filter(
-        (inst) => inst.status === "error" || inst.status === "stale",
-      ).length,
+    () => (installations() ?? []).filter(needsAttention).length,
   );
 
   const openDetail = (inst: Installation) =>
@@ -210,7 +209,7 @@ function Inner() {
                           <div class="av-card-head">
                             <span class="av-card-name">{inst.name}</span>
                             <StatusBadge
-                              status={inst.status}
+                              status={effectiveInstallationStatus(inst)}
                               label={installationStatusLabel}
                               tone={installationTone}
                             />
@@ -228,7 +227,7 @@ function Inner() {
                           </Show>
                           <Show
                             when={
-                              inst.status === "stale" &&
+                              effectiveInstallationStatus(inst) === "stale" &&
                               staleReasons().get(inst.id)
                             }
                           >
