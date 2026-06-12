@@ -396,12 +396,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       readonly json: unknown;
     },
   ): Promise<void> {
+    const run = fields.json as {
+      readonly status?: string;
+      readonly leaseToken?: string | null;
+      readonly heartbeatAt?: number | null;
+    };
     const values = {
       id: fields.id,
       kind,
       spaceId: fields.spaceId,
       sourceId: fields.sourceId ?? null,
       installationId: fields.installationId,
+      // The §27 ledger keeps status / lease coordination as indexed columns; the
+      // canonical value still rides in run_json. Default status to `queued` so a
+      // run without an explicit status still satisfies the NOT NULL column.
+      status: run.status ?? "queued",
+      leaseToken: run.leaseToken ?? null,
+      heartbeatAt: run.heartbeatAt ?? null,
       // created_at is TEXT so it can hold both the internal epoch-number runs
       // and the ISO-string SourceSyncRun without a per-kind column.
       createdAt: String(fields.createdAt),
@@ -417,6 +428,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           spaceId: values.spaceId,
           sourceId: values.sourceId,
           installationId: values.installationId,
+          status: values.status,
+          leaseToken: values.leaseToken,
+          heartbeatAt: values.heartbeatAt,
           createdAt: values.createdAt,
           runJson: values.runJson,
         },
@@ -738,10 +752,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
    * and the guarded Installation advance — run inside ONE Postgres interactive
    * transaction so a mid-sequence failure rolls the whole unit back instead of
    * leaving torn state. The transaction is opened through the {@link SqlClient}
-   * `transaction` seam (a pinned connection); when the configured client does not
-   * expose one (e.g. a bare pool wrapper), the writes fall back to the previous
-   * non-transactional sequence on `this.#db` — identical to the pre-atomic
-   * behavior, never worse.
+   * `transaction` seam (a pinned connection), which every SqlClient implements.
    *
    * The guard is fenced in the UPDATE predicate exactly as
    * {@link patchInstallation}: a guard miss (no row updated) re-reads to decide
@@ -752,13 +763,6 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
   ): Promise<{ readonly installation: Installation | undefined }> {
-    if (!this.#client.transaction) {
-      // No pinned-connection transaction available: replay the writes on the
-      // shared (pool) connection. This is the exact pre-atomic sequence, so no
-      // regression versus today; only the substrate that wires a real
-      // transaction gains all-or-nothing.
-      return await this.#commitAppliedDeploymentWrites(this.#db, input);
-    }
     return await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const txDb = this.#drizzleForClient(transaction);

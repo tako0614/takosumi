@@ -20,7 +20,7 @@ export interface SqlClient {
     sql: string,
     parameters?: SqlParameters,
   ): Promise<SqlQueryResult<Row>>;
-  transaction?<T>(
+  transaction<T>(
     fn: (transaction: SqlTransaction) => T | Promise<T>,
   ): Promise<T>;
 }

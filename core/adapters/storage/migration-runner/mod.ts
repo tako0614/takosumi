@@ -251,22 +251,7 @@ export class StorageMigrationRunner {
   async #runInTransaction<T>(
     fn: (transaction: SqlTransaction) => T | Promise<T>,
   ): Promise<T> {
-    if (this.#client.transaction) {
-      return await this.#client.transaction(fn);
-    }
-
-    const transaction = this.#client as SqlTransaction;
-    await transaction.query("begin");
-    try {
-      const result = await fn(transaction);
-      if (transaction.commit) await transaction.commit();
-      else await transaction.query("commit");
-      return result;
-    } catch (error) {
-      if (transaction.rollback) await transaction.rollback();
-      else await transaction.query("rollback");
-      throw error;
-    }
+    return await this.#client.transaction(fn);
   }
 }
 

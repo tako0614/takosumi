@@ -50,8 +50,14 @@ interface PgQueryResult {
   rowCount?: number;
 }
 
+interface PgPoolClient {
+  query(sql: string, values?: readonly unknown[]): Promise<PgQueryResult>;
+  release(): void;
+}
+
 interface PgPool {
   query(sql: string, values?: readonly unknown[]): Promise<PgQueryResult>;
+  connect(): Promise<PgPoolClient>;
   end(): Promise<void>;
 }
 
@@ -60,6 +66,11 @@ type ServiceSqlClient = NonNullable<
   Parameters<typeof buildComposedApp>[0]["sqlClient"]
 >;
 type ServiceSqlParameters = Parameters<ServiceSqlClient["query"]>[1];
+type ServiceSqlTransaction = Parameters<
+  NonNullable<ServiceSqlClient["transaction"]>
+>[0] extends (transaction: infer T) => unknown
+  ? T
+  : never;
 
 type Es256PrivateJwk = JsonWebKey & {
   readonly kid?: string;
@@ -624,21 +635,55 @@ function wrapPool(pool: PgPool): PostgresQueryClient {
 }
 
 function wrapServiceSqlClient(pool: PgPool): ServiceSqlClient {
+  const runQuery = async <Row extends Record<string, unknown>>(
+    runner: Pick<PgPool, "query">,
+    sql: string,
+    parameters?: ServiceSqlParameters,
+  ): Promise<{ rows: readonly Row[]; rowCount: number }> => {
+    if (parameters !== undefined && !Array.isArray(parameters)) {
+      throw new TypeError(
+        "node-postgres service SQL adapter expects positional parameters",
+      );
+    }
+    const result = await runner.query(sql, parameters as readonly unknown[]);
+    return {
+      rows: result.rows as Row[],
+      rowCount: result.rowCount ?? result.rows.length,
+    };
+  };
   return {
     async query<Row extends Record<string, unknown> = Record<string, unknown>>(
       sql: string,
       parameters?: ServiceSqlParameters,
     ): Promise<{ rows: readonly Row[]; rowCount: number }> {
-      if (parameters !== undefined && !Array.isArray(parameters)) {
-        throw new TypeError(
-          "node-postgres service SQL adapter expects positional parameters",
-        );
-      }
-      const result = await pool.query(sql, parameters as readonly unknown[]);
-      return {
-        rows: result.rows as Row[],
-        rowCount: result.rowCount ?? result.rows.length,
+      return await runQuery<Row>(pool, sql, parameters);
+    },
+    // Interactive transaction over a pinned connection: BEGIN / COMMIT, with a
+    // best-effort ROLLBACK on any throw, mirroring core/index.ts. Atomic
+    // ledger commits (commitAppliedDeployment) run their whole write set here so
+    // a mid-sequence failure rolls back instead of leaving torn state.
+    async transaction<T>(
+      fn: (transaction: ServiceSqlTransaction) => T | Promise<T>,
+    ): Promise<T> {
+      const conn = await pool.connect();
+      // The pinned-connection handle is itself a transaction. A nested
+      // transaction(fn) runs fn against the same connection — the ledger commit
+      // never nests, so flat re-entry is the correct (no savepoint) behavior.
+      const tx: ServiceSqlTransaction = {
+        query: (sql, parameters) => runQuery(conn, sql, parameters),
+        transaction: (nested) => Promise.resolve(nested(tx)),
       };
+      try {
+        await conn.query("begin");
+        const value = await fn(tx);
+        await conn.query("commit");
+        return value;
+      } catch (error) {
+        await conn.query("rollback").catch(() => {});
+        throw error;
+      } finally {
+        conn.release();
+      }
     },
   };
 }

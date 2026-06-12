@@ -531,17 +531,55 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "space_id",
         "source_id",
         "installation_id",
+        "status",
+        "lease_token",
+        "heartbeat_at",
         "created_at",
         "run_json",
       ],
       primaryKey: ["id"],
       indexes: [
         ["kind"],
+        ["kind", "status"],
         ["space_id"],
         ["source_id"],
         ["installation_id"],
         ["created_at"],
       ],
+    },
+    {
+      // §30 artifact ledger (R2 pointer metadata for plan / state archives).
+      name: "takosumi_artifacts",
+      domain: "deploy",
+      columns: [
+        "id",
+        "run_id",
+        "kind",
+        "object_key",
+        "digest",
+        "size_bytes",
+        "created_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["run_id"]],
+    },
+    {
+      // Provider Template catalog (read-only provider source / credential source
+      // metadata; the live table, distinct from the v43 `_entries` dead table).
+      name: "takosumi_provider_templates",
+      domain: "deploy",
+      columns: [
+        "id",
+        "provider_source",
+        "primary_credential_source",
+        "default_eligible",
+        "entry_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["provider_source"]],
+      indexes: [["primary_credential_source"], ["default_eligible"]],
     },
     {
       name: "takosumi_spaces",
@@ -2293,5 +2331,62 @@ drop table if exists takosumi_provider_env_sets;
 drop index if exists takosumi_provider_templates_entries_default_eligible_idx;
 drop index if exists takosumi_provider_templates_entries_primary_credential_source_idx;
 drop table if exists takosumi_provider_templates_entries;`,
+    },
+    {
+      id: "deploy.takosumi_runs_lease_columns.add",
+      version: 46,
+      domain: "deploy",
+      description:
+        "Promote the single Run ledger's status / lease coordination fields to indexed columns: add status (mirroring the D1 ledger, backfilled from run_json), plus the lease_token / heartbeat_at columns and the (kind, status) index used by run-lease claim/heartbeat sweeps. Also create the takosumi_artifacts and takosumi_provider_templates ledgers that the deploy-control store has written but which no prior Postgres migration ever materialized (the D1 store and Drizzle schema already define them), and relax the source_id columns on takosumi_source_snapshots / takosumi_opentofu_installations to nullable so upload-origin (takosumi deploy) snapshots and installations — which have no Source — match the Drizzle schema. Additive and idempotent: each column add uses `if not exists`, the backfill reads run_json before status is enforced NOT NULL, the table / index creates are `if not exists`, and `drop not null` is a no-op when already nullable.",
+      sql: `alter table takosumi_runs add column if not exists status text;
+alter table takosumi_runs add column if not exists lease_token text;
+alter table takosumi_runs add column if not exists heartbeat_at bigint;
+update takosumi_runs
+  set status = coalesce(run_json->>'status', status, 'queued')
+  where status is null;
+update takosumi_runs
+  set heartbeat_at = (run_json->>'heartbeatAt')::bigint
+  where heartbeat_at is null and run_json ? 'heartbeatAt';
+alter table takosumi_runs alter column status set not null;
+create index if not exists takosumi_runs_kind_status_idx
+  on takosumi_runs (kind, status);
+create table if not exists takosumi_artifacts (
+  id          text    primary key,
+  run_id      text    not null,
+  kind        text    not null,
+  object_key  text    not null,
+  digest      text    not null,
+  size_bytes  integer not null,
+  created_at  text    not null
+);
+create index if not exists takosumi_artifacts_run_idx
+  on takosumi_artifacts (run_id);
+create table if not exists takosumi_provider_templates (
+  id                        text    primary key,
+  provider_source           text    not null,
+  primary_credential_source text    not null,
+  default_eligible          integer not null,
+  entry_json                jsonb   not null,
+  created_at                text    not null,
+  updated_at                text    not null
+);
+create unique index if not exists takosumi_provider_templates_source_unique
+  on takosumi_provider_templates (provider_source);
+create index if not exists takosumi_provider_templates_primary_credential_source_idx
+  on takosumi_provider_templates (primary_credential_source);
+create index if not exists takosumi_provider_templates_default_eligible_idx
+  on takosumi_provider_templates (default_eligible);
+alter table takosumi_source_snapshots alter column source_id drop not null;
+alter table takosumi_opentofu_installations alter column source_id drop not null;`,
+      down: `drop index if exists takosumi_provider_templates_default_eligible_idx;
+drop index if exists takosumi_provider_templates_primary_credential_source_idx;
+drop index if exists takosumi_provider_templates_source_unique;
+drop table if exists takosumi_provider_templates;
+drop index if exists takosumi_artifacts_run_idx;
+drop table if exists takosumi_artifacts;
+drop index if exists takosumi_runs_kind_status_idx;
+alter table takosumi_runs drop column if exists heartbeat_at;
+alter table takosumi_runs drop column if exists lease_token;
+alter table takosumi_runs drop column if exists status;`,
     },
   ]);

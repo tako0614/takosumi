@@ -412,9 +412,16 @@ async function tryCreatePostgresClient(
           const { sql: rendered, values } = renderNamedParams(sql, parameters);
           return wrapPgResult<Row>(await conn.query(rendered, values));
         };
+        // The pinned-connection handle is itself a SqlTransaction. A nested
+        // `transaction(fn)` runs `fn` against the same connection — the store
+        // never nests, so flat re-entry is the correct (no savepoint) behavior.
+        const tx: SqlTransaction = {
+          query: connQuery,
+          transaction: (nested) => Promise.resolve(nested(tx)),
+        };
         try {
           await conn.query("begin");
-          const value = await fn({ query: connQuery });
+          const value = await fn(tx);
           await conn.query("commit");
           return value;
         } catch (error) {
