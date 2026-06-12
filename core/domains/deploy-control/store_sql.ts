@@ -31,10 +31,12 @@ import {
   asc,
   desc,
   eq,
+  gt,
   gte,
   inArray,
   isNull,
   ne,
+  or,
   type SQL,
   sql,
 } from "drizzle-orm";
@@ -56,6 +58,13 @@ import type {
 } from "takosumi-contract/output-snapshots";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import {
+  clampPageLimit,
+  decodeCursor,
+  type Page,
+  type PageParams,
+  pageFromProbe,
+} from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
@@ -89,6 +98,26 @@ const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
 const RUN_KIND_BACKUP = "backup";
+
+/**
+ * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the given
+ * `(createdAtCol, idCol)` sort columns: a row qualifies when its createdAt is
+ * strictly after the cursor, or equal-createdAt with a strictly-greater id. When
+ * there is no cursor (first page) the existing filter is returned unchanged.
+ */
+function pgKeysetWhere(
+  filter: SQL | undefined,
+  createdAtCol: PgColumn,
+  idCol: PgColumn,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    gt(createdAtCol, cursor.createdAt),
+    and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
 
 export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #client: SqlClient;
@@ -585,6 +614,31 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows.map((row) => parseRow(row) as Installation);
   }
 
+  async listInstallationsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Installation>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<Installation>(
+      pgSchema.installations,
+      pgSchema.installations.installationJson,
+      {
+        where: pgKeysetWhere(
+          eq(pgSchema.installations.spaceId, spaceId),
+          pgSchema.installations.createdAt,
+          pgSchema.installations.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(pgSchema.installations.createdAt),
+          asc(pgSchema.installations.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   async patchInstallation(
     id: string,
     patch: InstallationPatch,
@@ -699,6 +753,31 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async listDeploymentsPage(
+    installationId: string,
+    params: PageParams,
+  ): Promise<Page<Deployment>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<Deployment>(
+      pgSchema.deployments,
+      pgSchema.deployments.deploymentJson,
+      {
+        where: pgKeysetWhere(
+          eq(pgSchema.deployments.installationId, installationId),
+          pgSchema.deployments.createdAt,
+          pgSchema.deployments.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(pgSchema.deployments.createdAt),
+          asc(pgSchema.deployments.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   // --- connections + sealed secret blobs ------------------------------------
 
   async putConnection(connection: Connection): Promise<Connection> {
@@ -734,6 +813,31 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ],
       },
     );
+  }
+
+  async listConnectionsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Connection>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<Connection>(
+      pgSchema.connections,
+      pgSchema.connections.connectionJson,
+      {
+        where: pgKeysetWhere(
+          eq(pgSchema.connections.spaceId, spaceId),
+          pgSchema.connections.createdAt,
+          pgSchema.connections.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(pgSchema.connections.createdAt),
+          asc(pgSchema.connections.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   async listOperatorConnections(): Promise<readonly Connection[]> {
@@ -887,6 +991,28 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
       },
     );
+  }
+
+  async listSourcesPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<StoredSource>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<StoredSource>(
+      pgSchema.sources,
+      pgSchema.sources.sourceJson,
+      {
+        where: pgKeysetWhere(
+          eq(pgSchema.sources.spaceId, spaceId),
+          pgSchema.sources.createdAt,
+          pgSchema.sources.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   async deleteSource(id: string): Promise<boolean> {

@@ -29,9 +29,11 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNull,
   ne,
+  or,
   type SQL,
   sql,
 } from "drizzle-orm";
@@ -66,6 +68,13 @@ import type {
 } from "takosumi-contract/output-snapshots";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import {
+  clampPageLimit,
+  decodeCursor,
+  type Page,
+  type PageParams,
+  pageFromProbe,
+} from "takosumi-contract/pagination";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
@@ -106,6 +115,26 @@ const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
+
+/**
+ * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the
+ * `(createdAtCol, idCol)` sort columns (mirrors the SQL store's `pgKeysetWhere`
+ * for the D1 / SQLite backend). No cursor (first page) returns the filter
+ * unchanged.
+ */
+function d1KeysetWhere(
+  filter: SQL | undefined,
+  createdAtCol: SQLiteColumn,
+  idCol: SQLiteColumn,
+  cursor: { readonly createdAt: string; readonly id: string } | undefined,
+): SQL | undefined {
+  if (cursor === undefined) return filter;
+  const keyset = or(
+    gt(createdAtCol, cursor.createdAt),
+    and(eq(createdAtCol, cursor.createdAt), gt(idCol, cursor.id)),
+  );
+  return filter === undefined ? keyset : and(filter, keyset);
+}
 
 export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   readonly #orm: DrizzleD1Database<typeof schema>;
@@ -538,6 +567,31 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
+  async listInstallationsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Installation>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<Installation>(
+      schema.installations,
+      schema.installations.recordJson,
+      {
+        where: d1KeysetWhere(
+          eq(schema.installations.spaceId, spaceId),
+          schema.installations.createdAt,
+          schema.installations.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(schema.installations.createdAt),
+          asc(schema.installations.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   async patchInstallation(
     id: string,
     patch: InstallationPatch,
@@ -642,6 +696,28 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows.map(deploymentFromDrizzleRow);
   }
 
+  async listDeploymentsPage(
+    installationId: string,
+    params: PageParams,
+  ): Promise<Page<Deployment>> {
+    await this.#ensureSchema();
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#orm
+      .select()
+      .from(schema.deployments)
+      .where(
+        d1KeysetWhere(
+          eq(schema.deployments.installationId, installationId),
+          schema.deployments.createdAt,
+          schema.deployments.id,
+          decodeCursor(params.cursor),
+        ),
+      )
+      .orderBy(asc(schema.deployments.createdAt), asc(schema.deployments.id))
+      .limit(limit + 1);
+    return pageFromProbe(rows.map(deploymentFromDrizzleRow), limit);
+  }
+
   // -- Connection (+ sealed secret blob) --------------------------------------
 
   async putConnection(connection: Connection): Promise<Connection> {
@@ -677,6 +753,31 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         ],
       },
     );
+  }
+
+  async listConnectionsPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<Connection>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<Connection>(
+      schema.connections,
+      schema.connections.connectionJson,
+      {
+        where: d1KeysetWhere(
+          eq(schema.connections.spaceId, spaceId),
+          schema.connections.createdAt,
+          schema.connections.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          asc(schema.connections.createdAt),
+          asc(schema.connections.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   async listOperatorConnections(): Promise<readonly Connection[]> {
@@ -838,6 +939,28 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         orderBy: [asc(schema.sources.createdAt), asc(schema.sources.id)],
       },
     );
+  }
+
+  async listSourcesPage(
+    spaceId: string,
+    params: PageParams,
+  ): Promise<Page<StoredSource>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<StoredSource>(
+      schema.sources,
+      schema.sources.recordJson,
+      {
+        where: d1KeysetWhere(
+          eq(schema.sources.spaceId, spaceId),
+          schema.sources.createdAt,
+          schema.sources.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [asc(schema.sources.createdAt), asc(schema.sources.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
   }
 
   async deleteSource(id: string): Promise<boolean> {

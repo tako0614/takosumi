@@ -103,6 +103,7 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import type { RunCostInfo, RunLogsResponse } from "takosumi-contract/runs";
+import type { PageParams } from "takosumi-contract/pagination";
 import {
   InMemoryOpenTofuDeploymentStore,
   type OpenTofuDeploymentStore,
@@ -503,7 +504,10 @@ export interface TakosumiOperations {
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
   getInstallation(id: string): Promise<GetInstallationResponse>;
-  listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+  listDeployments(
+    installationId: string,
+    params?: PageParams,
+  ): Promise<ListDeploymentsResponse>;
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
@@ -533,7 +537,10 @@ export interface TakosumiOperations {
   ): Promise<Run>;
   cancelRun(id: string): Promise<Run>;
   /** Lists a Space's Connections (never includes secret values; spec §30). */
-  listConnections(spaceId: string): Promise<ListConnectionsResponse>;
+  listConnections(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListConnectionsResponse>;
   /** Lists operator-scoped (instance-wide) Connections (spec §30). */
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   /** Reads a Connection projection by id (no secret values). */
@@ -583,7 +590,7 @@ export interface TakosumiOperations {
   }): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
-  listSources(spaceId: string): Promise<ListSourcesResponse>;
+  listSources(spaceId: string, params?: PageParams): Promise<ListSourcesResponse>;
   getSource(id: string): Promise<SourceResponse>;
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
@@ -966,8 +973,8 @@ export async function createTakosumiService(
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
     getInstallation: (id) => opentofuController.getInstallation(id),
-    listDeployments: (installationId) =>
-      opentofuController.listDeployments(installationId),
+    listDeployments: (installationId, params) =>
+      opentofuController.listDeployments(installationId, params),
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
     getDeployment: (id) => opentofuController.getDeployment(id),
@@ -978,7 +985,8 @@ export async function createTakosumiService(
     getRunCost: (id) => opentofuController.getRunCost(id),
     approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),
     cancelRun: (id) => opentofuController.cancelRun(id),
-    listConnections: (spaceId) => opentofuController.listConnections(spaceId),
+    listConnections: (spaceId, params) =>
+      opentofuController.listConnections(spaceId, params),
     listOperatorConnections: () => opentofuController.listOperatorConnections(),
     getConnection: (connectionId) =>
       opentofuController.getConnection(connectionId),
@@ -1029,7 +1037,8 @@ export async function createTakosumiService(
     dispatchQueuedRun: (dispatch) =>
       opentofuController.dispatchQueuedRun(dispatch),
     createSource: (request) => opentofuController.createSource(request),
-    listSources: (spaceId) => opentofuController.listSources(spaceId),
+    listSources: (spaceId, params) =>
+      opentofuController.listSources(spaceId, params),
     getSource: (id) => opentofuController.getSource(id),
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     createSourceSync: (sourceId, opts) =>

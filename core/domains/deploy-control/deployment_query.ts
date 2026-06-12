@@ -21,6 +21,7 @@ import type {
   ListDeploymentOutputsResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { PublicInstallation } from "takosumi-contract/installations";
+import type { PageParams } from "takosumi-contract/pagination";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 
@@ -114,10 +115,16 @@ export class DeploymentQuery {
 
   async listDeployments(
     installationId: string,
+    params?: PageParams,
   ): Promise<ListDeploymentsResponse> {
     await requireInstallation(this.#store, installationId);
+    const { items, nextCursor } = await this.#store.listDeploymentsPage(
+      installationId,
+      params ?? {},
+    );
     return {
-      deployments: await this.#store.listDeployments(installationId),
+      deployments: items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
   }
 

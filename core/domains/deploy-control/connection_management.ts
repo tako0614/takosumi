@@ -18,6 +18,7 @@ import type {
   ListConnectionsResponse,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
+import type { PageParams } from "takosumi-contract/pagination";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import {
@@ -53,9 +54,19 @@ export class ConnectionManagement {
     }
   }
 
-  async listConnections(spaceId: string): Promise<ListConnectionsResponse> {
+  async listConnections(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListConnectionsResponse> {
     requireNonEmptyString(spaceId, "spaceId");
-    return { connections: await this.#store.listConnections(spaceId) };
+    const { items, nextCursor } = await this.#store.listConnectionsPage(
+      spaceId,
+      params ?? {},
+    );
+    return {
+      connections: items,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+    };
   }
 
   /**

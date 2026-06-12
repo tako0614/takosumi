@@ -104,6 +104,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import type { PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import { isValidTenantScriptName } from "../../../providers/cloudflare/hosting/wfp_script_name.ts";
@@ -4077,8 +4078,9 @@ export class OpenTofuDeploymentController {
 
   async listDeployments(
     installationId: string,
+    params?: PageParams,
   ): Promise<ListDeploymentsResponse> {
-    return await this.#deployments.listDeployments(installationId);
+    return await this.#deployments.listDeployments(installationId, params);
   }
 
   async listDeploymentOutputs(
@@ -4123,8 +4125,11 @@ export class OpenTofuDeploymentController {
     return await this.#connections.createConnection(request);
   }
 
-  async listConnections(spaceId: string): Promise<ListConnectionsResponse> {
-    return await this.#connections.listConnections(spaceId);
+  async listConnections(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListConnectionsResponse> {
+    return await this.#connections.listConnections(spaceId, params);
   }
 
   /**
@@ -4165,8 +4170,11 @@ export class OpenTofuDeploymentController {
     return await this.#sources.createSource(request);
   }
 
-  async listSources(spaceId: string): Promise<ListSourcesResponse> {
-    return await this.#sources.listSources(spaceId);
+  async listSources(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListSourcesResponse> {
+    return await this.#sources.listSources(spaceId, params);
   }
 
   async getSource(id: string): Promise<SourceResponse> {
