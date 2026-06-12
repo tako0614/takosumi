@@ -36,6 +36,7 @@ import {
   validateOperationCompletionFromStatusPatch,
 } from "./installation-materialize-helpers.ts";
 import {
+  errorJson,
   appInstallationStatusValue,
   isRecord,
   json,
@@ -70,31 +71,28 @@ export async function handleUpdateAppInstallationStatus(input: {
   store: AccountsStore;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const status = appInstallationStatusValue(body.status);
-  if (!status) return json({ error: "invalid_request" }, 400);
+  if (!status) return errorJson("invalid_request", "invalid request", 400);
   const requestedMode = body.mode === undefined
     ? undefined
     : appInstallationModeValue(body.mode);
   if (body.mode !== undefined && !requestedMode) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
   const failedOperation = body.operation === undefined
     ? undefined
     : installationFailedOperationValue(body.operation);
   if (body.operation !== undefined && !failedOperation) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
   if (failedOperation && !stringValue(body.operationId)) {
-    return json({
-      error: "invalid_request",
-      error_description: "operationId is required when operation is provided",
-    }, 400);
+    return errorJson("invalid_request", "operationId is required when operation is provided", 400);
   }
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
 
   let updated;
   const now = Date.now();
@@ -105,10 +103,7 @@ export async function handleUpdateAppInstallationStatus(input: {
       "installation_status_conflict",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "state_conflict",
-      error_description: "installation status transition is not allowed",
-    }, 409);
+    return errorJson("state_conflict", "installation status transition is not allowed", 409);
   }
   const statusOperationId = stringValue(body.operationId);
   if (updated.status === "exported" && statusOperationId) {
@@ -162,11 +157,7 @@ export async function handleUpdateAppInstallationStatus(input: {
         ],
       });
       if (closed) {
-        return json({
-          error: "operation_already_closed",
-          error_description:
-            "materialize operation already has a completion event",
-        }, 409);
+        return errorJson("operation_already_closed", "materialize operation already has a completion event", 409);
       }
     }
   }
@@ -250,11 +241,11 @@ export async function handleUninstallAppInstallation(input: {
   store: AccountsStore;
 }): Promise<Response> {
   const body = await readOptionalJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
 
   const existingEvents = await input.store.listInstallationEvents(
     input.installationId,
@@ -345,16 +336,13 @@ export async function handleUpdateAppInstallationRevision(input: {
   deployControl?: DeployControlProxyOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return json({
-      error: "state_conflict",
-      error_description: `${input.operation} requires a ready AppInstallation`,
-    }, 409);
+    return errorJson("state_conflict", `${input.operation} requires a ready AppInstallation`, 409);
   }
   if (input.deployControl) {
     return await handleCoreDeployControlBackedRevision({
@@ -379,29 +367,17 @@ export async function handleUpdateAppInstallationRevision(input: {
   const artifactDigest = stringValue(source.artifactDigest) ??
     stringValue(body.artifactDigest);
   if (!sourceRef || !sourceCommit || !planDigest) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "source.ref, source.commit, and source.planDigest are required",
-    }, 400);
+    return errorJson("invalid_request", "source.ref, source.commit, and source.planDigest are required", 400);
   }
   if (
     normalizeSourceGitUrl(sourceGitUrl) !==
       normalizeSourceGitUrl(installation.sourceGitUrl)
   ) {
-    return json({
-      error: "source_mismatch",
-      error_description:
-        "deployment and rollback must keep the installation source git URL",
-    }, 409);
+    return errorJson("source_mismatch", "deployment and rollback must keep the installation source git URL", 409);
   }
   const appId = stringValue(body.appId);
   if (appId && appId !== installation.appId) {
-    return json({
-      error: "app_mismatch",
-      error_description:
-        "deployment and rollback must keep the installation appId",
-    }, 409);
+    return errorJson("app_mismatch", "deployment and rollback must keep the installation appId", 409);
   }
 
   const now = Date.now();
@@ -568,27 +544,17 @@ async function handleCoreDeployControlBackedRevision(input: {
   const artifactDigest = stringValue(source?.artifactDigest) ??
     stringValue(input.body.artifactDigest);
   if (!sourceRef || !sourceCommit || !planDigest) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "deployment through Takosumi deploy control requires source.ref plus expected.sourceCommit and expected.planDigest",
-    }, 400);
+    return errorJson("invalid_request", "deployment through Takosumi deploy control requires source.ref plus expected.sourceCommit and expected.planDigest", 400);
   }
   if (
     normalizeSourceGitUrl(sourceGitUrl) !==
       normalizeSourceGitUrl(input.installation.sourceGitUrl)
   ) {
-    return json({
-      error: "source_mismatch",
-      error_description: "deployment must keep the installation source git URL",
-    }, 409);
+    return errorJson("source_mismatch", "deployment must keep the installation source git URL", 409);
   }
   const appId = stringValue(input.body.appId);
   if (appId && appId !== input.installation.appId) {
-    return json({
-      error: "app_mismatch",
-      error_description: "deployment must keep the installation appId",
-    }, 409);
+    return errorJson("app_mismatch", "deployment must keep the installation appId", 409);
   }
 
   const requestedBindings = appBindingRecordsFromValue({

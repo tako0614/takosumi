@@ -10,6 +10,7 @@ import {
 import type { AccountsStore } from "./store.ts";
 import { requireSameSpaceWorkloadControlForInstallation } from "./workload-service-tokens.ts";
 import {
+  errorJson,
   json,
   readJsonObject,
   stringValue,
@@ -22,10 +23,7 @@ export async function requireAppInstallationCreateWriteAccess(input: {
 }): Promise<Response | undefined> {
   const body = await readJsonObject(input.request);
   if (!body) {
-    return json({
-      error: "invalid_request",
-      error_description: "request body is required",
-    }, 400);
+    return errorJson("invalid_request", "request body is required", 400);
   }
   const accountId = stringValue(body.accountId);
   const createdBySubject = takosumiSubjectValue(body.createdBySubject);
@@ -35,11 +33,7 @@ export async function requireAppInstallationCreateWriteAccess(input: {
   // authenticated session and require the body to declare both fields so the
   // session subject can be matched against them.
   if (!accountId || !createdBySubject) {
-    return json({
-      error: "missing_field",
-      error_description:
-        "accountId and createdBySubject are required to authorize installation create",
-    }, 400);
+    return errorJson("missing_field", "accountId and createdBySubject are required to authorize installation create", 400);
   }
   return await requireAccountCreateWriteAccess({
     request: input.request,
@@ -81,7 +75,7 @@ export async function requireConnectionSpaceAccess(input: {
       space.accountId,
     )
   ) {
-    return json({ error: "space_not_found" }, 404);
+    return errorJson("space_not_found", "space not found", 404);
   }
   return undefined;
 }
@@ -97,15 +91,12 @@ export async function requireInstallationPlanRunWriteAccess(input: {
   });
   if (!bearer.ok) return bearer.response;
   const body = await readJsonObject(input.request.clone());
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   const spaceId = stringValue(body.spaceId) ??
     stringValue(body.space_id) ??
     stringValue(body.space);
   if (!spaceId) {
-    return json({
-      error: "invalid_request",
-      error_description: "spaceId is required",
-    }, 400);
+    return errorJson("invalid_request", "spaceId is required", 400);
   }
   const space = await input.store.findSpace(spaceId);
   // A not-yet-created space is allowed for any write-scoped subject: this is the
@@ -122,7 +113,7 @@ export async function requireInstallationPlanRunWriteAccess(input: {
       space.accountId,
     )
   ) {
-    return json({ error: "space_not_found" }, 404);
+    return errorJson("space_not_found", "space not found", 404);
   }
   return undefined;
 }
@@ -133,10 +124,7 @@ export async function requireAppInstallationImportWriteAccess(input: {
 }): Promise<Response | undefined> {
   const body = await readJsonObject(input.request);
   if (!body) {
-    return json({
-      error: "invalid_request",
-      error_description: "request body is required",
-    }, 400);
+    return errorJson("invalid_request", "request body is required", 400);
   }
   const accountId = stringValue(body.targetAccountId) ??
     stringValue(body.accountId);
@@ -150,11 +138,7 @@ export async function requireAppInstallationImportWriteAccess(input: {
   // session subject can be matched against them. This mirrors the
   // `requireAppInstallationCreateWriteAccess` shape exactly.
   if (!accountId || !createdBySubject) {
-    return json({
-      error: "missing_field",
-      error_description:
-        "targetAccountId (or accountId) and createdBySubject (or subject) are required to authorize installation import",
-    }, 400);
+    return errorJson("missing_field", "targetAccountId (or accountId) and createdBySubject (or subject) are required to authorize installation import", 400);
   }
   return await requireAccountCreateWriteAccess({
     request: input.request,
@@ -179,7 +163,7 @@ export async function requireAppInstallationAccountAccess(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   if (
     !await subjectCanAccessInstallation(
       input.store,
@@ -187,7 +171,7 @@ export async function requireAppInstallationAccountAccess(input: {
       installation,
     )
   ) {
-    return json({ error: "installation_not_found" }, 404);
+    return errorJson("installation_not_found", "installation not found", 404);
   }
   return undefined;
 }
@@ -228,7 +212,7 @@ async function requireAccountCreateWriteAccess(input: {
     // We respond with `account_not_found` (rather than the stricter 403) to
     // preserve the existing non-disclosure shape; combined with the upstream
     // session enforcement, mismatched callers cannot proceed regardless.
-    return json({ error: "account_not_found" }, 404);
+    return errorJson("account_not_found", "account not found", 404);
   }
   const account = await input.store.findLedgerAccount(input.accountId);
   if (
@@ -239,7 +223,7 @@ async function requireAccountCreateWriteAccess(input: {
       account.accountId,
     )
   ) {
-    return json({ error: "account_not_found" }, 404);
+    return errorJson("account_not_found", "account not found", 404);
   }
   return undefined;
 }

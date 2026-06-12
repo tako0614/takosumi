@@ -7,6 +7,7 @@ import {
 import type { AccountsStore } from "./store.ts";
 import type { StripeBillingOptions } from "./mod.ts";
 import {
+  errorJson,
   isRecord,
   json,
   readJsonObject,
@@ -34,7 +35,7 @@ export async function handleStripeCheckoutRequest(input: {
   billingRedirectAllowlist?: readonly string[];
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const subject = takosumiSubjectValue(body.subject);
   const priceId = stringValue(body.priceId);
@@ -45,61 +46,29 @@ export async function handleStripeCheckoutRequest(input: {
   const successUrl = stringValue(body.successUrl);
   const cancelUrl = stringValue(body.cancelUrl);
   if (!subject || !priceId || !mode || !successUrl || !cancelUrl) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description:
-          "subject, priceId, mode, successUrl, and cancelUrl are required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "subject, priceId, mode, successUrl, and cancelUrl are required", 400);
   }
   if (subject !== input.sessionSubject) {
-    return json(
-      {
-        error: "subject_mismatch",
-        error_description:
-          "checkout body subject does not match the authenticated session",
-      },
-      403,
-    );
+    return errorJson("subject_mismatch", "checkout body subject does not match the authenticated session", 403);
   }
   const allowlist = resolveBillingRedirectAllowlist(
     input.billingRedirectAllowlist,
   );
   if (!allowlist || allowlist.length === 0) {
-    return json(
-      {
-        error: "feature_unavailable",
-        error_description: "Billing redirect allowlist is not configured.",
-      },
-      503,
-    );
+    return errorJson("feature_unavailable", "Billing redirect allowlist is not configured.", 503);
   }
   if (!isAllowedBillingRedirect(successUrl, allowlist)) {
-    return json(
-      {
-        error: "invalid_redirect_uri",
-        error_description: "successUrl origin is not in the billing allowlist",
-      },
-      400,
-    );
+    return errorJson("invalid_redirect_uri", "successUrl origin is not in the billing allowlist", 400);
   }
   if (!isAllowedBillingRedirect(cancelUrl, allowlist)) {
-    return json(
-      {
-        error: "invalid_redirect_uri",
-        error_description: "cancelUrl origin is not in the billing allowlist",
-      },
-      400,
-    );
+    return errorJson("invalid_redirect_uri", "cancelUrl origin is not in the billing allowlist", 400);
   }
 
   const account = await input.store.findAccount(subject);
-  if (!account) return json({ error: "account_not_found" }, 404);
+  if (!account) return errorJson("account_not_found", "account not found", 404);
   const metadata = stringRecordValue(body.metadata);
   if (body.metadata !== undefined && !metadata) {
-    return json({ error: "invalid_request" }, 400);
+    return errorJson("invalid_request", "invalid request", 400);
   }
   const existingBilling =
     await input.store.findBillingAccountForSubject(subject);
@@ -130,13 +99,7 @@ export async function handleStripeCheckoutRequest(input: {
       "billing_checkout_failed",
       error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
-    return json(
-      {
-        error: "checkout_failed",
-        error_description: "billing checkout failed",
-      },
-      502,
-    );
+    return errorJson("checkout_failed", "billing checkout failed", 502);
   }
 }
 
@@ -148,63 +111,31 @@ export async function handleStripeBillingPortalRequest(input: {
   billingRedirectAllowlist?: readonly string[];
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const subject = takosumiSubjectValue(body.subject);
   const returnUrl = stringValue(body.returnUrl);
   if (!subject || !returnUrl) {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "subject and returnUrl are required",
-      },
-      400,
-    );
+    return errorJson("invalid_request", "subject and returnUrl are required", 400);
   }
   if (subject !== input.sessionSubject) {
-    return json(
-      {
-        error: "subject_mismatch",
-        error_description:
-          "portal body subject does not match the authenticated session",
-      },
-      403,
-    );
+    return errorJson("subject_mismatch", "portal body subject does not match the authenticated session", 403);
   }
 
   const allowlist = resolveBillingRedirectAllowlist(
     input.billingRedirectAllowlist,
   );
   if (!allowlist || allowlist.length === 0) {
-    return json(
-      {
-        error: "feature_unavailable",
-        error_description: "Billing redirect allowlist is not configured.",
-      },
-      503,
-    );
+    return errorJson("feature_unavailable", "Billing redirect allowlist is not configured.", 503);
   }
   if (!isAllowedBillingRedirect(returnUrl, allowlist)) {
-    return json(
-      {
-        error: "invalid_redirect_uri",
-        error_description: "returnUrl origin is not in the billing allowlist",
-      },
-      400,
-    );
+    return errorJson("invalid_redirect_uri", "returnUrl origin is not in the billing allowlist", 400);
   }
 
   const existingBilling =
     await input.store.findBillingAccountForSubject(subject);
   if (!existingBilling?.stripeCustomerId) {
-    return json(
-      {
-        error: "billing_account_not_linked",
-        error_description:
-          "Stripe Customer Portal requires an existing Stripe customer.",
-      },
-      409,
-    );
+    return errorJson("billing_account_not_linked", "Stripe Customer Portal requires an existing Stripe customer.", 409);
   }
 
   try {
@@ -224,13 +155,7 @@ export async function handleStripeBillingPortalRequest(input: {
       "billing_portal_failed",
       error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
-    return json(
-      {
-        error: "portal_failed",
-        error_description: "billing portal failed",
-      },
-      502,
-    );
+    return errorJson("portal_failed", "billing portal failed", 502);
   }
 }
 
@@ -293,7 +218,7 @@ export async function handleStripeWebhookRequest(input: {
   billingCreditReconciler?: StripeSpaceCreditReconciler;
 }): Promise<Response> {
   const signature = input.request.headers.get("stripe-signature");
-  if (!signature) return json({ error: "missing_signature" }, 400);
+  if (!signature) return errorJson("missing_signature", "missing signature", 400);
   const payload = await input.request.text();
 
   try {
@@ -347,7 +272,7 @@ export async function handleStripeWebhookRequest(input: {
       error: result.errorMessage,
     });
   } catch {
-    return json({ error: "invalid_signature" }, 400);
+    return errorJson("invalid_signature", "invalid signature", 400);
   }
 }
 

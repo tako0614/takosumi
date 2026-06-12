@@ -3,7 +3,7 @@ import type {
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
-import { bearerChallenge, bearerToken, json } from "./http-helpers.ts";
+import { errorJson, bearerChallenge, bearerToken, json } from "./http-helpers.ts";
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenIsActive } from "./pat-routes.ts";
@@ -271,7 +271,7 @@ export async function requireAccountsBearer(input: {
   if (!personalAccessTokenHasScope(record.scopes, input.scope)) {
     return {
       ok: false,
-      response: json({ error: "insufficient_scope" }, 403, {
+      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
         "www-authenticate":
           `Bearer error="insufficient_scope", scope="${input.scope}"`,
       }),

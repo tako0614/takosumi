@@ -54,6 +54,7 @@ import {
   oidcRedirectUrisValue,
 } from "./installation-routes-internal.ts";
 import {
+  errorJson,
   appInstallationStatusValue,
   booleanValue,
   isRecord,
@@ -93,7 +94,7 @@ export async function handleCreateAppInstallation(input: {
   sharedCellRuntime?: SharedCellRuntimeAllocator;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const source = isRecord(body.source) ? body.source : {};
   const expected = isRecord(body.expected) ? body.expected : undefined;
@@ -122,11 +123,7 @@ export async function handleCreateAppInstallation(input: {
   );
   const createdBySubject = takosumiSubjectValue(body.createdBySubject);
   if (!accountId || !spaceId || !mode || !createdBySubject) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "accountId, spaceId, mode, and createdBySubject are required",
-    }, 400);
+    return errorJson("invalid_request", "accountId, spaceId, mode, and createdBySubject are required", 400);
   }
   const billingGuard = await assertBillingAllowsInstallationCreate({
     store: input.store,
@@ -138,21 +135,13 @@ export async function handleCreateAppInstallation(input: {
   if (billingGuard) return billingGuard;
   const existingSpace = await input.store.findSpace(spaceId);
   if (existingSpace && existingSpace.accountId !== accountId) {
-    return json({ error: "space_account_mismatch" }, 409);
+    return errorJson("space_account_mismatch", "space account mismatch", 409);
   }
   if (input.deployControl && requestedInstallationId) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "installationId is assigned by Takosumi deploy control for this Accounts facade",
-    }, 400);
+    return errorJson("invalid_request", "installationId is assigned by Takosumi deploy control for this Accounts facade", 400);
   }
   if (input.deployControl && !expected) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "installation apply through Takosumi deploy control requires expected review guards",
-    }, 400);
+    return errorJson("invalid_request", "installation apply through Takosumi deploy control requires expected review guards", 400);
   }
   if (
     (planDigest !== undefined &&
@@ -160,11 +149,7 @@ export async function handleCreateAppInstallation(input: {
     (artifactDigest !== undefined &&
       !isSha256DigestRef(artifactDigest))
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "source.planDigest and source.artifactDigest must be sha256: digest references",
-    }, 400);
+    return errorJson("invalid_request", "source.planDigest and source.artifactDigest must be sha256: digest references", 400);
   }
   if (input.deployControl) {
     const preflightBindings = appBindingRecordsFromValue({
@@ -225,7 +210,7 @@ export async function handleCreateAppInstallation(input: {
   // no-deployControl + caller-supplied-id race requires an atomic putIfAbsent
   // on `saveAppInstallation` in the store implementations.
   if (await input.store.findAppInstallation(installationId)) {
-    return json({ error: "installation_already_exists" }, 409);
+    return errorJson("installation_already_exists", "installation already exists", 409);
   }
   if (
     !accountId ||
@@ -238,11 +223,7 @@ export async function handleCreateAppInstallation(input: {
     !mode ||
     !createdBySubject
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "accountId, spaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planDigest, mode, and createdBySubject are required",
-    }, 400);
+    return errorJson("invalid_request", "accountId, spaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planDigest, mode, and createdBySubject are required", 400);
   }
   // These fields are digest-typed integrity attestations recorded in the
   // ledger (surfaced as plan_digest); reject values that are not a
@@ -253,11 +234,7 @@ export async function handleCreateAppInstallation(input: {
     (artifactDigest !== undefined &&
       !isSha256DigestRef(artifactDigest))
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "source.planDigest and source.artifactDigest must be sha256: digest references",
-    }, 400);
+    return errorJson("invalid_request", "source.planDigest and source.artifactDigest must be sha256: digest references", 400);
   }
 
   const status = appInstallationStatusValue(body.status) ??
@@ -283,22 +260,14 @@ export async function handleCreateAppInstallation(input: {
       now,
     });
     if (!runtimeBinding) {
-      return json({
-        error: "shared_cell_capacity_unavailable",
-        error_description:
-          "shared-cell install requires an available warm runtime slot",
-      }, 503);
+      return errorJson("shared_cell_capacity_unavailable", "shared-cell install requires an available warm runtime slot", 503);
     }
     if (
       runtimeBinding.installationId !== installationId ||
       runtimeBinding.mode !== "shared-cell" ||
       runtimeBinding.targetType !== "shared-cell"
     ) {
-      return json({
-        error: "invalid_shared_cell_runtime_target",
-        error_description:
-          "shared-cell runtime allocator must return a shared-cell runtime target for the requested installation",
-      }, 500);
+      return errorJson("invalid_shared_cell_runtime_target", "shared-cell runtime allocator must return a shared-cell runtime target for the requested installation", 500);
     }
     runtimeBindingAutoAssigned = true;
   }
@@ -360,11 +329,7 @@ export async function handleCreateAppInstallation(input: {
   const existingLedgerAccount = await input.store.findLedgerAccount(accountId);
   if (existingLedgerAccount) {
     if (existingLedgerAccount.legalOwnerSubject !== createdBySubject) {
-      return json({
-        error: "account_claim_conflict",
-        error_description:
-          "accountId is already owned by a different Takosumi subject",
-      }, 409);
+      return errorJson("account_claim_conflict", "accountId is already owned by a different Takosumi subject", 409);
     }
   } else {
     await input.store.saveLedgerAccount({
@@ -381,11 +346,7 @@ export async function handleCreateAppInstallation(input: {
       !confirmedLedgerAccount ||
       confirmedLedgerAccount.legalOwnerSubject !== createdBySubject
     ) {
-      return json({
-        error: "account_claim_conflict",
-        error_description:
-          "accountId was claimed by another install while creating this one",
-      }, 409);
+      return errorJson("account_claim_conflict", "accountId was claimed by another install while creating this one", 409);
     }
   }
   if (!existingSpace) {
@@ -404,11 +365,7 @@ export async function handleCreateAppInstallation(input: {
     // another account.
     const confirmedSpace = await input.store.findSpace(spaceId);
     if (!confirmedSpace || confirmedSpace.accountId !== accountId) {
-      return json({
-        error: "space_claim_conflict",
-        error_description:
-          "spaceId was claimed by another account while creating this one",
-      }, 409);
+      return errorJson("space_claim_conflict", "spaceId was claimed by another account while creating this one", 409);
     }
   }
 
@@ -605,7 +562,7 @@ export async function handleImportAppInstallation(input: {
   importDataRestorer?: AppInstallationImportDataRestorer;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
   let bundle: AccountsInstallationExportBundle;
   try {
     bundle = parseAccountsInstallationExportBundle(body.bundle);
@@ -614,10 +571,7 @@ export async function handleImportAppInstallation(input: {
       "import_bundle_parse_failed",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "invalid_request",
-      error_description: "installation export bundle is invalid",
-    }, 400);
+    return errorJson("invalid_request", "installation export bundle is invalid", 400);
   }
   const accountId = stringValue(body.targetAccountId) ??
     stringValue(body.accountId);
@@ -636,11 +590,7 @@ export async function handleImportAppInstallation(input: {
     !createdBySubject ||
     (body.mode !== undefined && !mode)
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "accountId/targetAccountId, spaceId/targetSpaceId, createdBySubject/subject, and optional mode=dedicated|self-hosted are required",
-    }, 400);
+    return errorJson("invalid_request", "accountId/targetAccountId, spaceId/targetSpaceId, createdBySubject/subject, and optional mode=dedicated|self-hosted are required", 400);
   }
   let importData;
   try {
@@ -650,17 +600,10 @@ export async function handleImportAppInstallation(input: {
       "import_data_parse_failed",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "invalid_import_data",
-      error_description: "import data is invalid",
-    }, 400);
+    return errorJson("invalid_import_data", "import data is invalid", 400);
   }
   if (importData && !input.importDataRestorer) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Import with provider data is temporarily unavailable.",
-    }, 503);
+    return errorJson("feature_unavailable", "Import with provider data is temporarily unavailable.", 503);
   }
 
   let plan;
@@ -681,10 +624,7 @@ export async function handleImportAppInstallation(input: {
       "import_bundle_plan_failed",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "invalid_import_bundle",
-      error_description: "installation export bundle could not be planned",
-    }, 400);
+    return errorJson("invalid_import_bundle", "installation export bundle could not be planned", 400);
   }
 
   const createResponse = await handleCreateAppInstallation({
@@ -722,11 +662,7 @@ export async function handleImportAppInstallation(input: {
         installationId,
       );
       if (!installation) {
-        return json({
-          error: "installation_not_found",
-          error_description:
-            "imported installation disappeared before data restore",
-        }, 404);
+        return errorJson("installation_not_found", "imported installation disappeared before data restore", 404);
       }
       try {
         const result = await input.importDataRestorer({
@@ -820,21 +756,14 @@ async function oidcClientCreateRequestFromValue(input: {
     ? input.value.length === 1 ? input.value[0] : undefined
     : input.value;
   if (!isRecord(value)) {
-    return json({
-      error: "invalid_oidc_clients",
-      error_description: "oidcClients must contain exactly one client object",
-    }, 400);
+    return errorJson("invalid_oidc_clients", "oidcClients must contain exactly one client object", 400);
   }
   const redirectUris = oidcRedirectUrisValue(value.redirectUris);
   const authMethod = oidcClientAuthMethodValue(
     value.tokenEndpointAuthMethod ?? value.token_endpoint_auth_method,
   ) ?? "client_secret_post";
   if (hasRemovedOidcNamespaceAlias(value)) {
-    return json({
-      error: "invalid_oidc_clients",
-      error_description:
-        "oidcClients entries use servicePath; serviceId/service_id are not accepted",
-    }, 400);
+    return errorJson("invalid_oidc_clients", "oidcClients entries use servicePath; serviceId/service_id are not accepted", 400);
   }
   // Accept namespacePath aliases for existing API callers; new requests use servicePath.
   const namespacePathInput = value.servicePath ?? value.service_path ??
@@ -858,11 +787,7 @@ async function oidcClientCreateRequestFromValue(input: {
       !oidcAllowedScopesValue(allowedScopesInput)) ||
     subjectMode !== "pairwise"
   ) {
-    return json({
-      error: "invalid_oidc_clients",
-      error_description:
-        "oidcClients entries require redirectUris, optional useEdge, optional servicePath, optional issuerUrl, allowedScopes containing openid, and subjectMode pairwise",
-    }, 400);
+    return errorJson("invalid_oidc_clients", "oidcClients entries require redirectUris, optional useEdge, optional servicePath, optional issuerUrl, allowedScopes containing openid, and subjectMode pairwise", 400);
   }
   const clientSecret = authMethod === "none"
     ? undefined
@@ -901,11 +826,7 @@ function materializeOidcClientBinding(input: {
     binding.name === input.oidcClient?.binding
   );
   if (index < 0 || input.bindings[index].kind !== "identity.oidc@v1") {
-    return json({
-      error: "invalid_oidc_clients",
-      error_description:
-        "oidcClients[].useEdge must reference an identity.oidc@v1 use edge",
-    }, 422);
+    return errorJson("invalid_oidc_clients", "oidcClients[].useEdge must reference an identity.oidc@v1 use edge", 422);
   }
   const binding = input.bindings[index];
   const materialized: AppBindingRecord = {
@@ -930,10 +851,7 @@ function materializeOidcClientBinding(input: {
       "invalid_oidc_binding",
       error instanceof Error ? error.stack ?? error.message : String(error),
     );
-    return json({
-      error: "invalid_bindings",
-      error_description: "binding record is invalid",
-    }, 422);
+    return errorJson("invalid_bindings", "binding record is invalid", 422);
   }
   const bindings = [...input.bindings];
   bindings[index] = materialized;
@@ -1011,10 +929,7 @@ function materializeLaunchTokenBindings(input: {
         "invalid_launch_token_binding",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "invalid_bindings",
-        error_description: "binding record is invalid",
-      }, 422);
+      return errorJson("invalid_bindings", "binding record is invalid", 422);
     }
     if (
       next.configRef !== binding.configRef ||
@@ -1074,10 +989,7 @@ async function materializeConfiguredAppBindings(input: {
         "binding_materialization_failed",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "invalid_binding_materialization",
-        error_description: "binding materialization failed",
-      }, 422);
+      return errorJson("invalid_binding_materialization", "binding materialization failed", 422);
     }
     if (!result) {
       bindings.push(binding);
@@ -1096,28 +1008,17 @@ async function materializeConfiguredAppBindings(input: {
         "invalid_materialized_binding",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "invalid_binding_materialization",
-        error_description: "binding materialization failed",
-      }, 422);
+      return errorJson("invalid_binding_materialization", "binding materialization failed", 422);
     }
     for (const [key, value] of Object.entries(result.env ?? {})) {
       if (typeof value !== "string") {
-        return json({
-          error: "invalid_binding_materialization",
-          error_description:
-            `binding ${binding.name} env ${key} must be a string`,
-        }, 422);
+        return errorJson("invalid_binding_materialization", `binding ${binding.name} env ${key} must be a string`, 422);
       }
       const existingKey = Object.keys(env).find((candidate) =>
         candidate.toUpperCase() === key.toUpperCase()
       );
       if (existingKey && env[existingKey] !== value) {
-        return json({
-          error: "invalid_binding_materialization",
-          error_description:
-            `binding env ${key} is produced by more than one binding`,
-        }, 422);
+        return errorJson("invalid_binding_materialization", `binding env ${key} is produced by more than one binding`, 422);
       }
       env[existingKey ?? key] = value;
     }
@@ -1141,19 +1042,15 @@ function appBindingDeclarationsFromValue(
 ): ReadonlyMap<string, Record<string, unknown>> | Response {
   const declarations = new Map<string, Record<string, unknown>>();
   if (value === undefined) return declarations;
-  if (!Array.isArray(value)) return json({ error: "invalid_use_edges" }, 400);
+  if (!Array.isArray(value)) return errorJson("invalid_use_edges", "invalid use edges", 400);
   for (const [index, entry] of value.entries()) {
-    if (!isRecord(entry)) return json({ error: "invalid_use_edges" }, 400);
+    if (!isRecord(entry)) return errorJson("invalid_use_edges", "invalid use edges", 400);
     const name = stringValue(entry.name);
     if (!name) continue;
     const declaration = entry.declaration ?? entry.request;
     if (declaration === undefined) continue;
     if (!isRecord(declaration)) {
-      return json({
-        error: "invalid_use_edges",
-        error_description:
-          `useEdges[${index}].declaration must be an object when present`,
-      }, 400);
+      return errorJson("invalid_use_edges", `useEdges[${index}].declaration must be an object when present`, 400);
     }
     declarations.set(name, declaration);
   }
@@ -1167,10 +1064,7 @@ async function appInstallationConfirmFromValue(input: {
 }): Promise<AppInstallationConfirmRecord | Response | undefined> {
   if (input.value === undefined) return undefined;
   if (!isRecord(input.value)) {
-    return json({
-      error: "invalid_confirm",
-      error_description: "confirm must be an object",
-    }, 400);
+    return errorJson("invalid_confirm", "confirm must be an object", 400);
   }
   const permissionDigest = stringValue(
     input.value.permissionDigest ?? input.value.permission_digest,
@@ -1189,28 +1083,22 @@ async function appInstallationConfirmFromValue(input: {
     (approvalRequired !== undefined &&
       typeof approvalRequired !== "boolean")
   ) {
-    return json({
-      error: "invalid_confirm",
-      error_description:
-        "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck/approvalRequired",
-    }, 400);
+    return errorJson("invalid_confirm", "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck/approvalRequired", 400);
   }
   const expectedPermissionDigest = await appInstallationPermissionDigest(input);
   if (permissionDigest !== expectedPermissionDigest) {
-    return json({
-      error: "approval_digest_mismatch",
-      error_description:
-        "confirm.permissionDigest does not match requested use edges and permission scopes",
-      expected_permission_digest: expectedPermissionDigest,
-    }, 409);
+    return errorJson(
+      "approval_digest_mismatch",
+      "confirm.permissionDigest does not match requested use edges and permission scopes",
+      409,
+      undefined,
+      {},
+      { expected_permission_digest: expectedPermissionDigest },
+    );
   }
   if (input.bindings.some((binding) => isMeteredBindingKind(binding.kind))) {
     if (costAck !== true) {
-      return json({
-        error: "cost_ack_required",
-        error_description:
-          "confirm.costAck=true is required when requested use edges include metered provider resources",
-      }, 400);
+      return errorJson("cost_ack_required", "confirm.costAck=true is required when requested use edges include metered provider resources", 400);
     }
   }
   return {
@@ -1249,11 +1137,7 @@ async function assertBillingAllowsInstallationCreate(input: {
   if (!billingAccount) return undefined;
 
   if (BILLING_BLOCKED_STATUSES_FOR_PAID_PLANS.has(billingAccount.status)) {
-    return json({
-      error: "billing_required",
-      error_description:
-        `billing account is in status \"${billingAccount.status}\"; resolve outstanding billing before installing a paid plan`,
-    }, 402);
+    return errorJson("billing_required", `billing account is in status \"${billingAccount.status}\"; resolve outstanding billing before installing a paid plan`, 402);
   }
   return undefined;
 }

@@ -7,7 +7,7 @@
 // keep working while the managed offering is closed.
 
 import { isSha256HexDigest } from "./installation-helpers.ts";
-import { json } from "./http-helpers.ts";
+import { json, requestIdFrom } from "./http-helpers.ts";
 import type { InstallationRoute } from "./route-matchers.ts";
 
 export interface ManagedOfferingAccessPolicy {
@@ -69,9 +69,12 @@ export function managedOfferingAccessBlocked(
   }
   const status = policy?.status ?? "closed";
   return json({
-    error: "launch_readiness_not_complete",
-    error_description:
-      "Public managed Takos signup, install, and paid access are blocked until launch readiness evidence is approved",
+    error: {
+      code: "launch_readiness_not_complete",
+      message:
+        "Public managed Takos signup, install, and paid access are blocked until launch readiness evidence is approved",
+      requestId: requestIdFrom(),
+    },
     managed_offering_access: status,
   }, 503);
 }

@@ -29,6 +29,7 @@ import {
   completeAppInstallationExportWithWorker,
 } from "./installation-materialize-helpers.ts";
 import {
+  errorJson,
   isRecord,
   json,
   readJsonObject,
@@ -56,7 +57,7 @@ export async function handleRequestAppInstallationExport(input: {
   const idempotencyKey = requiredIdempotencyKey(input.request);
   if (idempotencyKey instanceof Response) return idempotencyKey;
   const body = await readJsonObject(input.request);
-  if (!body) return json({ error: "invalid_request" }, 400);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
 
   const format = stringValue(body.format) ?? "bundle";
   const encryption = body.encryption === undefined
@@ -70,11 +71,7 @@ export async function handleRequestAppInstallationExport(input: {
     ? body.scope
     : undefined;
   if (!encryption || !scope || format !== "bundle") {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "export requires format=bundle with object encryption and scope",
-    }, 400);
+    return errorJson("invalid_request", "export requires format=bundle with object encryption and scope", 400);
   }
   const encryptionMethod = stringValue(encryption.method) ?? "none";
   const encryptionRecipients = stringArrayValue(encryption.recipients) ?? [];
@@ -82,11 +79,7 @@ export async function handleRequestAppInstallationExport(input: {
     (encryptionMethod !== "none" && encryptionMethod !== "age") ||
     (encryptionMethod === "age" && encryptionRecipients.length === 0)
   ) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "export encryption.method must be none or age; age requires recipients",
-    }, 400);
+    return errorJson("invalid_request", "export encryption.method must be none or age; age requires recipients", 400);
   }
   const requestPayload: AppInstallationExportRequest = {
     includeData: body.includeData === true,
@@ -104,7 +97,7 @@ export async function handleRequestAppInstallationExport(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
 
   const operationId = await installationOperationId({
     installationId: input.installationId,
@@ -141,20 +134,12 @@ export async function handleRequestAppInstallationExport(input: {
   }
   const inFlight = findInFlightInstallationOperation(events);
   if (inFlight) {
-    return json({
-      error: "installation_locked",
-      error_description:
-        `installation already has an in-flight ${inFlight.eventType} operation`,
-    }, 409);
+    return errorJson("installation_locked", `installation already has an in-flight ${inFlight.eventType} operation`, 409);
   }
   if (
     installation.status === "installing" || installation.status === "exported"
   ) {
-    return json({
-      error: "state_conflict",
-      error_description:
-        "export requires an installation that is not installing or exported",
-    }, 409);
+    return errorJson("state_conflict", "export requires an installation that is not installing or exported", 409);
   }
 
   const now = Date.now();
@@ -201,13 +186,13 @@ export async function handleGetAppInstallationExportOperation(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   const events = await input.store.listInstallationEvents(input.installationId);
   const event = events.find((entry) =>
     entry.eventType === installationExportRequestedEvent &&
     entry.payload.operationId === input.operationId
   );
-  if (!event) return json({ error: "export_operation_not_found" }, 404);
+  if (!event) return errorJson("export_operation_not_found", "export operation not found", 404);
   const completed = findOperationEvent({
     events,
     operationId: input.operationId,
@@ -251,23 +236,20 @@ export async function handleDownloadAppInstallationExport(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return json({ error: "installation_not_found" }, 404);
+  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
   const events = await input.store.listInstallationEvents(input.installationId);
   const event = events.find((entry) =>
     entry.eventType === installationExportRequestedEvent &&
     entry.payload.operationId === input.operationId
   );
-  if (!event) return json({ error: "export_operation_not_found" }, 404);
+  if (!event) return errorJson("export_operation_not_found", "export operation not found", 404);
   const failed = findOperationEvent({
     events,
     operationId: input.operationId,
     eventTypes: [installationExportFailedEvent],
   });
   if (failed) {
-    return json({
-      error: "export_failed",
-      error_description: stringValue(failed.payload.error) ?? "export failed",
-    }, 409);
+    return errorJson("export_failed", stringValue(failed.payload.error) ?? "export failed", 409);
   }
   const completed = findOperationEvent({
     events,
@@ -275,39 +257,32 @@ export async function handleDownloadAppInstallationExport(input: {
     eventTypes: [installationExportedEvent],
   });
   if (!completed) {
-    return json({
-      error: "export_not_ready",
-      error_description: "export artifact is not ready for download",
-    }, 409);
+    return errorJson("export_not_ready", "export artifact is not ready for download", 409);
   }
   const downloadUrl = stringValue(completed.payload.downloadUrl);
-  if (!downloadUrl) return json({ error: "export_artifact_not_found" }, 404);
+  if (!downloadUrl) return errorJson("export_artifact_not_found", "export artifact not found", 404);
   try {
     const url = new URL(downloadUrl);
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       throw new TypeError("unsupported protocol");
     }
   } catch {
-    return json({ error: "invalid_export_download_url" }, 502);
+    return errorJson("invalid_export_download_url", "invalid export download url", 502);
   }
   const recordedExpiresAt = stringValue(completed.payload.downloadExpiresAt);
   if (recordedExpiresAt) {
     const expiresAtMs = Date.parse(recordedExpiresAt);
     if (!Number.isFinite(expiresAtMs)) {
-      return json({ error: "invalid_export_download_expiry" }, 502);
+      return errorJson("invalid_export_download_expiry", "invalid export download expiry", 502);
     }
     if (expiresAtMs <= Date.now()) {
-      return json({ error: "export_download_expired" }, 410);
+      return errorJson("export_download_expired", "export download expired", 410);
     }
   }
   const signingSecret = input.exportDownloadSigningSecret ??
     readExportDownloadSigningSecretFromEnv();
   if (!signingSecret) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "export download signing secret is not configured; refusing to issue an unsigned redirect",
-    }, 503);
+    return errorJson("feature_unavailable", "export download signing secret is not configured; refusing to issue an unsigned redirect", 503);
   }
   try {
     const signed = await signExportDownloadUrl(downloadUrl, {
@@ -321,6 +296,6 @@ export async function handleDownloadAppInstallationExport(input: {
       },
     });
   } catch {
-    return json({ error: "invalid_export_download_url" }, 502);
+    return errorJson("invalid_export_download_url", "invalid export download url", 502);
   }
 }

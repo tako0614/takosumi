@@ -36,6 +36,7 @@ import {
   serializeInstallationEvent,
 } from "./installation-helpers.ts";
 import {
+  errorJson,
   isRecord,
   json,
   stringArrayValue,
@@ -137,10 +138,7 @@ export async function applyCoreInstallationForCloudProjection(input: {
   const source = coreDeployControlSourceFromCloudSource(input.source);
   if (source instanceof Response) return source;
   if (!input.spaceId) {
-    return json({
-      error: "invalid_request",
-      error_description: "spaceId is required",
-    }, 400);
+    return errorJson("invalid_request", "spaceId is required", 400);
   }
   const body: Record<string, unknown> = {
     spaceId: input.spaceId,
@@ -150,11 +148,7 @@ export async function applyCoreInstallationForCloudProjection(input: {
     body.planRunId = input.planRunId;
   }
   if (!input.expected || !isRecord(input.expected)) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "installation apply through Takosumi deploy control requires expected review guards",
-    }, 400);
+    return errorJson("invalid_request", "installation apply through Takosumi deploy control requires expected review guards", 400);
   }
   body.expected = { ...input.expected };
   const result = await requestInstallationApply({
@@ -163,11 +157,14 @@ export async function applyCoreInstallationForCloudProjection(input: {
   });
   if (result.status < 200 || result.status >= 300) {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
-    return json({
-      error: "failed_precondition",
-      error_description: "Takosumi installation apply failed",
-      ...(upstream ? { upstream } : {}),
-    }, result.status);
+    return errorJson(
+      "failed_precondition",
+      "Takosumi installation apply failed",
+      result.status,
+      undefined,
+      {},
+      upstream ? { upstream } : undefined,
+    );
   }
   const projection = coreInstallationProjectionFromApply(result.payload);
   if (projection instanceof Response) return projection;
@@ -188,11 +185,14 @@ export async function planCoreDeploymentForCloudProjection(input: {
   });
   if (result.status < 200 || result.status >= 300) {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
-    return json({
-      error: "failed_precondition",
-      error_description: "Takosumi deployment PlanRun failed",
-      ...(upstream ? { upstream } : {}),
-    }, result.status);
+    return errorJson(
+      "failed_precondition",
+      "Takosumi deployment PlanRun failed",
+      result.status,
+      undefined,
+      {},
+      upstream ? { upstream } : undefined,
+    );
   }
   return coreDeploymentProjectionFromPlanRun(result.payload);
 }
@@ -209,11 +209,7 @@ export async function applyCoreDeploymentForCloudProjection(input: {
   });
   if (body instanceof Response) return body;
   if (!body.expected || !isRecord(body.expected)) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "deployment apply through Takosumi deploy control requires expected review guards",
-    }, 400);
+    return errorJson("invalid_request", "deployment apply through Takosumi deploy control requires expected review guards", 400);
   }
   const result = await requestDeploymentApply({
     deployControl: input.deployControl,
@@ -222,11 +218,14 @@ export async function applyCoreDeploymentForCloudProjection(input: {
   });
   if (result.status < 200 || result.status >= 300) {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
-    return json({
-      error: "failed_precondition",
-      error_description: "Takosumi deployment apply failed",
-      ...(upstream ? { upstream } : {}),
-    }, result.status);
+    return errorJson(
+      "failed_precondition",
+      "Takosumi deployment apply failed",
+      result.status,
+      undefined,
+      {},
+      upstream ? { upstream } : undefined,
+    );
   }
   return coreDeploymentProjectionFromApply(result.payload);
 }
@@ -239,11 +238,7 @@ export async function rollbackCoreDeploymentForCloudProjection(input: {
   expected: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
   if (!input.deploymentId) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "rollback through Takosumi deploy control requires deploymentId",
-    }, 400);
+    return errorJson("invalid_request", "rollback through Takosumi deploy control requires deploymentId", 400);
   }
   const result = await requestRollback({
     deployControl: input.deployControl,
@@ -256,11 +251,14 @@ export async function rollbackCoreDeploymentForCloudProjection(input: {
   });
   if (result.status < 200 || result.status >= 300) {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
-    return json({
-      error: "failed_precondition",
-      error_description: "Takosumi rollback failed",
-      ...(upstream ? { upstream } : {}),
-    }, result.status);
+    return errorJson(
+      "failed_precondition",
+      "Takosumi rollback failed",
+      result.status,
+      undefined,
+      {},
+      upstream ? { upstream } : undefined,
+    );
   }
   return coreDeploymentProjectionFromRollback(result.payload);
 }
@@ -285,49 +283,33 @@ export function coreDeployControlSourceFromCloudSource(
   const kind = stringValue(source.kind) ?? "git";
   const url = stringValue(source.url);
   if (!url) {
-    return json({
-      error: "invalid_request",
-      error_description: "source.url is required",
-    }, 400);
+    return errorJson("invalid_request", "source.url is required", 400);
   }
   if (kind === "git") {
     const ref = stringValue(source.ref);
     if (!ref) {
-      return json({
-        error: "invalid_request",
-        error_description: "source.ref is required for git sources",
-      }, 400);
+      return errorJson("invalid_request", "source.ref is required for git sources", 400);
     }
     return { kind: "git", url, ref };
   }
   if (kind === "prepared") {
     const digest = stringValue(source.digest);
     if (!digest) {
-      return json({
-        error: "invalid_request",
-        error_description: "source.digest is required for prepared sources",
-      }, 400);
+      return errorJson("invalid_request", "source.digest is required for prepared sources", 400);
     }
     return { kind: "prepared", url, digest };
   }
   if (kind === "local") {
     return { kind: "local", path: url };
   }
-  return json({
-    error: "invalid_request",
-    error_description: "source.kind must be git, prepared, or local",
-  }, 400);
+  return errorJson("invalid_request", "source.kind must be git, prepared, or local", 400);
 }
 
 export function coreInstallationProjectionFromApply(
   payload: unknown,
 ): CoreInstallationProjection | Response {
   if (!isRecord(payload)) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi installation apply returned a non-object response",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi installation apply returned a non-object response", 502);
   }
   const installation = isRecord(payload.installation)
     ? payload.installation
@@ -362,11 +344,7 @@ export function coreInstallationProjectionFromApply(
   if (
     !installationId || !appId || !sourceUrl || !sourceRef || !planDigest
   ) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi installation apply response is missing installation/deployment projection fields",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi installation apply response is missing installation/deployment projection fields", 502);
   }
   return {
     installationId,
@@ -385,11 +363,7 @@ export function coreDeploymentProjectionFromPlanRun(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi deployment PlanRun returned a non-object response",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi deployment PlanRun returned a non-object response", 502);
   }
   const projection = coreDeploymentProjectionFromDeploymentLike({
     deployment: payload,
@@ -405,11 +379,7 @@ export function coreDeploymentProjectionFromApply(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi deployment apply returned a non-object response",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi deployment apply returned a non-object response", 502);
   }
   const deployment = isRecord(payload.deployment)
     ? payload.deployment
@@ -421,11 +391,7 @@ export function coreDeploymentProjectionFromRollback(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi rollback returned a non-object response",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi rollback returned a non-object response", 502);
   }
   const deployment = isRecord(payload.deployment)
     ? payload.deployment
@@ -461,11 +427,7 @@ export function coreDeploymentProjectionFromDeploymentLike(input: {
     now: Date.now(),
   });
   if (!deploymentId || !planDigest) {
-    return json({
-      error: "feature_unavailable",
-      error_description:
-        "Takosumi deployment response is missing deployment projection fields",
-    }, 502);
+    return errorJson("feature_unavailable", "Takosumi deployment response is missing deployment projection fields", 502);
   }
   return {
     deploymentId,
@@ -813,12 +775,12 @@ export function appBindingRecordsFromValue(input: {
 }): readonly AppBindingRecord[] | Response {
   if (input.value === undefined) return [];
   if (!Array.isArray(input.value)) {
-    return json({ error: "invalid_use_edges" }, 400);
+    return errorJson("invalid_use_edges", "invalid use edges", 400);
   }
   const records: AppBindingRecord[] = [];
   const seenNames = new Set<string>();
   for (const [index, value] of input.value.entries()) {
-    if (!isRecord(value)) return json({ error: "invalid_use_edges" }, 400);
+    if (!isRecord(value)) return errorJson("invalid_use_edges", "invalid use edges", 400);
     const name = stringValue(value.name);
     const kind = appBindingKindValue(value.kind ?? value.type);
     const configRef = stringValue(value.configRef);
@@ -826,17 +788,10 @@ export function appBindingRecordsFromValue(input: {
       ? []
       : stringArrayValue(value.secretRefs);
     if (!name || !kind || !configRef || !secretRefs) {
-      return json({
-        error: "invalid_use_edges",
-        error_description:
-          `useEdges[${index}] requires name, kind/type, configRef, and secretRefs`,
-      }, 400);
+      return errorJson("invalid_use_edges", `useEdges[${index}] requires name, kind/type, configRef, and secretRefs`, 400);
     }
     if (seenNames.has(name)) {
-      return json({
-        error: "invalid_use_edges",
-        error_description: `duplicate use edge name: ${name}`,
-      }, 400);
+      return errorJson("invalid_use_edges", `duplicate use edge name: ${name}`, 400);
     }
     seenNames.add(name);
     const record: AppBindingRecord = {
@@ -856,10 +811,7 @@ export function appBindingRecordsFromValue(input: {
         "invalid_use_edge_binding",
         error instanceof Error ? error.stack ?? error.message : String(error),
       );
-      return json({
-        error: "invalid_use_edges",
-        error_description: "use edge binding record is invalid",
-      }, 422);
+      return errorJson("invalid_use_edges", "use edge binding record is invalid", 422);
     }
     records.push(record);
   }
@@ -873,12 +825,12 @@ export function appGrantRecordsFromValue(input: {
 }): readonly AppGrantRecord[] | Response {
   if (input.value === undefined) return [];
   if (!Array.isArray(input.value)) {
-    return json({ error: "invalid_permission_scopes" }, 400);
+    return errorJson("invalid_permission_scopes", "invalid permission scopes", 400);
   }
   const records: AppGrantRecord[] = [];
   for (const [index, value] of input.value.entries()) {
     if (!isRecord(value)) {
-      return json({ error: "invalid_permission_scopes" }, 400);
+      return errorJson("invalid_permission_scopes", "invalid permission scopes", 400);
     }
     const capability = stringValue(value.capability);
     const scope = value.scope === undefined
@@ -887,18 +839,10 @@ export function appGrantRecordsFromValue(input: {
       ? value.scope
       : undefined;
     if (!capability || !scope) {
-      return json({
-        error: "invalid_permission_scopes",
-        error_description:
-          `permissionScopes[${index}] requires capability and optional object scope`,
-      }, 400);
+      return errorJson("invalid_permission_scopes", `permissionScopes[${index}] requires capability and optional object scope`, 400);
     }
     if (!isAppGrantCapability(capability)) {
-      return json({
-        error: "invalid_permission_scopes",
-        error_description:
-          `permissionScopes[${index}].capability is not in the v1 permission scope catalog`,
-      }, 422);
+      return errorJson("invalid_permission_scopes", `permissionScopes[${index}].capability is not in the v1 permission scope catalog`, 422);
     }
     records.push({
       grantId: stringValue(value.permissionScopeId) ??
@@ -926,10 +870,7 @@ export async function appInstallationRevisionConfirmFromValue(input: {
   requestedGrants: readonly AppGrantRecord[];
 }): Promise<{ permissionDigest: string; costAck: boolean } | Response> {
   if (!isRecord(input.value)) {
-    return json({
-      error: "invalid_confirm",
-      error_description: "confirm must be an object",
-    }, 400);
+    return errorJson("invalid_confirm", "confirm must be an object", 400);
   }
   const permissionDigest = stringValue(
     input.value.permissionDigest ?? input.value.permission_digest,
@@ -940,34 +881,28 @@ export async function appInstallationRevisionConfirmFromValue(input: {
     !isSha256HexDigest(permissionDigest) ||
     (costAck !== undefined && typeof costAck !== "boolean")
   ) {
-    return json({
-      error: "invalid_confirm",
-      error_description:
-        "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck",
-    }, 400);
+    return errorJson("invalid_confirm", "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck", 400);
   }
   const expectedPermissionDigest =
     await appInstallationRevisionPermissionDigest(
       input,
     );
   if (!constantTimeEqual(permissionDigest, expectedPermissionDigest)) {
-    return json({
-      error: "approval_digest_mismatch",
-      error_description:
-        "confirm.permissionDigest does not match revision request",
-      expected_permission_digest: expectedPermissionDigest,
-    }, 409);
+    return errorJson(
+      "approval_digest_mismatch",
+      "confirm.permissionDigest does not match revision request",
+      409,
+      undefined,
+      {},
+      { expected_permission_digest: expectedPermissionDigest },
+    );
   }
   if (
     input.requestedBindings.some((binding) =>
       isMeteredBindingKind(binding.kind)
     ) && costAck !== true
   ) {
-    return json({
-      error: "cost_ack_required",
-      error_description:
-        "confirm.costAck=true is required when requested use edges include metered provider resources",
-    }, 400);
+    return errorJson("cost_ack_required", "confirm.costAck=true is required when requested use edges include metered provider resources", 400);
   }
   return { permissionDigest, costAck: costAck === true };
 }
