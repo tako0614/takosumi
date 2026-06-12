@@ -2189,6 +2189,15 @@ export class OpenTofuDeploymentController {
     // Installation + Deployment (and real cloud resources). Reject any apply of a
     // PlanRun that has already been successfully applied. (update/destroy were
     // already replay-protected by the installation currentDeploymentId guard.)
+    //
+    // This is an OPTIMISTIC pre-check before the per-(Installation,environment)
+    // lease serializes the apply. Two concurrent createApplyRun calls can both
+    // pass it and each insert an ApplyRun row + enqueue — wasteful, but NOT a
+    // double-apply: the authoritative apply-once re-check runs INSIDE the
+    // serialized section against the persisted PlanRun (see
+    // `appliedApplyRunId` re-read in the commit path), so the second worker's
+    // dispatch is rejected before it commits any state generation. The pre-
+    // check stays as a cheap early-out for the common (non-concurrent) case.
     if (planRun.appliedApplyRunId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -3226,16 +3235,25 @@ export class OpenTofuDeploymentController {
       ],
       updatedAt: now,
     };
-    // Fenced approve: the plan parks awaiting approval in the persisted
-    // `waiting_approval` status (a legacy row may still be `succeeded`), so the
-    // CAS accepts either pre-state and advances to `succeeded`. The lease column
-    // is left untouched (a parked/terminal plan carries no lease fence). A lost
-    // CAS means the row moved (e.g. cancelled) between read and write, so the
-    // approval is dropped rather than clobbering the new state.
+    // Fenced approve. expectFrom is scoped to the READ status so a concurrent
+    // double-approve cannot win: the normal path parks in `waiting_approval`,
+    // so `expectFrom: ["waiting_approval"]` — the FIRST approve advances the row
+    // to `succeeded` and a second concurrent approve (which also read
+    // `waiting_approval`) loses the CAS because `succeeded` is no longer in
+    // expectFrom (it would otherwise have re-won against the just-written
+    // `succeeded` and clobbered the approval with a duplicate). A legacy row
+    // already persisted `succeeded` WITHOUT an approval takes the narrow
+    // `["succeeded"]` path (its `if (planRun.approval) return` early-out above
+    // already handles the already-approved legacy row). The lease column is
+    // left untouched (a parked/terminal plan carries no lease fence). A lost
+    // CAS means the row moved between read and write, so the approval is
+    // dropped rather than clobbering the new state.
     const approveResult = await this.#store.transitionRun({
       id,
       kind: "plan",
-      expectFrom: ["waiting_approval", "succeeded"],
+      expectFrom: planRun.status === "succeeded"
+        ? ["succeeded"]
+        : ["waiting_approval"],
       run: approved,
     });
     if (!approveResult.won) {
