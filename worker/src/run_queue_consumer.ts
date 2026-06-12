@@ -4,6 +4,7 @@ import type {
   QueueBatch,
 } from "./bindings.ts";
 import { cachedDeployControlService } from "./deploy_control_seam.ts";
+import { InstallationLeaseBusyError } from "../../core/domains/deploy-control/installation_lease.ts";
 
 // Queue consumer config (mirrors deploy/*/wrangler.toml `max_retries`): one
 // initial delivery + this many retries. On the final attempt the consumer
@@ -12,6 +13,14 @@ import { cachedDeployControlService } from "./deploy_control_seam.ts";
 const OPENTOFU_RUN_MAX_RETRIES = 2;
 const OPENTOFU_RUN_DLQ_SUFFIX = "-dlq";
 const OPENTOFU_RUN_QUEUE_NAME = "takosumi-runs";
+
+/**
+ * Backoff before redelivering a run that is parked on a busy installation lease
+ * (another write run for the same (Installation, environment) holds it). The
+ * run stays `queued` and is NOT counted toward the retry budget, so a long
+ * sibling apply does not exhaust the lease-blocked run's retries.
+ */
+const OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS = 10;
 
 /**
  * Drives a batch of OpenTofu run-dispatch messages.
@@ -26,9 +35,29 @@ const OPENTOFU_RUN_QUEUE_NAME = "takosumi-runs";
  * DLQ: a run that exhausted retries is marked failed ("retries-exhausted") if it
  * is not already terminal, then acked.
  */
+/**
+ * Injection seam for {@link consumeOpenTofuRunBatch}: the two side-effecting
+ * steps a unit test overrides (the run dispatch and the DLQ failure-record). The
+ * production caller omits `deps` and gets the real in-process controller path.
+ */
+export interface ConsumeOpenTofuRunDeps {
+  readonly dispatch: (
+    run: OpenTofuRunQueueMessage,
+    env: CloudflareWorkerEnv,
+  ) => Promise<void>;
+  readonly markRetriesExhausted: (
+    run: OpenTofuRunQueueMessage,
+    env: CloudflareWorkerEnv,
+  ) => Promise<void>;
+}
+
 export async function consumeOpenTofuRunBatch(
   batch: QueueBatch,
   env: CloudflareWorkerEnv,
+  deps: ConsumeOpenTofuRunDeps = {
+    dispatch: dispatchOpenTofuRun,
+    markRetriesExhausted: markOpenTofuRunRetriesExhausted,
+  },
 ): Promise<void> {
   const isDeadLetter = typeof batch.queue === "string" &&
     batch.queue.endsWith(OPENTOFU_RUN_DLQ_SUFFIX);
@@ -50,18 +79,29 @@ export async function consumeOpenTofuRunBatch(
     }
     const run = parsed.message;
     if (isDeadLetter) {
-      await markOpenTofuRunRetriesExhausted(run, env);
+      await deps.markRetriesExhausted(run, env);
       message.ack?.();
       continue;
     }
     const attempt = typeof message.attempts === "number" ? message.attempts : 1;
     const finalAttempt = attempt > OPENTOFU_RUN_MAX_RETRIES;
     try {
-      await dispatchOpenTofuRun(run, env);
+      await deps.dispatch(run, env);
       message.ack?.();
     } catch (error) {
+      // Lease-busy is SCHEDULING, not failure: another write run for the same
+      // (Installation, environment) currently holds the lease, so this run could
+      // not be dispatched. Re-enqueue with a backoff and DO NOT count this toward
+      // the retry budget — it must never reach the final-attempt
+      // "retries-exhausted" branch. The run stays `queued` (no claim happened).
+      if (error instanceof InstallationLeaseBusyError) {
+        if (typeof message.retry === "function") {
+          message.retry({ delaySeconds: OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS });
+        }
+        continue;
+      }
       if (finalAttempt) {
-        await markOpenTofuRunRetriesExhausted(run, env);
+        await deps.markRetriesExhausted(run, env);
         // Out of retries: stop redelivery after the best-effort ledger update.
         message.ack?.();
         continue;

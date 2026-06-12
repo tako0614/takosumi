@@ -45,6 +45,7 @@ import { providerMatches } from "./policy.ts";
 import { evaluateProviderCredentialMintPolicy } from "./provider_policy.ts";
 import {
   mintableConnectionIds,
+  resolvedBindingsDigest,
   type ResolvedProviderBinding,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
@@ -117,6 +118,26 @@ export class RunCredentialBroker {
       // feeds the per-binding credential split (TF_VAR entries) so minted vars
       // line up byte-for-byte with rootgen.
       const resolved = await this.#resolveRunProviderBindings(planRun);
+      // plan→apply TOCTOU assert (S2): the plan pinned a digest of the bindings
+      // it was reviewed against. At apply/destroy mint, re-hash the LIVE resolved
+      // bindings and fail closed if they diverge — a Connection swap, a binding
+      // mode flip, or an operator-default repoint between plan and apply would
+      // otherwise mint DIFFERENT credentials than the reviewer approved. The plan
+      // mint is the pinning side, so it is never asserted here.
+      if (
+        (phase === "apply" || phase === "destroy") &&
+        planRun.resolvedBindingsDigest !== undefined
+      ) {
+        const liveDigest = await resolvedBindingsDigest(resolved);
+        if (liveDigest !== planRun.resolvedBindingsDigest) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `resolved_bindings_changed: plan run ${planRun.id} was reviewed ` +
+              `against different provider bindings than are now resolved; ` +
+              `re-plan before apply`,
+          );
+        }
+      }
       // Per-binding split: the same resolved entries that produced the rootgen
       // provider blocks produce these TF_VAR_<provider>_<alias>_<arg> vars.
       // This is the only provider credential delivery path for Installation

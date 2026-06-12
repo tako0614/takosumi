@@ -195,13 +195,24 @@ export interface RunnerProfile {
   readonly createdAt: number;
 }
 
-export type RunStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "blocked"
-  | "cancelled";
+// RunStatus is now ONE vocabulary across the internal PlanRun / ApplyRun records
+// and the public §19 Run projection. The canonical union lives in `./runs.ts`;
+// the internal seam re-exports it so a single status set flows end to end. The
+// retired `blocked` status is gone — a create-time / completion-time policy
+// denial is now `failed` (with the policy reason), and an approval gate is the
+// persisted `waiting_approval` status (no longer a read-time derivation).
+export type { RunStatus } from "./runs.ts";
+import type { RunStatus } from "./runs.ts";
+
+/**
+ * Read-coerces a persisted run status to the unified {@link RunStatus}. Legacy
+ * rows written before the `blocked` → `failed` collapse stored `status:
+ * "blocked"`; those coerce to `failed` so a stored legacy status still reads
+ * back in the new model. Every other value passes through unchanged.
+ */
+export function coerceRunStatus(status: string): RunStatus {
+  return status === "blocked" ? "failed" : (status as RunStatus);
+}
 
 export interface PolicyDecision {
   readonly status: "passed" | "blocked";
@@ -296,6 +307,16 @@ export interface PlanRun {
    * plan has not been approved.
    */
   readonly approval?: RunApproval;
+  /**
+   * Digest of the RESOLVED provider bindings this plan was reviewed against
+   * (plan→apply TOCTOU pin). Hashes each binding's `provider` / optional `alias`
+   * / `mode` / resolved `connectionId` (never `manual` value literals). Pinned at
+   * plan completion for installation-context runs; the apply mint re-resolves the
+   * live bindings and asserts this digest still matches, failing closed when a
+   * Connection / binding mode / operator default changed between plan and apply.
+   * Absent for runs with no installation context (no bindings to resolve).
+   */
+  readonly resolvedBindingsDigest?: string;
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Installation plan/destroy-plan path. The apply consumer
@@ -456,6 +477,13 @@ export interface ApplyExpectedGuard {
   readonly planArtifactDigest: string;
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
+  /**
+   * Digest of the resolved provider bindings the plan was reviewed against
+   * (plan→apply TOCTOU pin; see {@link PlanRun.resolvedBindingsDigest}). Carried
+   * on the guard so the structural plan/apply guard compare also covers a
+   * binding/connection swap. Absent for runs with no installation context.
+   */
+  readonly resolvedBindingsDigest?: string;
 }
 
 // Installation / InstallConfig live in ./installations.ts and

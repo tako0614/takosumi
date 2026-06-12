@@ -177,12 +177,15 @@ import {
   projectPlanRun,
 } from "./projection_run.ts";
 import {
+  DEFAULT_INSTALLATION_LEASE_TTL_MS,
   type InstallationCoordination,
+  type LeaseHandle,
   withInstallationLease,
   withPlanLease,
 } from "./installation_lease.ts";
 import {
   ConnectionsService,
+  resolvedBindingsDigest,
   type ResolvedProviderBinding,
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
@@ -483,6 +486,27 @@ export type EnqueueRun = (dispatch: OpenTofuRunDispatch) => Promise<void>;
  * heartbeat means a sibling consumer holds the run and the duplicate no-ops.
  */
 const RUN_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Renewal cadence for a long-running apply/destroy: re-stamp the run heartbeat
+ * and renew the lease at a fraction of the tighter of the lease TTL and the
+ * heartbeat-stale window, so a sibling never observes the run as crashed while
+ * the single blocking runner fetch is in flight. `/3` leaves room for at least
+ * two renewals before either deadline elapses.
+ */
+const RUN_RENEWAL_INTERVAL_MS = Math.floor(
+  Math.min(DEFAULT_INSTALLATION_LEASE_TTL_MS, RUN_HEARTBEAT_STALE_MS) / 3,
+);
+
+/**
+ * The non-terminal run statuses a TERMINAL transition (succeeded / failed /
+ * cancelled) is allowed to fire from. (The internal run model has no distinct
+ * `waiting_approval` status — a plan that parks for approval stays `succeeded`,
+ * so its later cancel is handled by the `succeeded`-from cancel CAS, not here.)
+ * A run already in a terminal state is never re-terminalized (the fenced CAS
+ * loses and the existing row stands).
+ */
+const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["queued", "running"];
 const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
 
 function initialProviderTemplates(): readonly ProviderTemplate[] {
@@ -650,6 +674,14 @@ export interface OpenTofuDeploymentControllerDependencies {
    * seam). `source_sync` never takes the lease.
    */
   readonly installationCoordination?: InstallationCoordination;
+  /**
+   * Renewal cadence (ms) for a long-running apply/destroy: how often the
+   * controller re-stamps the run heartbeat + renews the held lease while a
+   * single blocking runner fetch is in flight. Defaults to
+   * {@link RUN_RENEWAL_INTERVAL_MS}. Tests inject a small value to drive the
+   * renewal tick deterministically; values <= 0 disable the renewal timer.
+   */
+  readonly runRenewalIntervalMs?: number;
   /**
    * Space-scoped Activity audit trail (spec §27 audit_events / §34 Activity).
    * The controller emits run-lifecycle events (plan created, approved, applied,
@@ -852,6 +884,7 @@ export class OpenTofuDeploymentController {
   readonly #enqueueRun: EnqueueRun;
   readonly #templateRegistry: TemplateRegistry;
   readonly #installationCoordination?: InstallationCoordination;
+  readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
@@ -886,6 +919,11 @@ export class OpenTofuDeploymentController {
     this.#deployments = new DeploymentQuery(this.#store, publicInstallation);
     this.#runQuery = new RunQueryService(this.#store);
     this.#installationCoordination = dependencies.installationCoordination;
+    this.#runRenewalIntervalMs =
+      dependencies.runRenewalIntervalMs !== undefined &&
+      Number.isFinite(dependencies.runRenewalIntervalMs)
+        ? dependencies.runRenewalIntervalMs
+        : RUN_RENEWAL_INTERVAL_MS;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
@@ -1216,7 +1254,10 @@ export class OpenTofuDeploymentController {
             } satisfies PlanRunTemplateBinding,
           }
         : {}),
-      status: policy.status === "passed" ? "queued" : "blocked",
+      // A create-time policy denial is a terminal `failed` run carrying the
+      // policy reason (the retired `blocked` status is gone); a passed plan is
+      // `queued` for the consumer to execute.
+      status: policy.status === "passed" ? "queued" : "failed",
       policy,
       policyDecisionDigest,
       auditEvents: [
@@ -1250,6 +1291,7 @@ export class OpenTofuDeploymentController {
       ],
       createdAt: now,
       updatedAt: now,
+      // A create-time policy denial finishes immediately (terminal `failed`).
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
     await this.#store.putPlanRun(planRun);
@@ -1339,8 +1381,8 @@ export class OpenTofuDeploymentController {
   /**
    * Installation-driven destroy-plan (spec §23 Destroy). Same resolution as
    * {@link createInstallationPlan} with a destroy operation; the plan ALWAYS
-   * lands `waiting_approval` after completion (the §19 Run projection maps a
-   * succeeded destroy_plan to waiting_approval).
+   * lands the persisted `waiting_approval` status after completion (a destroy
+   * plan is always two-stage).
    */
   async createInstallationDestroyPlan(
     installationId: string,
@@ -2277,8 +2319,9 @@ export class OpenTofuDeploymentController {
 
   /**
    * Dead-letter backstop. Marks a run failed with the given reason when it is
-   * not already terminal (succeeded/failed/blocked/cancelled). Used by the DLQ
-   * consumer for runs whose consumer crashed before it could record failure.
+   * not already settled (succeeded/failed/waiting_approval/expired/cancelled).
+   * Used by the DLQ consumer for runs whose consumer crashed before it could
+   * record failure.
    * Returns true when it transitioned the run.
    */
   async markRunFailed(
@@ -2341,7 +2384,13 @@ export class OpenTofuDeploymentController {
       await this.#store.deletePlanRunInputs(runId);
       return await this.#failPlanRun(planRun, error);
     }
-    const running = await this.#markPlanRunning(planRun);
+    const claim = await this.#markPlanRunning(planRun);
+    if (!claim.won) {
+      // A sibling consumer already claimed this run (or a cancel won the row).
+      // Do NOT dispatch the runner; return the row the winner persisted.
+      return claim.run;
+    }
+    const running = claim.run;
     let result: PlanRun;
     try {
       const credentials = await this.#credentials.mintRunCredentials(
@@ -2360,13 +2409,16 @@ export class OpenTofuDeploymentController {
       await this.#store.deletePlanRunInputs(runId);
       return await this.#failPlanRun(running, error);
     }
-    // Retain the inputs sidecar for a SUCCEEDED generated-root run: the apply
+    // Retain the inputs sidecar for an APPLYABLE generated-root run: the apply
     // consumer re-reads the generated root / build payload (the same generated
-    // root the plan was reviewed against).
-    // It is deleted once the plan is applied (apply-once) or the run is failed.
-    // Non-succeeded generated-root plans drop the sidecar now.
+    // root the plan was reviewed against). An applyable plan is one that
+    // completed `succeeded`, OR parked `waiting_approval` (it becomes applyable
+    // once approved — the sidecar must survive the approval gate). It is deleted
+    // once the plan is applied (apply-once) or the run is failed. Other terminal
+    // generated-root plans drop the sidecar now.
     const retainForApply =
-      result.status === "succeeded" && dispatch.generatedRoot !== undefined;
+      (result.status === "succeeded" || result.status === "waiting_approval") &&
+      dispatch.generatedRoot !== undefined;
     if (!retainForApply) {
       await this.#store.deletePlanRunInputs(runId);
     }
@@ -2403,10 +2455,12 @@ export class OpenTofuDeploymentController {
     // `installation:{installationId}:{environment}` lease so only one write run
     // per (Installation, environment) executes at a time. A busy lease throws so
     // the queue redelivers. The in-process serialization stays as the inner
-    // guard (single-isolate correctness).
-    const runWork = () =>
+    // guard (single-isolate correctness). The held-lease handle is threaded into
+    // #executeApply so a long apply can renew the lease + re-stamp its heartbeat
+    // while a single blocking runner fetch is in flight.
+    const runWork = (handle?: LeaseHandle) =>
       this.#runSerialized(key, () =>
-        this.#executeApply(applyRun, planRun, profile, dispatch),
+        this.#executeApply(applyRun, planRun, profile, dispatch, handle),
       );
     if (this.#installationCoordination && planRun.installationId) {
       const environment =
@@ -2766,6 +2820,23 @@ export class OpenTofuDeploymentController {
     );
   }
 
+  /**
+   * Pins the resolved-bindings digest (plan→apply TOCTOU) onto a completed plan.
+   * Resolves the plan's live provider bindings ONCE and hashes the
+   * provider→{connectionId,mode,alias} set onto `resolvedBindingsDigest`. Only
+   * pinned for an installation-context run (a raw `/plan-runs` run resolves no
+   * bindings, so there is nothing to fence); the apply mint re-resolves and
+   * asserts this digest is unchanged. A failed/denied plan is never applied, so
+   * the pin is harmless either way.
+   */
+  async #pinResolvedBindingsDigest(planRun: PlanRun): Promise<PlanRun> {
+    if (!planRun.installationContext) return planRun;
+    const resolved = await this.#resolveRunProviderBindings(planRun);
+    if (resolved === undefined) return planRun;
+    const digest = await resolvedBindingsDigest(resolved);
+    return { ...planRun, resolvedBindingsDigest: digest };
+  }
+
   async getApplyRun(id: string): Promise<ApplyRunResponse> {
     return await this.#deployments.getApplyRun(id);
   }
@@ -2981,9 +3052,9 @@ export class OpenTofuDeploymentController {
 
   /**
    * Cancels a run that has not started executing. Only `queued` plan/apply runs
-   * (or a plan parked `waiting_approval`, i.e. `blocked` with a pending approval)
-   * may be cancelled; a `running` or terminal run is rejected. Returns the
-   * resulting unified Run.
+   * (or a plan parked in the persisted `waiting_approval` status) may be
+   * cancelled; a `running` or terminal run is rejected. Returns the resulting
+   * unified Run.
    */
   async cancelRun(id: string): Promise<Run> {
     requireNonEmptyString(id, "runId");
@@ -3009,7 +3080,26 @@ export class OpenTofuDeploymentController {
         updatedAt: now,
         finishedAt: now,
       };
-      await this.#store.putPlanRun(cancelled);
+      // Fenced cancel: the CAS fires ONLY when the row is still in the status we
+      // read (`queued` or the parked `waiting_approval`). If a consumer claim
+      // raced us to `running` first, the CAS loses and the cancel is rejected —
+      // it must not clobber a run a sibling already owns. Conversely, when the
+      // cancel wins, a later claim CAS (expectFrom `queued`) loses, so a
+      // cancelled run is never resurrected into `running`.
+      const result = await this.#store.transitionRun({
+        id,
+        kind: "plan",
+        expectFrom: [planRun.status],
+        run: cancelled,
+        clearLeaseToken: true,
+      });
+      if (!result.won) {
+        const current = (result.run as PlanRun | undefined) ?? planRun;
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${id} is ${current.status}; only queued or waiting-approval runs can be cancelled`,
+        );
+      }
       await this.#store.deletePlanRunInputs(id);
       return projectPlanRun(cancelled, {
         awaitingApproval: false,
@@ -3035,7 +3125,25 @@ export class OpenTofuDeploymentController {
         updatedAt: now,
         finishedAt: now,
       };
-      await this.#store.putApplyRun(cancelled);
+      // Fenced cancel: fire ONLY while the apply is still `queued`. A consumer
+      // claim (expectFrom `queued`) and this cancel race the same row; exactly
+      // one wins. If the claim won (now `running`), the cancel CAS loses and is
+      // rejected — never clobbering the in-flight apply; if the cancel won, the
+      // later claim loses and the cancelled apply is never resurrected.
+      const result = await this.#store.transitionRun({
+        id,
+        kind: "apply",
+        expectFrom: ["queued"],
+        run: cancelled,
+        clearLeaseToken: true,
+      });
+      if (!result.won) {
+        const current = (result.run as ApplyRun | undefined) ?? applyRun;
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `apply run ${id} is ${current.status}; only queued runs can be cancelled`,
+        );
+      }
       return projectApplyRun(cancelled);
     }
     if (
@@ -3095,6 +3203,10 @@ export class OpenTofuDeploymentController {
     const now = this.#now();
     const approved: PlanRun = {
       ...planRun,
+      // Approving the gate advances the persisted status to `succeeded` so the
+      // plan becomes applyable (the apply precondition requires `succeeded`). A
+      // legacy row already persisted `succeeded` stays `succeeded`.
+      status: "succeeded",
       approval: {
         ...(input.approvedBy ? { approvedBy: input.approvedBy } : {}),
         approvedAt: now,
@@ -3114,7 +3226,25 @@ export class OpenTofuDeploymentController {
       ],
       updatedAt: now,
     };
-    await this.#store.putPlanRun(approved);
+    // Fenced approve: the plan parks awaiting approval in the persisted
+    // `waiting_approval` status (a legacy row may still be `succeeded`), so the
+    // CAS accepts either pre-state and advances to `succeeded`. The lease column
+    // is left untouched (a parked/terminal plan carries no lease fence). A lost
+    // CAS means the row moved (e.g. cancelled) between read and write, so the
+    // approval is dropped rather than clobbering the new state.
+    const approveResult = await this.#store.transitionRun({
+      id,
+      kind: "plan",
+      expectFrom: ["waiting_approval", "succeeded"],
+      run: approved,
+    });
+    if (!approveResult.won) {
+      const current = (approveResult.run as PlanRun | undefined) ?? approved;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${id} is ${current.status}; only a plan awaiting approval can be approved`,
+      );
+    }
     // Activity (§27 / §34): the plan Run was approved.
     await this.#recordActivity({
       spaceId: approved.spaceId,
@@ -3149,9 +3279,15 @@ export class OpenTofuDeploymentController {
   }
 
   // Status-transition ceremony shared by the three execute paths: clone the run
-  // into `running`, append the phase `started` audit event, persist, and return
-  // the running run.
-  async #markPlanRunning(planRun: PlanRun): Promise<PlanRun> {
+  // into `running`, append the phase `started` audit event, and CLAIM it with a
+  // fenced compare-and-set so exactly one consumer can move a `queued` (or a
+  // stale-`running`) run into `running`. A lost CAS (`won:false`) means a
+  // sibling already owns the run — or a cancel won the row — and the caller must
+  // NOT dispatch the runner. The claim stamps the run id as the lease fence
+  // token + the heartbeat, so a concurrent claim/cancel cannot both win.
+  async #markPlanRunning(
+    planRun: PlanRun,
+  ): Promise<{ won: boolean; run: PlanRun }> {
     const startedAt = this.#now();
     const running: PlanRun = {
       ...planRun,
@@ -3164,15 +3300,14 @@ export class OpenTofuDeploymentController {
       ],
       updatedAt: startedAt,
     };
-    await this.#store.putPlanRun(running);
-    return running;
+    return await this.#claimRunRunning("plan", planRun.status, running, startedAt);
   }
 
   async #markApplyRunning(
     applyRun: ApplyRun,
     profile: RunnerProfile,
     startedAt: number,
-  ): Promise<ApplyRun> {
+  ): Promise<{ won: boolean; run: ApplyRun }> {
     const running: ApplyRun = {
       ...applyRun,
       status: "running",
@@ -3190,8 +3325,128 @@ export class OpenTofuDeploymentController {
       ],
       updatedAt: startedAt,
     };
-    await this.#store.putApplyRun(running);
-    return running;
+    return await this.#claimRunRunning(
+      "apply",
+      applyRun.status,
+      running,
+      startedAt,
+    );
+  }
+
+  /**
+   * Fenced `→ running` claim shared by the plan / apply consumers. The CAS fires
+   * only when the row is still in the expected pre-state: `queued` (the normal
+   * claim) or a stale `running` (crash takeover — the pre-read in
+   * {@link #shouldProcessRun} already established staleness). On a win it stamps
+   * the run id as the lease fence token + the heartbeat. On a loss the row was
+   * cancelled or already claimed by a sibling, so the caller skips dispatch and
+   * returns the re-read current row.
+   */
+  async #claimRunRunning<R extends PlanRun | ApplyRun>(
+    kind: "plan" | "apply",
+    fromStatus: RunStatus,
+    running: R,
+    heartbeatAt: number,
+  ): Promise<{ won: boolean; run: R }> {
+    const expectFrom: RunStatus[] =
+      fromStatus === "running" ? ["running"] : ["queued"];
+    const result = await this.#store.transitionRun({
+      id: running.id,
+      kind,
+      expectFrom,
+      run: running,
+      setLeaseToken: running.id,
+      heartbeatAt,
+    });
+    const run = (result.run ?? running) as R;
+    return { won: result.won, run };
+  }
+
+  /**
+   * Re-stamps a `running` run's heartbeat (the renewal harness, around a long
+   * blocking runner fetch). Lease-fenced on the run id so a stale takeover that
+   * already re-claimed the row with a fresh token does NOT get its heartbeat
+   * bumped by the crashed prior owner. A lost CAS is a no-op (the run moved on).
+   */
+  async #heartbeatRunningRun(
+    kind: "plan" | "apply",
+    run: PlanRun | ApplyRun,
+  ): Promise<void> {
+    const now = this.#now();
+    await this.#store.transitionRun({
+      id: run.id,
+      kind,
+      expectFrom: ["running"],
+      expectLeaseToken: run.id,
+      run: { ...run, heartbeatAt: now, updatedAt: now },
+      heartbeatAt: now,
+    });
+  }
+
+  /**
+   * Runs `work` (a single long blocking runner fetch) under a renewal timer:
+   * every {@link RUN_RENEWAL_INTERVAL_MS} it re-stamps the run's heartbeat AND
+   * renews the held lease so a sibling consumer never treats the run as crashed
+   * mid-apply. The interval is cleared in a `finally` on EVERY exit path
+   * (success, throw, or cancel). Each tick is best-effort: a renewal/heartbeat
+   * error is swallowed so it can never reject `work`'s result or crash the run.
+   */
+  async #withRunRenewal<T>(
+    kind: "plan" | "apply",
+    run: PlanRun | ApplyRun,
+    lease: LeaseHandle | undefined,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const tick = async (): Promise<void> => {
+      try {
+        await this.#heartbeatRunningRun(kind, run);
+        if (lease) {
+          await lease.renew(DEFAULT_INSTALLATION_LEASE_TTL_MS);
+        }
+      } catch {
+        // Best-effort: a transient renewal failure must not kill the apply it is
+        // babysitting. The next tick retries; a permanently-lost lease surfaces
+        // as a stale-takeover by a sibling, not as a thrown apply.
+      }
+    };
+    const intervalMs = this.#runRenewalIntervalMs;
+    // A non-positive interval disables the renewal timer (used by tests / inline
+    // substrates that never need it). The work still runs unchanged.
+    if (intervalMs <= 0) {
+      return await work();
+    }
+    const timer = setInterval(() => void tick(), intervalMs);
+    // Some runtimes keep the event loop alive for a pending interval; unref when
+    // available so the renewal timer never blocks process exit on its own.
+    (timer as { unref?: () => void }).unref?.();
+    try {
+      return await work();
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
+  /**
+   * Persists a run that has reached a TERMINAL status (succeeded / failed /
+   * cancelled). Routed through {@link OpenTofuDeploymentStore.transitionRun}
+   * instead of a raw `put*` so the lease fence column is CLEARED on the same
+   * write (a `put*` would leave a stale `lease_token` behind). Non-terminal →
+   * terminal is uncontested (the consumer that reached this point already holds
+   * the run), so the CAS accepts any non-terminal from-state; a lost CAS means a
+   * sibling already terminalized it and the existing terminal row stands.
+   */
+  async #persistTerminalRun<R extends PlanRun | ApplyRun>(
+    kind: "plan" | "apply",
+    terminal: R,
+  ): Promise<R> {
+    const result = await this.#store.transitionRun({
+      id: terminal.id,
+      kind,
+      expectFrom: NON_TERMINAL_RUN_STATUSES,
+      run: terminal,
+      clearLeaseToken: true,
+    });
+    return (result.won ? terminal : (result.run ?? terminal)) as R;
   }
 
   // Failure ceremony shared by the three catch bodies: clone the running run
@@ -3212,7 +3467,7 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
       finishedAt: now,
     };
-    await this.#store.putPlanRun(failed);
+    await this.#persistTerminalRun("plan", failed);
     // Activity (§27 / §34): a plan / destroy_plan reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
     // diagnostic message), the run phase, and the targeted Installation id.
@@ -3261,7 +3516,7 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
       finishedAt: now,
     };
-    await this.#store.putApplyRun(failed);
+    await this.#persistTerminalRun("apply", failed);
     // Activity (§27 / §34): an apply / destroy_apply reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
     // diagnostic message), the run phase, and the targeted Installation id.
@@ -3334,13 +3589,21 @@ export class OpenTofuDeploymentController {
         result,
         now,
       });
-      const updated = this.#buildCompletedPlanRun({
+      const completed = this.#buildCompletedPlanRun({
         running,
         result,
         verdict,
         now,
       });
-      await this.#store.putPlanRun(updated);
+      // plan→apply TOCTOU pin (S2): hash the resolved provider bindings this
+      // plan was reviewed against onto the plan (installation-context runs only),
+      // so the apply mint can assert nothing was swapped between plan and apply.
+      const updated = await this.#pinResolvedBindingsDigest(completed);
+      // Terminal write of the running plan (succeeded / waiting_approval /
+      // failed): route through the fenced transition so the lease fence column is
+      // cleared on the same write (a raw put* would leave a stale lease_token on
+      // the terminal row).
+      await this.#persistTerminalRun("plan", updated);
       await this.#recordRunnerMinuteUsage({
         spaceId: updated.spaceId,
         runId: updated.id,
@@ -3507,9 +3770,29 @@ export class OpenTofuDeploymentController {
       running,
       layered.templatePolicy,
     );
+    // §25 approval gate as a PERSISTED status (S2): a destroy plan is always
+    // two-stage — it MUST carry a recorded approval (`approveRun`) before apply —
+    // so a passed destroy plan parks in the persisted `waiting_approval` status
+    // instead of `succeeded` (it was previously `succeeded` + a read-time
+    // derivation). The OTHER gates are NOT approval-mandatory at apply and stay
+    // `succeeded`: a `requiresApproval` (delete/replace) change is a display
+    // signal, and a template `requiresConfirmation` change is enforced by
+    // `confirmDestructive` at apply — both still PROJECT `waiting_approval` via
+    // the read-time `planAwaitsApproval` derivation, so their semantics are
+    // unchanged. A read-only drift_check never parks; a policy-denied plan is
+    // `failed`.
+    const parksForApproval =
+      passedPolicy &&
+      running.driftCheck !== true &&
+      running.operation === "destroy";
+    const completedStatus: RunStatus = passedPolicy
+      ? parksForApproval
+        ? "waiting_approval"
+        : "succeeded"
+      : "failed";
     return {
       ...running,
-      status: passedPolicy ? "succeeded" : "blocked",
+      status: completedStatus,
       requiredProviders,
       policy: completedPolicy,
       policyDecisionDigest,
@@ -3769,9 +4052,16 @@ export class OpenTofuDeploymentController {
     planRun: PlanRun,
     profile: RunnerProfile,
     dispatch: RunTemplateDispatch,
+    lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
     const startedAt = this.#now();
-    const running = await this.#markApplyRunning(applyRun, profile, startedAt);
+    const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
+    if (!claim.won) {
+      // A sibling consumer already claimed this apply (or a cancel won the row).
+      // Do NOT dispatch the runner; return the row the winner persisted.
+      return { applyRun: claim.run };
+    }
+    const running = claim.run;
     let runnerDispatched = false;
 
     try {
@@ -3796,26 +4086,34 @@ export class OpenTofuDeploymentController {
           plannedInstallation,
           credentials,
           dispatch,
+          lease,
         );
       }
+      // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
+      // fetch for the whole tofu run, which can outlive the lease TTL + the
+      // heartbeat-stale window. Around it, periodically re-stamp the run
+      // heartbeat AND renew the installation/plan lease so a sibling does not
+      // treat the run as crashed and take it over mid-apply.
       const {
         result,
         envDispatch,
         persistGeneration,
         providerInstallationPolicy,
-      } = await this.#dispatchApply({
-        running,
-        planRun,
-        profile,
-        dispatch,
-        credentials,
-        // Flip the runner-dispatched flag ONLY when the runner is actually
-        // invoked, so a throw from the pre-dispatch env/policy resolution does
-        // not record runner-minute usage (matches the pre-extraction order).
-        onDispatch: () => {
-          runnerDispatched = true;
-        },
-      });
+      } = await this.#withRunRenewal("apply", running, lease, () =>
+        this.#dispatchApply({
+          running,
+          planRun,
+          profile,
+          dispatch,
+          credentials,
+          // Flip the runner-dispatched flag ONLY when the runner is actually
+          // invoked, so a throw from the pre-dispatch env/policy resolution does
+          // not record runner-minute usage (matches the pre-extraction order).
+          onDispatch: () => {
+            runnerDispatched = true;
+          },
+        }),
+      );
       const now = this.#now();
       const projected = await this.#projectAndRecordApplyOutputs({
         planRun,
@@ -3835,10 +4133,30 @@ export class OpenTofuDeploymentController {
           nextStateGeneration: projected.nextStateGeneration,
           now,
         });
+      // Build the terminal ApplyRun + the apply-once PlanRun marker NOW so they
+      // commit atomically with the Deployment (commit-tail fold, S2).
+      const completed = this.#buildCompletedApplyRun({
+        running,
+        applyRun,
+        profile,
+        installation: projected.installation,
+        deployment,
+        outputs: projected.outputs,
+        result,
+        providerInstallationPolicy,
+        startedAt,
+        now,
+      });
+      const appliedPlan: PlanRun = {
+        ...planRun,
+        appliedApplyRunId: applyRun.id,
+        updatedAt: now,
+      };
       // ATOMIC ledger commit (spec §20 / §21 / §16): the new (+ superseded)
-      // Deployment, the StateSnapshot, the OutputSnapshot, and the guarded
-      // Installation advance land all-or-nothing. A crash mid-write can no
-      // longer leave torn state.
+      // Deployment, the StateSnapshot, the OutputSnapshot, the guarded
+      // Installation advance, AND the terminal ApplyRun + applied PlanRun marker
+      // land all-or-nothing. A crash mid-write can no longer leave torn state or
+      // a stuck `running` run over a finished Deployment.
       const patched = await this.#commitApplyLedger({
         planRun,
         plannedInstallation,
@@ -3851,6 +4169,8 @@ export class OpenTofuDeploymentController {
         nextStateGeneration: projected.nextStateGeneration,
         stateDigest: result.stateDigest,
         runId: applyRun.id,
+        applyRunTerminal: completed,
+        planRunApplied: appliedPlan,
         now,
       });
       // §24 stale propagation: when this apply's projected outputs changed
@@ -3865,17 +4185,13 @@ export class OpenTofuDeploymentController {
         now,
       });
       return await this.#completeApplyRun({
-        running,
+        completed,
         planRun,
-        applyRun,
-        profile,
         installation: projected.installation,
         patched,
         deployment,
         outputs: projected.outputs,
         nextStateGeneration: projected.nextStateGeneration,
-        result,
-        providerInstallationPolicy,
         dispatch,
         startedAt,
         now,
@@ -4198,6 +4514,15 @@ export class OpenTofuDeploymentController {
     readonly nextStateGeneration: number;
     readonly stateDigest: string | undefined;
     readonly runId: string;
+    /**
+     * Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun are
+     * committed in the SAME atomic unit as the Deployment so a crash can never
+     * tear them apart. On the no-state-context fallback path (no atomic unit)
+     * they are written here through the same terminal-run / put paths the tail
+     * used before the fold.
+     */
+    readonly applyRunTerminal: ApplyRun;
+    readonly planRunApplied: PlanRun;
     readonly now: number;
   }): Promise<Installation | undefined> {
     const { planRun, installation, deployment, outputSnapshot, now } = input;
@@ -4224,7 +4549,7 @@ export class OpenTofuDeploymentController {
         await this.#store.putDeployment(input.supersededDeployment);
       }
       await this.#store.putOutputSnapshot(outputSnapshot);
-      return await this.#store.patchInstallation(
+      const patched = await this.#store.patchInstallation(
         installation.id,
         {
           currentDeploymentId: deployment.id,
@@ -4239,6 +4564,12 @@ export class OpenTofuDeploymentController {
           status: input.plannedInstallation?.status,
         },
       );
+      // Fallback path (no env context, no atomic unit): write the commit-tail
+      // runs the way the tail did before the fold — the terminal ApplyRun via
+      // the lease-clearing transition, then the apply-once PlanRun marker.
+      await this.#persistTerminalRun("apply", input.applyRunTerminal);
+      await this.#store.putPlanRun(input.planRunApplied);
+      return patched;
     }
     const committed = await this.#store.commitAppliedDeployment({
       newDeployment: deployment,
@@ -4262,6 +4593,9 @@ export class OpenTofuDeploymentController {
           status: input.plannedInstallation?.status,
         },
       },
+      // Commit-tail fold (S2): terminal ApplyRun + applied PlanRun in the unit.
+      applyRunTerminal: input.applyRunTerminal,
+      planRunApplied: input.planRunApplied,
     });
     return committed.installation;
   }
@@ -4281,42 +4615,28 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Finalizes a successful apply: persists the succeeded ApplyRun, records
-   * runner-minute usage, marks the PlanRun applied (apply-once), captures
-   * billing usage, drops the retained generated-root inputs sidecar, and emits
-   * the §27 / §34 activity. Returns the apply response.
+   * Builds the terminal (`succeeded`) ApplyRun for a non-destroy apply. The run
+   * is BUILT here (not persisted): it is committed atomically with the Deployment
+   * by {@link #commitApplyLedger} (commit-tail fold, S2) so the terminal status
+   * can never tear from the Deployment it produced.
    */
-  async #completeApplyRun(input: {
+  #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
-    readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
     readonly profile: RunnerProfile;
     readonly installation: Installation;
-    readonly patched: Installation | undefined;
     readonly deployment: Deployment;
     readonly outputs: readonly DeploymentOutput[];
-    readonly nextStateGeneration: number;
     readonly result: OpenTofuApplyResult;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
-    readonly dispatch: RunTemplateDispatch;
     readonly startedAt: number;
     readonly now: number;
-  }): Promise<ApplyRunResponse> {
-    const {
-      running,
-      planRun,
-      applyRun,
-      profile,
-      installation,
-      deployment,
-      outputs,
-      result,
-      dispatch,
-      startedAt,
-      now,
-    } = input;
+  }): ApplyRun {
+    const { running, applyRun, profile, installation, deployment, outputs } =
+      input;
+    const { result, startedAt, now } = input;
     const diagnostics = redactRunDiagnostics(result.diagnostics);
-    const completed: ApplyRun = {
+    return {
       ...running,
       installationId: installation.id,
       deploymentId: deployment.id,
@@ -4343,19 +4663,43 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
       finishedAt: now,
     };
-    await this.#store.putApplyRun(completed);
+  }
+
+  /**
+   * Finalizes a successful apply AFTER the atomic commit-tail fold has already
+   * persisted the terminal ApplyRun + the applied PlanRun marker (S2): records
+   * runner-minute usage, captures billing usage (own idempotencyKey, so it stays
+   * OUTSIDE the atomic unit), drops the retained generated-root inputs sidecar,
+   * and emits the §27 / §34 activity. Returns the apply response.
+   */
+  async #completeApplyRun(input: {
+    readonly completed: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly installation: Installation;
+    readonly patched: Installation | undefined;
+    readonly deployment: Deployment;
+    readonly outputs: readonly DeploymentOutput[];
+    readonly nextStateGeneration: number;
+    readonly dispatch: RunTemplateDispatch;
+    readonly startedAt: number;
+    readonly now: number;
+  }): Promise<ApplyRunResponse> {
+    const {
+      completed,
+      planRun,
+      installation,
+      deployment,
+      outputs,
+      dispatch,
+      startedAt,
+      now,
+    } = input;
     await this.#recordRunnerMinuteUsage({
       spaceId: completed.spaceId,
       runId: completed.id,
       installationId: completed.installationId,
       startedAt,
       finishedAt: now,
-    });
-    // Mark the PlanRun applied so it cannot be applied again (apply-once).
-    await this.#store.putPlanRun({
-      ...planRun,
-      appliedApplyRunId: applyRun.id,
-      updatedAt: now,
     });
     await this.#billing.captureApplyBillingUsage({
       planRun,
@@ -4397,6 +4741,7 @@ export class OpenTofuDeploymentController {
     plannedInstallation: Installation | undefined,
     credentials: RunCredentials | undefined,
     dispatch: RunTemplateDispatch,
+    lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -4438,31 +4783,37 @@ export class OpenTofuDeploymentController {
         );
       }
       runnerDispatched = true;
-      const result = await runner.destroy({
-        applyRun: running,
-        planRun,
-        planArtifact: planRun.planArtifact,
-        installation,
-        runnerProfile: profile,
-        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-        // Generated-root dispatch: destroy tofu in the reviewed root.
-        ...(dispatch.generatedRoot
-          ? { generatedRoot: dispatch.generatedRoot }
-          : {}),
-        ...(dispatch.build ? { build: dispatch.build } : {}),
-        // M2 env dispatch (state scope at base+1 + source archive).
-        ...(envDispatch.stateScope
-          ? { stateScope: envDispatch.stateScope }
-          : {}),
-        ...(envDispatch.sourceArchive
-          ? { sourceArchive: envDispatch.sourceArchive }
-          : {}),
-        // remote_state dependency states materialized into /work/deps (spec §15):
-        // the teardown config still refreshes its `terraform_remote_state` data
-        // sources, so the producer state files must be present.
-        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
-        ...(credentials ? { credentials } : {}),
-      });
+      const destroyFn = runner.destroy;
+      // Renewal harness: destroy is ONE awaited blocking fetch for the whole
+      // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
+      // long destroy is not taken over by a sibling. clearInterval on every exit.
+      const result = await this.#withRunRenewal("apply", running, lease, () =>
+        destroyFn.call(runner, {
+          applyRun: running,
+          planRun,
+          planArtifact: planRun.planArtifact!,
+          installation,
+          runnerProfile: profile,
+          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+          // Generated-root dispatch: destroy tofu in the reviewed root.
+          ...(dispatch.generatedRoot
+            ? { generatedRoot: dispatch.generatedRoot }
+            : {}),
+          ...(dispatch.build ? { build: dispatch.build } : {}),
+          // M2 env dispatch (state scope at base+1 + source archive).
+          ...(envDispatch.stateScope
+            ? { stateScope: envDispatch.stateScope }
+            : {}),
+          ...(envDispatch.sourceArchive
+            ? { sourceArchive: envDispatch.sourceArchive }
+            : {}),
+          // remote_state dependency states materialized into /work/deps (§15):
+          // the teardown config still refreshes its `terraform_remote_state` data
+          // sources, so the producer state files must be present.
+          ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
+          ...(credentials ? { credentials } : {}),
+        }),
+      );
       const now = this.#now();
       // Build the post-teardown StateSnapshot at the SAME generation the DO
       // wrote to R2_STATE, plus the destroyed-Deployment transition, then commit
@@ -4500,29 +4851,10 @@ export class OpenTofuDeploymentController {
           status: installation.status,
         },
       };
-      let patched: Installation | undefined;
-      if (stateSnapshot) {
-        const committed = await this.#store.commitAppliedDeployment({
-          ...(destroyedDeployment
-            ? { supersededDeployment: destroyedDeployment }
-            : {}),
-          stateSnapshot,
-          installationPatch: destroyPatch,
-        });
-        patched = committed.installation;
-      } else {
-        // No environment context => no StateSnapshot. Preserve the prior
-        // (deployment flip + guarded patch) sequence; only the type guard hits
-        // this branch in practice.
-        if (destroyedDeployment) {
-          await this.#store.putDeployment(destroyedDeployment);
-        }
-        patched = await this.#store.patchInstallation(
-          destroyPatch.id,
-          destroyPatch.patch,
-          destroyPatch.guard,
-        );
-      }
+      // Build the terminal (`succeeded`) destroy-apply ApplyRun + the apply-once
+      // PlanRun marker NOW so they commit atomically with the destroy ledger
+      // writes (commit-tail fold, S2): a torn tail can no longer leave a stuck
+      // `running` destroy run over a finished teardown.
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
       const completed: ApplyRun = {
         ...running,
@@ -4554,19 +4886,45 @@ export class OpenTofuDeploymentController {
         updatedAt: now,
         finishedAt: now,
       };
-      await this.#store.putApplyRun(completed);
+      const appliedPlan: PlanRun = {
+        ...planRun,
+        appliedApplyRunId: running.id,
+        updatedAt: now,
+      };
+      let patched: Installation | undefined;
+      if (stateSnapshot) {
+        const committed = await this.#store.commitAppliedDeployment({
+          ...(destroyedDeployment
+            ? { supersededDeployment: destroyedDeployment }
+            : {}),
+          stateSnapshot,
+          installationPatch: destroyPatch,
+          // Commit-tail fold (S2): terminal destroy-apply + applied PlanRun.
+          applyRunTerminal: completed,
+          planRunApplied: appliedPlan,
+        });
+        patched = committed.installation;
+      } else {
+        // No environment context => no StateSnapshot, no atomic unit. Preserve
+        // the prior (deployment flip + guarded patch) sequence and write the
+        // commit-tail runs the way the tail did before the fold.
+        if (destroyedDeployment) {
+          await this.#store.putDeployment(destroyedDeployment);
+        }
+        patched = await this.#store.patchInstallation(
+          destroyPatch.id,
+          destroyPatch.patch,
+          destroyPatch.guard,
+        );
+        await this.#persistTerminalRun("apply", completed);
+        await this.#store.putPlanRun(appliedPlan);
+      }
       await this.#recordRunnerMinuteUsage({
         spaceId: completed.spaceId,
         runId: completed.id,
         installationId: completed.installationId,
         startedAt,
         finishedAt: now,
-      });
-      // Mark the PlanRun applied so a destroy plan cannot be re-applied.
-      await this.#store.putPlanRun({
-        ...planRun,
-        appliedApplyRunId: running.id,
-        updatedAt: now,
       });
       await this.#billing.captureApplyBillingUsage({
         planRun,
@@ -4760,6 +5118,7 @@ const APPLY_EXPECTED_GUARD_KEYS = [
   "planArtifactDigest",
   "sourceCommit",
   "providerLockDigest",
+  "resolvedBindingsDigest",
 ] as const satisfies readonly (keyof ApplyExpectedGuard)[];
 
 function projectApplyExpectedGuard(
@@ -4813,6 +5172,9 @@ export function applyExpectedGuardFromPlanRun(
     ...(planRun.sourceCommit ? { sourceCommit: planRun.sourceCommit } : {}),
     ...(planRun.providerLockDigest
       ? { providerLockDigest: planRun.providerLockDigest }
+      : {}),
+    ...(planRun.resolvedBindingsDigest
+      ? { resolvedBindingsDigest: planRun.resolvedBindingsDigest }
       : {}),
   };
 }
@@ -5148,11 +5510,18 @@ function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
+/**
+ * Whether a run status is settled — the run engine will not dispatch / re-run it.
+ * The unified RunStatus has no `blocked`; `waiting_approval` is settled for this
+ * purpose (the plan execution finished and is parked awaiting a human approval,
+ * so a DLQ retry must NOT re-fail it).
+ */
 function isTerminalStatus(status: RunStatus): boolean {
   return (
     status === "succeeded" ||
     status === "failed" ||
-    status === "blocked" ||
+    status === "waiting_approval" ||
+    status === "expired" ||
     status === "cancelled"
   );
 }

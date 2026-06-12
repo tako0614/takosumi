@@ -7,12 +7,13 @@
  * module is a pure projection — it never mutates the internal records.
  *
  * Status mapping (the load-bearing part):
- *   - PlanRun.status `blocked` projects to `waiting_approval` when the block is a
- *     policy gate that an approval can clear (template `requiresConfirmation`, a
- *     destroy_plan, or an Installation that requires approval); otherwise a
- *     genuinely policy-denied plan projects to `failed`.
- *   - The remaining internal statuses map 1:1 to the unified statuses; the
- *     internal model has no `expired`, so it is never produced here.
+ *   - RunStatus is ONE vocabulary now (`queued | running | waiting_approval |
+ *     succeeded | failed | cancelled | expired`). The internal PlanRun / ApplyRun
+ *     records persist that same set, so the projection is mostly identity.
+ *   - `waiting_approval` is a PERSISTED status (an approval gate parks the plan
+ *     there at completion). A legacy row persisted `succeeded` that the caller
+ *     still observes as awaiting approval is mapped to `waiting_approval` for
+ *     back-compat; a legacy `blocked` row coerces to `failed`.
  */
 
 import type {
@@ -50,10 +51,12 @@ function runTypeForOperation(
 }
 
 /**
- * Maps a PlanRun status to the unified status. A `blocked` plan becomes
- * `waiting_approval` when an approval can move it forward; a policy-denied plan
- * with no approval path becomes `failed`. `awaitingApproval` is set by the
- * caller from the environment/plan policy decision.
+ * Maps a PlanRun status to the unified status. RunStatus is now ONE vocabulary,
+ * so a status that is already unified (`waiting_approval` included) passes
+ * through. `awaitingApproval` is retained for legacy/back-compat: a legacy row
+ * persisted `succeeded` (before `waiting_approval` became a persisted status)
+ * that the caller still observes as awaiting approval projects to
+ * `waiting_approval`. A legacy persisted `blocked` coerces to `failed`.
  */
 function planUnifiedStatus(
   status: PlanRun["status"],
@@ -64,15 +67,18 @@ function planUnifiedStatus(
       return "queued";
     case "running":
       return "running";
+    case "waiting_approval":
+      return "waiting_approval";
     case "succeeded":
       return awaitingApproval ? "waiting_approval" : "succeeded";
     case "cancelled":
       return "cancelled";
-    case "blocked":
-      return awaitingApproval ? "waiting_approval" : "failed";
+    case "expired":
+      return "expired";
     case "failed":
       return "failed";
     default:
+      // Legacy `blocked` (and any unknown) coerces to `failed`.
       return "failed";
   }
 }
@@ -83,14 +89,18 @@ function applyUnifiedStatus(status: ApplyRun["status"]): RunStatus {
       return "queued";
     case "running":
       return "running";
+    case "waiting_approval":
+      return "waiting_approval";
     case "succeeded":
       return "succeeded";
     case "cancelled":
       return "cancelled";
-    case "blocked":
+    case "expired":
+      return "expired";
     case "failed":
       return "failed";
     default:
+      // Legacy `blocked` (and any unknown) coerces to `failed`.
       return "failed";
   }
 }

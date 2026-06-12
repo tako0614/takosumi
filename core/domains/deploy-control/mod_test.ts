@@ -335,7 +335,7 @@ test("update and destroy PlanRuns stay bound to the targeted Installation", asyn
     source: SOURCE,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
-  expect(destroyPlan.status).toEqual("succeeded");
+  expect(destroyPlan.status).toEqual("waiting_approval");
   expect(destroyPlan.installationId).toEqual(installationId);
   expect(destroyPlan.operation).toEqual("destroy");
   expect(destroyPlan.installationCurrentDeploymentId).toEqual(
@@ -642,7 +642,7 @@ test("runner profile policy blocks unsupported providers before execution", asyn
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons[0]).toContain("not allowed");
 });
@@ -672,7 +672,7 @@ test("runner profile policy requires declared providers before execution", async
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(runnerCalled).toEqual(false);
   expect(planRun.requiredProviders).toEqual([]);
   expect(planRun.policy.reasons.join("\n")).toContain(
@@ -729,7 +729,7 @@ test("runner profile policy blocks denied providers and missing credential refs"
     runnerProfileId: profile.id,
   });
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain("denied");
 });
 
@@ -763,7 +763,7 @@ test("runner profile policy blocks required providers without credential refs", 
     runnerProfileId: profile.id,
   });
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain("credential reference");
 });
 
@@ -814,7 +814,7 @@ test("InstallConfig provider allowlist blocks after RunnerProfile admits provide
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "registry.opentofu.org/hashicorp/aws is not allowed by policy",
   );
@@ -864,7 +864,7 @@ test("plan policy blocks strict Cloudflare scope when plan metadata is missing",
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "missing Cloudflare account metadata",
@@ -921,7 +921,7 @@ test("plan policy admits matching scope metadata and blocks quota overflow", asy
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).not.toContain("out of scope");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "resources.total count 2 exceeds 1",
@@ -983,7 +983,7 @@ test("plan policy composes Space policy ceiling with InstallConfig policy", asyn
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "cloudflare_workers_script is not allowed",
   );
@@ -1125,7 +1125,7 @@ test("template runner profiles are blocked until operator validation enables the
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain("disabled template");
 });
 
@@ -1231,7 +1231,7 @@ test("provider env set providers require a user env set runner class before disp
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("blocked");
+  expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
     "is not a user env set provider runner class",
   );
@@ -1382,16 +1382,18 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
     operation: "destroy",
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
-  expect(destroyPlan.status).toEqual("succeeded");
+  expect(destroyPlan.status).toEqual("waiting_approval");
 
-  // Without a recorded approval the destroy apply is refused — the approval is
-  // enforced at apply, not merely displayed.
+  // Without a recorded approval the destroy apply is refused — the destroy plan
+  // is parked in the persisted `waiting_approval` status, so the apply
+  // precondition (which requires a `succeeded` plan) fails closed. The approval
+  // is enforced at apply, not merely displayed.
   await expect(
     controller.createApplyRun({
       planRunId: destroyPlan.id,
       expected: applyExpectedGuardFromPlanRun(destroyPlan),
     }),
-  ).rejects.toThrow(/awaiting approval/);
+  ).rejects.toThrow(/waiting_approval|awaiting approval/);
 
   // After approval the same destroy applies.
   await controller.approveRun(destroyPlan.id, { approvedBy: "ops" });

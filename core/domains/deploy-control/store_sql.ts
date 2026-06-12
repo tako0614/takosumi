@@ -25,6 +25,7 @@ import type {
   RunnerProfile,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
+import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import {
   and,
@@ -251,7 +252,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
-    return await this.#getRun<PlanRun>(id, [...RUN_KINDS_PLAN, "drift_check"]);
+    return coerceRunRowStatus(
+      await this.#getRun<PlanRun>(id, [...RUN_KINDS_PLAN, "drift_check"]),
+    );
   }
 
   async putApplyRun(run: ApplyRun): Promise<ApplyRun> {
@@ -269,7 +272,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY);
+    return coerceRunRowStatus(await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY));
   }
 
   /**
@@ -850,6 +853,30 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     await pgUpsertStateSnapshot(db, input.stateSnapshot);
     if (input.outputSnapshot) {
       await pgUpsertOutputSnapshot(db, input.outputSnapshot);
+    }
+    // Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun land in
+    // the SAME interactive transaction as the Deployment. The apply terminal
+    // clears its lease fence (`lease_token = NULL`, mirrors transitionRun
+    // clearLeaseToken); the plan patch is a plain row write (already terminal).
+    if (input.applyRunTerminal) {
+      await pgUpsertRun(
+        db,
+        input.applyRunTerminal.operation === "destroy"
+          ? "destroy_apply"
+          : "apply",
+        input.applyRunTerminal,
+      );
+    }
+    if (input.planRunApplied) {
+      await pgUpsertRun(
+        db,
+        input.planRunApplied.driftCheck === true
+          ? "drift_check"
+          : input.planRunApplied.operation === "destroy"
+            ? "destroy_plan"
+            : "plan",
+        input.planRunApplied,
+      );
     }
     // Guarded Installation advance, fenced on current_deployment_id (and
     // optionally status) so the patch lands atomically with the writes above.
@@ -2447,6 +2474,68 @@ function installationValues(installation: Installation) {
 // drizzle handle (the atomic commitAppliedDeployment path). Keeping ONE column
 // payload per entity means the transactional and non-transactional writes stay
 // byte-for-byte identical.
+
+/**
+ * Read-coerces a persisted PlanRun / ApplyRun's `status` to the unified
+ * {@link RunStatus} (RunStatus unify, S2). A legacy row written before the
+ * `blocked` → `failed` collapse stored `status: "blocked"`; this maps it to
+ * `failed` on read so old rows read back in the new model. Undefined passes
+ * through.
+ */
+function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
+  run: R | undefined,
+): R | undefined {
+  if (!run || run.status !== ("blocked" as unknown as R["status"])) return run;
+  return { ...run, status: coerceRunStatus(run.status) } as R;
+}
+
+/**
+ * Tx-aware §27 `runs` upsert (the commit-tail fold helper). Writes a PlanRun /
+ * ApplyRun row through the given drizzle handle (the transaction-bound one), so
+ * the run-status write commits atomically with the Deployment. Mirrors the
+ * `#putRunDrizzle` column payload exactly. `clearLease` nulls the lease fence on
+ * the same write (the terminal ApplyRun path); otherwise the lease column rides
+ * the run's own `heartbeatAt`.
+ *
+ * Both rows written through this helper are TERMINAL (the succeeded ApplyRun and
+ * the apply-once PlanRun marker), so the lease fence is always nulled — the
+ * commit-tail fold never re-stamps a live lease.
+ */
+async function pgUpsertRun(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  kind: string,
+  run: PlanRun | ApplyRun,
+): Promise<void> {
+  const values = {
+    id: run.id,
+    kind,
+    spaceId: run.spaceId,
+    sourceId: null,
+    installationId: run.installationId ?? null,
+    status: run.status,
+    leaseToken: null as string | null,
+    heartbeatAt: run.heartbeatAt ?? null,
+    createdAt: String(run.createdAt),
+    runJson: run,
+  };
+  await db
+    .insert(pgSchema.runs)
+    .values(values)
+    .onConflictDoUpdate({
+      target: pgSchema.runs.id,
+      set: {
+        kind: values.kind,
+        spaceId: values.spaceId,
+        sourceId: values.sourceId,
+        installationId: values.installationId,
+        status: values.status,
+        leaseToken: values.leaseToken,
+        heartbeatAt: values.heartbeatAt,
+        createdAt: values.createdAt,
+        runJson: values.runJson,
+      },
+    });
+}
 
 async function pgUpsertDeployment(
   db: PgRemoteDatabase<typeof pgSchema>,

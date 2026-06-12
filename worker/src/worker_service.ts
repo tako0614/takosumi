@@ -173,6 +173,35 @@ function durableObjectInstallationCoordination(
       };
       return result;
     },
+    async renewLease(input) {
+      // The DO's `renew-lease` throws (400) when the lease is not held by this
+      // holder+token. Translate that into a fail-closed `acquired=false` lease
+      // so the renewal harness stops renewing instead of surfacing the error and
+      // killing the apply it is babysitting.
+      try {
+        const result = await post("renew-lease", {
+          scope: input.scope,
+          holderId: input.holderId,
+          token: input.token,
+          ttlMs: input.ttlMs,
+        }) as {
+          scope: string;
+          holderId: string;
+          token: string;
+          acquired: boolean;
+          expiresAt: string;
+        };
+        return result;
+      } catch {
+        return {
+          scope: input.scope,
+          holderId: input.holderId,
+          token: input.token,
+          acquired: false,
+          expiresAt: new Date().toISOString(),
+        };
+      }
+    },
     async releaseLease(input) {
       return await post("release-lease", {
         scope: input.scope,

@@ -31,6 +31,7 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /** One provider binding's resolution outcome. */
 export interface ResolvedProviderBinding {
@@ -41,6 +42,39 @@ export interface ResolvedProviderBinding {
   readonly connection?: Connection;
   /** Present for `manual` mode. */
   readonly values?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Stable digest over a run's RESOLVED provider bindings (plan→apply TOCTOU pin).
+ *
+ * Hashes the identity-bearing fields of each binding — `provider`, optional
+ * `alias`, `mode`, and the resolved `connectionId` — sorted into a canonical
+ * order so the digest is independent of resolution order. It is pinned on the
+ * PlanRun at plan completion and re-asserted at apply mint: if a Space owner (or
+ * operator) swaps a Connection, flips a ProviderBinding mode, or repoints the
+ * operator default between plan and apply, the recomputed digest diverges and
+ * the apply fails closed (a plan was reviewed against DIFFERENT credentials than
+ * the apply would mint). `manual` values are intentionally NOT hashed (they are
+ * module inputs, not credentials, and may carry sensitive literals); a mode flip
+ * to/from `manual` still changes `mode` and is caught. `undefined` (a run with
+ * no installation context / no resolvable bindings) yields a fixed empty digest.
+ */
+export async function resolvedBindingsDigest(
+  resolved: readonly ResolvedProviderBinding[] | undefined,
+): Promise<string> {
+  const entries = (resolved ?? [])
+    .map((entry) => ({
+      provider: entry.provider,
+      alias: entry.alias ?? null,
+      mode: entry.mode,
+      connectionId: entry.connection?.id ?? null,
+    }))
+    .sort(
+      (a, b) =>
+        a.provider.localeCompare(b.provider) ||
+        String(a.alias).localeCompare(String(b.alias)),
+    );
+  return await stableJsonDigest(entries);
 }
 
 export interface ConnectionsServiceDependencies {

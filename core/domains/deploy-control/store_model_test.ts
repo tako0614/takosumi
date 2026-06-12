@@ -1225,6 +1225,123 @@ test("commitAppliedDeployment (SQL): runs inside the SqlClient transaction seam 
   );
 });
 
+test("commitAppliedDeployment: commit-tail fold writes the terminal ApplyRun + applied PlanRun atomically and clears the lease", async () => {
+  for (const [label, store] of await forEachStore()) {
+    // Seed the run rows in their pre-terminal states: the plan succeeded (not
+    // yet marked applied), the apply is `running` holding a lease fence token.
+    await store.putInstallation(
+      installation({ id: "inst_1", status: "pending", currentStateGeneration: 0 }),
+    );
+    await store.putPlanRun({ ...makePlanRun("plan_fold"), status: "succeeded" });
+    await store.putApplyRun({
+      ...makeApplyRun("apply_fold", "plan_fold"),
+      status: "queued",
+    });
+    // Claim the apply -> `running` with a lease fence, so the fold must CLEAR it.
+    const claim = await store.transitionRun({
+      id: "apply_fold",
+      kind: "apply",
+      expectFrom: ["queued"],
+      run: { ...makeApplyRun("apply_fold", "plan_fold"), status: "running" },
+      setLeaseToken: "apply_fold",
+      heartbeatAt: 1,
+    });
+    expect(claim.won, label).toBe(true);
+
+    const terminalApply = {
+      ...makeApplyRun("apply_fold", "plan_fold"),
+      status: "succeeded" as const,
+      deploymentId: "dep_fold",
+      finishedAt: 9_000,
+    };
+    const appliedPlan = {
+      ...makePlanRun("plan_fold"),
+      status: "succeeded" as const,
+      appliedApplyRunId: "apply_fold",
+    };
+
+    const committed = await store.commitAppliedDeployment({
+      newDeployment: deployment({
+        id: "dep_fold",
+        stateGeneration: 1,
+        outputSnapshotId: "out_fold",
+        status: "active",
+      }),
+      stateSnapshot: stateSnapshot({ id: "state_fold", generation: 1 }),
+      outputSnapshot: outputSnapshot({ id: "out_fold", stateGeneration: 1 }),
+      installationPatch: {
+        id: "inst_1",
+        patch: {
+          currentDeploymentId: "dep_fold",
+          status: "active",
+          currentStateGeneration: 1,
+          currentOutputSnapshotId: "out_fold",
+          updatedAt: TS,
+        },
+        guard: { currentDeploymentId: undefined, status: "pending" },
+      },
+      applyRunTerminal: terminalApply,
+      planRunApplied: appliedPlan,
+    });
+    expect(committed.installation?.currentDeploymentId, label).toBe("dep_fold");
+
+    // The terminal ApplyRun + applied PlanRun landed in the SAME unit.
+    const apply = await store.getApplyRun("apply_fold");
+    expect(apply?.status, label).toBe("succeeded");
+    expect(apply?.deploymentId, label).toBe("dep_fold");
+    const plan = await store.getPlanRun("plan_fold");
+    expect(plan?.appliedApplyRunId, label).toBe("apply_fold");
+
+    // Torn-tail self-heal: the apply terminal cleared its lease fence in the
+    // SAME write, so a stale-token holder can never re-claim a finished run, and
+    // a now-removed tail step can't leave it stuck `running`. A re-claim of the
+    // succeeded apply from `running` with the OLD fence token loses.
+    const reclaim = await store.transitionRun({
+      id: "apply_fold",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: "apply_fold",
+      run: { ...makeApplyRun("apply_fold", "plan_fold"), status: "failed" },
+    });
+    expect(reclaim.won, label).toBe(false);
+    expect((await store.getApplyRun("apply_fold"))?.status, label).toBe(
+      "succeeded",
+    );
+  }
+});
+
+test("RunStatus round-trips waiting_approval / expired through all stores; legacy blocked coerces to failed", async () => {
+  for (const [label, store] of await forEachStore()) {
+    // waiting_approval is a persisted status: it round-trips unchanged.
+    await store.putPlanRun({ ...makePlanRun("run_wa"), status: "waiting_approval" });
+    expect((await store.getPlanRun("run_wa"))?.status, label).toBe(
+      "waiting_approval",
+    );
+    // expired round-trips on an apply row.
+    await store.putApplyRun({
+      ...makeApplyRun("run_exp", "run_plan_exp"),
+      status: "expired",
+    });
+    expect((await store.getApplyRun("run_exp"))?.status, label).toBe("expired");
+
+    // A legacy row persisted with the retired `blocked` status read-coerces to
+    // `failed` (the unified model has no `blocked`). Write it through the typed
+    // put with a cast so the persisted column/JSON carries the legacy value.
+    await store.putPlanRun({
+      ...makePlanRun("run_legacy"),
+      status: "blocked" as unknown as "failed",
+    });
+    expect((await store.getPlanRun("run_legacy"))?.status, label).toBe("failed");
+    await store.putApplyRun({
+      ...makeApplyRun("run_legacy_a", "run_plan_legacy"),
+      status: "blocked" as unknown as "failed",
+    });
+    expect((await store.getApplyRun("run_legacy_a"))?.status, label).toBe(
+      "failed",
+    );
+  }
+});
+
 test("DeploymentProfile store: upsert keyed (installation, environment)", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putDeploymentProfile(deploymentProfile({ id: "dpf_a" }));
