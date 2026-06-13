@@ -14,6 +14,13 @@
  * projection that omits the Stripe price id) and starts checkout by `planId`;
  * the server resolves the Stripe price + checkout mode + metadata, so a client
  * can never drive checkout against an arbitrary price.
+ *
+ * POLICY — credits are non-refundable and final (spec §32.3). A purchased
+ * grant is never reversed: there is no voluntary refund flow. A chargeback
+ * (`charge.dispute.*`) freezes the BillingAccount (status `disputed` →
+ * entitlements suspended via `shouldSuspendForBilling`) rather than refunding
+ * credits, so "reversing the purchase also stops usage" — the credit balance
+ * itself is not reversed.
  */
 
 export interface BillingPlanText {
