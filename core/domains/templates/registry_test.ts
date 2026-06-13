@@ -51,6 +51,8 @@ test("built-in registry resolves bundled module files for every first-party modu
 // `providers/<provider>/modules/<id>/`.
 const MODULE_DIRS: Readonly<Record<string, string>> = {
   core: "opentofu-modules/core",
+  "cloudflare-hello-worker":
+    "providers/cloudflare/modules/cloudflare-hello-worker",
   "cloudflare-r2-storage": "providers/cloudflare/modules/cloudflare-r2-storage",
   "cloudflare-static-site":
     "providers/cloudflare/modules/cloudflare-static-site",

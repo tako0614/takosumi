@@ -31,6 +31,18 @@ export interface CatalogEntry {
 
 export const CATALOG: readonly CatalogEntry[] = [
   {
+    id: "cloudflare-hello-worker",
+    git: "https://github.com/tako0614/takosumi.git",
+    ref: "main",
+    path: "providers/cloudflare/modules/cloudflare-hello-worker/module",
+    suggestedName: "hello",
+    name: { ja: "Hello Worker（スターター）", en: "Hello Worker (starter)" },
+    description: {
+      ja: "ビルド不要のスターター。apply だけで Cloudflare Worker が立ち上がり、workers.dev のページ URL が出力されます。まず動くものを 5 分で。",
+      en: "A no-build starter: apply alone brings up a Cloudflare Worker and outputs a reachable workers.dev URL. Something live in 5 minutes.",
+    },
+  },
+  {
     id: "takos",
     git: "https://github.com/tako0614/takos.git",
     ref: "main",

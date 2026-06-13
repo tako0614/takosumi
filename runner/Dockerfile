@@ -71,6 +71,7 @@ RUN set -eux; \
 # same generated-root child-module slot.
 WORKDIR /app
 COPY opentofu-modules/core/ ./templates/core/
+COPY providers/cloudflare/modules/cloudflare-hello-worker/ ./templates/cloudflare-hello-worker/
 COPY providers/cloudflare/modules/cloudflare-r2-storage/ ./templates/cloudflare-r2-storage/
 COPY providers/cloudflare/modules/cloudflare-static-site/ ./templates/cloudflare-static-site/
 COPY providers/cloudflare/modules/cloudflare-worker-service/ ./templates/cloudflare-worker-service/
