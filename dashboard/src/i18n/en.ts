@@ -547,6 +547,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.balance.reserved": "Reserved credits",
   "billing.plans.title": "Plans",
   "billing.plans.none": "No plans are offered right now.",
+  "billing.plans.nonRefundable":
+    "Credits are final — purchases are non-refundable.",
   "billing.plans.subscribe": "Choose this plan",
   "billing.plans.perMonth": "{n} credits per month",
   "billing.packs.title": "Credit packs",

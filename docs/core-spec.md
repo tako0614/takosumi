@@ -2342,6 +2342,14 @@ ledger だけを更新する。既存 customer の plan / payment method / cance
 Portal session route が Stripe Customer Portal に委譲し、dashboard Billing 画面は Checkout と Customer Portal の hosted
 session を起動するだけで raw Stripe secret を扱わない。
 
+**クレジットは買い切り・非返金（policy）**: 購入したクレジットは最終確定であり、Takosumi は credit grant を
+**反転（返金）しない**。自主返金フローは持たず、購入後のクレジットは返金対象にならない。チャージバック
+（`charge.dispute.*`）は不可避な強制巻き戻しなので、credit を返金する代わりに `BillingAccount` を `disputed`
+status に遷移させて entitlement を suspend する（`shouldSuspendForBilling`）。これにより dispute 中の Space は
+未使用クレジットを含め apply できなくなり、「買いを巻き戻すなら利用も止まる」という対称な扱いになる
+（クレジット残高そのものは反転しない）。サブスク解約は将来分の月次付与を終了する（未使用 monthly 分を除去、
+purchased 分は残す）が、これは返金ではなく付与の停止である。
+
 #### 32.3.1 Plan cost estimate
 
 上の `cost estimate` ステップは透明・決定的・テスト可能な式で credit を見積もる。plan の各 resource change はその change の最も重い OpenTofu action token の weight を持ち（replace は OpenTofu が `["delete","create"]` として表すため create + delete として二重計上せず create 1 回として課金する）、estimate は `credits = max(BASE, Σ per-change weight)` で求める。`BASE` は最小課金として常に下限を与える。weight 表は次のとおり（`create` / `replace` = 2、`update` = 1、`delete` = 1、`read` / `no-op` = 0、`BASE` = 1）で、change が無い plan は `BASE` に落ちる。`runner_minute` 系の実行時間課金はこの式に含めず、run 後に別の `UsageEvent` として計上し（将来 estimate に加える場合は additive な別項として足す）将来拡張とする。
