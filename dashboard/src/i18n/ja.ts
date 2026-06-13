@@ -541,6 +541,8 @@ export const ja = {
   "billing.balance.reserved": "予約中クレジット",
   "billing.plans.title": "プラン",
   "billing.plans.none": "現在、プランは提供されていません。",
+  "billing.plans.nonRefundable":
+    "クレジットは買い切りです。購入後の返金はできません。",
   "billing.plans.subscribe": "このプランにする",
   "billing.plans.perMonth": "毎月 {n} クレジット",
   "billing.packs.title": "クレジットパック",

@@ -42,6 +42,10 @@
 .av-plan-section {
   margin-top: var(--tg-s-4);
 }
+.av-plan-policy {
+  margin: 0 0 var(--tg-s-3);
+  font-size: var(--tg-fs-sm);
+}
 
 /* ===== shared ===== */
 .av-actions {

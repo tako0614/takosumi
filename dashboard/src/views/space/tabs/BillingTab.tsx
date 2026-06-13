@@ -260,6 +260,9 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
       <Card>
         <CardHeader title={t("billing.plans.title")} />
+        <Show when={(plans() ?? []).length > 0}>
+          <p class="muted av-plan-policy">{t("billing.plans.nonRefundable")}</p>
+        </Show>
         <Show
           when={(plans() ?? []).length > 0}
           fallback={<p class="muted">{t("billing.plans.none")}</p>}
