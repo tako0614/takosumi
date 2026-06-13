@@ -2,6 +2,11 @@
 
 この手順は local Takosumi service に対して、Space 直下の OpenTofu Capsule Installation の control-plane record を作り、Compatibility Check / Plan / Apply の contract を確認する最小例です。
 
+> **5 分で動くもの**: dashboard の「追加」(`/new`) のカタログにある **Hello Worker（スターター）**
+> (`cloudflare-hello-worker`) は **ビルド不要** のスターターカプセルです。Cloudflare 接続（運営の managed
+> default、または自分の Cloudflare 接続）があれば、install → 変更を確認 → デプロイ だけで Cloudflare Worker が
+> 立ち上がり、`url` 出力（`*.workers.dev`）がアプリ詳細の「開く」リンクになります。まず動くものを見たい場合の入口です。
+
 正本は [Core spec](../core-spec.md) です。local service で runner / R2 / billing adapter が未配線の場合、実際の OpenTofu 実行や credit による apply blocking は queued / failed / adapter-unavailable として見えることがあります。現実装の適合状況と追加拡張の候補は [Core conformance](../core-conformance.md) に集約しています。
 
 Provider Templates / Provider Env Set が正本モデルです。Takosumi提供は Cloudflare only から始まり、AWS / GCP / GitHub / Kubernetes / 任意 provider は Space-owned Connection のユーザーenvセットで使います。
