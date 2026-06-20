@@ -54,6 +54,7 @@ export type ConnectionStatus =
 
 export const PROVIDER_CREDENTIAL_OWNERSHIPS = [
   "own_key",
+  "takos_provided",
 ] as const;
 
 export type ProviderCredentialOwnership =

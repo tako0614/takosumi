@@ -1,5 +1,5 @@
 /**
- * §29 Provider routes: read-only Provider Catalog endpoints.
+ * §29 Provider routes: read-only ProviderConnection recipe endpoints.
  */
 
 import {
@@ -29,7 +29,7 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "GET",
       path: TAKOSUMI_PROVIDERS_ROUTE,
       summary:
-        "Lists Provider Catalog entries with Provider Connection options, helper flows, and policy metadata.",
+        "Lists provider connection recipes with helper flows and policy metadata.",
       auth: "deploy-control-token",
       operationId: "listProviders",
       openapi: { okSchema: "ListProviderCatalogEntriesResponse" },
@@ -38,7 +38,7 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
     {
       method: "GET",
       path: TAKOSUMI_PROVIDER_ROUTE,
-      summary: "Reads a Provider Catalog entry.",
+      summary: "Reads a provider connection recipe.",
       auth: "deploy-control-token",
       operationId: "getProvider",
       openapi: {
@@ -51,7 +51,7 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "GET",
       path: TAKOSUMI_PROVIDER_ENVS_ROUTE,
       summary:
-        "Lists internal provider resolver records visible to a Space, including global Takosumi Gateway records.",
+        "Lists internal provider resolver records visible to a Workspace.",
       auth: "deploy-control-token",
       operationId: "listProviderEnvs",
       discoverable: false,
@@ -61,8 +61,7 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
     {
       method: "PUT",
       path: TAKOSUMI_PROVIDER_ENV_ROUTE,
-      summary:
-        "Creates or replaces an internal provider resolver record. Global Gateway records require an unrestricted principal.",
+      summary: "Creates or replaces an internal provider resolver record.",
       auth: "deploy-control-token",
       operationId: "putProviderEnv",
       discoverable: false,
