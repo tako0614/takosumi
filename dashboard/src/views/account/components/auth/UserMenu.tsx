@@ -11,6 +11,18 @@ import {
   type SessionRecord,
 } from "../../lib/session.ts";
 import { locale, setLocale, t } from "../../../../i18n/index.ts";
+import type { MessageKey } from "../../../../i18n/index.ts";
+import {
+  setThemePreference,
+  themePreference,
+  type ThemePreference,
+} from "../../../../lib/theme.ts";
+
+const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
+  system: "theme.system",
+  light: "theme.light",
+  dark: "theme.dark",
+};
 
 export default function UserMenu() {
   const [open, setOpen] = createSignal(false);
@@ -94,6 +106,23 @@ export default function UserMenu() {
             >
               English
             </button>
+          </div>
+          <div
+            class="user-menu-lang"
+            role="group"
+            aria-label={t("shell.theme")}
+          >
+            <span class="user-menu-lang-label">{t("shell.theme")}</span>
+            {(["system", "light", "dark"] as const).map((theme) => (
+              <button
+                type="button"
+                class="user-menu-lang-btn"
+                classList={{ active: themePreference() === theme }}
+                onClick={() => setThemePreference(theme)}
+              >
+                {t(THEME_LABEL_KEY[theme])}
+              </button>
+            ))}
           </div>
           <button
             class="user-menu-item user-menu-danger"

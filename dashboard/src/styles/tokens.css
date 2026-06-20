@@ -1,4 +1,5 @@
-:root {
+:root,
+:root[data-theme="light"] {
   color-scheme: light;
 
   /* ===== Palette — dashboard app. Light, quiet, operational. ===== */
@@ -20,10 +21,15 @@
   --tg-accent-soft: #fff1f0;
   --tg-accent-text: #b42318;
 
+  --tg-grad-from: #111827;
+  --tg-grad-mid: #d92d20;
+  --tg-grad-to: #b42318;
+
   --tg-info: #2563eb;
   --tg-success: #16803f;
   --tg-warn: #b65c00;
   --tg-danger: #c82323;
+  --tg-danger-fg: #ffffff;
 
   /* Spacing scale */
   --tg-s-1: 4px;
@@ -77,6 +83,41 @@
   /* Layout */
   --tg-container: 1120px;
   --tg-nav-h: 64px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --tg-bg: #101316;
+  --tg-bg-elev: #171b20;
+  --tg-bg-subtle: #20252c;
+  --tg-fg: #f7f7f8;
+  --tg-fg-muted: #b6bdc8;
+  --tg-fg-subtle: #838b98;
+  --tg-line: #2b323b;
+  --tg-line-strong: #3d4652;
+  --tg-code-bg: #20252c;
+  --tg-code-fg: #f3f4f6;
+
+  --tg-accent: #ff554a;
+  --tg-accent-hover: #ff766f;
+  --tg-accent-fg: #190706;
+  --tg-accent-soft: #351815;
+  --tg-accent-text: #ffb3ad;
+
+  --tg-grad-from: #ffffff;
+  --tg-grad-mid: #ff766f;
+  --tg-grad-to: #ff554a;
+
+  --tg-info: #73a5ff;
+  --tg-success: #55c47f;
+  --tg-warn: #e2a957;
+  --tg-danger: #ff6f6a;
+  --tg-danger-fg: #190706;
+
+  --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --tg-shadow-md: 0 10px 24px rgba(0, 0, 0, 0.34);
+  --tg-shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.44);
 }
 
 /* ===== Dashboard-only layout + status tokens =============================

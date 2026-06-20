@@ -41,7 +41,7 @@ a:hover {
 
 ::selection {
   background: var(--tg-accent);
-  color: #fff;
+  color: var(--tg-accent-fg);
 }
 
 code,
@@ -113,7 +113,7 @@ main {
   z-index: 1000;
   padding: var(--tg-s-2) var(--tg-s-4);
   background: var(--tg-accent);
-  color: #fff;
+  color: var(--tg-accent-fg);
   border-radius: var(--tg-r-md);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
@@ -123,7 +123,7 @@ main {
 .skip-link:focus-visible {
   top: var(--tg-s-2);
   text-decoration: none;
-  color: #fff;
+  color: var(--tg-accent-fg);
 }
 
 /* Visually-hidden but accessible to assistive tech. */
