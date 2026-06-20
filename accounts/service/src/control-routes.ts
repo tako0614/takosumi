@@ -200,7 +200,10 @@ function publicDeployment(deployment: Deployment): PublicDeployment {
   return rest;
 }
 
-async function publicRun(run: Run): Promise<PublicRun> {
+async function publicRun(
+  operations: ControlPlaneOperations,
+  run: Run,
+): Promise<PublicRun> {
   const { providerResolutions, ...rest } = run;
   if (!providerResolutions || providerResolutions.length === 0) {
     return rest;
@@ -208,18 +211,25 @@ async function publicRun(run: Run): Promise<PublicRun> {
   return {
     ...rest,
     providerResolutions: await Promise.all(
-      providerResolutions.map(publicProviderResolution),
+      providerResolutions.map((resolution) =>
+        publicProviderResolution(operations, resolution),
+      ),
     ),
   };
 }
 
 async function publicProviderResolution(
+  operations: ControlPlaneOperations,
   resolution: ProviderResolution,
 ): Promise<PublicProviderResolution> {
   const connectionId = resolution.envId
     ? await publicProviderConnectionId(resolution.envId)
     : undefined;
-  const ownership = resolution.materialization ? "own_key" : undefined;
+  const ownership = resolution.envId
+    ? await providerConnectionOwnershipForEnvId(operations, resolution.envId)
+    : resolution.materialization
+      ? "own_key"
+      : undefined;
   return {
     requirement: resolution.requirement,
     status: publicProviderResolutionStatus(resolution),
@@ -228,7 +238,7 @@ async function publicProviderResolution(
     ...(resolution.blockedReason
       ? { blockedReason: publicProviderBlockedReason(resolution.blockedReason) }
       : {}),
-    evidence: await publicProviderResolutionEvidence(resolution),
+    evidence: await publicProviderResolutionEvidence(operations, resolution),
   };
 }
 
@@ -245,15 +255,20 @@ function publicProviderResolutionStatus(
 }
 
 async function publicProviderResolutionEvidence(
+  operations: ControlPlaneOperations,
   resolution: ProviderResolution,
 ): Promise<PublicProviderResolution["evidence"]> {
   const evidence = resolution.evidence;
   if (evidence.kind === "provider_env") {
+    const ownership = await providerConnectionOwnershipForEnvId(
+      operations,
+      evidence.envId,
+    );
     return {
       kind: "provider_connection",
       provider: evidence.provider,
       connectionId: await publicProviderConnectionId(evidence.envId),
-      ownership: "own_key",
+      ownership,
       requiredEnvNames: evidence.requiredEnvNames,
     };
   }
@@ -268,14 +283,39 @@ function publicProviderBlockedReason(reason: string): string {
   return reason.replace(/\bProvider Env\b/g, "Provider Connection");
 }
 
+async function providerConnectionOwnershipForEnvId(
+  operations: ControlPlaneOperations,
+  providerEnvId: string,
+): Promise<ProviderConnection["ownership"]> {
+  const providerEnv = await operations.connections
+    .getProviderEnv?.(providerEnvId)
+    .catch(() => undefined);
+  if (!providerEnv) return "own_key";
+  return await providerConnectionOwnership(operations, providerEnv);
+}
+
+async function providerConnectionOwnership(
+  operations: ControlPlaneOperations,
+  providerEnv: ProviderEnv,
+): Promise<ProviderConnection["ownership"]> {
+  if (!providerEnv.secretRef) return "own_key";
+  const connection = await operations
+    .getConnection(providerEnv.secretRef)
+    .catch(() => undefined);
+  return connection?.scope === "operator" ? "takos_provided" : "own_key";
+}
+
 async function publicCompatibilityReportResponse(
+  operations: ControlPlaneOperations,
   response: CapsuleCompatibilityReportResponse,
 ): Promise<PublicCapsuleCompatibilityReportResponse> {
   const { providerResolutions: internalProviderResolutions, ...report } =
     response.report;
   const providerResolutions = internalProviderResolutions
     ? await Promise.all(
-        internalProviderResolutions.map(publicProviderResolution),
+        internalProviderResolutions.map((resolution) =>
+          publicProviderResolution(operations, resolution),
+        ),
       )
     : undefined;
   return {
@@ -283,19 +323,20 @@ async function publicCompatibilityReportResponse(
       ...report,
       ...(providerResolutions ? { providerResolutions } : {}),
     },
-    ...(response.run ? { run: await publicRun(response.run) } : {}),
+    ...(response.run ? { run: await publicRun(operations, response.run) } : {}),
   };
 }
 
 async function publicDeployResponse(
+  operations: ControlPlaneOperations,
   response: DeployResponse,
 ): Promise<PublicDeployResponse> {
   const { run, planRun, applyRun, ...rest } = response;
   return {
     ...rest,
-    run: await publicRun(run),
-    ...(planRun ? { planRun: await publicRun(planRun) } : {}),
-    ...(applyRun ? { applyRun: await publicRun(applyRun) } : {}),
+    run: await publicRun(operations, run),
+    ...(planRun ? { planRun: await publicRun(operations, planRun) } : {}),
+    ...(applyRun ? { applyRun: await publicRun(operations, applyRun) } : {}),
   };
 }
 
@@ -320,7 +361,7 @@ async function publicPlanActionResponse(
     .getRunCost(response.planRun.id)
     .catch(() => undefined);
   return {
-    run: await publicRun(run),
+    run: await publicRun(operations, run),
     ...(response.planRun.summary
       ? { planSummary: response.planRun.summary }
       : {}),
@@ -334,7 +375,7 @@ async function publicApplyActionResponse(
 ): Promise<PublicApplyActionResponse> {
   const run = await operations.getRun(response.applyRun.id);
   return {
-    run: await publicRun(run),
+    run: await publicRun(operations, run),
     ...(response.installation
       ? { installation: publicInstallation(response.installation) }
       : {}),
@@ -568,6 +609,7 @@ export interface ControlPlaneOperations {
   // --- Connections (§9) ---
   readonly connections: {
     listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
+    getProviderEnv?(id: string): Promise<ProviderEnv>;
   };
   // --- OutputShares (§18) ---
   readonly outputShares: {
@@ -1334,6 +1376,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       };
       return jsonStatus(
         await publicCompatibilityReportResponse(
+          operations,
           await operations.createSourceCompatibilityCheck(
             sourceId,
             compatibilityRequest,
@@ -1392,7 +1435,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       subject: input.session.subject,
     });
     if (!auth.ok) return auth.response;
-    return json(await publicCompatibilityReportResponse(response));
+    return json(await publicCompatibilityReportResponse(operations, response));
   }
 
   // /api/v1/deployments/:deploymentId ; .../rollback-plan — session-authed
@@ -1439,7 +1482,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json({ run: await publicRun(run) });
+      return json({ run: await publicRun(operations, run) });
     }
     const leaf = segments[2];
     if (leaf === "approve" && segments.length === 3) {
@@ -1471,7 +1514,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "cancel" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return json({ run: await publicRun(await operations.cancelRun(runId)) });
+      return json({
+        run: await publicRun(operations, await operations.cancelRun(runId)),
+      });
     }
     if (leaf === "cost" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -2303,7 +2348,7 @@ async function createRestoreRun(
       actor,
     },
   );
-  return jsonStatus({ run: await publicRun(run) }, 201);
+  return jsonStatus({ run: await publicRun(operations, run) }, 201);
 }
 
 async function getInstallationProviderConnectionSet(
@@ -2757,7 +2802,10 @@ async function deployUploadedSnapshot(
   };
   try {
     return json(
-      await publicDeployResponse(await operations.deployUpload(deployRequest)),
+      await publicDeployResponse(
+        operations,
+        await operations.deployUpload(deployRequest),
+      ),
     );
   } catch (error) {
     logDeployUploadFailure(error, {
@@ -2811,7 +2859,7 @@ async function approveRun(
     approvedBy: sessionSubject,
     ...(reason ? { reason } : {}),
   });
-  return json({ run: await publicRun(run) });
+  return json({ run: await publicRun(operations, run) });
 }
 
 /**
@@ -3235,7 +3283,7 @@ async function listProviderConnections(
   const providerConnections = await Promise.all(
     (await operations.connections.listProviderEnvs(spaceId))
       .filter((providerEnv) => providerEnv.spaceId !== undefined)
-      .map(publicProviderConnection),
+      .map((providerEnv) => publicProviderConnection(operations, providerEnv)),
   );
   return json({ providerConnections });
 }
@@ -3247,6 +3295,7 @@ function publicProviderEnv(providerEnv: ProviderEnv): PublicProviderEnv {
 }
 
 async function publicProviderConnection(
+  operations: ControlPlaneOperations,
   providerEnv: ProviderEnv,
 ): Promise<ProviderConnection> {
   const publicEnv = publicProviderEnv(providerEnv);
@@ -3255,7 +3304,7 @@ async function publicProviderConnection(
     ...(publicEnv.spaceId ? { spaceId: publicEnv.spaceId } : {}),
     providerSource: publicEnv.providerSource,
     displayName: publicEnv.displayName,
-    ownership: "own_key",
+    ownership: await providerConnectionOwnership(operations, providerEnv),
     status: publicEnv.status,
     requiredEnvNames: publicEnv.requiredEnvNames,
     ...(publicEnv.expiresAt ? { expiresAt: publicEnv.expiresAt } : {}),

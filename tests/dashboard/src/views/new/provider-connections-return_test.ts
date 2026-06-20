@@ -24,8 +24,30 @@ const connectionsTabSource = readFileSync(
   ),
   "utf8",
 );
+const connectionsHelperSource = readFileSync(
+  resolve(
+    here,
+    "../../../../../dashboard/src/views/account/lib/connections.ts",
+  ),
+  "utf8",
+);
 const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
+  "utf8",
+);
+const appDetailViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/apps/AppDetailView.tsx"),
+  "utf8",
+);
+const accountViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/account/AccountView.tsx"),
+  "utf8",
+);
+const spaceSettingsViewSource = readFileSync(
+  resolve(
+    here,
+    "../../../../../dashboard/src/views/space/SpaceSettingsView.tsx",
+  ),
   "utf8",
 );
 
@@ -35,6 +57,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "providerConnectionsHrefForInstallReturn",
     );
+    expect(newAppViewSource).toContain("name: name().trim()");
     expect(newAppViewSource).toContain("const providerConnectionsHref = () =>");
     expect(newAppViewSource).not.toContain(
       'href="/space/settings/connections"',
@@ -107,6 +130,29 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("else void runCompatibilityCheck()");
   });
 
+  test("/new retry still saves Provider Connections after a partial install create", () => {
+    const createIndex = newAppViewSource.indexOf(
+      "await createInstallation({",
+    );
+    const setCreatedIndex = newAppViewSource.indexOf(
+      "setCreatedInstallationId(installationId);",
+    );
+    const saveIndex = newAppViewSource.indexOf(
+      "await putInstallationProviderConnectionSet(",
+    );
+    const doneIndex = newAppViewSource.indexOf('setStepInstall("done");');
+
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(setCreatedIndex).toBeGreaterThan(createIndex);
+    expect(saveIndex).toBeGreaterThan(setCreatedIndex);
+    expect(doneIndex).toBeGreaterThan(saveIndex);
+    expect(
+      newAppViewSource.match(
+        /await putInstallationProviderConnectionSet\(/g,
+      ) ?? [],
+    ).toHaveLength(1);
+  });
+
   test("/new translates known compatibility diagnostics into user-facing copy", () => {
     expect(controlApiSource).toContain("code: finding.code");
     expect(newAppViewSource).toContain("compatibilityDiagnosticDisplay");
@@ -131,5 +177,36 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain("name={`field:${field().envName}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvName:${index}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvValue:${index}`}");
+  });
+
+  test("Cloudflare OAuth start includes the typed display name", () => {
+    expect(connectionsTabSource).toContain("const startOAuth = async () =>");
+    expect(connectionsTabSource).toContain(
+      "displayName: displayName().trim() || undefined",
+    );
+  });
+
+  test("provider setup helper copy goes through dashboard i18n", () => {
+    expect(connectionsHelperSource).toContain("providerCopy");
+    expect(connectionsHelperSource).toContain(
+      '"conn.provider.cloudflare.helper.stepOpen"',
+    );
+    expect(connectionsHelperSource).not.toContain(
+      "下のボタンで Cloudflare のトークン作成画面を開きます。",
+    );
+    expect(connectionsHelperSource).not.toContain("API トークン");
+    expect(connectionsHelperSource).not.toContain("アカウント ID");
+  });
+
+  test("deep-linked detail views import their view CSS explicitly", () => {
+    expect(appDetailViewSource).toContain('import "../../styles/wave-a.css"');
+    expect(appDetailViewSource).toContain('import "../../styles/wave-b.css"');
+    expect(appDetailViewSource).toContain(
+      'import "../../styles/app-views.css"',
+    );
+    expect(accountViewSource).toContain('import "../../styles/wave-c.css"');
+    expect(spaceSettingsViewSource).toContain(
+      'import "../../styles/wave-a.css"',
+    );
   });
 });

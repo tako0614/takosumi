@@ -92,6 +92,27 @@ describe("installReturnContext", () => {
     });
   });
 
+  test("preserves the typed Capsule name through install return links", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+      name: "Customer API",
+      vars: { project_name: "customer-api" },
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&name=Customer+API&var.project_name=customer-api",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+      name: "Customer API",
+      label: "Customer API",
+      vars: { project_name: "customer-api" },
+    });
+  });
+
   test("builds Provider Connections hrefs with a safe /new return parameter", () => {
     const returnPath =
       "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu";

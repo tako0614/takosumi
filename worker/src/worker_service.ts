@@ -92,6 +92,8 @@ export async function createWorkerServiceApp(
     ),
     opentofuRunner,
     ownKeyProviderRunner: opentofuRunner,
+    allowOperatorBackedProviderEnvs:
+      env.TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS === "enabled",
     secretCrypto,
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this

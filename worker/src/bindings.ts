@@ -33,6 +33,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * `"cloudflare-default"`.
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
+  /**
+   * Cloud-only hosted-provider-connection switch. When set to `enabled`, the
+   * platform composition may expose Space-scoped ProviderConnections backed by
+   * operator-scoped Connections (`takos_provided`).
+   */
+  readonly TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS?: string;
   readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
   readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;

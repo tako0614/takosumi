@@ -4,6 +4,7 @@
  * account-plane has no subject-scoped session-enumeration API yet, so only the
  * current browser's session can be managed (stated honestly below).
  */
+import "../../styles/wave-c.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { LogOut, Monitor, User } from "lucide-solid";

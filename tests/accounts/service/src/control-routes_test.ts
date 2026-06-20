@@ -1937,7 +1937,36 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
+        {
+          id: "penv_operator_backed",
+          spaceId: "space_a",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          displayName: "Takosumi provided Cloudflare",
+          materialization: "secret",
+          status: "ready",
+          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+          secretRef: "conn_operator_secret",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-02T00:00:00Z",
+        },
       ],
+    },
+    getConnection: async (connectionId) => {
+      if (connectionId === "conn_operator_secret") {
+        return {
+          id: connectionId,
+          provider: "cloudflare",
+          kind: "cloudflare_api_token",
+          authMethod: "static_secret",
+          scope: "operator",
+          status: "verified",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        } as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["getConnection"]>
+        >;
+      }
+      return fakeOperations().getConnection(connectionId);
     },
   });
   const { request: req, url } = request(
@@ -1964,7 +1993,7 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
   const body = JSON.parse(raw) as {
     providerConnections: readonly Record<string, unknown>[];
   };
-  expect(body.providerConnections.length).toEqual(1);
+  expect(body.providerConnections.length).toEqual(2);
   expect(Object.keys(body.providerConnections[0]!).sort()).toEqual([
     "createdAt",
     "displayName",
@@ -1976,7 +2005,10 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
     "status",
     "updatedAt",
   ]);
-  expect(body.providerConnections[0]?.ownership).toEqual("own_key");
+  expect(body.providerConnections.map((item) => item.ownership)).toEqual([
+    "own_key",
+    "takos_provided",
+  ]);
   expect(String(body.providerConnections[0]?.id).startsWith("pcn_")).toEqual(
     true,
   );
@@ -2480,6 +2512,96 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   expect(resolution?.connectionId?.startsWith("pcn_")).toEqual(true);
   expect(resolution?.evidence?.kind).toEqual("provider_connection");
   expect(resolution?.evidence?.connectionId).toEqual(resolution?.connectionId);
+});
+
+test("GET /api/v1/runs/:id projects operator-backed provider resolutions as takos_provided", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    connections: {
+      listProviderEnvs: async () => [],
+      getProviderEnv: async (id) => ({
+        id,
+        spaceId: "space_a",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        displayName: "Takosumi provided Cloudflare",
+        materialization: "secret",
+        status: "ready",
+        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+        secretRef: "conn_operator_secret",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    getConnection: async (connectionId) =>
+      ({
+        id: connectionId,
+        provider: "cloudflare",
+        kind: "cloudflare_api_token",
+        authMethod: "static_secret",
+        scope: "operator",
+        status: "verified",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }) as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getConnection"]>
+      >,
+    getRun: async (id) =>
+      ({
+        id,
+        spaceId: "space_a",
+        installationId: "inst_1",
+        type: "plan",
+        status: "succeeded",
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+        providerResolutions: [
+          {
+            requirement: {
+              providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+              providerName: "cloudflare",
+              modulePath: ".",
+              discoveredFrom: "required_providers",
+              requiredForPhases: ["plan", "apply"],
+            },
+            status: "resolved_provider_env",
+            envId: "penv_operator_backed",
+            materialization: "secret",
+            evidence: {
+              kind: "provider_env",
+              provider: "cloudflare",
+              envId: "penv_operator_backed",
+              materialization: "secret",
+              requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+            },
+          },
+        ],
+      }) as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>,
+  });
+  const { request: req, url } = request("GET", "/api/v1/runs/run_1", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    run: {
+      providerResolutions?: readonly {
+        ownership?: string;
+        evidence?: { ownership?: string };
+      }[];
+    };
+  };
+  expect(body.run.providerResolutions?.[0]?.ownership).toEqual(
+    "takos_provided",
+  );
+  expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual(
+    "takos_provided",
+  );
 });
 
 test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", async () => {
