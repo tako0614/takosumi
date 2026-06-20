@@ -50,7 +50,7 @@ test("handleAuthProvidersRequest enables passkey when passkeys configured", asyn
   expect(body.providers).toContainEqual({ id: "passkey", enabled: true });
 });
 
-test("handleAuthProvidersRequest surfaces custom upstream provider ids", async () => {
+test("handleAuthProvidersRequest hides custom upstream provider ids from hosted dashboard discovery", async () => {
   const upstreamOAuth: UpstreamOAuthOptions = {
     subjectSecret: "secret",
     providers: [
@@ -64,9 +64,10 @@ test("handleAuthProvidersRequest surfaces custom upstream provider ids", async (
   const body = await readProviders(
     handleAuthProvidersRequest({ upstreamOAuth }),
   );
-  expect(body.providers).toContainEqual({ id: "keycloak", enabled: true });
-  // built-ins still listed (disabled) so the screen renders placeholders.
-  expect(body.providers).toContainEqual({ id: "google", enabled: false });
+  expect(body.providers).toEqual([
+    { id: "google", enabled: false },
+    { id: "passkey", enabled: false },
+  ]);
 });
 
 test("handleAuthProvidersRequest hides retired GitHub sign-in config", async () => {

@@ -78,7 +78,9 @@ export function SignInPanel() {
   const providerSubText = (p: Provider): string => {
     if (!providersLoaded()) return t("auth.providerChecking");
     if (providersLoadFailed()) return t("auth.providerRetryNeeded");
-    return isEnabled(p) ? "OAuth 2.0" : t("auth.providerUnavailable");
+    return isEnabled(p)
+      ? t("auth.googleAccount")
+      : t("auth.providerUnavailable");
   };
 
   const select = (p: Provider) => {

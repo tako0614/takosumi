@@ -17,6 +17,7 @@ import {
   createOpenPlatformAccessPolicy,
   customOidcOAuthProvider,
   googleOAuthProvider,
+  isRetiredUpstreamOAuthProviderId,
 } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
@@ -599,6 +600,11 @@ function parseCustomOidcUpstreamProvider(
   ) {
     throw new TypeError(
       "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
+    );
+  }
+  if (isRetiredUpstreamOAuthProviderId(providerId)) {
+    throw new TypeError(
+      `Custom upstream OIDC provider id ${providerId} is reserved or retired`,
     );
   }
   const subjectClaim = optional(

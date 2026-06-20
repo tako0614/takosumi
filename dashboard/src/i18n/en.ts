@@ -65,6 +65,7 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.providerChecking": "Checking availability",
   "auth.providerUnavailable": "Currently unavailable",
   "auth.providerRetryNeeded": "Could not check availability",
+  "auth.googleAccount": "Google Account",
   "auth.noProvidersTitle": "Sign-in is temporarily unavailable",
   "auth.noProvidersMessage":
     "No sign-in method is available right now. Please retry in a moment or contact support if this continues.",
@@ -90,7 +91,7 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
   "auth.incompleteCallback":
-    "The OAuth response is incomplete (code / state / provider missing). Please try signing in again.",
+    "The sign-in response is incomplete (code / state / provider missing). Please try signing in again.",
 
   // --- 404 --------------------------------------------------------------
   "notFound.title": "Page not found",
@@ -200,17 +201,15 @@ export const en: Record<keyof typeof ja, string> = {
   "app.recentRuns.title": "Recent runs",
   "app.recentRuns.empty": "No recent runs.",
   "app.recentRuns.open": "Details",
-  "app.bindings.title": "Provider connections",
+  "app.bindings.title": "External service connections",
   "app.bindings.subtitle":
-    "Choose the provider connection each OpenTofu provider uses. Usually no change is needed.",
-  "app.bindings.add": "Add provider",
+    "Choose the external service connection OpenTofu should use. Usually no change is needed.",
+  "app.bindings.add": "Add service",
   "app.bindings.aliasPlaceholder": "alias (optional)",
   "app.bindings.selectConnection": "Select a connection",
   "app.bindings.remove": "Remove",
-  "app.bindings.errorProvider":
-    "Enter the provider for provider connection {index}.",
-  "app.bindings.errorConnection":
-    "Select a ready provider connection for {provider}.",
+  "app.bindings.errorProvider": "Enter the service for connection {index}.",
+  "app.bindings.errorConnection": "Select a ready connection for {provider}.",
   "app.danger.destroyTitle": "Delete this Capsule",
   "app.danger.destroyBody":
     "Deletion first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
@@ -297,13 +296,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.path": "Path (module path)",
   "new.name": "Capsule name",
   "new.managed.notice":
-    "Takosumi checks whether an operator-managed connection can run this Capsule. Start with inspection; if the provider is not covered, add your own verified connection.",
+    "Takosumi Cloud checks whether its managed connection can add this Capsule. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
   "new.managed.needCredential":
-    "This Capsule needs a provider connection that is not available in this Workspace yet.",
+    "This Capsule needs an external service connection that is not available in this Workspace yet.",
   "new.managed.connectFirst": "Set up a connection",
-  "new.managed.byoTitle": "Use your own provider key",
+  "new.managed.byoTitle": "Use your own cloud connection",
   "new.managed.byoBody":
-    "Operator-managed connections are used only when this Takosumi environment has enabled them for the provider. Otherwise add a verified connection for AWS, GCP, GitHub, Kubernetes, or your own Cloudflare account.",
+    "If Takosumi Cloud cannot cover the AWS, GCP, Kubernetes, or personal Cloudflare account this Capsule needs, add your verified connection.",
   "new.managed.byoLink": "Set up a connection",
   "new.compat.check": "Register source & inspect",
   "new.compat.checking": "Registering and inspecting...",
@@ -314,16 +313,16 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.unsupported": "Cannot be added right now",
   "new.proceed": "Review & add",
   "new.proceedHint": "Run “Register source & inspect” first.",
-  "new.providers.title": "Provider connections",
+  "new.providers.title": "External service connections",
   "new.providers.subtitle":
-    "Choose the provider connection for each provider before the first plan. If a required provider is unset, Takosumi stops and asks you to choose one instead of using another connection silently.",
+    "Choose the connections this Capsule will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
   "new.providers.noneRequired":
-    "This Capsule did not declare any provider credentials for the first plan.",
+    "This Capsule does not require extra connections for the first review.",
   "new.providers.alias": "alias: {alias}",
   "new.providers.selectConnection": "Select a connection",
-  "new.providers.manageConnections": "Manage provider connections",
+  "new.providers.manageConnections": "Manage connections",
   "new.providers.errorConnection":
-    "Select a ready provider connection for {provider}.",
+    "Select a ready connection for {provider}.",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create Capsule",
@@ -391,15 +390,15 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Register provider credentials per Workspace. Values are write-only and never shown again after saving.",
-  "conn.providerConnections.title": "Provider connections",
+    "Register external service credentials per Workspace. Values are write-only and never shown again after saving.",
+  "conn.providerConnections.title": "External service connections",
   "conn.providerConnections.subtitle":
-    "Credential ownership available to this Workspace. Values stay write-only.",
-  "conn.providerConnections.provider": "Provider",
+    "Connections available to this Workspace. Values stay write-only.",
+  "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
   "conn.providerConnections.ownership": "Ownership",
   "conn.providerConnections.status": "Status",
-  "conn.ownership.ownKey": "Your provider key",
+  "conn.ownership.ownKey": "Your credentials",
   "conn.ownership.takosProvided": "Operator managed",
   "conn.scope.operator": "Operator managed",
   "conn.scope.space": "Workspace",
@@ -412,9 +411,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.return.cta": "Back to add Capsule",
   "conn.add.title": "Add a connection",
   "conn.add.subtitle":
-    "Pick a provider, then paste a token or register env values.",
-  "conn.add.provider": "Provider",
-  "conn.add.genericEnvOption": "Use my own provider key",
+    "Pick a service, then paste a token or register env values.",
+  "conn.add.provider": "Service",
+  "conn.add.genericEnvOption": "Use custom credentials",
   "conn.add.displayName": "Display name (optional)",
   "conn.add.displayNamePlaceholder": "Production Cloudflare",
   "conn.guided.intro":
