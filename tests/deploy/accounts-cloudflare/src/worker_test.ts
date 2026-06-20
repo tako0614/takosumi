@@ -154,6 +154,63 @@ test("Cloudflare Accounts Worker treats subject secret without upstream provider
   });
 });
 
+test("Cloudflare Accounts Worker ignores retired custom OIDC GitHub provider id", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request("https://accounts.example/v1/auth/providers"),
+    createEnv(new InitOnlyD1Database(), {
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "upstream-subject-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID: "github",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER: "https://github.com/login/oauth",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT:
+        "https://github.com/login/oauth/authorize",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT:
+        "https://github.com/login/oauth/access_token",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT:
+        "https://api.github.com/user",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID: "github-client",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET: "github-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI:
+        "https://accounts.example/v1/auth/upstream/callback",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    providers: [
+      { id: "google", enabled: false },
+      { id: "passkey", enabled: false },
+    ],
+  });
+});
+
+test("Cloudflare Accounts Worker rejects retired custom OIDC GitHub provider id on authorize", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(
+      "https://accounts.example/v1/auth/upstream/authorize?provider=github&state=state-1",
+    ),
+    createEnv(new InitOnlyD1Database(), {
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "upstream-subject-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID: "github",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER: "https://github.com/login/oauth",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT:
+        "https://github.com/login/oauth/authorize",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT:
+        "https://github.com/login/oauth/access_token",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT:
+        "https://api.github.com/user",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID: "github-client",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET: "github-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI:
+        "https://accounts.example/v1/auth/upstream/callback",
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "feature_unavailable");
+});
+
 test("Cloudflare Accounts Worker ignores retired partial GitHub OAuth config on provider discovery", async () => {
   const worker = createCloudflareWorker();
   const response = await worker.fetch(
