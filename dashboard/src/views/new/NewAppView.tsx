@@ -18,7 +18,14 @@
  * before apply.
  */
 import "../../styles/wave-b.css";
-import { createMemo, createResource, createSignal, For, Show } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
 import { Download } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -52,6 +59,7 @@ import {
   type CapsuleCompatibilityProvider,
   type ProviderConnection,
   type ProviderCredentialOwnership,
+  type RunStatus,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
@@ -110,6 +118,29 @@ function isFullCommitSha(value: string): boolean {
 function displayRef(value: string): string {
   const trimmed = value.trim();
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
+}
+
+function runStatusLabel(status: RunStatus): string {
+  switch (status) {
+    case "queued":
+      return t("status.run.queued");
+    case "running":
+      return t("status.run.running");
+    case "waiting_approval":
+      return t("status.run.waiting_approval");
+    case "succeeded":
+      return t("status.run.succeeded");
+    case "failed":
+      return t("status.run.failed");
+    case "cancelled":
+      return t("status.run.cancelled");
+    case "expired":
+      return t("status.run.expired");
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
 export default function NewAppView() {
@@ -179,13 +210,52 @@ function Inner() {
   const [createdSourceId, setCreatedSourceId] = createSignal<string | null>(
     null,
   );
+  const [createdInstallationId, setCreatedInstallationId] = createSignal<
+    string | null
+  >(null);
   const [stepSource, setStepSource] = createSignal<StepState>("idle");
   const [stepSync, setStepSync] = createSignal<StepState>("idle");
   const [stepInstall, setStepInstall] = createSignal<StepState>("idle");
   const [stepPlan, setStepPlan] = createSignal<StepState>("idle");
   const [error, setError] = createSignal<string | null>(null);
   const [syncRequired, setSyncRequired] = createSignal(false);
+  const [sourceSyncSlow, setSourceSyncSlow] = createSignal(false);
+  const [sourceSyncRunStatus, setSourceSyncRunStatus] =
+    createSignal<RunStatus | null>(null);
   const [busy, setBusy] = createSignal(false);
+  let sourceSyncSlowTimer: ReturnType<typeof setTimeout> | undefined;
+  let activeFlowAbort: AbortController | undefined;
+
+  const clearSourceSyncSlowTimer = () => {
+    if (sourceSyncSlowTimer) {
+      clearTimeout(sourceSyncSlowTimer);
+      sourceSyncSlowTimer = undefined;
+    }
+  };
+  const startSourceSyncSlowTimer = () => {
+    clearSourceSyncSlowTimer();
+    setSourceSyncSlow(false);
+    sourceSyncSlowTimer = setTimeout(() => {
+      if (checkingCompatibility() || busy()) {
+        setSourceSyncSlow(true);
+      }
+    }, 8_000);
+  };
+  const startAbortableFlow = () => {
+    activeFlowAbort?.abort();
+    const controller = new AbortController();
+    activeFlowAbort = controller;
+    return controller;
+  };
+  const finishAbortableFlow = (controller: AbortController) => {
+    if (activeFlowAbort === controller) {
+      activeFlowAbort = undefined;
+    }
+  };
+  onCleanup(() => {
+    clearSourceSyncSlowTimer();
+    activeFlowAbort?.abort();
+  });
 
   const validate = (): string | null => {
     if (!spaceId()) return t("new.error.spaceRequired");
@@ -255,6 +325,8 @@ function Inner() {
       .length === 0;
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
+  const missingProviderRows = () =>
+    providerRows().filter(providerNeedsConnection);
 
   const defaultConnectionForProvider = (
     provider: string,
@@ -346,6 +418,8 @@ function Inner() {
   const resetCompatibility = () => {
     setCompatibility(null);
     setProviderRows([]);
+    setCreatedSourceId(null);
+    setCreatedInstallationId(null);
     setError(null);
   };
 
@@ -377,6 +451,9 @@ function Inner() {
     setStepSync("running");
     setStepInstall("idle");
     setStepPlan("idle");
+    setSourceSyncRunStatus(null);
+    startSourceSyncSlowTimer();
+    const controller = startAbortableFlow();
     try {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
@@ -385,6 +462,15 @@ function Inner() {
         path: path().trim() || ".",
         name: name().trim(),
         installConfigId: selectedInstallConfigId(),
+        signal: controller.signal,
+        onSourceSyncProgress: (progress) => {
+          if (progress.run?.status) {
+            setSourceSyncRunStatus(progress.run.status);
+          }
+          if (progress.elapsedMs > 8_000) {
+            setSourceSyncSlow(true);
+          }
+        },
       });
       if (result.sourceId) {
         setCreatedSourceId(result.sourceId);
@@ -394,11 +480,15 @@ function Inner() {
       setProviderRows(rowsFromCompatibility(result));
       setCompatibility(result);
     } catch (err) {
+      if (isAbortError(err)) return;
       const apiError = err instanceof ControlApiError ? err : undefined;
       if (apiError?.isSourceSyncRequired) {
         setStepSource("done");
         setStepSync("error");
         setSyncRequired(true);
+      } else if (apiError?.code === "source_sync_failed") {
+        setStepSource("done");
+        setStepSync("error");
       } else {
         setStepSource("error");
         setStepSync("idle");
@@ -406,9 +496,15 @@ function Inner() {
       setError(
         apiError?.isSourceSyncRequired
           ? t("new.error.syncPending")
+          : apiError?.code === "source_sync_failed"
+            ? t("new.error.sourceFetchFailed", {
+                message: apiError.message,
+              })
           : (apiError?.message ?? String(err)),
       );
     } finally {
+      finishAbortableFlow(controller);
+      clearSourceSyncSlowTimer();
       setCheckingCompatibility(false);
     }
   };
@@ -426,6 +522,9 @@ function Inner() {
     setBusy(true);
     setError(null);
     setSyncRequired(false);
+    setSourceSyncRunStatus(null);
+    startSourceSyncSlowTimer();
+    const controller = startAbortableFlow();
     const space = spaceId()!;
     try {
       // Step 1 — create Source (skip if a previous attempt already created it).
@@ -451,8 +550,21 @@ function Inner() {
       // snapshot instead of adding a second source_sync run.
       if (stepSync() !== "done") {
         setStepSync("running");
-        await syncSource(sourceId);
-        await waitForLatestSourceSnapshot(sourceId);
+        const syncEnvelope = await syncSource(sourceId, {
+          signal: controller.signal,
+        });
+        await waitForLatestSourceSnapshot(sourceId, {
+          runId: extractRunId(syncEnvelope),
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (progress.run?.status) {
+              setSourceSyncRunStatus(progress.run.status);
+            }
+            if (progress.elapsedMs > 8_000) {
+              setSourceSyncSlow(true);
+            }
+          },
+        });
         setStepSync("done");
       } else {
         setStepSync("done");
@@ -460,24 +572,31 @@ function Inner() {
 
       // Step 3 — create the current compatibility record bound to the chosen
       // service-side config. Public UI presents this as Capsule creation.
-      setStepInstall("running");
-      const installation = await createInstallation({
-        spaceId: space,
-        name: name().trim(),
-        environment: "production",
-        sourceId,
-        installConfigId:
-          compatibility()?.installConfigId ?? selectedInstallConfigId(),
-      });
-      await putInstallationProviderConnectionSet(
-        installation.id,
-        providerConnectionsPayload(),
-      );
-      setStepInstall("done");
+      let installationId = createdInstallationId();
+      if (!installationId) {
+        setStepInstall("running");
+        const installation = await createInstallation({
+          spaceId: space,
+          name: name().trim(),
+          environment: "production",
+          sourceId,
+          installConfigId:
+            compatibility()?.installConfigId ?? selectedInstallConfigId(),
+        });
+        installationId = installation.id;
+        setCreatedInstallationId(installationId);
+        await putInstallationProviderConnectionSet(
+          installationId,
+          providerConnectionsPayload(),
+        );
+        setStepInstall("done");
+      } else {
+        setStepInstall("done");
+      }
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");
-      const planEnvelope = await planInstallation(installation.id);
+      const planEnvelope = await planInstallation(installationId);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
       navigate(runId ? `/runs/${runId}` : "/");
@@ -485,7 +604,17 @@ function Inner() {
       const apiError = err instanceof ControlApiError ? err : undefined;
       if (apiError?.isSourceSyncRequired) {
         setSyncRequired(true);
+        setStepSync("error");
         setError(t("new.error.syncPending"));
+      } else if (apiError?.code === "source_sync_failed") {
+        setStepSync("error");
+        setError(
+          t("new.error.sourceFetchFailed", {
+            message: apiError.message,
+          }),
+        );
+      } else if (isAbortError(err)) {
+        return;
       } else {
         setError(apiError?.message ?? String(err));
       }
@@ -494,6 +623,8 @@ function Inner() {
       else if (stepSync() === "running") setStepSync("error");
       else if (stepSource() === "running") setStepSource("error");
     } finally {
+      finishAbortableFlow(controller);
+      clearSourceSyncSlowTimer();
       setBusy(false);
     }
   };
@@ -662,12 +793,18 @@ function Inner() {
                 </p>
               </Show>
               <Show when={needsCloudCredential()}>
-                <p class="wb-note" role="note">
-                  {t("new.managed.needCredential")}{" "}
+                <div class="wb-action-callout" role="note">
+                  <strong>{t("new.providers.missingTitle")}</strong>
+                  <p>{t("new.managed.needCredential")}</p>
+                  <ul>
+                    <For each={missingProviderRows()}>
+                      {(row) => <li>{row.provider}</li>}
+                    </For>
+                  </ul>
                   <A href={providerConnectionsHref()} class="link">
                     {t("new.managed.connectFirst")}
                   </A>
-                </p>
+                </div>
               </Show>
               <details class="wb-disclosure">
                 <summary>{t("new.managed.byoTitle")}</summary>
@@ -711,6 +848,31 @@ function Inner() {
                   </p>
                 </Show>
 
+                <Show
+                  when={
+                    checkingCompatibility() ||
+                    (busy() && stepSync() === "running")
+                  }
+                >
+                  <div class="wb-status-panel" role="status" aria-live="polite">
+                    <strong>{t("new.progress.title")}</strong>
+                    <p>
+                      {sourceSyncSlow()
+                        ? t("new.progress.slow")
+                        : t("new.progress.fetching")}
+                    </p>
+                    <Show when={sourceSyncRunStatus()}>
+                      {(status) => (
+                        <span class="wb-status-meta">
+                          {t("new.progress.status", {
+                            status: runStatusLabel(status()),
+                          })}
+                        </span>
+                      )}
+                    </Show>
+                  </div>
+                </Show>
+
                 <Show when={compatibility()}>
                   {(result) => (
                     <Card>
@@ -722,6 +884,9 @@ function Inner() {
                           </Badge>
                         </div>
                         <p class="wb-compat-summary">{result().summary}</p>
+                        <Show when={result().level === "needs_patch"}>
+                          <p class="wb-note">{t("new.compat.patchHelp")}</p>
+                        </Show>
                         <Show when={result().diagnostics.length > 0}>
                           <ul class="wb-diagnostics">
                             <For each={result().diagnostics}>
@@ -809,6 +974,24 @@ function Inner() {
                             {m()}
                           </p>
                         )}
+                      </Show>
+                      <Show when={missingProviderRows().length > 0}>
+                        <div class="wb-action-callout" role="note">
+                          <strong>{t("new.providers.missingTitle")}</strong>
+                          <p>{t("new.providers.missingBody")}</p>
+                          <ul>
+                            <For each={missingProviderRows()}>
+                              {(row) => <li>{row.provider}</li>}
+                            </For>
+                          </ul>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            href={providerConnectionsHref()}
+                          >
+                            {t("new.providers.setupMissing")}
+                          </Button>
+                        </div>
                       </Show>
                       <p class="wb-note">
                         <A href={providerConnectionsHref()} class="link">

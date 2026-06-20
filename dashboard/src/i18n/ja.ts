@@ -316,11 +316,19 @@ export const ja = {
   "new.compat.check": "確認して続ける",
   "new.compat.recheck": "もう一度確認",
   "new.compat.checking": "確認中...",
+  "new.progress.title": "取得元を確認しています",
+  "new.progress.fetching":
+    "Git の中身を取得し、OpenTofu Capsule として追加できるか確認しています。このままお待ちください。",
+  "new.progress.slow":
+    "取得に少し時間がかかっています。大きいリポジトリや初回起動では時間がかかることがあります。完了すると次に必要な接続だけを案内します。",
+  "new.progress.status": "実行状態: {status}",
   "new.compat.title": "確認結果",
   "new.compat.ready": "このまま追加できます",
   "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
+  "new.compat.patchHelp":
+    "表示された手直し内容を確認してください。リポジトリ側の修正が必要な場合と、外部サービス接続の設定で進められる場合があります。",
   "new.proceed": "追加内容を確認",
   "new.proceedHint": "先に「確認して続ける」を押してください。",
   "new.providers.title": "外部サービス接続",
@@ -333,6 +341,10 @@ export const ja = {
   "new.providers.manageConnections": "接続を管理",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
+  "new.providers.missingTitle": "接続の設定が必要です",
+  "new.providers.missingBody":
+    "この Capsule は下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
+  "new.providers.setupMissing": "必要な接続を設定",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
   "new.step.create": "Capsule を作成",
@@ -343,6 +355,8 @@ export const ja = {
   "new.error.configMissing": "Capsule の追加設定がまだ利用できません。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
+  "new.error.sourceFetchFailed":
+    "Git の中身を取得できませんでした。URL、Ref、Path、または非公開リポジトリの接続を確認してください。詳細: {message}",
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Workspace 設定",
