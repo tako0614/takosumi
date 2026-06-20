@@ -14,7 +14,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { installReturnContext } from "../../lib/install-return-context.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
-import GeometricMark from "../account/components/brand/GeometricMark.tsx";
+import LogoMark from "../account/components/brand/LogoMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
 
 type Provider = "google";
@@ -212,7 +212,7 @@ export function SignInPanel() {
 function BrandLogoMark() {
   return (
     <span class="auth-brand-mark" aria-hidden="true">
-      <GeometricMark size={42} />
+      <LogoMark size={42} />
     </span>
   );
 }

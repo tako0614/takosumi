@@ -6,7 +6,7 @@ interface Props {
   title?: string;
 }
 
-export default function GeometricMark(props: Props): JSX.Element {
+export default function LogoMark(props: Props): JSX.Element {
   const size = () => props.size ?? 48;
   return (
     <img
@@ -14,6 +14,7 @@ export default function GeometricMark(props: Props): JSX.Element {
       width={size()}
       height={size()}
       alt={props.title ?? "Takosumi logo"}
+      decoding="async"
       class={`takosumi-brand-mark ${props.class ?? ""}`}
     />
   );

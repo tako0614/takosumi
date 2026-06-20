@@ -33,6 +33,7 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
+import { errorMessage } from "../deploy-control/projection.ts";
 import type {
   OpenTofuDeploymentStore,
   StoredSource,
@@ -404,7 +405,7 @@ export class SourcesService {
       startedAt: nowIso,
     };
     await this.#store.putCompatibilityCheckRun(runningRun);
-    const analysis = await this.#compatibilityAnalysisOrUnsupportedReport(
+    const analysisAttempt = await this.#compatibilityAnalysisOrUnsupportedReport(
       snapshot,
       async (files) =>
         await this.#compatibilityAnalyzer.analyze({
@@ -414,6 +415,7 @@ export class SourcesService {
           ...(input.policy ? { policy: input.policy } : {}),
         }),
     );
+    const analysis = analysisAttempt.analysis;
     const normalizedArtifact = await this.#persistNormalizedArtifact(
       snapshot,
       analysis.normalizedFiles,
@@ -448,6 +450,9 @@ export class SourcesService {
       ...runningRun,
       status: "succeeded",
       compatibilityReportId: report.id,
+      ...(analysisAttempt.diagnosticMessage
+        ? { errorCode: analysisAttempt.diagnosticMessage }
+        : {}),
       finishedAt: this.#now().toISOString(),
     };
     await this.#store.putCompatibilityCheckRun(succeededRun);
@@ -459,12 +464,18 @@ export class SourcesService {
     analyze: (
       files: readonly CapsuleSourceFile[],
     ) => Promise<CapsuleCompatibilityAnalysis>,
-  ): Promise<CapsuleCompatibilityAnalysis> {
+  ): Promise<{
+    readonly analysis: CapsuleCompatibilityAnalysis;
+    readonly diagnosticMessage?: string;
+  }> {
     try {
       const files = await this.#readCapsuleSourceFiles(snapshot);
-      return await analyze(files);
+      return { analysis: await analyze(files) };
     } catch (error) {
-      return compatibilityCheckFailureAnalysis(snapshot, error);
+      return {
+        analysis: compatibilityCheckFailureAnalysis(snapshot, error),
+        diagnosticMessage: errorMessage(error),
+      };
     }
   }
 
