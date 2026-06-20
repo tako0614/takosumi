@@ -173,6 +173,26 @@
 .wb-disclosure .tg-field {
   margin-bottom: var(--tg-s-3);
 }
+.wb-source-advanced {
+  max-width: 720px;
+}
+.wb-inline-details {
+  margin-top: var(--tg-s-2);
+  color: var(--tg-fg-muted);
+}
+.wb-inline-details > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: var(--tg-fs-xs);
+  font-weight: 600;
+  color: var(--tg-fg-subtle);
+}
+.wb-inline-details p {
+  margin: var(--tg-s-1) 0 0;
+  font-size: var(--tg-fs-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 
 .wb-compat-head {
   display: flex;
@@ -240,6 +260,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-1);
+}
+.wb-provider-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .wb-provider-meta code {
   overflow-wrap: anywhere;
@@ -331,6 +355,17 @@
   }
   .wb-provider-row {
     grid-template-columns: 1fr;
+  }
+  .wb-install-form > .wb-form-actions {
+    position: sticky;
+    bottom: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
+    z-index: 25;
+    padding: var(--tg-s-2) 0;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--tg-bg) 0%, transparent),
+      var(--tg-bg) 28%
+    );
   }
   .wb-form-actions .tg-btn {
     flex: 1 1 100%;

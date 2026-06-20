@@ -141,7 +141,11 @@ function providerDisplayName(provider: string): string {
 
 function compatibilityDiagnosticDisplay(
   diagnostic: CapsuleCompatibilityDiagnostic,
-): { readonly message: string; readonly detail?: string } {
+): {
+  readonly message: string;
+  readonly detail?: string;
+  readonly technical?: boolean;
+} {
   const provider = providerDisplayName(providerNameFromDiagnostic(diagnostic));
   const code = diagnostic.code;
   if (
@@ -175,8 +179,9 @@ function compatibilityDiagnosticDisplay(
     return { message: t("new.compat.issue.lockfile.message") };
   }
   return {
-    message: diagnostic.message,
-    ...(diagnostic.detail ? { detail: diagnostic.detail } : {}),
+    message: t("new.compat.issue.reviewRequired.message"),
+    detail: diagnostic.detail || diagnostic.message,
+    technical: true,
   };
 }
 
@@ -226,7 +231,10 @@ function slugInputValue(value: string): string {
 }
 
 function spaceSuffix(value: string | null): string {
-  return (value ?? "").replace(/^space_/u, "").slice(0, 6).toLowerCase();
+  return (value ?? "")
+    .replace(/^space_/u, "")
+    .slice(0, 6)
+    .toLowerCase();
 }
 
 function isTakosOpenTofuCapsule(git: string, modulePath: string): boolean {
@@ -453,6 +461,8 @@ function Inner() {
     const normalized = canonicalProvider(provider);
     return normalized.split("/").at(-1) ?? normalized;
   };
+  const providerLabel = (provider: string) =>
+    providerDisplayName(providerTail(provider));
   const sameProviderFamily = (
     requiredProvider: string,
     connectionProvider: string,
@@ -886,39 +896,42 @@ function Inner() {
         />
       </FormField>
 
-      <div class="wb-form-row">
-        <FormField label={t("new.git.ref")}>
-          <Input
-            id="new-capsule-ref"
-            name="ref"
-            type="text"
-            value={ref()}
-            onInput={(e) => {
-              setPinnedFullRef(null);
-              setRef(e.currentTarget.value);
-              resetCompatibility();
-            }}
-            placeholder="main"
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </FormField>
-        <FormField label={t("new.git.path")}>
-          <Input
-            id="new-capsule-path"
-            name="path"
-            type="text"
-            value={path()}
-            onInput={(e) => {
-              setPath(e.currentTarget.value);
-              resetCompatibility();
-            }}
-            placeholder="."
-            autocomplete="off"
-            spellcheck={false}
-          />
-        </FormField>
-      </div>
+      <details class="wb-disclosure wb-source-advanced">
+        <summary>{t("new.git.advanced")}</summary>
+        <div class="wb-form-row">
+          <FormField label={t("new.git.ref")}>
+            <Input
+              id="new-capsule-ref"
+              name="ref"
+              type="text"
+              value={ref()}
+              onInput={(e) => {
+                setPinnedFullRef(null);
+                setRef(e.currentTarget.value);
+                resetCompatibility();
+              }}
+              placeholder="main"
+              autocomplete="off"
+              spellcheck={false}
+            />
+          </FormField>
+          <FormField label={t("new.git.path")}>
+            <Input
+              id="new-capsule-path"
+              name="path"
+              type="text"
+              value={path()}
+              onInput={(e) => {
+                setPath(e.currentTarget.value);
+                resetCompatibility();
+              }}
+              placeholder="."
+              autocomplete="off"
+              spellcheck={false}
+            />
+          </FormField>
+        </div>
+      </details>
     </>
   );
 
@@ -1026,7 +1039,7 @@ function Inner() {
                   <p>{t("new.managed.needCredential")}</p>
                   <ul>
                     <For each={missingProviderRows()}>
-                      {(row) => <li>{row.provider}</li>}
+                      {(row) => <li>{providerLabel(row.provider)}</li>}
                     </For>
                   </ul>
                   <A href={providerConnectionsHref()} class="link">
@@ -1147,9 +1160,21 @@ function Inner() {
                                   class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
                                 >
                                   {display.message}
-                                  <Show when={display.detail}>
+                                  <Show
+                                    when={display.detail && !display.technical}
+                                  >
                                     {(detail) => (
                                       <span class="muted"> — {detail()}</span>
+                                    )}
+                                  </Show>
+                                  <Show
+                                    when={display.detail && display.technical}
+                                  >
+                                    {(detail) => (
+                                      <details class="wb-inline-details">
+                                        <summary>{t("common.details")}</summary>
+                                        <p>{detail()}</p>
+                                      </details>
                                     )}
                                   </Show>
                                 </li>
@@ -1185,7 +1210,9 @@ function Inner() {
                             return (
                               <div class="wb-provider-row">
                                 <div class="wb-provider-meta">
-                                  <code>{row.provider}</code>
+                                  <span class="wb-provider-title">
+                                    {providerLabel(row.provider)}
+                                  </span>
                                   <Show when={row.alias}>
                                     <span class="muted">
                                       {t("new.providers.alias", {
@@ -1193,6 +1220,25 @@ function Inner() {
                                       })}
                                     </span>
                                   </Show>
+                                  <details class="wb-inline-details">
+                                    <summary>
+                                      {t("new.providers.advanced")}
+                                    </summary>
+                                    <p>
+                                      <code>{row.provider}</code>
+                                      <Show when={row.alias}>
+                                        {(alias) => (
+                                          <>
+                                            {" "}
+                                            /{" "}
+                                            {t("new.providers.alias", {
+                                              alias: alias(),
+                                            })}
+                                          </>
+                                        )}
+                                      </Show>
+                                    </p>
+                                  </details>
                                 </div>
                                 <Select
                                   id={`provider-connection-${index()}`}
@@ -1238,7 +1284,7 @@ function Inner() {
                           <p>{t("new.providers.missingBody")}</p>
                           <ul>
                             <For each={missingProviderRows()}>
-                              {(row) => <li>{row.provider}</li>}
+                              {(row) => <li>{providerLabel(row.provider)}</li>}
                             </For>
                           </ul>
                           <Button
