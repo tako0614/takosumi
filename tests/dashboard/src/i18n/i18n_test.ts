@@ -33,4 +33,37 @@ describe("i18n dictionaries", () => {
       expect(en[key].length).toBeGreaterThan(0);
     }
   });
+
+  test("public dashboard copy does not expose implementation-only terms", () => {
+    const blockedTerms = ["OutputSnapshot", "InstallConfig", "fail-closed"];
+
+    for (const [locale, messages] of [
+      ["ja", ja],
+      ["en", en],
+    ] as const) {
+      for (const [key, value] of Object.entries(messages)) {
+        for (const term of blockedTerms) {
+          expect({ locale, key, term, value }).not.toEqual(
+            expect.objectContaining({ value: expect.stringContaining(term) }),
+          );
+        }
+      }
+    }
+  });
+
+  test("standalone dashboard copy does not brand itself as Takos", () => {
+    for (const [locale, messages] of [
+      ["ja", ja],
+      ["en", en],
+    ] as const) {
+      for (const [key, value] of Object.entries(messages)) {
+        expect({ locale, key, value }).not.toEqual(
+          expect.objectContaining({ value: expect.stringContaining("Takos ") }),
+        );
+        expect({ locale, key, value }).not.toEqual(
+          expect.objectContaining({ value: expect.stringContaining("Takos に") }),
+        );
+      }
+    }
+  });
 });

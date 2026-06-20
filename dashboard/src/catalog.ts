@@ -11,6 +11,8 @@
  *   - product-distribution repos that only publish application metadata rather
  *     than infrastructure are excluded because installing them here would plan
  *     zero resources.
+ *   - product distributions such as Takos are linked from their own website via
+ *     `/install?git=...`; they are not generic Takosumi starter cards.
  *   - providers/cloudflare/modules/* : first-party deployment TEMPLATES whose
  *     module/ expects a runner-built artifact and pipeline-supplied inputs
  *     (`localModulePath`, build commands) — not standalone Git capsules.
@@ -30,7 +32,6 @@ export interface CatalogEntry {
 }
 
 const TAKOSUMI_CATALOG_REF = "fcc47907b0154d8bf53872a3336e5653fc88792e";
-const TAKOS_CATALOG_REF = "e343560dc63bb0440614da2589169404d8543efa";
 
 export const CATALOG: readonly CatalogEntry[] = [
   {
@@ -43,18 +44,6 @@ export const CATALOG: readonly CatalogEntry[] = [
     description: {
       ja: "ビルド不要のスターター。apply で Cloudflare Worker script を作成し、公開 URL は dispatcher/custom route の projection がある場合だけ出力します。",
       en: "A no-build starter: apply creates a Cloudflare Worker script. A public URL is output only when dispatcher/custom-route projection is configured.",
-    },
-  },
-  {
-    id: "takos",
-    git: "https://github.com/tako0614/takos.git",
-    ref: TAKOS_CATALOG_REF,
-    path: "deploy/opentofu",
-    suggestedName: "takos",
-    name: { ja: "Takos", en: "Takos" },
-    description: {
-      ja: "AI ファーストのチャット & エージェント環境を Takosumi の Installation / Run / Deployment 台帳で管理します。出力と次の手順は apply 後の OutputSnapshot に従います。",
-      en: "Manages the AI-first chat & agent environment through the Takosumi Installation / Run / Deployment ledger. Follow the OutputSnapshot after apply for addresses and next steps.",
     },
   },
 ];
