@@ -42,6 +42,8 @@ Out of scope for the first open gate:
 - Cloudflare Compatibility Gateway public availability unless its provider and
   resource operation coverage has separate readiness evidence;
 - GitHub OAuth as a sign-in provider;
+- passkey sign-in as a GA provider; passkeys may remain implemented but disabled
+  until a separate passkey UI and e2e readiness track is accepted;
 - CLI-first onboarding for hosted customers;
 - paid enforcement before Stripe, entitlement, invoice, dunning, refund, and
   support drills pass readiness.

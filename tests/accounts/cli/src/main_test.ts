@@ -1814,7 +1814,6 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "oidc-conformance",
       "key-rotation-drill",
       "client-secret-rotation",
-      "passkey-e2e",
       "rate-limit-test",
       "audit-event",
     ],
