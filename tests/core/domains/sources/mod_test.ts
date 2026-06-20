@@ -850,7 +850,8 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
       severity: "error",
       code: "capsule_compatibility_check_failed",
       message: "Takosumi could not inspect this Capsule before installation.",
-      suggestion: expect.stringContaining("runner unavailable"),
+      suggestion:
+        "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",
     }),
   ]);
 
