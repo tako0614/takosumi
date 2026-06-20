@@ -1,30 +1,51 @@
 import { For } from "solid-js";
-import { PILLARS } from "~/content/why";
-import SplatField from "./SplatField.tsx";
+import Section from "./Section";
+
+interface Point {
+  readonly title: string;
+  readonly body: string;
+}
+
+const POINTS: readonly Point[] = [
+  {
+    title: "どのクラウドでも、同じやり方で",
+    body: "AWS、GCP、Cloudflare、Kubernetes。Git の URL を登録するだけで、どこにでも同じ手順で deploy。専用の設定ファイルは要りません。",
+  },
+  {
+    title: "鍵は安全に、履歴は確実に",
+    body: "クラウドの認証情報は deploy の瞬間だけ渡して、終わったら消します。誰が・いつ・何を変えたかは、すべて記録に残ります。",
+  },
+  {
+    title: "オープンソース、ロックインなし",
+    body: "コードは全部公開。セルフホストなら無料。あとからクラウドを乗り換えても、同じコードでそのまま動きます。",
+  },
+];
 
 export default function WhyOperatorOwned() {
   return (
-    <section id="why">
-      <SplatField density="section" />
-      <div class="container">
-        <span class="eyebrow">why operator-owned</span>
-        <h2>入口は共通。実行先は、あなたが選ぶ。</h2>
-        <p class="lede">
-          Takosumi は OpenTofu/Terraform 実行の外側を管理します。
-          API、DB、object store、worker は既存 provider が作り、Takosumi は
-          credential、state、outputs、run 履歴、audit を一箇所に残します。
-        </p>
-        <div class="pillars">
-          <For each={PILLARS}>
-            {(p) => (
-              <article class="pillar">
-                <h3>{p.title}</h3>
-                <p>{p.body}</p>
-              </article>
-            )}
-          </For>
-        </div>
+    <Section
+      id="why"
+      title="なぜ Takosumi か。"
+      lede={
+        <>
+          deploy
+          がクラウドのダッシュボードに縛られると、鍵は散らばり、履歴は追えなくなる。
+          Takosumi は鍵・状態・履歴・監査を、
+          <em class="em">あなたの手元の一箇所</em>にまとめます。
+        </>
+      }
+    >
+      <div class="why-points">
+        <For each={POINTS}>
+          {(p, i) => (
+            <div class="why-point">
+              <span class="why-num">{String(i() + 1).padStart(2, "0")}</span>
+              <h3>{p.title}</h3>
+              <p>{p.body}</p>
+            </div>
+          )}
+        </For>
       </div>
-    </section>
+    </Section>
   );
 }
