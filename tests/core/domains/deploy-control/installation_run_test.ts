@@ -453,7 +453,7 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(run.baseStateGeneration).toEqual(0);
 });
 
-test("installation plan projects Cloudflare account scope hints into generic Capsule inputs without exposing secrets", async () => {
+test("installation plan does not invent Cloudflare Capsule inputs from scope hints", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -493,13 +493,58 @@ test("installation plan projects Cloudflare account scope hints into generic Cap
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('project_name = "takos"');
-  expect(mainTf).toContain(
-    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\"}")',
-  );
+  expect(mainTf).not.toContain("cloudflare = jsondecode");
+  expect(mainTf).not.toContain("acct_scope_123");
   expect(mainTf).not.toContain("fixture-provider-token");
   expect(JSON.stringify(await store.getPlanRun(planRun.id))).not.toContain(
     "fixture-provider-token",
   );
+});
+
+test("requested Cloudflare Capsule input can be filled from provider scope hints", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: { project_name: "takos", cloudflare: {} },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        envId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('project_name = "takos"');
+  expect(mainTf).toContain(
+    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\"}")',
+  );
+  expect(mainTf).not.toContain("fixture-provider-token");
 });
 
 test("explicit Cloudflare Capsule variables override provider scope hint defaults", async () => {

@@ -71,8 +71,10 @@ export interface InstallTypePlanContext {
   /** Generic-env Connection env names that must be declared as root variables. */
   readonly genericEnvVarNames: readonly string[];
   /**
-   * Non-secret provider scope metadata projected as default Capsule inputs.
-   * Explicit InstallConfig variables override these defaults.
+   * Non-secret provider scope metadata available to fill requested Capsule
+   * inputs. The controller only applies these defaults under keys already
+   * declared by InstallConfig.variableMapping; Provider Connections must not
+   * invent module input schema for arbitrary OpenTofu Capsules.
    */
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   /** InstallConfig.build, when enabled (overrides the template build). */
