@@ -4,8 +4,8 @@
  * Local supplement for the run / run-group / activity views and the shared
  * detail primitives (changes, diagnostics, audit, bindings). Only carries rules the
  * shared tokens/components/views CSS does not already provide; all colours come
- * from the canonical --tg-* tokens so this stays on the dark "Splatoon ink"
- * palette. Imported locally at the top of each Wave A view (never via index).
+ * from the canonical --tg-* app tokens. Imported locally at the top of each
+ * Wave A view (never via index).
  */
 
 /* --- Page action clusters -------------------------------------------------- */
@@ -85,7 +85,7 @@
   font-size: var(--tg-fs-base);
 }
 .wa-change-create strong {
-  color: var(--tg-ink-blue);
+  color: var(--tg-success);
 }
 .wa-change-update strong {
   color: var(--tg-accent);

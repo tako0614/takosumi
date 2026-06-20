@@ -1,26 +1,9 @@
 /*
- * views.css — the few cross-view rules that survived the Installation-centric rebuild:
- * the decorative splat layer (SplatField / InkSplash) and the connections tab's
- * advanced disclosure. Everything else moved to the per-cluster wave-* files or
- * styles/app-views.css; colours stay on the canonical --tg-* tokens.
+ * views.css — the few cross-view rules that survived the Installation-centric rebuild.
+ * Everything else moved to the per-cluster wave-* files or styles/app-views.css;
+ * colours stay on the canonical --tg-* tokens.
  */
 
-/* ===== Decorative ink splat layer (SplatField / InkSplash) ===== */
-.splat-field {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-.splat-field .splat {
-  display: block;
-}
-.splat-field svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
 /* ===== Connections screen ===== */
 .connection-advanced {
   margin-top: var(--tg-s-5);

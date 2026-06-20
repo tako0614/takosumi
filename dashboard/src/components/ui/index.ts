@@ -1,7 +1,7 @@
 /**
  * Barrel for the hand-rolled Takosumi dashboard UI component library.
  *
- * Dark "Splatoon ink" design, zero headless-UI deps, lucide-solid icons. The
+ * Takosumi dashboard design system, zero headless-UI deps, lucide-solid icons. The
  * shared component CSS lives in src/styles/components.css (the `tg-*` classes).
  */
 
@@ -17,4 +17,3 @@ export { default as KVList, type KVItem } from "./KVList.tsx";
 export { default as Toast } from "./Toast.tsx";
 export { default as Tabs, type TabItem } from "./Tabs.tsx";
 export { default as DataTable, type Column } from "./DataTable.tsx";
-export { default as InkBackdrop } from "./InkBackdrop.tsx";

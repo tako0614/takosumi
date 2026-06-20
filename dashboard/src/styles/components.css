@@ -11,10 +11,10 @@
  *      still render (.btn*, .page-header, .empty-state, .detail-section,
  *      .kv-list, .data-table, .status-pill + modifiers, .account-nav,
  *      .app-card, the token/connection/install forms, the confirm dialog),
- *      dark-restyled. As each view migrates to the `tg-*` components in later
+ *      app-restyled. As each view migrates to the `tg-*` components in later
  *      waves these legacy rules retire.
  *
- * All values reference the canonical dark `--tg-*` tokens (styles/tokens.css).
+ * All values reference the canonical dashboard `--tg-*` tokens (styles/tokens.css).
  */
 
 /* ----- Eyebrow ----- */
@@ -28,7 +28,7 @@
   color: var(--tg-accent-text);
   padding: 4px 10px;
   background: var(--tg-accent-soft);
-  border-radius: var(--tg-r-full);
+  border-radius: var(--tg-r-md);
   font-weight: 700;
   font-family: var(--tg-font-mono);
 }
@@ -38,26 +38,26 @@
   align-items: center;
   justify-content: center;
   gap: var(--tg-s-2);
-  padding: 0.6em 1.1em;
+  min-height: 36px;
+  padding: 0.52em 0.95em;
   border-radius: var(--tg-r-md);
   font-weight: 600;
   font-size: var(--tg-fs-sm);
   border: 1px solid transparent;
   background: transparent;
   color: var(--tg-fg);
-  font-family: var(--tg-font-display);
-  letter-spacing: -0.005em;
+  font-family: var(--tg-font-body);
+  letter-spacing: 0;
   white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
   transition:
-    transform 120ms ease,
     background 120ms ease,
     border-color 120ms ease,
     color 120ms ease;
 }
 .tg-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
+  text-decoration: none;
 }
 .tg-btn:disabled,
 .tg-btn[aria-disabled="true"] {
@@ -67,7 +67,8 @@
 .tg-btn-primary {
   background: var(--tg-accent);
   color: #fff;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--tg-accent) 30%, transparent);
+  border-color: var(--tg-accent);
+  box-shadow: none;
 }
 .tg-btn-primary:hover:not(:disabled) {
   background: var(--tg-accent-hover);
@@ -79,8 +80,9 @@
   border-color: var(--tg-line-strong);
 }
 .tg-btn-secondary:hover:not(:disabled) {
-  border-color: var(--tg-accent);
-  color: var(--tg-accent);
+  border-color: var(--tg-line-strong);
+  color: var(--tg-fg);
+  background: var(--tg-bg-subtle);
 }
 .tg-btn-ghost {
   background: transparent;
@@ -95,7 +97,7 @@
   background: var(--tg-danger);
   color: #fff;
   border-color: var(--tg-danger);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--tg-danger) 28%, transparent);
+  box-shadow: none;
 }
 .tg-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tg-danger) 85%, #fff);
@@ -132,38 +134,24 @@
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
-  padding: var(--tg-s-5);
+  padding: var(--tg-s-4);
   position: relative;
   overflow: hidden;
+  box-shadow: var(--tg-shadow-sm);
   transition:
-    border-color 160ms ease,
-    transform 160ms ease;
-}
-.tg-card-hover::after {
-  content: "";
-  position: absolute;
-  top: -40px;
-  right: -40px;
-  width: 120px;
-  height: 120px;
-  background: radial-gradient(circle, var(--tg-accent-soft), transparent 70%);
-  opacity: 0;
-  transition: opacity 200ms ease;
-  pointer-events: none;
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 .tg-card-hover:hover {
-  border-color: var(--tg-accent);
-  transform: translateY(-2px);
-}
-.tg-card-hover:hover::after {
-  opacity: 1;
+  border-color: var(--tg-line-strong);
+  box-shadow: var(--tg-shadow-md);
 }
 .tg-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--tg-s-3);
-  margin-bottom: var(--tg-s-4);
+  margin-bottom: var(--tg-s-3);
 }
 .tg-card-header-text {
   min-width: 0;
@@ -171,8 +159,8 @@
 .tg-card-title {
   font-family: var(--tg-font-display);
   font-size: var(--tg-fs-lg);
-  font-weight: 800;
-  letter-spacing: -0.015em;
+  font-weight: 700;
+  letter-spacing: 0;
   margin: 0;
 }
 .tg-card-subtitle {
@@ -181,8 +169,8 @@
   font-size: var(--tg-fs-sm);
 }
 .tg-card-section + .tg-card-section {
-  margin-top: var(--tg-s-5);
-  padding-top: var(--tg-s-5);
+  margin-top: var(--tg-s-4);
+  padding-top: var(--tg-s-4);
   border-top: 1px solid var(--tg-line);
 }
 /* ----- Badge / StatusBadge ----- */
@@ -218,9 +206,9 @@
   border-color: color-mix(in srgb, var(--tg-danger) 30%, transparent);
 }
 .tg-badge-info {
-  background: color-mix(in srgb, var(--tg-ink-blue) 14%, transparent);
-  color: var(--tg-ink-blue);
-  border-color: color-mix(in srgb, var(--tg-ink-blue) 30%, transparent);
+  background: color-mix(in srgb, var(--tg-info) 12%, transparent);
+  color: var(--tg-info);
+  border-color: color-mix(in srgb, var(--tg-info) 26%, transparent);
 }
 .tg-badge-muted {
   background: var(--tg-bg-subtle);
@@ -255,9 +243,9 @@
 .tg-input,
 .tg-select,
 .tg-textarea {
-  padding: 0.55em 0.75em;
-  background: var(--tg-bg-subtle);
-  border: 1px solid var(--tg-line-strong);
+  padding: 0.58em 0.72em;
+  background: var(--tg-bg-elev);
+  border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
@@ -273,7 +261,8 @@
 .tg-select:focus,
 .tg-textarea:focus {
   outline: none;
-  border-color: var(--tg-accent);
+  border-color: var(--tg-line-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tg-accent) 14%, transparent);
 }
 .tg-input-invalid,
 .tg-select-invalid,
@@ -304,7 +293,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--tg-s-4);
-  margin-bottom: var(--tg-s-6);
+  margin-bottom: var(--tg-s-5);
   flex-wrap: wrap;
 }
 .tg-page-header-text {
@@ -312,9 +301,9 @@
 }
 .tg-page-title {
   font-family: var(--tg-font-display);
-  font-size: var(--tg-fs-3xl);
-  letter-spacing: -0.025em;
-  font-weight: 800;
+  font-size: var(--tg-fs-2xl);
+  letter-spacing: 0;
+  font-weight: 720;
   margin: 0;
 }
 .tg-page-subtitle {
@@ -331,7 +320,7 @@
 .tg-empty {
   position: relative;
   overflow: hidden;
-  padding: var(--tg-s-8) var(--tg-s-5);
+  padding: var(--tg-s-6) var(--tg-s-5);
   border: 1px dashed var(--tg-line-strong);
   border-radius: var(--tg-r-lg);
   text-align: center;
@@ -345,9 +334,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: var(--tg-r-full);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--tg-r-lg);
   background: var(--tg-accent-soft);
   color: var(--tg-accent-text);
   position: relative;
@@ -355,9 +344,9 @@
 }
 .tg-empty-title {
   font-family: var(--tg-font-display);
-  font-size: var(--tg-fs-xl);
-  font-weight: 800;
-  letter-spacing: -0.015em;
+  font-size: var(--tg-fs-lg);
+  font-weight: 700;
+  letter-spacing: 0;
   margin: 0;
   position: relative;
   z-index: 1;
@@ -513,7 +502,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--tg-s-2);
-  padding: 0.6em 1.1em;
+  min-height: 36px;
+  padding: 0.52em 0.95em;
   border-radius: var(--tg-r-md);
   font-weight: 600;
   font-size: var(--tg-fs-sm);
@@ -521,7 +511,6 @@
   background: transparent;
   color: var(--tg-fg);
   transition:
-    transform 120ms ease,
     background 120ms ease,
     border-color 120ms ease,
     color 120ms ease;
@@ -531,7 +520,7 @@
   text-decoration: none;
 }
 .btn:hover:not(:disabled) {
-  transform: translateY(-1px);
+  text-decoration: none;
 }
 .btn:disabled {
   opacity: 0.55;
@@ -540,7 +529,8 @@
 .btn-primary {
   background: var(--tg-accent);
   color: #fff;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--tg-accent) 30%, transparent);
+  border-color: var(--tg-accent);
+  box-shadow: none;
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--tg-accent-hover);
@@ -552,8 +542,9 @@
   border-color: var(--tg-line-strong);
 }
 .btn-secondary:hover:not(:disabled) {
-  border-color: var(--tg-accent);
-  color: var(--tg-accent);
+  border-color: var(--tg-line-strong);
+  color: var(--tg-fg);
+  background: var(--tg-bg-subtle);
 }
 .btn-danger {
   background: var(--tg-danger);
@@ -592,11 +583,11 @@
 .takosumi-brand-mark {
   display: block;
   object-fit: contain;
-  border-radius: var(--tg-r-xs);
+  border-radius: var(--tg-r-sm);
 }
 .wordmark-text {
   font-size: var(--tg-fs-lg);
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 .wordmark-sub {
   font-size: var(--tg-fs-xs);

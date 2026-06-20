@@ -1,9 +1,6 @@
 /*
- * shell.css — dark app chrome for the Takosumi dashboard: app shell grid,
+ * shell.css — app chrome for the Takosumi dashboard: app shell grid,
  * sidebar, topbar, user menu, mobile tabs, and the auth (sign-in) page.
- *
- * Same class names + grid layout the shell components render; only dark-restyled
- * against the canonical tokens, plus a subtle ink backdrop seam.
  */
 
 /* ===== App shell grid ===== */
@@ -32,47 +29,15 @@
 .app-shell-content {
   position: relative;
   flex: 1;
-  padding: var(--tg-s-7) var(--tg-content-pad);
+  padding: var(--tg-s-6) var(--tg-content-pad);
   max-width: var(--tg-content-max);
   width: 100%;
   margin: 0 auto;
 }
-/* Content sits above the shell ink backdrop. */
-.app-shell-content > * {
-  position: relative;
-  z-index: 1;
-}
-/* ===== Ink backdrop (decorative, behind shell content / auth page) ===== */
-.ink-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-.ink-backdrop .splat-field {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-.ink-backdrop .splat {
-  display: block;
-}
-.ink-backdrop svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.ink-backdrop-shell {
-  opacity: 0.5;
-}
-.ink-backdrop-auth {
-  opacity: 0.85;
-}
+
 /* ===== Sidebar ===== */
 .sidebar {
-  background: var(--tg-bg-subtle);
+  background: var(--tg-bg-elev);
   border-right: 1px solid var(--tg-line);
   display: flex;
   flex-direction: column;
@@ -82,7 +47,7 @@
   height: 100vh;
 }
 .sidebar-brand {
-  padding: var(--tg-s-2) var(--tg-s-3) var(--tg-s-5);
+  padding: var(--tg-s-1) var(--tg-s-3) var(--tg-s-4);
 }
 .sidebar-context-label {
   display: block;
@@ -107,7 +72,8 @@
   display: flex;
   align-items: center;
   gap: var(--tg-s-3);
-  padding: var(--tg-s-3) var(--tg-s-3);
+  min-height: 38px;
+  padding: var(--tg-s-2) var(--tg-s-3);
   border-radius: var(--tg-r-md);
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
@@ -117,12 +83,13 @@
     color 120ms ease;
 }
 .sidebar-link:hover {
-  background: var(--tg-bg-elev);
+  background: var(--tg-bg-subtle);
   color: var(--tg-fg);
 }
 .sidebar-link.active {
   background: var(--tg-accent-soft);
   color: var(--tg-accent-text);
+  box-shadow: inset 3px 0 0 var(--tg-accent);
 }
 .sidebar-link.active:hover {
   background: var(--tg-accent-soft);
@@ -151,7 +118,7 @@
   gap: var(--tg-s-4);
   padding: 0 var(--tg-content-pad);
   border-bottom: 1px solid var(--tg-line);
-  background: color-mix(in srgb, var(--tg-bg) 85%, transparent);
+  background: color-mix(in srgb, var(--tg-bg-elev) 94%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   position: sticky;
@@ -226,8 +193,8 @@
   text-align: center;
 }
 .topbar-icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -256,8 +223,8 @@
   width: 32px;
   height: 32px;
   border-radius: var(--tg-r-full);
-  background: var(--tg-accent);
-  color: #fff;
+  background: var(--tg-accent-soft);
+  color: var(--tg-accent-text);
   font-weight: 700;
   font-size: var(--tg-fs-sm);
 }
@@ -363,11 +330,27 @@
     display: none;
   }
   .topbar {
-    padding: 0 var(--tg-s-4);
+    height: auto;
+    min-height: var(--tg-topbar-h);
+    padding: var(--tg-s-2) var(--tg-s-3);
+    gap: var(--tg-s-2);
+  }
+  .topbar-actions {
+    gap: var(--tg-s-1);
+  }
+  .topbar-space {
+    flex: 1;
+    min-width: 0;
+  }
+  .topbar-space-select {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    font-size: var(--tg-fs-xs);
   }
   .app-shell-content {
-    padding: var(--tg-s-5) var(--tg-s-4)
-      calc(var(--tg-mobile-tab-h) + var(--tg-s-5));
+    padding: var(--tg-s-4) var(--tg-s-3)
+      calc(var(--tg-mobile-tab-h) + var(--tg-s-4));
   }
   .mobile-tabs {
     position: fixed;
@@ -377,7 +360,7 @@
     height: var(--tg-mobile-tab-h);
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    background: color-mix(in srgb, var(--tg-bg-elev) 92%, transparent);
+    background: color-mix(in srgb, var(--tg-bg-elev) 96%, transparent);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     border-top: 1px solid var(--tg-line);
@@ -390,11 +373,21 @@
     justify-content: center;
     gap: 2px;
     color: var(--tg-fg-muted);
-    font-size: var(--tg-fs-xs);
+    font-size: 0.68rem;
+    line-height: 1.1;
     text-decoration: none;
+    min-width: 0;
+    padding: 0 2px;
+  }
+  .mobile-tab span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .mobile-tab.active {
-    color: var(--tg-accent);
+    color: var(--tg-accent-text);
+    background: var(--tg-accent-soft);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -409,27 +402,20 @@
 .auth-page {
   position: relative;
   min-height: 100svh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: clamp(56px, 10vh, 112px) var(--tg-s-5)
-    clamp(32px, 7vh, 72px);
-  background:
-    linear-gradient(var(--tg-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--tg-line) 1px, transparent 1px), var(--tg-bg);
-  background-size: 32px 32px;
+  padding: clamp(32px, 7vh, 72px) var(--tg-s-5);
+  background: var(--tg-bg);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
   overflow-x: hidden;
   overflow-y: auto;
 }
 .auth-page::before {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  content: "";
-  background: color-mix(in srgb, var(--tg-bg) 86%, transparent);
+  display: none;
 }
 .auth-page > * {
   position: relative;
@@ -439,7 +425,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--tg-s-4);
-  margin-bottom: var(--tg-s-6);
+  margin-bottom: var(--tg-s-5);
   color: var(--tg-fg);
   text-decoration: none;
 }
@@ -447,8 +433,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border: 0;
   border-radius: var(--tg-r-sm);
   background: transparent;
@@ -468,7 +454,7 @@
 }
 .sign-in-panel {
   width: 100%;
-  max-width: 392px;
+  max-width: 384px;
 }
 .sign-in-title {
   font-family: var(--tg-font-display);
@@ -485,7 +471,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-1);
-  margin: calc(var(--tg-s-6) * -0.35) 0 var(--tg-s-5);
+  margin: calc(var(--tg-s-5) * -0.25) 0 var(--tg-s-5);
   padding: var(--tg-s-3) var(--tg-s-4);
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
@@ -517,20 +503,20 @@
   grid-template-columns: 34px 1fr 16px;
   align-items: center;
   gap: var(--tg-s-3);
+  min-height: 68px;
   padding: var(--tg-s-3) var(--tg-s-4);
-  background: color-mix(in srgb, var(--tg-bg-elev) 82%, transparent);
+  background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   color: var(--tg-fg);
   text-align: left;
   transition:
     border-color 120ms ease,
-    transform 120ms ease,
     background 120ms ease;
 }
 .sign-in-btn:hover:not(:disabled) {
-  border-color: var(--tg-accent);
-  transform: translateY(-1px);
+  border-color: var(--tg-line-strong);
+  background: var(--tg-bg-subtle);
 }
 .sign-in-btn:disabled {
   cursor: not-allowed;
@@ -577,7 +563,7 @@
   gap: var(--tg-s-1);
   margin: var(--tg-s-4) 0 0;
   padding: var(--tg-s-3) var(--tg-s-4);
-  background: var(--tg-bg-subtle);
+  background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   color: var(--tg-fg);
@@ -587,8 +573,8 @@
   color: var(--tg-fg-muted);
 }
 .sign-in-notice-warn {
-  background: color-mix(in srgb, var(--tg-warn) 10%, var(--tg-bg-subtle));
-  border-color: color-mix(in srgb, var(--tg-warn) 28%, var(--tg-line));
+  background: #fff8ed;
+  border-color: #efd2aa;
 }
 .sign-in-retry {
   align-self: flex-start;
@@ -604,11 +590,31 @@
   cursor: pointer;
 }
 .sign-in-retry:hover {
-  border-color: var(--tg-accent);
+  border-color: var(--tg-line-strong);
+  background: var(--tg-bg-subtle);
 }
 .sign-in-terms {
-  margin-top: var(--tg-s-6);
+  margin-top: var(--tg-s-5);
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
   text-align: center;
+}
+
+@media (max-width: 520px) {
+  .auth-brand {
+    align-self: center;
+    margin-bottom: var(--tg-s-6);
+  }
+
+  .sign-in-panel {
+    max-width: none;
+  }
+
+  .sign-in-title {
+    font-size: var(--tg-fs-2xl);
+  }
+
+  .sign-in-btn {
+    grid-template-columns: 34px minmax(0, 1fr) 16px;
+  }
 }

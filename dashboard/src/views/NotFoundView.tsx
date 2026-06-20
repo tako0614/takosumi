@@ -8,14 +8,12 @@
 import { Compass } from "lucide-solid";
 import { setDocumentTitle, t } from "../i18n/index.ts";
 import { onMount } from "solid-js";
-import InkBackdrop from "../components/ui/InkBackdrop.tsx";
 import Button from "../components/ui/Button.tsx";
 
 export default function NotFoundView() {
   onMount(() => setDocumentTitle(t("notFound.title")));
   return (
     <div class="auth-page">
-      <InkBackdrop density="auth" />
       <div class="sign-in-panel notfound-panel">
         <Compass size={40} aria-hidden="true" />
         <h1 class="sign-in-title">{t("notFound.title")}</h1>

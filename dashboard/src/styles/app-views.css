@@ -76,8 +76,8 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--tg-s-4);
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: var(--tg-s-3);
 }
 .av-grid > li {
   display: flex;
@@ -85,20 +85,22 @@
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
+  box-shadow: var(--tg-shadow-sm);
   overflow: hidden;
   transition:
     border-color 120ms ease,
-    transform 120ms ease;
+    box-shadow 120ms ease;
 }
 .av-grid > li:hover {
-  border-color: color-mix(in srgb, var(--tg-accent) 55%, var(--tg-line));
+  border-color: var(--tg-line-strong);
+  box-shadow: var(--tg-shadow-md);
 }
 .av-card {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--tg-s-2);
-  padding: var(--tg-s-4);
+  padding: var(--tg-s-3);
   background: transparent;
   border: 0;
   cursor: pointer;
@@ -127,7 +129,7 @@
   color: var(--tg-warn, #e8a33d);
 }
 .av-card-foot {
-  padding: 0 var(--tg-s-4) var(--tg-s-4);
+  padding: 0 var(--tg-s-3) var(--tg-s-3);
 }
 
 /* ===== recent runs strip (Installation detail / deploys) ===== */
@@ -256,6 +258,31 @@ button.tg-tab {
   cursor: pointer;
   font-family: var(--tg-font-body);
   font-size: inherit;
+}
+
+@media (max-width: 720px) {
+  .av-actions {
+    width: 100%;
+  }
+
+  .av-actions .tg-btn {
+    flex: 1 1 auto;
+  }
+
+  .av-attention {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .av-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .av-catalog-item {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--tg-s-3);
+  }
 }
 
 /* ===== 404 ===== */
