@@ -46,6 +46,7 @@ import {
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
+  changeCountsForRun,
   changesFromLogs,
   connectionNamesFromLogs,
   inputNamesFromLogs,
@@ -250,14 +251,9 @@ function Inner() {
     inputNamesFromLogs(logs()?.auditEvents ?? []),
   );
   const changes = createMemo(() => changesFromLogs(logs()?.auditEvents ?? []));
-  const changeCounts = createMemo(() => {
-    const items = changes();
-    return {
-      create: items.filter((item) => item.action === "create").length,
-      update: items.filter((item) => item.action === "update").length,
-      delete: items.filter((item) => item.action === "delete").length,
-    };
-  });
+  const changeCounts = createMemo(() =>
+    changeCountsForRun(run.latest, logs()?.auditEvents ?? []),
+  );
   const connections = createMemo(() =>
     connectionNamesFromLogs(logs()?.auditEvents ?? []),
   );
@@ -371,7 +367,11 @@ function Inner() {
             return { kind: "danger", text: t("run.summary.blocked") };
           }
           const counts = changeCounts();
-          const sub = t("run.summary.readyChanges", counts);
+          const sub = t("run.summary.readyChanges", {
+            create: counts.create,
+            update: counts.update,
+            delete: counts.delete,
+          });
           return r.type === "destroy_plan"
             ? {
                 kind: "danger",
