@@ -2041,7 +2041,10 @@ export class OpenTofuDeploymentController {
       requiredProviders,
     );
     const variables = normalizeVariables(
-      mergeJsonVariables(input.installConfig.variableMapping),
+      mergeJsonVariableDefaults(
+        installTypePlan.providerInputDefaults,
+        input.installConfig.variableMapping,
+      ),
     );
     return {
       request: {
@@ -5745,6 +5748,42 @@ function mergeJsonVariables(
     }
   }
   return out;
+}
+
+function mergeJsonVariableDefaults(
+  defaults: Readonly<Record<string, unknown>>,
+  explicit: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, JsonValue>> {
+  return deepMergeJsonRecords(
+    mergeJsonVariables(defaults),
+    mergeJsonVariables(explicit),
+  );
+}
+
+function deepMergeJsonRecords(
+  defaults: Readonly<Record<string, JsonValue>>,
+  explicit: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = { ...defaults };
+  for (const [key, value] of Object.entries(explicit)) {
+    const existing = out[key];
+    out[key] =
+      isJsonObject(existing) && isJsonObject(value)
+        ? deepMergeJsonRecords(existing, value)
+        : value;
+  }
+  return out;
+}
+
+function isJsonObject(
+  value: JsonValue | undefined,
+): value is Readonly<Record<string, JsonValue>> {
+  return (
+    value !== undefined &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

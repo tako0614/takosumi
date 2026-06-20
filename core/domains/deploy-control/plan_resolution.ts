@@ -53,6 +53,7 @@ import {
 import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.ts";
 import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 
 /**
  * Install-type wiring for an installation-driven template plan (§13). Carried
@@ -69,6 +70,11 @@ export interface InstallTypePlanContext {
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
   /** Generic-env Connection env names that must be declared as root variables. */
   readonly genericEnvVarNames: readonly string[];
+  /**
+   * Non-secret provider scope metadata projected as default Capsule inputs.
+   * Explicit InstallConfig variables override these defaults.
+   */
+  readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   /** InstallConfig.build, when enabled (overrides the template build). */
   readonly build?: DispatchBuildSpec;
   /**
@@ -150,6 +156,7 @@ export class PlanResolutionService {
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
     const genericEnvVarNames = genericEnvVarNamesFromResolved(resolved);
+    const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
     );
@@ -159,6 +166,7 @@ export class PlanResolutionService {
       installType: installType as GeneratedRootInstallType,
       providerEnvBindings,
       genericEnvVarNames,
+      providerInputDefaults,
       usesCloudOnlyGatewayMaterialization,
       ...(installConfig.build?.enabled
         ? { build: installConfigBuildSpec(installConfig.build) }
@@ -303,6 +311,52 @@ function genericEnvVarNamesFromResolved(
   return [...names].sort();
 }
 
+function providerInputDefaultsFromResolved(
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+): Readonly<Record<string, JsonValue>> {
+  const inputs: Record<string, JsonValue> = {};
+  for (const entry of resolved) {
+    const connection = entry.connection;
+    if (!connection) continue;
+    if (sameProviderFamily(entry.provider, "cloudflare")) {
+      const accountId = nonEmptyString(connection.scopeHints?.accountId);
+      if (accountId) {
+        mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
+      }
+    }
+  }
+  return inputs;
+}
+
+function mergeObjectInput(
+  target: Record<string, JsonValue>,
+  key: string,
+  patch: Readonly<Record<string, JsonValue>>,
+): void {
+  const existing = target[key];
+  if (isJsonObject(existing)) {
+    target[key] = { ...existing, ...patch };
+    return;
+  }
+  target[key] = { ...patch };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function isJsonObject(value: JsonValue | undefined): value is {
+  readonly [key: string]: JsonValue;
+} {
+  return (
+    value !== undefined &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
+}
 
 function isJsonScalar(value: unknown): value is string | number | boolean {
   const t = typeof value;
