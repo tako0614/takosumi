@@ -221,13 +221,13 @@ function BrandLogoMark() {
 export default function SignInView() {
   onMount(() => setDocumentTitle(t("auth.signIn")));
   return (
-    <div class="auth-page">
+    <main class="auth-page">
       <a href="/" class="auth-brand">
         <BrandLogoMark />
         <span class="auth-brand-text">Takosumi</span>
       </a>
       <SignInPanel />
-    </div>
+    </main>
   );
 }
 
