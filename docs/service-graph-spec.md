@@ -213,12 +213,16 @@ that require subsets of these capabilities. For example, Takos uses
 `protocol.mcp.server` for MCP tool loading, `source.repository` / `source.git.smart_http` for Git UX,
 `storage.filesystem` / `storage.object` for files, and `automation.agent_runtime` for agent task execution.
 
-### 5.1 Takosumi AI Gateway Profile
+### 5.1 Cloud-only Takosumi AI Gateway Profile
 
-Takosumi may provide an operator-backed AI Gateway as a Service Graph service with service id
-`takosumi.ai.gateway`, capability `ai.model`, and endpoint `/gateway/ai/v1`. It is an OpenAI-compatible HTTP API
-facade for model and embedding calls. The gateway is an operator-backed hosted Takosumi service, not a provider
-credential and not an OpenTofu output secret.
+Takosumi Cloud may provide an operator-backed AI Gateway as a Service Graph
+service with service id `takosumi.ai.gateway`, capability `ai.model`, and
+endpoint `/gateway/ai/v1`. It is an OpenAI-compatible HTTP API facade for model
+and embedding calls. This is a Cloud/closed operator extension, not part of the
+Takosumi OSS public control-plane contract. OSS Takosumi remains focused on
+OpenTofu/Terraform runs, ProviderConnections, CredentialRecipes,
+ProviderBindings, StateVersions, Outputs, Runners, and AuditEvents. The gateway
+is not a provider credential and not an OpenTofu output secret.
 
 The installation projection material for this service is:
 
