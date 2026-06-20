@@ -99,6 +99,15 @@ function compatibilityLabel(level: CapsuleCompatibilityLevel): string {
   }
 }
 
+function isFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/iu.test(value.trim());
+}
+
+function displayRef(value: string): string {
+  const trimmed = value.trim();
+  return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
+}
+
 export default function NewAppView() {
   return <Page title={t("new.title")}>{() => <Inner />}</Page>;
 }
@@ -119,8 +128,12 @@ function Inner() {
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
     prefill ? "git" : "catalog",
   );
+  const initialRef = prefill?.ref || "main";
   const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
-  const [ref, setRef] = createSignal(prefill?.ref || "main");
+  const [ref, setRef] = createSignal(displayRef(initialRef));
+  const [pinnedFullRef, setPinnedFullRef] = createSignal<string | null>(
+    isFullCommitSha(initialRef) ? initialRef : null,
+  );
   const [path, setPath] = createSignal(prefill?.path || ".");
   const [name, setName] = createSignal(
     prefill ? capsuleNameFromUrl(prefill.git) : "",
@@ -176,6 +189,12 @@ function Inner() {
     if (!name().trim()) return t("new.error.nameRequired");
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
     return null;
+  };
+  const effectiveRef = () => {
+    const current = ref().trim();
+    const pinned = pinnedFullRef();
+    if (pinned && current === displayRef(pinned)) return pinned;
+    return current || "main";
   };
 
   const providerConnectionLabel = (connection: ProviderConnection) =>
@@ -316,7 +335,8 @@ function Inner() {
 
   const pickCatalogEntry = (entry: CatalogEntry) => {
     setGitUrl(entry.git);
-    setRef(entry.ref);
+    setRef(displayRef(entry.ref));
+    setPinnedFullRef(isFullCommitSha(entry.ref) ? entry.ref : null);
     setPath(entry.path);
     setName(entry.suggestedName);
     resetCompatibility();
@@ -340,7 +360,7 @@ function Inner() {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
         gitUrl: gitUrl().trim(),
-        ref: ref().trim() || "main",
+        ref: effectiveRef(),
         path: path().trim() || ".",
         name: name().trim(),
         installConfigId: selectedInstallConfigId(),
@@ -383,7 +403,7 @@ function Inner() {
           spaceId: space,
           name: name().trim(),
           url: gitUrl().trim(),
-          defaultRef: ref().trim() || "main",
+          defaultRef: effectiveRef(),
           defaultPath: path().trim() || ".",
         });
         sourceId = result.source.id;
@@ -477,6 +497,7 @@ function Inner() {
             type="text"
             value={ref()}
             onInput={(e) => {
+              setPinnedFullRef(null);
               setRef(e.currentTarget.value);
               resetCompatibility();
             }}
