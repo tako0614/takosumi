@@ -849,7 +849,11 @@ function readyProviderConnectionsForProvider(
 function providerConnectionLabel(
   providerConnection: ProviderConnection,
 ): string {
-  return `${providerConnection.displayName || providerConnection.providerSource} (${t("conn.ownership.ownKey")})`;
+  const ownershipLabel =
+    providerConnection.ownership === "takos_provided"
+      ? t("conn.ownership.takosProvided")
+      : t("conn.ownership.ownKey");
+  return `${providerConnection.displayName || providerConnection.providerSource} (${ownershipLabel})`;
 }
 
 function buildProviderConnections(

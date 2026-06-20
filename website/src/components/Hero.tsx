@@ -19,17 +19,17 @@ export default function Hero() {
         <div class="cta-row">
           <a
             class="btn btn-primary"
-            href="/docs/getting-started/quickstart"
-            rel="external"
-          >
-            5 分で動かす
-          </a>
-          <a
-            class="btn btn-secondary"
             href="https://app.takosumi.com/sign-in"
             rel="noopener"
           >
-            ダッシュボード
+            Takosumi Cloud を開く
+          </a>
+          <a
+            class="btn btn-secondary"
+            href="/docs/getting-started/quickstart"
+            rel="external"
+          >
+            OSS をセルフホスト
           </a>
         </div>
       </div>
