@@ -24,6 +24,12 @@ export interface ChangeItem {
   readonly label: string;
 }
 
+export interface ChangeCounts {
+  readonly create: number;
+  readonly update: number;
+  readonly delete: number;
+}
+
 /** A Run is terminal once it has reached a final status. */
 export function isTerminalRunStatus(status: Run["status"]): boolean {
   return (
@@ -69,6 +75,37 @@ export function changesFromLogs(
     }
   }
   return out;
+}
+
+export function changeCountsForRun(
+  run: Run | undefined,
+  auditEvents: readonly AuditEventRecord[],
+): ChangeCounts {
+  const summary = run?.summary;
+  if (hasPlanSummary(summary)) {
+    return {
+      create: summary.add ?? 0,
+      update: summary.change ?? 0,
+      delete: summary.destroy ?? 0,
+    };
+  }
+  const items = changesFromLogs(auditEvents);
+  return {
+    create: items.filter((item) => item.action === "create").length,
+    update: items.filter((item) => item.action === "update").length,
+    delete: items.filter((item) => item.action === "delete").length,
+  };
+}
+
+function hasPlanSummary(
+  summary: Run["summary"] | undefined,
+): summary is NonNullable<Run["summary"]> {
+  return (
+    summary !== undefined &&
+    (typeof summary.add === "number" ||
+      typeof summary.change === "number" ||
+      typeof summary.destroy === "number")
+  );
 }
 
 function collectChanges(candidate: unknown, out: ChangeItem[]): void {
