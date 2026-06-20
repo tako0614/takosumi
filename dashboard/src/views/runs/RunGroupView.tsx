@@ -71,7 +71,7 @@ function Inner() {
       cell: (r) => (
         <Show when={r.installationId} fallback={<span class="muted">—</span>}>
           {(id) => (
-            <a href={`/installations/${encodeURIComponent(id())}`}>
+            <a href={`/capsules/${encodeURIComponent(id())}`}>
               <code>{id()}</code>
             </a>
           )}

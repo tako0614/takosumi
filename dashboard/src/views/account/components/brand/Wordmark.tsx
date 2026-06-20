@@ -9,8 +9,8 @@ interface Props {
 }
 
 /**
- * Takosumi wordmark — geometric mark + word + 'Cloud' subtitle.
- * Ported from takosumi dashboard-ui/src/components/brand/Wordmark.tsx.
+ * Takosumi wordmark — geometric mark + product name.
+ * Cloud deployments may opt into the subtitle explicitly.
  */
 export default function Wordmark(props: Props): JSX.Element {
   const inner = (
@@ -20,7 +20,7 @@ export default function Wordmark(props: Props): JSX.Element {
       </span>
       <span class="wordmark-text">
         Takosumi
-        {props.showSub !== false && (
+        {props.showSub === true && (
           <span class="wordmark-sub" style="margin-left:6px">
             Cloud
           </span>

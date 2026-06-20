@@ -14,6 +14,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { installReturnContext } from "../../lib/install-return-context.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
+import GeometricMark from "../account/components/brand/GeometricMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
 
 type Provider = "google";
@@ -208,11 +209,10 @@ export function SignInPanel() {
   );
 }
 
-function TemporaryBrandMark() {
+function DraftBrandMark() {
   return (
-    <span class="auth-brand-mark" aria-label={t("auth.brandDraftAria")}>
-      <span class="auth-brand-mark-core">{t("auth.brandDraftMark")}</span>
-      <span class="auth-brand-mark-draft">{t("auth.brandDraft")}</span>
+    <span class="auth-brand-mark" aria-hidden="true">
+      <GeometricMark size={28} />
     </span>
   );
 }
@@ -223,7 +223,7 @@ export default function SignInView() {
   return (
     <div class="auth-page">
       <a href="/" class="auth-brand">
-        <TemporaryBrandMark />
+        <DraftBrandMark />
         <span class="auth-brand-text">Takosumi</span>
       </a>
       <SignInPanel />

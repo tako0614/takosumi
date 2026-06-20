@@ -5,7 +5,7 @@
  * "開く" launch link resolved from public outputs, the dependency line from the
  * Workspace graph, and a needs-attention strip derived from Capsule lifecycle
  * status (error / stale). Click-through goes to
- * `/installations/:id`.
+ * `/capsules/:id`.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -114,7 +114,7 @@ function Inner() {
   );
 
   const openDetail = (inst: Installation) =>
-    navigate(`/installations/${encodeURIComponent(inst.id)}`);
+    navigate(`/capsules/${encodeURIComponent(inst.id)}`);
 
   return (
     <AppShell>
