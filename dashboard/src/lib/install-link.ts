@@ -22,6 +22,7 @@ export interface InstallPrefill {
   readonly git: string;
   readonly ref: string;
   readonly path: string;
+  readonly vars?: Readonly<Record<string, string>>;
 }
 
 /** Parse an install link's query into a prefill, or undefined when absent/bad. */
@@ -32,11 +33,28 @@ export function parseInstallPrefill(
   const packed = parsePackedSource(params.get("source"));
   const git = params.get("git") ?? packed?.git ?? "";
   if (!isSafeHttpsGitUrl(git)) return undefined;
+  const vars = parseVariableParams(params);
   return {
     git,
     ref: (params.get("ref") ?? packed?.ref ?? "").trim(),
     path: (params.get("path") ?? packed?.path ?? "").trim(),
+    ...(Object.keys(vars).length > 0 ? { vars } : {}),
   };
+}
+
+function parseVariableParams(
+  params: URLSearchParams,
+): Readonly<Record<string, string>> {
+  const vars: Record<string, string> = {};
+  for (const [key, value] of params) {
+    if (!key.startsWith("var.")) continue;
+    const name = key.slice("var.".length);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) continue;
+    if (name !== "project_name") continue;
+    if (/[\r\n\0]/u.test(value)) continue;
+    vars[name] = value;
+  }
+  return vars;
 }
 
 /** `source=git::<url>//<path>?ref=<ref>` (Terraform/OpenTofu module address). */

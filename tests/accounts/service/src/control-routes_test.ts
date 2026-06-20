@@ -159,6 +159,10 @@ function fakeOperations(
         record("createInstallation", req);
         return installation("inst_new", req.spaceId);
       },
+      putInstallConfig: async (config) => {
+        record("putInstallConfig", config);
+        return config;
+      },
       getInstallConfig: async (id) => {
         record("getInstallConfig", id);
         return {
@@ -2126,6 +2130,74 @@ test("POST /api/v1/spaces/:id/installations creates an installation", async () =
     spaceId: string;
   };
   expect(createCall.spaceId).toEqual("space_a");
+});
+
+test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: { project_name: "takos-space-a" },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    spaceId: string;
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.spaceId).toEqual("space_a");
+  expect(config.variableMapping).toEqual({ project_name: "takos-space-a" });
+  const createCall = operations.calls.createInstallation?.[0] as {
+    installConfigId: string;
+  };
+  expect(createCall.installConfigId).toEqual(config.id);
+});
+
+test("POST /api/v1/spaces/:id/installations rejects non-JSON vars", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: "project_name=takos",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+  expect(operations.calls.createInstallation).toBeUndefined();
 });
 
 test("GET /api/v1/spaces/:id/graph projects nodes + edges", async () => {

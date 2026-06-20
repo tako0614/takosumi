@@ -40,6 +40,32 @@ describe("parseInstallPrefill", () => {
     ).toEqual({ git: "https://github.com/acme/repo.git", ref: "", path: "" });
   });
 
+  test("parses the safe project_name variable prefill", () => {
+    expect(
+      parseInstallPrefill(
+        "?git=https://github.com/acme/repo.git&ref=main&path=deploy&var.project_name=takos-space",
+      ),
+    ).toEqual({
+      git: "https://github.com/acme/repo.git",
+      ref: "main",
+      path: "deploy",
+      vars: { project_name: "takos-space" },
+    });
+  });
+
+  test("ignores unsupported variable prefill keys", () => {
+    expect(
+      parseInstallPrefill(
+        "?git=https://github.com/acme/repo.git&var.secret=hidden&var.project_name=visible",
+      ),
+    ).toEqual({
+      git: "https://github.com/acme/repo.git",
+      ref: "",
+      path: "",
+      vars: { project_name: "visible" },
+    });
+  });
+
   test("refuses to seed the form from unsafe or absent links", () => {
     // no params at all
     expect(parseInstallPrefill("")).toBeUndefined();

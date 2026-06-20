@@ -282,6 +282,13 @@
   gap: var(--tg-s-2);
   margin-top: var(--tg-s-4);
 }
+@media (max-width: 640px) {
+  .wa-form-actions .tg-btn {
+    flex: 1 1 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+}
 
 /* --- Activity feed ---------------------------------------------------------- */
 .wa-activity {

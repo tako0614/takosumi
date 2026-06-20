@@ -303,6 +303,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.ref": "Ref",
   "new.git.path": "Path (module path)",
   "new.name": "Capsule name",
+  "new.vars.projectName": "Resource prefix",
   "new.managed.notice":
     "Takosumi Cloud checks whether its managed connection can add this Capsule. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
   "new.managed.needCredential":

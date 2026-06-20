@@ -8,6 +8,7 @@ export interface InstallReturnContext {
   readonly git: string;
   readonly ref: string;
   readonly path: string;
+  readonly vars?: Readonly<Record<string, string>>;
   readonly label: string;
   readonly host: string;
   readonly sourceLabel: string;
@@ -48,12 +49,15 @@ export function installReturnContext(
 
 export function installReturnPathFromPrefill(
   prefill: Pick<InstallPrefill, "git"> &
-    Partial<Pick<InstallPrefill, "ref" | "path">>,
+    Partial<Pick<InstallPrefill, "ref" | "path" | "vars">>,
 ): string | undefined {
   const params = new URLSearchParams();
   params.set("git", prefill.git.trim());
   params.set("ref", prefill.ref?.trim() ?? "");
   params.set("path", prefill.path?.trim() || ".");
+  for (const [key, value] of Object.entries(prefill.vars ?? {}).sort()) {
+    params.set(`var.${key}`, value);
+  }
 
   const safe = parseInstallPrefill(`?${params.toString()}`);
   if (!safe) return undefined;
@@ -62,6 +66,9 @@ export function installReturnPathFromPrefill(
   canonical.set("git", safe.git);
   canonical.set("ref", safe.ref);
   canonical.set("path", safe.path || ".");
+  for (const [key, value] of Object.entries(safe.vars ?? {}).sort()) {
+    canonical.set(`var.${key}`, value);
+  }
   return `/new?${canonical.toString()}`;
 }
 

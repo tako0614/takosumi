@@ -2661,6 +2661,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
+        vars: { type: "object", additionalProperties: true },
       },
       additionalProperties: false,
     },

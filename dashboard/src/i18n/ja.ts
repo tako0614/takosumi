@@ -308,6 +308,7 @@ export const ja = {
   "new.git.ref": "Ref",
   "new.git.path": "Path（モジュールパス）",
   "new.name": "Capsule 名",
+  "new.vars.projectName": "リソース接頭辞",
   "new.managed.notice":
     "Takosumi Cloud の接続でこの Capsule を追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
   "new.managed.needCredential":

@@ -121,7 +121,7 @@ import type {
   RunLogsResponse,
   PublicRun,
 } from "takosumi-contract/runs";
-import { API_V1_PREFIX, isApiV1Path } from "takosumi-contract";
+import { API_V1_PREFIX, isApiV1Path, type JsonValue } from "takosumi-contract";
 import {
   errorJson,
   json,
@@ -453,6 +453,7 @@ export interface ControlPlaneOperations {
       readonly sourceId: string;
       readonly installConfigId: string;
     }): Promise<Installation>;
+    putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     getInstallConfig(id: string): Promise<InstallConfig>;
     listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
     patchInstallationStatus(
@@ -2201,6 +2202,14 @@ async function createInstallation(
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
+  const vars = jsonRecordValue(body.vars);
+  if (body.vars !== undefined && vars === undefined) {
+    return errorJson(
+      "invalid_request",
+      "vars must be an object of JSON values keyed by OpenTofu variable names",
+      400,
+    );
+  }
   if (!name || !environment || !sourceId || !installConfigId) {
     return errorJson(
       "invalid_request",
@@ -2223,12 +2232,38 @@ async function createInstallation(
       400,
     );
   }
+  let resolvedInstallConfigId = installConfigId;
+  if (vars !== undefined && Object.keys(vars).length > 0) {
+    const baseConfig =
+      await operations.installations.getInstallConfig(installConfigId);
+    if (
+      baseConfig.spaceId !== undefined &&
+      baseConfig.spaceId !== spaceId
+    ) {
+      return errorJson(
+        "invalid_request",
+        "installConfigId is not available to the target Space.",
+        400,
+      );
+    }
+    const now = new Date().toISOString();
+    const config = await operations.installations.putInstallConfig({
+      ...baseConfig,
+      id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      spaceId,
+      name: `${name}-config`,
+      variableMapping: { ...baseConfig.variableMapping, ...vars },
+      createdAt: now,
+      updatedAt: now,
+    });
+    resolvedInstallConfigId = config.id;
+  }
   const installation = await operations.installations.createInstallation({
     spaceId,
     name,
     environment,
     sourceId,
-    installConfigId,
+    installConfigId: resolvedInstallConfigId,
   });
   return jsonStatus({ installation: publicInstallation(installation) }, 201);
 }
@@ -3487,6 +3522,36 @@ function stringRecordValue(
     out[key] = item;
   }
   return out;
+}
+
+function jsonRecordValue(
+  value: unknown,
+): Readonly<Record<string, JsonValue>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const out: Record<string, JsonValue> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) return undefined;
+    if (!isJsonValue(item)) return undefined;
+    out[key] = item;
+  }
+  return out;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return typeof value !== "number" || Number.isFinite(value);
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value !== "object") return false;
+  return Object.values(value).every(isJsonValue);
 }
 
 function parseInstallationProviderConnectionBindings(value: unknown):
