@@ -1,6 +1,6 @@
 import type { JSX } from "solid-js";
-import GeometricMark from "./GeometricMark.tsx";
-import InkdropMark from "./InkdropMark.tsx";
+import GeometricMark from "./GeometricMark";
+import InkdropMark from "./InkdropMark";
 
 interface Props {
   variant?: "geometric" | "inkdrop";

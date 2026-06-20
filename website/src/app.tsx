@@ -12,7 +12,7 @@ export default function App() {
     <Router
       root={(props) => (
         <MetaProvider>
-          <Title>Takosumi — OpenTofu-native deploy control plane</Title>
+          <Title>Takosumi — your service, your server.</Title>
           <Suspense>{props.children}</Suspense>
         </MetaProvider>
       )}

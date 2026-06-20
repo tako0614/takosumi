@@ -1,5 +1,5 @@
 import { For, type JSX } from "solid-js";
-import InkSplash from "./brand/InkSplash.tsx";
+import InkSplash from "./brand/InkSplash";
 
 /**
  * Decorative ink-splatter layer. Renders a hand-tuned (deterministic — no
@@ -129,6 +129,183 @@ const SECTION: readonly Splat[] = [
   },
 ];
 
+// One continuous field spanning the whole post-hero page. Splats flow down both
+// edges so the ink reads as a single canvas across sections (no per-section
+// repetition or hard boundaries). `top` is a % of the full canvas height.
+const PAGE: readonly Splat[] = [
+  {
+    top: "1%",
+    right: "-90px",
+    size: 280,
+    rotate: 16,
+    color: "blue",
+    variant: 1,
+    opacity: 0.3,
+  },
+  {
+    top: "5%",
+    left: "-100px",
+    size: 300,
+    rotate: -24,
+    color: "red",
+    variant: 2,
+    opacity: 0.28,
+  },
+  {
+    top: "10%",
+    right: "4%",
+    size: 210,
+    rotate: 52,
+    color: "red",
+    variant: 4,
+    opacity: 0.24,
+  },
+  {
+    top: "15%",
+    left: "2%",
+    size: 240,
+    rotate: -38,
+    color: "blue",
+    variant: 5,
+    opacity: 0.28,
+  },
+  {
+    top: "21%",
+    right: "-110px",
+    size: 290,
+    rotate: 12,
+    color: "blue",
+    variant: 3,
+    opacity: 0.3,
+  },
+  {
+    top: "26%",
+    left: "-80px",
+    size: 220,
+    rotate: 44,
+    color: "red",
+    variant: 1,
+    opacity: 0.26,
+  },
+  {
+    top: "32%",
+    right: "3%",
+    size: 250,
+    rotate: -16,
+    color: "red",
+    variant: 5,
+    opacity: 0.28,
+  },
+  {
+    top: "37%",
+    left: "-110px",
+    size: 300,
+    rotate: 28,
+    color: "blue",
+    variant: 2,
+    opacity: 0.26,
+  },
+  {
+    top: "43%",
+    right: "-90px",
+    size: 220,
+    rotate: -48,
+    color: "blue",
+    variant: 4,
+    opacity: 0.28,
+  },
+  {
+    top: "49%",
+    left: "4%",
+    size: 260,
+    rotate: 20,
+    color: "red",
+    variant: 3,
+    opacity: 0.3,
+  },
+  {
+    top: "54%",
+    right: "-100px",
+    size: 230,
+    rotate: -28,
+    color: "red",
+    variant: 2,
+    opacity: 0.26,
+  },
+  {
+    top: "60%",
+    left: "-90px",
+    size: 260,
+    rotate: 56,
+    color: "blue",
+    variant: 1,
+    opacity: 0.28,
+  },
+  {
+    top: "65%",
+    right: "3%",
+    size: 290,
+    rotate: -14,
+    color: "blue",
+    variant: 5,
+    opacity: 0.3,
+  },
+  {
+    top: "71%",
+    left: "-100px",
+    size: 220,
+    rotate: 36,
+    color: "red",
+    variant: 4,
+    opacity: 0.26,
+  },
+  {
+    top: "77%",
+    right: "-90px",
+    size: 250,
+    rotate: -40,
+    color: "red",
+    variant: 1,
+    opacity: 0.28,
+  },
+  {
+    top: "82%",
+    left: "2%",
+    size: 270,
+    rotate: 22,
+    color: "blue",
+    variant: 3,
+    opacity: 0.28,
+  },
+  {
+    top: "88%",
+    right: "-110px",
+    size: 230,
+    rotate: -20,
+    color: "blue",
+    variant: 2,
+    opacity: 0.26,
+  },
+  {
+    top: "93%",
+    left: "-80px",
+    size: 280,
+    rotate: 30,
+    color: "red",
+    variant: 5,
+    opacity: 0.28,
+  },
+  {
+    top: "98%",
+    right: "4%",
+    size: 240,
+    rotate: -34,
+    color: "red",
+    variant: 4,
+    opacity: 0.26,
+  },
+];
+
 function styleFor(s: Splat): string {
   const pos = [
     s.top != null ? `top:${s.top}` : "",
@@ -142,10 +319,11 @@ function styleFor(s: Splat): string {
 }
 
 export default function SplatField(props: {
-  density?: "hero" | "section";
+  density?: "hero" | "section" | "page";
   class?: string;
 }): JSX.Element {
-  const splats = () => (props.density === "hero" ? HERO : SECTION);
+  const splats = () =>
+    props.density === "hero" ? HERO : props.density === "page" ? PAGE : SECTION;
   return (
     <div class={`splat-field ${props.class ?? ""}`} aria-hidden="true">
       <For each={splats()}>
