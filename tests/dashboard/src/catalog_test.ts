@@ -8,4 +8,8 @@ describe("dashboard catalog", () => {
       expect(["main", "latest", "HEAD"]).not.toContain(entry.ref);
     }
   });
+
+  test("product distributions are not generic Takosumi starter cards", () => {
+    expect(CATALOG.map((entry) => entry.id)).not.toContain("takos");
+  });
 });
