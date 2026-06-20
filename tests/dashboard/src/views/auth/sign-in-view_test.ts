@@ -68,13 +68,15 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).not.toContain("GitHub");
   });
 
-  test("marks the current brand mark as provisional", () => {
-    expect(signInViewSource).toContain("function TemporaryBrandMark()");
+  test("uses the provisional tako.png logo without the old ink placeholder", () => {
+    expect(signInViewSource).toContain("function BrandLogoMark()");
     expect(signInViewSource).toContain("auth-brand-mark");
-    expect(signInViewSource).toContain("auth.brandDraft");
-    expect(signInViewSource).toContain("auth.brandDraftMark");
+    expect(signInViewSource).toContain("<GeometricMark size={42} />");
+    expect(signInViewSource).not.toContain("TemporaryBrandMark");
+    expect(signInViewSource).not.toContain("auth.brandDraft");
+    expect(signInViewSource).not.toContain("auth.brandDraftMark");
     expect(signInViewSource).not.toContain("InkBackdrop");
     expect(signInViewSource).not.toContain("InkdropMark");
-    expect(ja["auth.brandDraft"]).toContain("仮");
+    expect(ja).not.toHaveProperty("auth.brandDraft");
   });
 });
