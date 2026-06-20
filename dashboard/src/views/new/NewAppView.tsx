@@ -47,6 +47,7 @@ import {
   createSource,
   extractRunId,
   type InstallationProviderConnectionBindings,
+  type CapsuleCompatibilityDiagnostic,
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
   type InstallConfig,
@@ -109,6 +110,73 @@ function compatibilityLabel(level: CapsuleCompatibilityLevel): string {
     case "unsupported":
       return t("new.compat.unsupported");
   }
+}
+
+function providerNameFromDiagnostic(
+  diagnostic: CapsuleCompatibilityDiagnostic,
+): string {
+  const match =
+    /^Provider\s+([a-zA-Z0-9_.-]+)\s+(?:contains|can be lifted)/u.exec(
+      diagnostic.message,
+    );
+  return match?.[1] ?? "provider";
+}
+
+function providerDisplayName(provider: string): string {
+  const normalized = provider.toLowerCase();
+  switch (normalized) {
+    case "aws":
+      return "AWS";
+    case "cloudflare":
+      return "Cloudflare";
+    case "google":
+      return "Google Cloud";
+    case "hcloud":
+      return "Hetzner Cloud";
+    default:
+      return provider;
+  }
+}
+
+function compatibilityDiagnosticDisplay(
+  diagnostic: CapsuleCompatibilityDiagnostic,
+): { readonly message: string; readonly detail?: string } {
+  const provider = providerDisplayName(providerNameFromDiagnostic(diagnostic));
+  const code = diagnostic.code;
+  if (
+    code === "provider_credentials_in_source" ||
+    /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
+      diagnostic.message,
+    )
+  ) {
+    return {
+      message: t("new.compat.issue.providerCredentials.message", {
+        provider,
+      }),
+      detail: t("new.compat.issue.providerCredentials.detail", { provider }),
+    };
+  }
+  if (
+    code === "provider_block_lift_candidate" ||
+    /^Provider\s+[a-zA-Z0-9_.-]+\s+can be lifted into the generated root/u.test(
+      diagnostic.message,
+    )
+  ) {
+    return {
+      message: t("new.compat.issue.providerLift.message", { provider }),
+    };
+  }
+  if (
+    code === "dependency_lock_detected" ||
+    diagnostic.message ===
+      "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init."
+  ) {
+    return { message: t("new.compat.issue.lockfile.message") };
+  }
+  return {
+    message: diagnostic.message,
+    ...(diagnostic.detail ? { detail: diagnostic.detail } : {}),
+  };
 }
 
 function isFullCommitSha(value: string): boolean {
@@ -919,18 +987,22 @@ function Inner() {
                         <Show when={result().diagnostics.length > 0}>
                           <ul class="wb-diagnostics">
                             <For each={result().diagnostics}>
-                              {(diagnostic) => (
-                                <li
-                                  class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
-                                >
-                                  {diagnostic.message}
-                                  <Show when={diagnostic.detail}>
-                                    {(detail) => (
-                                      <span class="muted"> — {detail()}</span>
-                                    )}
-                                  </Show>
-                                </li>
-                              )}
+                              {(diagnostic) => {
+                                const display =
+                                  compatibilityDiagnosticDisplay(diagnostic);
+                                return (
+                                  <li
+                                    class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
+                                  >
+                                    {display.message}
+                                    <Show when={display.detail}>
+                                      {(detail) => (
+                                        <span class="muted"> — {detail()}</span>
+                                      )}
+                                    </Show>
+                                  </li>
+                                );
+                              }}
                             </For>
                           </ul>
                         </Show>

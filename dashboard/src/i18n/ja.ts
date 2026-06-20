@@ -333,6 +333,14 @@ export const ja = {
   "new.compat.unsupported": "今は追加できません",
   "new.compat.patchHelp":
     "表示された手直し内容を確認してください。リポジトリ側の修正が必要な場合と、外部サービス接続の設定で進められる場合があります。",
+  "new.compat.issue.providerCredentials.message":
+    "{provider} の認証情報が Git の中に書かれています。",
+  "new.compat.issue.providerCredentials.detail":
+    "API トークンやアカウント ID はコードに置かず、Takosumi の外部サービス接続から実行時だけ渡してください。provider block から認証値を外して、{provider} 接続を設定すると続行できます。",
+  "new.compat.issue.providerLift.message":
+    "{provider} の provider 設定は、認証情報を外せば Takosumi が安全な実行用設定として扱えます。",
+  "new.compat.issue.lockfile.message":
+    "provider lockfile が含まれています。認証情報を外したあと、追加時に provider の固定内容を確認します。",
   "new.proceed": "追加内容を確認",
   "new.proceedHint": "先に「確認して続ける」を押してください。",
   "new.providers.title": "外部サービス接続",

@@ -685,9 +685,11 @@ export type CapsuleCompatibilityLevel =
   | "unsupported";
 
 export interface CapsuleCompatibilityDiagnostic {
+  readonly code?: string;
   readonly severity: "info" | "warning" | "error";
   readonly message: string;
   readonly detail?: string;
+  readonly path?: string;
 }
 
 export interface CapsuleCompatibilityProvider {
@@ -1066,6 +1068,7 @@ export async function checkCapsuleCompatibility(input: {
         readonly severity?: "info" | "warning" | "error";
         readonly code?: string;
         readonly message?: string;
+        readonly path?: string;
         readonly suggestion?: string;
       }[];
       readonly providers?: readonly {
@@ -1090,8 +1093,10 @@ export async function checkCapsuleCompatibility(input: {
   });
   const diagnostics = (body.report.findings ?? []).map((finding) => ({
     severity: finding.severity ?? "info",
+    ...(finding.code ? { code: finding.code } : {}),
     message: finding.message ?? finding.code ?? "Compatibility finding",
     ...(finding.suggestion ? { detail: finding.suggestion } : {}),
+    ...(finding.path ? { path: finding.path } : {}),
   }));
   const providers = (body.report.providers ?? [])
     .filter((provider) => provider.source !== undefined)

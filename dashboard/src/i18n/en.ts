@@ -328,6 +328,14 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.unsupported": "Cannot be added right now",
   "new.compat.patchHelp":
     "Review the items above. Some issues require a repository change, while others can be resolved by setting up the required external service connection.",
+  "new.compat.issue.providerCredentials.message":
+    "{provider} credentials are written in the Git source.",
+  "new.compat.issue.providerCredentials.detail":
+    "Do not keep API tokens or account IDs in the code. Remove credential values from the provider block, then set up the {provider} connection so Takosumi can pass them only while the run executes.",
+  "new.compat.issue.providerLift.message":
+    "Takosumi can handle the {provider} provider settings safely once credentials are removed.",
+  "new.compat.issue.lockfile.message":
+    "A provider lockfile is included. After credentials are removed, Takosumi will review the pinned providers during add.",
   "new.proceed": "Review and add",
   "new.proceedHint": "Run “Check and continue” first.",
   "new.providers.title": "External service connections",
