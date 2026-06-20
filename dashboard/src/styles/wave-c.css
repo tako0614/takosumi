@@ -227,3 +227,7 @@
   font-size: var(--tg-fs-sm);
   line-height: 1.5;
 }
+.wc-advanced-settings {
+  display: grid;
+  gap: var(--tg-s-3);
+}

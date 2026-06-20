@@ -152,15 +152,15 @@ export const ja = {
   "op.generic": "操作",
 
   // --- Capsule list (home) --------------------------------------------------
-  "apps.title": "Capsules",
-  "apps.subtitle": "この Workspace の Capsule と状態を表示します。",
-  "apps.add": "Capsule を追加",
+  "apps.title": "サービス",
+  "apps.subtitle": "この Workspace に追加したサービスと状態を表示します。",
+  "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
-  "apps.empty.title": "まだ Capsule がありません",
+  "apps.empty.title": "まだサービスがありません",
   "apps.empty.message":
-    "サンプル Capsule から始めるか、Git URL から OpenTofu Capsule を追加できます。",
-  "apps.empty.cta": "Capsule を追加",
+    "サンプルから始めるか、Git の取得元 URL から追加できます。",
+  "apps.empty.cta": "サービスを追加",
   "apps.openApp": "出力を開く",
   "apps.reviewChanges": "変更を確認",
   "apps.dependsOn": "依存: {names}",
@@ -259,7 +259,7 @@ export const ja = {
   "run.deploying": "実行中...",
   "run.deployBlocked": "残高不足のため実行できません",
   "run.retryPlan": "もう一度変更を確認",
-  "run.backToApp": "Capsule へ戻る",
+  "run.backToApp": "サービスへ戻る",
   "run.destructiveWarning":
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
@@ -296,36 +296,37 @@ export const ja = {
   "run.audit.empty": "監査イベントはありません。",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "Capsule を追加",
+  "new.title": "サービスを追加",
   "new.subtitle":
-    "既知の Capsule から始めるか、任意の Git URL の OpenTofu Capsule を追加します。",
+    "サンプルから始めるか、Git の取得元 URL を指定して追加します。",
   "new.tab.catalog": "サンプル",
-  "new.tab.git": "Git URL から",
+  "new.tab.git": "取得元 URL",
   "new.catalog.intro":
-    "サンプルの OpenTofu Capsule 取得元です。選ぶだけでは追加せず、取得元を入力済みにします。",
-  "new.catalog.select": "この Capsule を使う",
+    "追加できるサンプルです。選ぶだけでは追加せず、取得元を入力済みにします。",
+  "new.catalog.select": "このサンプルを使う",
   "new.deeplink.summary":
     "リンクから「{capsule}」の取得元が入力されています。内容を確認してから追加してください。",
-  "new.git.url": "Git URL",
-  "new.git.ref": "Ref",
-  "new.git.path": "Path（モジュールパス）",
-  "new.name": "Capsule 名",
+  "new.git.url": "取得元 URL",
+  "new.git.advanced": "バージョンとフォルダを指定",
+  "new.git.ref": "バージョン",
+  "new.git.path": "フォルダ",
+  "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
   "new.managed.notice":
-    "Takosumi Cloud の接続でこの Capsule を追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
+    "Takosumi Cloud で追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
   "new.managed.needCredential":
-    "この Capsule を追加するには、まだこの Workspace にない外部サービス接続が必要です。",
+    "追加するには、まだこの Workspace にない外部サービス接続が必要です。",
   "new.managed.connectFirst": "接続を設定する",
   "new.managed.byoTitle": "自分のクラウド接続を使う",
   "new.managed.byoBody":
-    "Takosumi Cloud の接続で対応できない AWS / GCP / Kubernetes や自分の Cloudflare アカウントが必要な Capsule では、確認済みの接続を追加してください。",
+    "Takosumi Cloud の接続で対応できない AWS / GCP / Kubernetes や自分の Cloudflare アカウントが必要な場合は、確認済みの接続を追加してください。",
   "new.managed.byoLink": "接続を設定する",
   "new.compat.check": "確認して続ける",
   "new.compat.recheck": "もう一度確認",
   "new.compat.checking": "確認中...",
   "new.progress.title": "取得元を確認しています",
   "new.progress.fetching":
-    "Git の中身を取得し、OpenTofu Capsule として追加できるか確認しています。このままお待ちください。",
+    "Git の中身を取得し、この Workspace に追加できるか確認しています。このままお待ちください。",
   "new.progress.slow":
     "取得に少し時間がかかっています。大きいリポジトリや初回起動では時間がかかることがあります。完了すると次に必要な接続だけを案内します。",
   "new.progress.status": "実行状態: {status}",
@@ -337,43 +338,46 @@ export const ja = {
   "new.compat.patchHelp":
     "表示された手直し内容を確認してください。リポジトリ側の修正が必要な場合と、外部サービス接続の設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
-    "{provider} の認証情報を Git から外す必要があります。",
+    "{provider} の認証情報を取得元から外す必要があります。",
   "new.compat.issue.providerCredentials.message":
-    "{provider} の認証情報が Git の中に書かれています。",
+    "{provider} の認証情報が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、Takosumi の外部サービス接続から実行時だけ渡してください。provider block から認証値を外して、{provider} 接続を設定すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、Takosumi の外部サービス接続から実行時だけ渡してください。認証値を外して、{provider} 接続を設定すると続行できます。",
   "new.compat.issue.providerLift.message":
-    "{provider} の provider 設定は、認証情報を外せば Takosumi が安全な実行用設定として扱えます。",
+    "{provider} の接続設定は、認証情報を外せば Takosumi が安全な実行用設定として扱えます。",
   "new.compat.issue.lockfile.message":
-    "provider lockfile が含まれています。認証情報を外したあと、追加時に provider の固定内容を確認します。",
+    "利用する外部サービスの固定情報が含まれています。認証情報を外したあと、追加時に固定内容を確認します。",
+  "new.compat.issue.reviewRequired.message":
+    "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認",
   "new.proceedHint": "先に「確認して続ける」を押してください。",
   "new.providers.title": "外部サービス接続",
   "new.providers.subtitle":
-    "最初の確認に進む前に、この Capsule が使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
+    "最初の確認に進む前に、このサービスが使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
   "new.providers.noneRequired":
-    "この Capsule は最初の確認で追加の接続を要求していません。",
+    "このサービスは最初の確認で追加の接続を要求していません。",
   "new.providers.alias": "alias: {alias}",
+  "new.providers.advanced": "接続の詳細",
   "new.providers.selectConnection": "接続を選択",
   "new.providers.manageConnections": "接続を管理",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.missingTitle": "接続の設定が必要です",
   "new.providers.missingBody":
-    "この Capsule は下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
+    "このサービスは下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
   "new.providers.setupMissing": "必要な接続を設定",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
-  "new.step.create": "Capsule を作成",
+  "new.step.create": "サービスを作成",
   "new.step.plan": "変更を確認",
   "new.error.spaceRequired": "Workspace を選択してください。",
   "new.error.urlRequired": "Git URL を入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
-  "new.error.configMissing": "Capsule の追加設定がまだ利用できません。",
+  "new.error.configMissing": "追加設定がまだ利用できません。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceFetchFailed":
-    "Git の中身を取得できませんでした。URL、Ref、Path、または非公開リポジトリの接続を確認してください。詳細: {message}",
+    "Git の中身を取得できませんでした。URL、バージョン、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
@@ -392,6 +396,7 @@ export const ja = {
   "spaceSettings.general.type": "種別",
   "spaceSettings.general.owner": "オーナー",
   "spaceSettings.general.updated": "更新日時",
+  "spaceSettings.general.advancedDetails": "Workspace の詳細設定",
   "spaceSettings.general.policyAdvanced": "ポリシー JSON（上級者向け）",
   "spaceSettings.general.saved": "Workspace 設定を保存しました。",
   "spaceSettings.general.nameRequired": "表示名を入力してください。",

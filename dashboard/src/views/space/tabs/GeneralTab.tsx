@@ -103,14 +103,6 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                   value: <code>@{current().handle}</code>,
                 },
                 {
-                  label: t("spaceSettings.general.type"),
-                  value: <code>{current().type}</code>,
-                },
-                {
-                  label: t("spaceSettings.general.owner"),
-                  value: <code>{current().ownerUserId}</code>,
-                },
-                {
                   label: t("spaceSettings.general.updated"),
                   value: formatDateTime(current().updatedAt),
                 },
@@ -124,15 +116,31 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                     onInput={(e) => setDisplayNameDraft(e.currentTarget.value)}
                   />
                 </FormField>
-                <details class="wb-disclosure">
-                  <summary>{t("spaceSettings.general.policyAdvanced")}</summary>
-                  <Textarea
-                    class="wc-policy-editor"
-                    spellcheck={false}
-                    rows={10}
-                    value={policyDraft()}
-                    onInput={(e) => setPolicyDraft(e.currentTarget.value)}
+                <details class="wb-disclosure wc-advanced-settings">
+                  <summary>
+                    {t("spaceSettings.general.advancedDetails")}
+                  </summary>
+                  <KVList
+                    items={[
+                      {
+                        label: t("spaceSettings.general.type"),
+                        value: <code>{current().type}</code>,
+                      },
+                      {
+                        label: t("spaceSettings.general.owner"),
+                        value: <code>{current().ownerUserId}</code>,
+                      },
+                    ]}
                   />
+                  <FormField label={t("spaceSettings.general.policyAdvanced")}>
+                    <Textarea
+                      class="wc-policy-editor"
+                      spellcheck={false}
+                      rows={10}
+                      value={policyDraft()}
+                      onInput={(e) => setPolicyDraft(e.currentTarget.value)}
+                    />
+                  </FormField>
                 </details>
                 <div class="wc-form-actions">
                   <Button variant="primary" type="submit" busy={saving()}>

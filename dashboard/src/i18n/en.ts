@@ -148,15 +148,15 @@ export const en: Record<keyof typeof ja, string> = {
   "op.generic": "Operation",
 
   // --- Capsule list (home) --------------------------------------------------
-  "apps.title": "Capsules",
-  "apps.subtitle": "OpenTofu Capsules in this Workspace and their status.",
-  "apps.add": "Add Capsule",
+  "apps.title": "Services",
+  "apps.subtitle": "Services added to this Workspace and their status.",
+  "apps.add": "Add service",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
-  "apps.empty.title": "No Capsules yet",
+  "apps.empty.title": "No services yet",
   "apps.empty.message":
-    "Use an example Capsule or add an OpenTofu Capsule by Git URL.",
-  "apps.empty.cta": "Add Capsule",
+    "Start from an example or add one from a Git source URL.",
+  "apps.empty.cta": "Add service",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
   "apps.dependsOn": "Depends on: {names}",
@@ -254,7 +254,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.deploying": "Deploying...",
   "run.deployBlocked": "Insufficient balance",
   "run.retryPlan": "Review changes again",
-  "run.backToApp": "Back to Capsule",
+  "run.backToApp": "Back to service",
   "run.destructiveWarning":
     "This change replaces or deletes existing resources. Running it may lose data.",
   "run.destructiveConfirm": "Run, accepting the destructive changes",
@@ -291,36 +291,36 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.empty": "No audit events.",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "Add Capsule",
-  "new.subtitle":
-    "Use a known Capsule or add any OpenTofu Capsule by Git URL.",
+  "new.title": "Add service",
+  "new.subtitle": "Start from an example or add one from a Git source URL.",
   "new.tab.catalog": "Examples",
-  "new.tab.git": "Git URL",
+  "new.tab.git": "Source URL",
   "new.catalog.intro":
-    "Example OpenTofu Capsule sources. Picking one only pre-fills the source.",
-  "new.catalog.select": "Use this Capsule",
+    "Examples you can add. Picking one only pre-fills the source.",
+  "new.catalog.select": "Use this example",
   "new.deeplink.summary":
     "A link filled in the source for “{capsule}”. Review it before adding.",
-  "new.git.url": "Git URL",
-  "new.git.ref": "Ref",
-  "new.git.path": "Path (module path)",
-  "new.name": "Capsule name",
+  "new.git.url": "Source URL",
+  "new.git.advanced": "Choose version and folder",
+  "new.git.ref": "Version",
+  "new.git.path": "Folder",
+  "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
   "new.managed.notice":
-    "Takosumi Cloud checks whether its managed connection can add this Capsule. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
+    "Takosumi Cloud checks whether this can be added. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
   "new.managed.needCredential":
-    "This Capsule needs an external service connection that is not available in this Workspace yet.",
+    "Adding this needs an external service connection that is not available in this Workspace yet.",
   "new.managed.connectFirst": "Set up a connection",
   "new.managed.byoTitle": "Use your own cloud connection",
   "new.managed.byoBody":
-    "If Takosumi Cloud cannot cover the AWS, GCP, Kubernetes, or personal Cloudflare account this Capsule needs, add your verified connection.",
+    "If Takosumi Cloud cannot cover the AWS, GCP, Kubernetes, or personal Cloudflare account this needs, add your verified connection.",
   "new.managed.byoLink": "Set up a connection",
   "new.compat.check": "Check and continue",
   "new.compat.recheck": "Check again",
   "new.compat.checking": "Checking...",
   "new.progress.title": "Checking the source",
   "new.progress.fetching":
-    "Takosumi is fetching the Git contents and checking whether this is a valid OpenTofu Capsule. Keep this page open.",
+    "Takosumi is fetching the Git contents and checking whether this can be added to this Workspace. Keep this page open.",
   "new.progress.slow":
     "This is taking a little longer than usual. Large repositories and cold starts can take time; when it finishes, Takosumi will only ask for the connections that are needed.",
   "new.progress.status": "Run status: {status}",
@@ -332,42 +332,45 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.patchHelp":
     "Review the items above. Some issues require a repository change, while others can be resolved by setting up the required external service connection.",
   "new.compat.summary.providerCredentials":
-    "Remove {provider} credentials from Git before adding this Capsule.",
+    "Remove {provider} credentials from the source before adding this.",
   "new.compat.issue.providerCredentials.message":
-    "{provider} credentials are written in the Git source.",
+    "{provider} credentials are written in the source.",
   "new.compat.issue.providerCredentials.detail":
-    "Do not keep API tokens or account IDs in the code. Remove credential values from the provider block, then set up the {provider} connection so Takosumi can pass them only while the run executes.",
+    "Do not keep API tokens or account IDs in code. Remove the credential values, then set up the {provider} connection so Takosumi can pass them only while the run executes.",
   "new.compat.issue.providerLift.message":
-    "Takosumi can handle the {provider} provider settings safely once credentials are removed.",
+    "Takosumi can handle the {provider} connection settings safely once credentials are removed.",
   "new.compat.issue.lockfile.message":
-    "A provider lockfile is included. After credentials are removed, Takosumi will review the pinned providers during add.",
+    "Pinned external-service information is included. After credentials are removed, Takosumi will review the pinned services during add.",
+  "new.compat.issue.reviewRequired.message":
+    "An item needs review before this can be added.",
   "new.proceed": "Review and add",
   "new.proceedHint": "Run “Check and continue” first.",
   "new.providers.title": "External service connections",
   "new.providers.subtitle":
-    "Choose the connections this Capsule will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
+    "Choose the connections this service will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
   "new.providers.noneRequired":
-    "This Capsule does not require extra connections for the first review.",
+    "This service does not require extra connections for the first review.",
   "new.providers.alias": "alias: {alias}",
+  "new.providers.advanced": "Connection details",
   "new.providers.selectConnection": "Select a connection",
   "new.providers.manageConnections": "Manage connections",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody":
-    "This Capsule uses the external services below. Set up the connection and you can return here to continue.",
+    "This service uses the external services below. Set up the connection and you can return here to continue.",
   "new.providers.setupMissing": "Set up required connection",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
-  "new.step.create": "Create Capsule",
+  "new.step.create": "Create service",
   "new.step.plan": "Review changes",
   "new.error.spaceRequired": "Select a Workspace.",
   "new.error.urlRequired": "Enter a Git URL.",
   "new.error.nameRequired": "Enter a name.",
-  "new.error.configMissing": "Capsule configuration is not available yet.",
+  "new.error.configMissing": "Add configuration is not available yet.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceFetchFailed":
-    "Takosumi could not fetch the Git contents. Check the URL, ref, path, or private-repository connection. Detail: {message}",
+    "Takosumi could not fetch the Git contents. Check the URL, version, folder, or private-repository connection. Detail: {message}",
   "new.error.notRunnable":
     "This inspection result is not runnable yet. Resolve the listed changes, then check again.",
 
@@ -386,6 +389,7 @@ export const en: Record<keyof typeof ja, string> = {
   "spaceSettings.general.type": "Type",
   "spaceSettings.general.owner": "Owner",
   "spaceSettings.general.updated": "Updated",
+  "spaceSettings.general.advancedDetails": "Workspace advanced settings",
   "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
   "spaceSettings.general.saved": "Workspace settings saved.",
   "spaceSettings.general.nameRequired": "Enter a display name.",
