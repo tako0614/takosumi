@@ -8,6 +8,7 @@ import {
   useLocation,
   useParams,
 } from "@solidjs/router";
+import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 
 // Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
 import "@fontsource-variable/bricolage-grotesque";
@@ -24,6 +25,8 @@ import "./styles/components.css";
 import "./styles/shell.css";
 import "./styles/views.css";
 import "./styles/app-views.css";
+
+installStaleAssetReload();
 
 // --- auth (public) ----------------------------------------------------------
 const SignInView = lazy(() => import("./views/auth/SignInView.tsx"));
