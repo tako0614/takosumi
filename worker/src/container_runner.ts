@@ -376,6 +376,10 @@ function runnerFailureDetail(
   if (detail) return redactRunnerDiagnosticText(detail);
   const error = stringFromRecord(payload, "error");
   if (error) return redactRunnerDiagnosticText(error);
+  const stderr = stringFromRecord(payload, "stderr");
+  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
+  const stdout = stringFromRecord(payload, "stdout");
+  if (stdout?.trim()) return redactRunnerDiagnosticText(stdout.trim());
   const trimmed = redactedText.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
 }
