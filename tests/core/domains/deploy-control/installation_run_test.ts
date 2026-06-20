@@ -35,7 +35,10 @@ import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy
 import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { MemoryObjectStorage } from "../../../../core/adapters/object-storage/mod.ts";
-import { CredentialBundle, PhaseMintBundle } from "../../../../core/adapters/vault/mod.ts";
+import {
+  CredentialBundle,
+  PhaseMintBundle,
+} from "../../../../core/adapters/vault/mod.ts";
 import type {
   Connection,
   PlanRun,
@@ -448,6 +451,102 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(run.environment).toEqual("preview");
   expect(run.sourceSnapshotId).toEqual("snap_fixture");
   expect(run.baseStateGeneration).toEqual(0);
+});
+
+test("installation plan projects Cloudflare account scope hints into generic Capsule inputs without exposing secrets", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: { project_name: "takos" },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        envId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('project_name = "takos"');
+  expect(mainTf).toContain(
+    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\"}")',
+  );
+  expect(mainTf).not.toContain("fixture-provider-token");
+  expect(JSON.stringify(await store.getPlanRun(planRun.id))).not.toContain(
+    "fixture-provider-token",
+  );
+});
+
+test("explicit Cloudflare Capsule variables override provider scope hint defaults", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        cloudflare: { account_id: "acct_explicit_456", zone_id: "zone_789" },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        envId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('\\"account_id\\":\\"acct_explicit_456\\"');
+  expect(mainTf).toContain('\\"zone_id\\":\\"zone_789\\"');
+  expect(mainTf).not.toContain("acct_scope_123");
+  expect(mainTf).not.toContain("fixture-provider-token");
 });
 
 test("installation plan treats sourceArchive as the selected module subtree", async () => {
@@ -2195,7 +2294,8 @@ test("installation apply records an OutputSnapshot and links it on the Deploymen
   );
 
   // The digest is stable + recomputable over { spaceOutputs, publicOutputs }.
-  const { stableJsonDigest } = await import("../../../../core/adapters/source/digest.ts");
+  const { stableJsonDigest } =
+    await import("../../../../core/adapters/source/digest.ts");
   expect(snapshot?.outputDigest).toEqual(
     await stableJsonDigest({
       spaceOutputs: snapshot!.spaceOutputs,
