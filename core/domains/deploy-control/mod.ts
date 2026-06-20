@@ -5754,10 +5754,25 @@ function mergeJsonVariableDefaults(
   defaults: Readonly<Record<string, unknown>>,
   explicit: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, JsonValue>> {
-  return deepMergeJsonRecords(
+  return deepMergeRequestedJsonDefaults(
     mergeJsonVariables(defaults),
     mergeJsonVariables(explicit),
   );
+}
+
+function deepMergeRequestedJsonDefaults(
+  defaults: Readonly<Record<string, JsonValue>>,
+  explicit: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(explicit)) {
+    const existing = defaults[key];
+    out[key] =
+      isJsonObject(existing) && isJsonObject(value)
+        ? deepMergeJsonRecords(existing, value)
+        : value;
+  }
+  return out;
 }
 
 function deepMergeJsonRecords(
