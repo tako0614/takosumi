@@ -6,32 +6,36 @@ metadata file, component graph, provider selector, or repository metadata field.
 
 ## Public Words
 
-- `Space`: owner namespace (`@handle`) for members, Sources, Connections,
-  Installations, the dependency DAG, policy, activity, and billing.
-- `Source`: Git URL / default ref / module path record that yields immutable
-  SourceSnapshots.
-- `Connection`: sealed backing material for Git credentials, OAuth helpers,
-  token-vending, or secret/env provider credentials.
-- `Provider Connection`: public provider ownership selection. Each required
-  provider source and optional alias resolves to `own_key` or `takos_provided`.
-- `Provider Env`: internal provider resolver record used by vault/runner. It may
-  materialize through `gateway`, `oauth`, or `secret`, but its `envId` is not
-  public `/api/v1` vocabulary.
-- `Provider Catalog`: provider source / helper / coverage / policy catalog.
-  Hosted Gateway-backed (`takos_provided`) default starts
-  Cloudflare-only.
-- `Installation provider connection`: Installation/environment scoped provider
-  binding, resolving each provider source and optional alias to a concrete
-  public Provider Connection.
-- `Installation`: Space-scoped OpenTofu Capsule execution unit.
-- `Dependency`: output-to-input edge between Installations.
-- `Run`: persisted source_sync / compatibility_check / plan / apply /
-  destroy_plan / destroy_apply execution record.
-- `RunGroup`: ordered group of Runs across the Installation DAG.
-- `Deployment`: one successful apply result with source snapshot, dependency
-  snapshot, state generation, output snapshot, and status.
-- `OutputSnapshot`: projected `tofu output -json` generation after apply.
-- `Activity`: Space-scoped audit trail.
+- `Workspace`: user/team owner boundary for projects, provider connections,
+  secrets, state isolation, and audit.
+- `Project`: one product, service, application, or infrastructure group.
+- `Capsule`: one OpenTofu/Terraform module execution unit, usually sourced from
+  Git URL + ref + path.
+- `Source`: Git URL / branch / ref / commit / module path / tarball / upload
+  input.
+- `ProviderConnection`: provider credential configuration stored in Takosumi and
+  resolved into temporary env/file material only while a Run executes.
+- `CredentialRecipe`: provider-specific env/file/pre-run action definition for
+  running an existing OpenTofu/Terraform provider as-is.
+- `ProviderBinding`: provider address or alias to ProviderConnection mapping.
+- `Secret`: encrypted backing material. Secret values are write-only to APIs and
+  redacted from logs.
+- `Run`: one init / validate / plan / apply / destroy / refresh / output
+  execution record with source snapshot, provider bindings, logs, outputs,
+  state version, actor, and timestamps.
+- `StateVersion`: persisted Capsule state generation.
+- `Output`: captured `tofu output -json`, optionally wired into another
+  Capsule's inputs.
+- `Runner`: local/docker/remote/operator/cloud execution boundary for checkout,
+  OpenTofu execution, log streaming, state sync, output extraction, and cleanup.
+- `AuditEvent`: actor/action/target/result evidence.
+- `Operator`: the person or organization running Takosumi for their own users.
+
+Legacy names such as Space, Installation, Deployment, OutputSnapshot,
+RunGroup, Activity, Provider Catalog, `own_key`, `takos_provided`, and
+Gateway-backed provider wording may appear only when documenting migration or
+internal compatibility with older implementation names. Do not present them as
+the current public product surface.
 
 Use `type` only for JSON Schema, JSON-LD `@type`, or TypeScript names. Do not
 add a new Takosumi public selector DSL.
@@ -42,8 +46,8 @@ Operator distributions own internal execution profiles, provider credential
 mint drivers, OpenTofu state storage, runtime attachment, approval gates, and
 account-facing policy. A distribution may populate policy from OpenTofu modules,
 static config, cloud APIs, dashboard input, or private ops inventory. Takosumi
-records policy decisions, Run evidence, Deployment, and OutputSnapshot records;
-it does not expose provider credential values.
+records policy decisions, Run evidence, StateVersion, Output, and AuditEvent
+records; it does not expose provider credential values.
 
 Backend adapters and runner implementations live in the operator distribution.
 Those exports are distribution-local API, not Takosumi source authoring
@@ -52,11 +56,11 @@ vocabulary.
 ## Source And Build
 
 Build recipes stay outside Takosumi. CI or an operator build service calls the
-Deploy Control API to create an Installation plan Run from a Git URL /
-SourceSnapshot, module path, variables, dependencies, and resolved internal
-execution policy. Apply uses the saved plan and verifies plan digest, source
-snapshot, dependency snapshot, compatibility report, and state generation to
-prevent drift between review and execution.
+control-plane API to create a Capsule plan Run from a Git URL / source snapshot,
+module path, variables, provider bindings, output-to-input wiring, and resolved
+internal execution policy. Apply uses the saved plan and verifies plan digest,
+source identity, provider bindings, and state generation to prevent drift
+between review and execution.
 
 ## Test / Source Boundary
 
