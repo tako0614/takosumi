@@ -29,7 +29,10 @@ import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
-import { isRetiredOfficialInstallConfigId } from "./official_seed.ts";
+import {
+  isRetiredOfficialInstallConfigId,
+  officialInstallConfigs,
+} from "./official_seed.ts";
 
 /**
  * Installation name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -86,6 +89,12 @@ export class InstallationsService {
         `name ${request.name} must match ${INSTALLATION_NAME_PATTERN.source}`,
       );
     }
+    if (isRetiredOfficialInstallConfigId(request.installConfigId)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `installConfigId ${request.installConfigId} is a retired built-in alias; use a Git URL Capsule config instead`,
+      );
+    }
     const space = await this.#store.getSpace(request.spaceId);
     if (!space) {
       throw new OpenTofuControllerError(
@@ -105,12 +114,20 @@ export class InstallationsService {
         );
       }
     }
-    const config = await this.#store.getInstallConfig(request.installConfigId);
-    if (!config) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `installConfigId ${request.installConfigId} does not exist`,
-      );
+    let config: InstallConfig;
+    try {
+      config = await this.getInstallConfig(request.installConfigId);
+    } catch (error) {
+      if (
+        error instanceof OpenTofuControllerError &&
+        error.code === "not_found"
+      ) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `installConfigId ${request.installConfigId} does not exist`,
+        );
+      }
+      throw error;
     }
     if (isRetiredOfficialInstallConfigId(config.id)) {
       throw new OpenTofuControllerError(
@@ -247,6 +264,12 @@ export class InstallationsService {
     requireNonEmptyString(id, "id");
     const config = await this.#store.getInstallConfig(id);
     if (!config || isRetiredOfficialInstallConfigId(config.id)) {
+      const fallback = this.#officialFallbackInstallConfigs().find(
+        (official) => official.id === id,
+      );
+      if (fallback && !isRetiredOfficialInstallConfigId(fallback.id)) {
+        return fallback;
+      }
       throw new OpenTofuControllerError(
         "not_found",
         `install config ${id} not found`,
@@ -258,7 +281,22 @@ export class InstallationsService {
   async listInstallConfigs(
     spaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    return (await this.#store.listInstallConfigs(spaceId)).filter(
+    const stored = (await this.#store.listInstallConfigs(spaceId)).filter(
+      (config) => !isRetiredOfficialInstallConfigId(config.id),
+    );
+    if (spaceId !== undefined) return stored;
+    const byId = new Map<string, InstallConfig>(
+      this.#officialFallbackInstallConfigs().map((config) => [
+        config.id,
+        config,
+      ]),
+    );
+    for (const config of stored) byId.set(config.id, config);
+    return [...byId.values()];
+  }
+
+  #officialFallbackInstallConfigs(): readonly InstallConfig[] {
+    return officialInstallConfigs({ now: this.#now }).filter(
       (config) => !isRetiredOfficialInstallConfigId(config.id),
     );
   }
