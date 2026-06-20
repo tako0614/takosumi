@@ -867,5 +867,5 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     compatibilityReportId: "caprep_test00000005",
     createdBy: "system",
   });
-  expect(compatibilityRun?.errorCode).toBeUndefined();
+  expect(compatibilityRun?.errorCode).toBe("runner unavailable");
 });

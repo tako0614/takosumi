@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js";
-import GeometricMark from "./GeometricMark.tsx";
+import LogoMark from "./LogoMark.tsx";
 
 interface Props {
   size?: number;
@@ -9,14 +9,14 @@ interface Props {
 }
 
 /**
- * Takosumi wordmark — geometric mark + product name.
+ * Takosumi wordmark — provided logo mark + product name.
  * Cloud deployments may opt into the subtitle explicitly.
  */
 export default function Wordmark(props: Props): JSX.Element {
   const inner = (
     <>
       <span aria-hidden="true">
-        <GeometricMark size={props.size ?? 26} />
+        <LogoMark size={props.size ?? 26} />
       </span>
       <span class="wordmark-text">
         Takosumi
