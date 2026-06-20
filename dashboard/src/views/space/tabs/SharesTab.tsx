@@ -1,5 +1,5 @@
 /**
- * Space settings — 出力の共有. Port of the former ControlOutputSharesView body:
+ * Workspace settings — 出力の共有. Port of the former ControlOutputSharesView body:
  * explicit cross-Space OutputShares (create / approve / revoke).
  */
 import "../../../styles/wave-b.css";

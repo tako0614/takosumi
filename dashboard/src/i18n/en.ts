@@ -35,7 +35,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.add": "Add",
   "nav.activity": "Activity",
   "nav.notifications": "Notifications",
-  "nav.spaceSettings": "Space settings",
+  "nav.spaceSettings": "Workspace settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back",
@@ -47,15 +47,15 @@ export const en: Record<keyof typeof ja, string> = {
   "shell.notificationsAria": "Notifications ({n} need attention)",
 
   // --- space switcher -------------------------------------------------------
-  "space.label": "Space",
-  "space.loadFailed": "Failed to load Spaces — {message}",
-  "space.none": "No Spaces",
-  "space.new": "New Space",
+  "space.label": "Workspace",
+  "space.loadFailed": "Failed to load Workspaces — {message}",
+  "space.none": "No Workspaces",
+  "space.new": "New Workspace",
   "space.handleLabel": "Handle (without @, letters/digits/hyphen)",
   "space.handlePlaceholder": "my-space",
   "space.handleRequired": "Enter a handle.",
-  "space.select": "Select a Space",
-  "space.selectMessage": "Pick a Space from the switcher in the top bar.",
+  "space.select": "Select a Workspace",
+  "space.selectMessage": "Pick a Workspace from the switcher in the top bar.",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -139,40 +139,39 @@ export const en: Record<keyof typeof ja, string> = {
   "op.compatibility_check": "Compatibility check",
   "op.generic": "Operation",
 
-  // --- Installation list (home) --------------------------------------------
-  "apps.title": "Installations",
-  "apps.subtitle":
-    "OpenTofu Capsule Installations in this Space and their status.",
-  "apps.add": "Add Installation",
+  // --- Capsule list (home) --------------------------------------------------
+  "apps.title": "Capsules",
+  "apps.subtitle": "OpenTofu Capsules in this Workspace and their status.",
+  "apps.add": "Add Capsule",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
-  "apps.empty.title": "No Installations yet",
+  "apps.empty.title": "No Capsules yet",
   "apps.empty.message":
     "Start from an example Capsule or add an OpenTofu Capsule from a Git URL.",
-  "apps.empty.cta": "Add Installation",
+  "apps.empty.cta": "Add Capsule",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.graphLink": "Dependency graph",
 
-  // --- Installation detail -------------------------------------------------
-  "app.installationSub": "Installation",
+  // --- Capsule detail ------------------------------------------------------
+  "app.installationSub": "Capsule",
   "app.tab.overview": "Overview",
   "app.tab.deploys": "Deploys",
   "app.tab.settings": "Settings",
   "app.tab.danger": "Danger zone",
-  "app.notFound": "Installation not found",
+  "app.notFound": "Capsule not found",
   "app.backToList": "Back to list",
   "app.outputs.title": "Public addresses & outputs",
   "app.outputs.subtitle":
-    "Addresses and values this Installation exposes. Secrets are never shown.",
+    "Addresses and values this Capsule exposes. Secrets are never shown.",
   "app.outputs.empty": "No public outputs yet. They appear after a deploy.",
   "app.outputs.none":
-    "This Installation exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
+    "This Capsule exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
   "app.nextSteps.title": "Next steps",
   "app.nextSteps.infraOnly":
-    "This Installation has no public URL output yet. Check the latest Run, OpenTofu outputs, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
+    "This Capsule has no public URL output yet. Check the latest Run, OpenTofu outputs, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
   "app.nextSteps.docs": "Open the docs →",
   "app.output.launchUrl": "Public address",
   "app.output.url": "URL",
@@ -286,7 +285,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.empty": "No audit events.",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "Add Installation",
+  "new.title": "Add Capsule",
   "new.subtitle":
     "Start from a known Capsule or add any OpenTofu Capsule from a Git URL.",
   "new.tab.catalog": "Examples",
@@ -299,7 +298,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path (module path)",
-  "new.name": "Installation name",
+  "new.name": "Capsule name",
   "new.managed.notice":
     "Takosumi Cloud can provide credentials for supported Capsules. You can continue without adding your own cloud key when every required provider is covered.",
   "new.managed.needCredential":
@@ -330,19 +329,19 @@ export const en: Record<keyof typeof ja, string> = {
     "Select a ready provider connection for {provider}.",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
-  "new.step.create": "Create Installation",
+  "new.step.create": "Create Capsule",
   "new.step.plan": "Review changes",
-  "new.error.spaceRequired": "Select a Space.",
+  "new.error.spaceRequired": "Select a Workspace.",
   "new.error.urlRequired": "Enter a Git URL.",
   "new.error.nameRequired": "Enter a name.",
-  "new.error.configMissing": "Install configuration is not available yet.",
+  "new.error.configMissing": "Capsule configuration is not available yet.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "Space settings",
+  "spaceSettings.title": "Workspace settings",
   "spaceSettings.subtitle":
-    "Manage this Space's members, connections, billing, and backups.",
+    "Manage this Workspace's members, connections, billing, and backups.",
   "spaceSettings.tab.general": "General",
   "spaceSettings.tab.members": "Members",
   "spaceSettings.tab.connections": "Connections",
@@ -355,7 +354,7 @@ export const en: Record<keyof typeof ja, string> = {
   "spaceSettings.general.owner": "Owner",
   "spaceSettings.general.updated": "Updated",
   "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
-  "spaceSettings.general.saved": "Space settings saved.",
+  "spaceSettings.general.saved": "Workspace settings saved.",
   "spaceSettings.general.nameRequired": "Enter a display name.",
   "spaceSettings.general.policyObject": "Policy JSON must be an object.",
   "spaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
@@ -369,7 +368,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.status.invited": "Invited",
   "members.status.suspended": "Removed",
   "members.subtitle":
-    "Members of this Space and their roles. Inviting, role changes, and removal are owner/admin only.",
+    "Members of this Workspace and their roles. Inviting, role changes, and removal are owner/admin only.",
   "members.invite.title": "Invite a member",
   "members.invite.subtitle":
     "Enter an existing account's handle (without @) or account ID to add them as a member. Email invites are not supported.",
@@ -389,16 +388,16 @@ export const en: Record<keyof typeof ja, string> = {
     "The last owner cannot be removed. Appoint another owner first.",
   "members.remove": "Remove",
   "members.removeConfirm": "Remove this member? ({account})",
-  "members.empty": "This Space has no members yet.",
+  "members.empty": "This Workspace has no members yet.",
   "members.viewerNote":
     "Only owners and admins can invite, change roles, or remove members.",
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Register provider credentials per Space. Values are write-only and never shown again after saving.",
+    "Register provider credentials per Workspace. Values are write-only and never shown again after saving.",
   "conn.providerConnections.title": "Provider connections",
   "conn.providerConnections.subtitle":
-    "Credential ownership available to this Space. Values stay write-only.",
+    "Credential ownership available to this Workspace. Values stay write-only.",
   "conn.providerConnections.provider": "Provider",
   "conn.providerConnections.name": "Name",
   "conn.providerConnections.ownership": "Ownership",
@@ -406,7 +405,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.ownership.ownKey": "Own key",
   "conn.ownership.takosProvided": "Operator managed",
   "conn.scope.operator": "Takosumi Cloud",
-  "conn.scope.space": "Space",
+  "conn.scope.space": "Workspace",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.add.title": "Add a connection",
@@ -446,7 +445,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.fieldRequired": "{field} is required.",
   "conn.list.title": "Registered connections",
   "conn.list.empty":
-    "This Space has no connections yet. Add one with the form above.",
+    "This Workspace has no connections yet. Add one with the form above.",
   "conn.test": "Test connection",
   "conn.testing": "Testing...",
   "conn.remove.confirmTitle": "Delete connection",
@@ -455,7 +454,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Manage this Space's control/state backups. Service-data archives appear only for Installations that provide an export.",
+    "Manage this Workspace's control/state backups. Service-data archives appear only for Capsules that provide an export.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
@@ -464,14 +463,14 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.col.run": "Run",
   "backups.manual": "manual",
   "backups.empty.title": "No backups yet",
-  "backups.empty.message": "Create this Space's first backup.",
+  "backups.empty.message": "Create this Workspace's first backup.",
 
   // --- output shares -------------------------------------------------------------
   "shares.subtitle":
-    "Explicitly share an Installation's projected outputs across Spaces.",
+    "Explicitly share a Capsule's projected outputs across Workspaces.",
   "shares.create.title": "Create a share",
-  "shares.create.toSpace": "Target Space",
-  "shares.create.producer": "Producer Installation",
+  "shares.create.toSpace": "Target Workspace",
+  "shares.create.producer": "Producer Capsule",
   "shares.create.selectPlaceholder": "Select",
   "shares.create.outputs": "Outputs",
   "shares.create.addOutput": "Add output",
@@ -482,7 +481,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.error.reasonRequired":
     "Enter a reason for sharing sensitive outputs.",
   "shares.col.direction": "Direction",
-  "shares.col.installation": "Installation",
+  "shares.col.installation": "Capsule",
   "shares.col.outputs": "Outputs",
   "shares.col.status": "Status",
   "shares.approve": "Approve",
@@ -496,27 +495,25 @@ export const en: Record<keyof typeof ja, string> = {
   // --- notifications -------------------------------------------------------------
   "notif.title": "Notifications",
   "notif.subtitle":
-    "Adds, runs, approvals, failures — what happened across your Spaces, newest first.",
+    "Adds, runs, approvals, failures — what happened across your Workspaces, newest first.",
   "notif.empty.title": "No notifications yet",
-  "notif.empty.message":
-    "Events appear here when you add or run Installations.",
+  "notif.empty.message": "Events appear here when you add or run Capsules.",
   "notif.attention": "{n} events need attention.",
   "notif.badge.attention": "Attention",
   "notif.viewRaw": "View the raw audit log (Activity) →",
-  "notif.event.installCreated": "Added Installation “{name}”",
+  "notif.event.installCreated": "Added Capsule “{name}”",
   "notif.event.installCreatedEnv": "Environment: {env}",
   "notif.event.planReady": "{operation} is ready",
   "notif.event.planReadyDetail": "Review the contents and approve",
   "notif.event.planBlockedDetail": "Approval is blocked by policy",
   "notif.event.approved": "Approved {operation}",
-  "notif.event.applied": "Deployed Installation changes",
+  "notif.event.applied": "Deployed Capsule changes",
   "notif.event.appliedDetail": "Updated {n} outputs",
-  "notif.event.destroyed": "Deleted an Installation",
+  "notif.event.destroyed": "Deleted a Capsule",
   "notif.event.failed": "{operation} failed",
   "notif.event.failedDetail": "Error: {code}",
   "notif.event.failedHint": "Check the run logs for details",
-  "notif.event.drift":
-    "An Installation's real state has drifted from the record",
+  "notif.event.drift": "A Capsule's real state has drifted from the record",
   "notif.event.driftDetail": "A redeploy may be needed",
   "notif.event.stale": "A dependency update requires a redeploy",
   "notif.event.staleDetail": "Updated by: {producer}",
@@ -525,8 +522,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.connRevoked": "Connection “{provider}” was revoked",
   "notif.event.connRevokedGeneric": "A connection was revoked",
   "notif.event.backupCreated": "Created a backup",
-  "notif.event.depCreated": "Linked two Installations",
-  "notif.event.depDeleted": "Unlinked two Installations",
+  "notif.event.depCreated": "Linked two Capsules",
+  "notif.event.depDeleted": "Unlinked two Capsules",
   "notif.event.shareRequested": "Received an output-share request",
   "notif.event.shareApproved": "Approved an output share",
   "notif.event.shareRevoked": "Revoked an output share",
@@ -535,9 +532,9 @@ export const en: Record<keyof typeof ja, string> = {
   // --- activity -------------------------------------------------------------------
   "activity.title": "Activity",
   "activity.subtitle":
-    "The Space's audit trail (recent operations), as raw events.",
+    "The Workspace audit trail (recent operations), as raw events.",
   "activity.empty.title": "No activity yet",
-  "activity.empty.message": "Operations in this Space are recorded here.",
+  "activity.empty.message": "Operations in this Workspace are recorded here.",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Grouped update",
@@ -551,12 +548,12 @@ export const en: Record<keyof typeof ja, string> = {
   // --- graph ---------------------------------------------------------------------
   "graph.title": "Dependency graph",
   "graph.subtitle":
-    "The dependency DAG between Installations — producers above, consumers below.",
+    "The dependency DAG between Capsules — producers above, consumers below.",
   "graph.layer": "Layer {n}",
   "graph.cycle": "Cycle (unresolvable)",
   "graph.dependsOn": "↑ depends on {names}",
-  "graph.empty.title": "No Installations",
-  "graph.empty.message": "This Space has no Installations yet.",
+  "graph.empty.title": "No Capsules",
+  "graph.empty.message": "This Workspace has no Capsules yet.",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
@@ -578,7 +575,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.language.body": "Choose the dashboard display language.",
 
   // --- billing -------------------------------------------------------------------
-  "billing.mode.disabled": "Billing is disabled for this Space.",
+  "billing.mode.disabled": "Billing is disabled for this Workspace.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a credit balance.",
   "billing.balance.title": "Balance",

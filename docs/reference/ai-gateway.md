@@ -1,17 +1,17 @@
 # AI Gateway
 
-Takosumi AI Gateway is a **Takosumi Cloud / closed operator extension**, not a
+Takosumi AI Gateway is a **Takosumi Cloud-only closed extension**, not a
 Takosumi OSS control-plane feature. OSS Takosumi remains an OpenTofu/Terraform
 control plane that runs existing providers as-is; it does not provide model
 gateway services as part of the public OSS contract.
 
-The Cloud extension is an operator-backed, OpenAI-compatible service projected
-through Service Graph. It lets an installed service use one Takosumi endpoint
-and one rotated Service Graph service token while the operator keeps upstream
-provider keys in platform secrets. OSS code may carry the fail-closed route seam
-so the shared platform worker can be composed and tested, but enabling upstream
-profiles and provider keys belongs to the closed Takosumi Cloud/operator
-deployment.
+The Cloud extension is a Takosumi Cloud operator-backed, OpenAI-compatible
+runtime profile projected through Service Graph. It lets a deployed Capsule
+runtime use one Takosumi endpoint and one rotated Service Graph service token
+while Takosumi Cloud keeps upstream provider keys in platform secrets. OSS code
+may carry the fail-closed route seam so the shared platform worker can be
+composed and tested, but enabling upstream profiles and provider keys belongs
+to the closed Takosumi Cloud deployment.
 
 It is not an OpenTofu provider credential and it is not an OpenTofu output secret. OpenTofu provisions and deploys the
 service that will consume the model API; runtime model access is granted after deployment through
@@ -39,8 +39,9 @@ OpenAI-compatible routes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`        | forwards chat completions to an upstream |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`  | forwards embeddings to an upstream       |
 
-The request bearer must be a current `takosumi.ai.gateway` Service Graph service token for the Installation. Tokens
-are rotated through the existing installation service route:
+The request bearer must be a current `takosumi.ai.gateway` Service Graph service token for the Capsule runtime
+projection. Tokens are rotated through the current projection route. The route path still uses the legacy
+`installation-projections` name until the API migration is complete:
 
 ```http
 POST /v1/installation-projections/{installationId}/services/takosumi.ai.gateway/rotate-token
@@ -134,12 +135,12 @@ same gateway mechanism: configure a profile, map public aliases to upstream mode
 
 There are two different keys:
 
-| key                         | holder                       | purpose                                      |
-| --------------------------- | ---------------------------- | -------------------------------------------- |
-| upstream provider API key   | operator platform worker env | authorizes Takosumi to call the provider     |
-| Service Graph service token | installed service runtime    | authorizes that Installation to call gateway |
+| key                         | holder                       | purpose                                     |
+| --------------------------- | ---------------------------- | ------------------------------------------- |
+| upstream provider API key   | operator platform worker env | authorizes Takosumi to call the provider    |
+| Service Graph service token | Capsule runtime projection   | authorizes that runtime to call the gateway |
 
-The installed service never receives the upstream provider key. It receives only the rotated Service Graph token and
+The Capsule runtime never receives the upstream provider key. It receives only the rotated Service Graph token and
 the gateway base URL. The gateway injects the upstream provider key at request time and strips hop-by-hop or unsafe
 response headers before returning the upstream response.
 

@@ -2,7 +2,7 @@
  * Shared notification-feed primitives.
  *
  * The friendly notifications feed (NotificationsView) and the TopBar bell badge
- * read the same data: the Space-scoped Activity trail of every Space the
+ * read the same data: the Workspace-scoped Activity trail of every Workspace the
  * visitor belongs to, merged newest-first. This module owns the loader, the
  * "needs attention" classification, and the last-seen marker so the badge and
  * the page can never disagree.

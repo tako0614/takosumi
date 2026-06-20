@@ -23,7 +23,7 @@
 # bind address (`TAKOSUMI_ACCOUNTS_BIND_HOST`, default `0.0.0.0`) which
 # only needs to be reachable on the docker-compose network. Set the
 # public hostname in your `.env` file before bringing the stack up.
-{$TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:accounts.example.com} {
+{$TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:app.example.com} {
     # `tls operator@example.com` here would override the global email for
     # this specific site. The global `email` directive above is sufficient
     # for a single-site Takosumi Accounts deploy; uncomment the directive

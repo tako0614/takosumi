@@ -138,8 +138,8 @@ repo.
    ```
 
 6. Run Layer 2 platform-control-plane smoke against staging. This is the real
-   signed-in user path: a staging account session owns the scratch Space,
-   creates a Space-scoped Cloudflare ProviderConnection, uploads the
+   signed-in user path: a staging account session owns the scratch Workspace,
+   creates a Workspace-scoped Cloudflare ProviderConnection, uploads the
    `cloudflare-hello-worker` Capsule, plans, applies, verifies through the
    Cloudflare API, then destroys. Store the transcript only in private evidence.
 
@@ -158,7 +158,7 @@ repo.
        --json
    ```
 
-   The command uses the public session-authenticated platform API for Space,
+   The command uses the public session-authenticated platform API for Workspace,
    connection, upload, deploy, run, and destroy. It does not require opening
    any edge-public internal route. The smoke output redacts token values and
    the Cloudflare account id; keep the raw transcript in
@@ -232,22 +232,22 @@ repo.
     Use the lower-level staging helper only when the private files or gate URL
     live outside the standard `takosumi-private/evidence/*` layout:
 
-   ```bash
-   bun run stage:takosumi-live-evidence -- \
-      --readiness-file <private-production-readiness.json> \
-      --readiness-evidence-ref <private-ref> \
-      --readiness-public-summary <reviewed-text> \
-      --readiness-out docs/quality/platform-readiness-public-summaries/readiness-<date>-production.json \
-      --hardening-manifest <private-production-hardening-manifest.json> \
-      --hardening-gate-url https://app.takosumi.com/internal/platform/hardening-gates \
-      --hardening-public-summary <reviewed-text> \
-      --hardening-out docs/quality/production-hardening-public-summaries/hardening-<date>-production.json \
-      --append-summary \
-      --verify-completion
-    ```
+````bash
+bun run stage:takosumi-live-evidence -- \
+   --readiness-file <private-production-readiness.json> \
+   --readiness-evidence-ref <private-ref> \
+   --readiness-public-summary <reviewed-text> \
+   --readiness-out docs/quality/platform-readiness-public-summaries/readiness-<date>-production.json \
+   --hardening-manifest <private-production-hardening-manifest.json> \
+   --hardening-gate-url https://app.takosumi.com/internal/platform/hardening-gates \
+   --hardening-public-summary <reviewed-text> \
+   --hardening-out docs/quality/production-hardening-public-summaries/hardening-<date>-production.json \
+   --append-summary \
+   --verify-completion
+ ```
 
 13. Open hosted Takosumi public access only after strict completion passes and operator
-    approval is recorded.
+ approval is recorded.
 
 ## Takos website rehearsal
 
@@ -260,7 +260,7 @@ export TAKOS_STAGING_INSTALL_URL="https://app-staging.takosumi.com/install?git=h
 VITE_CLOUD_INSTALL_URL="$TAKOS_STAGING_INSTALL_URL" \
 VITE_CLOUD_USE_TAKOS_URL="$TAKOS_STAGING_INSTALL_URL" \
 bun run build
-```
+````
 
 Production `takos.jp` must point to `https://app.takosumi.com/install?...` with
 a release tag or commit SHA, not `main`, `latest`, or `HEAD`.

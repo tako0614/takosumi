@@ -1,6 +1,6 @@
 /**
- * Space settings (`/space/settings[/:tab]`) — everything that belongs to the
- * Space rather than to one app: general (display name / policy), members,
+ * Workspace settings (`/space/settings[/:tab]`) — everything that belongs to the
+ * Workspace rather than to one Capsule: general (display name / policy), members,
  * connections, billing, backups, output shares. Tabs are routes so deep links
  * and the backend's OAuth-callback redirect (`/connections?connected=1` →
  * `/space/settings/connections?connected=1`) work unchanged.
@@ -73,7 +73,7 @@ function Inner(props: { readonly session: SessionRecord }) {
         title={t("spaceSettings.title")}
         subtitle={t("spaceSettings.subtitle")}
       />
-      <Tabs items={tabItems()} aria-label="Space settings sections" />
+      <Tabs items={tabItems()} aria-label="Workspace settings sections" />
 
       <Show
         when={spaceId()}

@@ -1,7 +1,7 @@
 /**
- * Activity view — the Space-scoped audit trail (the raw, expert counterpart of
- * the notifications feed). Lists recent {@link ActivityEvent}s for the current
- * Space via `GET /api/v1/spaces/:id/activity?limit=`. Each row shows the raw
+ * Activity view — the Workspace-scoped audit trail (the raw, expert counterpart
+ * of the notifications feed). Lists recent {@link ActivityEvent}s for the
+ * current Workspace via the current compatibility route. Each row shows the raw
  * action verb, the targeted entity, the actor, and the timestamp; metadata is
  * rendered as compact key=value chips (never secrets).
  */

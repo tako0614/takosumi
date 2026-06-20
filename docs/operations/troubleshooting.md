@@ -16,10 +16,10 @@
 | plan が policy で止まる                 | Run `policyStatus: deny` / `warn`                                                                          | plan JSON の policy 評価結果 (provider / resource allowlist / scope / secret-backed provider policy / egress) を確認 |
 | apply が plan 検証で拒否される          | plan digest / source snapshot / compatibility report / dependency snapshot / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)                                                      |
 | approval 待ちで進まない                 | Run `waiting_approval`                                                                                     | approver に escalation。 destroy は destroy_plan → approval → destroy_apply の 2 段                                  |
-| 同じ Installation の run が進まない     | lease 取得待ち / Run `queued` のまま                                                                       | CoordinationObject lease の保持 run を確認、 expired なら takeover を待つ                                            |
+| 同じ Capsule の run が進まない          | lease 取得待ち / Run `queued` のまま                                                                       | CoordinationObject lease の保持 run を確認、 expired なら takeover を待つ                                            |
 | provider credential が拒否される        | plan/apply phase の provider エラー                                                                        | Connection を test、 revoked / expired なら rotate して再 mint                                                       |
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | Provider Catalog entry、Provider Connection status、egress policy、custom runner availability を確認                 |
-| producer 更新後に downstream が古い     | Installation `stale` マーク                                                                                | dependency graph を確認し、 RunGroup (Space update) で DAG 順に plan/apply                                           |
+| producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                              |
 | Runner Container が起動しない           | dispatch timeout / container error                                                                         | runner image / Container 設定を確認、 queue DLQ を確認                                                               |
 
 ## 切り分けの基本
@@ -32,10 +32,11 @@
    provider のみ) ので、 credential 系エラーは phase で原因が絞れる。
 3. **検証エラーは再 plan**: apply は saved plan のみを実行し、 plan digest /
    source snapshot / dependency snapshot / state generation を検証する。 検証
-   エラーは状態が進んだサイン。 ロールバック的な操作も
-   `POST /api/v1/deployments/:deploymentId/rollback-plan` で plan からやり直す。
+   エラーは状態が進んだサイン。 ロールバック的な操作も retained
+   StateVersion / source identity / Output evidence から Capsule rollback plan
+   を作り、通常の Run として承認・適用し直す。
 4. **依存起因は graph で見る**: producer の outputs が変わると downstream は
-   stale になる。 単発で直すより RunGroup (Space update) で DAG 順に流す。
+   stale になる。 単発で直すより Workspace update として DAG 順に流す。
 
 ## エスカレーション
 

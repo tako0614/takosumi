@@ -14,11 +14,11 @@ model への migration 対象として扱います。host/distribution product �
 
 ## Scope
 
-| Store               | Contains                                                                                                                                                                                                                                                                                | Migration owner                                   |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                                                | Takosumi accounts plane                           |
+| Store               | Contains                                                                                                                                                                                                                                                 | Migration owner                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                 | Takosumi accounts plane                           |
 | Control-plane D1    | Workspace, Project, Capsule, Source, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, UsageEvent, CreditReservation, Billing, Audit, plus legacy rows while migrations are in flight | Takosumi control plane                            |
-| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                                                    | schema change only when D1 metadata shape changes |
+| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                     | schema change only when D1 metadata shape changes |
 
 realized config では accounts と control-plane を別 D1 binding にしてもよいが、
 正本 model は single Takosumi platform worker が所有する ledger です。
@@ -64,8 +64,9 @@ cd dashboard && bun run build
 | `contract`  | remove old shape after all code stops using it | explicit approval and restore plan        |
 | `emergency` | incident-only repair                           | incident commander approval               |
 
-expand と contract を同じ release に混ぜないこと。Run / StateSnapshot /
-OutputSnapshot / audit ledger は replay ではなく正本 record なので、destructive
+expand と contract を同じ release に混ぜないこと。Run / StateVersion /
+Output / audit ledger は replay ではなく正本 record です。旧 StateSnapshot /
+OutputSnapshot rows が残る環境でも、destructive
 DDL は原則 `contract` window まで延期します。
 
 ## Zero-downtime Pattern
@@ -139,7 +140,7 @@ production 後:
 - `https://app.takosumi.com/healthz` が green
 - OIDC discovery / JWKS が serve される
 - `GET /api/v1/spaces` が認証なしで 401 を返す
-- known staging / production Space の Installation list が読める
+- known staging / production Workspace の Capsule list が読める
 - compatibility check / plan read path が smoke できる
 - migration runtime、row 数、skip した duplicate DDL を private evidence に記録する
 

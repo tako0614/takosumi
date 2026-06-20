@@ -88,7 +88,7 @@ services:
       # both EXPORT_OUTPUT_DIR and this mount to a bind-mount of their own).
       - exports-data:/var/lib/takosumi-accounts/exports
     environment:
-      TAKOSUMI_ACCOUNTS_ISSUER: ${TAKOSUMI_ACCOUNTS_ISSUER:-https://accounts.example.com}
+      TAKOSUMI_ACCOUNTS_ISSUER: ${TAKOSUMI_ACCOUNTS_ISSUER:-https://app.example.com}
       TAKOSUMI_ACCOUNTS_BIND_HOST: ${TAKOSUMI_ACCOUNTS_BIND_HOST:-0.0.0.0}
       TAKOSUMI_ACCOUNTS_DATABASE_URL: postgres://takosumi:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/takosumi_accounts
       TAKOSUMI_ACCOUNTS_CLIENT_ID: ${TAKOSUMI_ACCOUNTS_CLIENT_ID:-}
@@ -99,10 +99,11 @@ services:
     expose:
       - "8787"
     healthcheck:
-      test: [
-        "CMD-SHELL",
-        "bun -e 'await fetch(\"http://127.0.0.1:8787/healthz\").then((r)=>{if(!r.ok)throw new Error(String(r.status))})'",
-      ]
+      test:
+        [
+          "CMD-SHELL",
+          'bun -e ''await fetch("http://127.0.0.1:8787/healthz").then((r)=>{if(!r.ok)throw new Error(String(r.status))})''',
+        ]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -119,7 +120,7 @@ services:
       # for the site label, which is the public hostname users dial.
       # Operators must set this before running `docker compose up` so
       # Caddy provisions the correct certificate over ACME.
-      TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME: ${TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:-accounts.example.com}
+      TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME: ${TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME:-app.example.com}
     ports:
       - "80:80"
       - "443:443"

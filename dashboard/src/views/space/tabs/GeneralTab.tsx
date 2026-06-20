@@ -1,6 +1,6 @@
 /**
- * Space settings — 一般: display name + (folded) policy JSON. Successor of the
- * Space part of the old AccountSettingsView; the Space is the one selected in
+ * Workspace settings — 一般: display name + (folded) policy JSON. Successor of the
+ * Workspace part of the old AccountSettingsView; the Workspace is the one selected in
  * the global switcher.
  */
 import {

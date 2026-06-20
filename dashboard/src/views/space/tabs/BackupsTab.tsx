@@ -1,6 +1,6 @@
 /**
- * Space settings — バックアップ. Port of the former ControlBackupsView body
- * (spec §29: Space-scoped control backup ledger).
+ * Workspace settings — バックアップ. Port of the former ControlBackupsView body
+ * (current compatibility store: workspace-scoped control backup ledger).
  */
 import "../../../styles/wave-b.css";
 import { createResource, Match, Show, Switch } from "solid-js";

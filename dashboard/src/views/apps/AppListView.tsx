@@ -1,10 +1,10 @@
 /**
- * Home (`/`) — the per-Space Installation list, the dashboard's primary surface.
+ * Home (`/`) — the per-Workspace Capsule list, the dashboard's primary surface.
  *
- * Card grid over the control-plane Installation list: status, a direct "開く"
- * launch link resolved from the current Deployment's public outputs, the
- * dependency line from the Space graph, and a needs-attention strip derived
- * from Installation statuses (error / stale). Click-through goes to
+ * Card grid over the current compatibility Installation list: status, a direct
+ * "開く" launch link resolved from public outputs, the dependency line from the
+ * Workspace graph, and a needs-attention strip derived from Capsule lifecycle
+ * status (error / stale). Click-through goes to
  * `/installations/:id`.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
@@ -108,7 +108,7 @@ function Inner() {
     return map;
   });
 
-  /** Installations currently needing attention (error / stale under either model). */
+  /** Capsules currently needing attention (error / stale under either model). */
   const attentionCount = createMemo(
     () => (installations() ?? []).filter(needsAttention).length,
   );
