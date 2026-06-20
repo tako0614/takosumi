@@ -108,8 +108,8 @@ function App() {
       <Route path="/graph" component={GraphView} />
       <Route path="/activity" component={ActivityView} />
       <Route path="/notifications" component={NotificationsView} />
-      <Route path="/space/settings" component={SpaceSettingsView} />
-      <Route path="/space/settings/:tab" component={SpaceSettingsView} />
+      <Route path="/workspace/settings" component={SpaceSettingsView} />
+      <Route path="/workspace/settings/:tab" component={SpaceSettingsView} />
       <Route path="/account" component={AccountView} />
 
       {/* Old paths → new homes. /install is the external install link
@@ -135,7 +135,9 @@ function App() {
       />
       <Route
         path="/connections"
-        component={() => <RedirectWithQuery to="/space/settings/connections" />}
+        component={() => (
+          <RedirectWithQuery to="/workspace/settings/connections" />
+        )}
       />
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/capsules" />} />
@@ -143,28 +145,28 @@ function App() {
       <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
       <Route
         path="/members"
-        component={() => <Navigate href="/space/settings/members" />}
+        component={() => <Navigate href="/workspace/settings/members" />}
       />
       <Route
         path="/backups"
-        component={() => <Navigate href="/space/settings/backups" />}
+        component={() => <Navigate href="/workspace/settings/backups" />}
       />
       <Route
         path="/output-shares"
-        component={() => <Navigate href="/space/settings/shares" />}
+        component={() => <Navigate href="/workspace/settings/shares" />}
       />
       <Route path="/sources" component={() => <Navigate href="/" />} />
       <Route
         path="/providers"
-        component={() => <Navigate href="/space/settings/connections" />}
+        component={() => <Navigate href="/workspace/settings/connections" />}
       />
       <Route
         path="/account/settings"
-        component={() => <Navigate href="/space/settings" />}
+        component={() => <Navigate href="/workspace/settings" />}
       />
       <Route
         path="/account/billing"
-        component={() => <Navigate href="/space/settings/billing" />}
+        component={() => <Navigate href="/workspace/settings/billing" />}
       />
       <Route
         path="/account/profile"
@@ -173,6 +175,16 @@ function App() {
       <Route
         path="/account/sessions"
         component={() => <Navigate href="/account" />}
+      />
+      <Route
+        path="/space/settings"
+        component={() => <RedirectWithQuery to="/workspace/settings" />}
+      />
+      <Route
+        path="/space/settings/:tab"
+        component={(props) => (
+          <RedirectWithQuery to={`/workspace/settings/${props.params.tab}`} />
+        )}
       />
 
       {/* Anything else is a real 404 — no silent bounce to home. */}

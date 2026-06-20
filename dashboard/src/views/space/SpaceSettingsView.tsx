@@ -1,9 +1,9 @@
 /**
- * Workspace settings (`/space/settings[/:tab]`) — everything that belongs to the
+ * Workspace settings (`/workspace/settings[/:tab]`) — everything that belongs to the
  * Workspace rather than to one Capsule: general (display name / policy), members,
  * connections, billing, backups, output shares. Tabs are routes so deep links
  * and the backend's OAuth-callback redirect (`/connections?connected=1` →
- * `/space/settings/connections?connected=1`) work unchanged.
+ * `/workspace/settings/connections?connected=1`) work unchanged.
  */
 import "../../styles/wave-a.css";
 import { Match, Show, Switch } from "solid-js";
@@ -54,18 +54,30 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const tabItems = () => [
     {
-      href: "/space/settings",
+      href: "/workspace/settings",
       label: t("spaceSettings.tab.general"),
       end: true,
     },
-    { href: "/space/settings/members", label: t("spaceSettings.tab.members") },
     {
-      href: "/space/settings/connections",
+      href: "/workspace/settings/members",
+      label: t("spaceSettings.tab.members"),
+    },
+    {
+      href: "/workspace/settings/connections",
       label: t("spaceSettings.tab.connections"),
     },
-    { href: "/space/settings/billing", label: t("spaceSettings.tab.billing") },
-    { href: "/space/settings/backups", label: t("spaceSettings.tab.backups") },
-    { href: "/space/settings/shares", label: t("spaceSettings.tab.shares") },
+    {
+      href: "/workspace/settings/billing",
+      label: t("spaceSettings.tab.billing"),
+    },
+    {
+      href: "/workspace/settings/backups",
+      label: t("spaceSettings.tab.backups"),
+    },
+    {
+      href: "/workspace/settings/shares",
+      label: t("spaceSettings.tab.shares"),
+    },
   ];
 
   return (

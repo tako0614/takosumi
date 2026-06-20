@@ -1123,44 +1123,42 @@ function Inner() {
 
                 <Show when={compatibility()}>
                   {(result) => (
-                    <Card>
-                      <CardSection>
-                        <div class="wb-compat-head">
-                          <h3 class="tg-card-title">{t("new.compat.title")}</h3>
-                          <Badge tone={compatibilityTone(result().level)}>
-                            {compatibilityLabel(result().level)}
-                          </Badge>
-                        </div>
-                        <p class="wb-compat-summary">
-                          {compatibilitySummaryDisplay(result())}
-                        </p>
-                        <Show when={result().level === "needs_patch"}>
-                          <p class="wb-note">{t("new.compat.patchHelp")}</p>
-                        </Show>
-                        <Show when={result().diagnostics.length > 0}>
-                          <ul class="wb-diagnostics">
-                            <For each={result().diagnostics}>
-                              {(diagnostic) => {
-                                const display =
-                                  compatibilityDiagnosticDisplay(diagnostic);
-                                return (
-                                  <li
-                                    class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
-                                  >
-                                    {display.message}
-                                    <Show when={display.detail}>
-                                      {(detail) => (
-                                        <span class="muted"> — {detail()}</span>
-                                      )}
-                                    </Show>
-                                  </li>
-                                );
-                              }}
-                            </For>
-                          </ul>
-                        </Show>
-                      </CardSection>
-                    </Card>
+                    <section class="wb-inline-panel">
+                      <div class="wb-compat-head">
+                        <h3 class="tg-card-title">{t("new.compat.title")}</h3>
+                        <Badge tone={compatibilityTone(result().level)}>
+                          {compatibilityLabel(result().level)}
+                        </Badge>
+                      </div>
+                      <p class="wb-compat-summary">
+                        {compatibilitySummaryDisplay(result())}
+                      </p>
+                      <Show when={result().level === "needs_patch"}>
+                        <p class="wb-note">{t("new.compat.patchHelp")}</p>
+                      </Show>
+                      <Show when={result().diagnostics.length > 0}>
+                        <ul class="wb-diagnostics">
+                          <For each={result().diagnostics}>
+                            {(diagnostic) => {
+                              const display =
+                                compatibilityDiagnosticDisplay(diagnostic);
+                              return (
+                                <li
+                                  class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
+                                >
+                                  {display.message}
+                                  <Show when={display.detail}>
+                                    {(detail) => (
+                                      <span class="muted"> — {detail()}</span>
+                                    )}
+                                  </Show>
+                                </li>
+                              );
+                            }}
+                          </For>
+                        </ul>
+                      </Show>
+                    </section>
                   )}
                 </Show>
 

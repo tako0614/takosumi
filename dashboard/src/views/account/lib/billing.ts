@@ -4,7 +4,7 @@
  * Checkout is plan-id based (spec §32): the client names an operator-offered
  * `planId` (from `GET /api/v1/billing/plans`) plus the target `spaceId`; the
  * SERVER resolves the Stripe price, checkout mode, and credit metadata. The
- * redirect URLs land back on the Space billing tab.
+ * redirect URLs land back on the Workspace billing tab.
  */
 import { apiFetch } from "./http.ts";
 import * as paths from "./paths.ts";
@@ -19,7 +19,7 @@ export interface StripePortalResult {
   readonly sessionId?: string;
 }
 
-const BILLING_RETURN_PATH = "/space/settings/billing";
+const BILLING_RETURN_PATH = "/workspace/settings/billing";
 
 export async function startStripeCheckout(input: {
   readonly subject: string;
