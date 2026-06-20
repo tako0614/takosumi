@@ -56,6 +56,19 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
+    {
+      text: "Operations",
+      items: [
+        {
+          text: "Cloud customer operations",
+          link: "/operations/cloud-customer-operations",
+        },
+        {
+          text: "Cloud launch brief",
+          link: "/operations/cloud-launch-brief",
+        },
+      ],
+    },
   ],
 };
 
