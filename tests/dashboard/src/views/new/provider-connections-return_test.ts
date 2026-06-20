@@ -94,9 +94,13 @@ describe("/new Provider Connections return context", () => {
   test("/new translates known compatibility diagnostics into user-facing copy", () => {
     expect(controlApiSource).toContain("code: finding.code");
     expect(newAppViewSource).toContain("compatibilityDiagnosticDisplay");
+    expect(newAppViewSource).toContain("compatibilitySummaryDisplay");
     expect(newAppViewSource).toContain("provider_credentials_in_source");
     expect(newAppViewSource).toContain("provider_block_lift_candidate");
     expect(newAppViewSource).toContain("dependency_lock_detected");
+    expect(newAppViewSource).toContain(
+      '"new.compat.summary.providerCredentials"',
+    );
     expect(newAppViewSource).toContain(
       '"new.compat.issue.providerCredentials.message"',
     );
