@@ -1,14 +1,23 @@
 # AI Gateway
 
-Takosumi AI Gateway is an operator-backed, OpenAI-compatible service projected through Service Graph. It lets an
-installed service use one Takosumi endpoint and one rotated Service Graph service token while the operator keeps
-upstream provider keys in platform secrets.
+Takosumi AI Gateway is a **Takosumi Cloud / closed operator extension**, not a
+Takosumi OSS control-plane feature. OSS Takosumi remains an OpenTofu/Terraform
+control plane that runs existing providers as-is; it does not provide model
+gateway services as part of the public OSS contract.
+
+The Cloud extension is an operator-backed, OpenAI-compatible service projected
+through Service Graph. It lets an installed service use one Takosumi endpoint
+and one rotated Service Graph service token while the operator keeps upstream
+provider keys in platform secrets. OSS code may carry the fail-closed route seam
+so the shared platform worker can be composed and tested, but enabling upstream
+profiles and provider keys belongs to the closed Takosumi Cloud/operator
+deployment.
 
 It is not an OpenTofu provider credential and it is not an OpenTofu output secret. OpenTofu provisions and deploys the
 service that will consume the model API; runtime model access is granted after deployment through
 `takosumi.ai.gateway`.
 
-## Public Contract
+## Cloud Extension Contract
 
 Service Graph projection:
 
