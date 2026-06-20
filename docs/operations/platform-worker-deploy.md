@@ -121,6 +121,11 @@ staging / production の vault を先に作るだけなら `--local-only` を併
   Takosumi Cloud/operator extension is enabled and only for providers listed in
   `TAKOSUMI_AI_GATEWAY_PROFILES`. These are operator platform secrets; installed
   services receive only a rotated `takosumi.ai.gateway` Service Graph token.
+- Cloud-only operator-backed Provider Connections are enabled only when
+  `TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS=enabled` is present in the
+  realized Takosumi Cloud config. Leave it unset for OSS/self-host operator
+  deployments unless that operator is deliberately exposing `takos_provided`
+  Provider Connections with matching secret-boundary evidence.
 - Workspace-owned Provider Connection secrets for policy-bound own-key providers (AWS /
   GitHub / Kubernetes and custom providers) are Workspace-owned ProviderConnection /
   SecretBlob material, not generic Gateway bootstrap credentials. GCP
