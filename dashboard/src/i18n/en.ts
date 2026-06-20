@@ -328,6 +328,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.unsupported": "Cannot be added right now",
   "new.compat.patchHelp":
     "Review the items above. Some issues require a repository change, while others can be resolved by setting up the required external service connection.",
+  "new.compat.summary.providerCredentials":
+    "Remove {provider} credentials from Git before adding this Capsule.",
   "new.compat.issue.providerCredentials.message":
     "{provider} credentials are written in the Git source.",
   "new.compat.issue.providerCredentials.detail":

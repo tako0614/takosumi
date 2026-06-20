@@ -179,6 +179,31 @@ function compatibilityDiagnosticDisplay(
   };
 }
 
+function compatibilitySummaryDisplay(
+  result: CapsuleCompatibilityResult,
+): string {
+  const credentialDiagnostic = result.diagnostics.find(
+    (diagnostic) =>
+      diagnostic.code === "provider_credentials_in_source" ||
+      /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
+        diagnostic.message,
+      ),
+  );
+  if (
+    credentialDiagnostic &&
+    /^Provider\s+[a-zA-Z0-9_.-]+\s+contains credential-like attributes\.?$/u.test(
+      result.summary,
+    )
+  ) {
+    return t("new.compat.summary.providerCredentials", {
+      provider: providerDisplayName(
+        providerNameFromDiagnostic(credentialDiagnostic),
+      ),
+    });
+  }
+  return result.summary;
+}
+
 function isFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/iu.test(value.trim());
 }
@@ -980,7 +1005,9 @@ function Inner() {
                             {compatibilityLabel(result().level)}
                           </Badge>
                         </div>
-                        <p class="wb-compat-summary">{result().summary}</p>
+                        <p class="wb-compat-summary">
+                          {compatibilitySummaryDisplay(result())}
+                        </p>
                         <Show when={result().level === "needs_patch"}>
                           <p class="wb-note">{t("new.compat.patchHelp")}</p>
                         </Show>
