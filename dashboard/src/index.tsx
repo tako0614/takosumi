@@ -34,7 +34,7 @@ const SignInCallbackView = lazy(() =>
 );
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
-// --- Installation-centric core ------------------------------------------------
+// --- Capsule-centric core -----------------------------------------------------
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
@@ -60,12 +60,20 @@ function RedirectWithQuery(props: { readonly to: string }) {
   return <Navigate href={`${props.to}${loc.search}`} />;
 }
 
-/** `/apps/:id` -> `/installations/:id` (legacy dashboard links). */
+/** `/apps/:id` -> `/capsules/:id` (legacy dashboard links). */
 function RedirectLegacyAppDetail() {
   const params = useParams();
   const id = encodeURIComponent(params.id ?? "");
   const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
-  return <Navigate href={`/installations/${id}${tab}`} />;
+  return <Navigate href={`/capsules/${id}${tab}`} />;
+}
+
+/** `/installations/:id` -> `/capsules/:id` while legacy URLs age out. */
+function RedirectLegacyInstallationDetail() {
+  const params = useParams();
+  const id = encodeURIComponent(params.id ?? "");
+  const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
+  return <Navigate href={`/capsules/${id}${tab}`} />;
 }
 
 function App() {
@@ -85,12 +93,12 @@ function App() {
         component={() => <RedirectWithQuery to="/sign-in" />}
       />
 
-      {/* Installation-centric core (AuthGuard-gated inside each view). */}
+      {/* Capsule-centric core (AuthGuard-gated inside each view). */}
       <Route path="/" component={AppListView} />
-      <Route path="/installations" component={AppListView} />
+      <Route path="/capsules" component={AppListView} />
       <Route path="/new" component={NewAppView} />
-      <Route path="/installations/:id" component={AppDetailView} />
-      <Route path="/installations/:id/:tab" component={AppDetailView} />
+      <Route path="/capsules/:id" component={AppDetailView} />
+      <Route path="/capsules/:id/:tab" component={AppDetailView} />
       <Route path="/runs/:id" component={RunView} />
       <Route path="/run-groups/:id" component={RunGroupView} />
       <Route path="/graph" component={GraphView} />
@@ -110,14 +118,23 @@ function App() {
         component={() => <RedirectWithQuery to="/new" />}
       />
       <Route
+        path="/installations"
+        component={() => <RedirectWithQuery to="/capsules" />}
+      />
+      <Route
+        path="/installations/:id"
+        component={RedirectLegacyInstallationDetail}
+      />
+      <Route
+        path="/installations/:id/:tab"
+        component={RedirectLegacyInstallationDetail}
+      />
+      <Route
         path="/connections"
         component={() => <RedirectWithQuery to="/space/settings/connections" />}
       />
       <Route path="/home" component={() => <Navigate href="/" />} />
-      <Route
-        path="/apps"
-        component={() => <Navigate href="/installations" />}
-      />
+      <Route path="/apps" component={() => <Navigate href="/capsules" />} />
       <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
       <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
       <Route

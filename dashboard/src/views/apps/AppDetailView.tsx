@@ -1,5 +1,5 @@
 /**
- * Installation detail (`/installations/:id` + tab routes) — one Installation, four tabs:
+ * Capsule detail (`/capsules/:id` + tab routes) — one Capsule, four tabs:
  *   概要     status / public outputs / dependencies / source
  *   デプロイ  Deployment generations + recent runs (+ rollback / backup)
  *   設定     source coordinates + provider connections (advanced, folded)
@@ -191,7 +191,7 @@ function Inner() {
   };
 
   const tabItems = () => {
-    const base = `/installations/${encodeURIComponent(installationId())}`;
+    const base = `/capsules/${encodeURIComponent(installationId())}`;
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
@@ -256,7 +256,7 @@ function Inner() {
                 }
               />
 
-              <Tabs items={tabItems()} aria-label="Installation sections" />
+              <Tabs items={tabItems()} aria-label="Capsule sections" />
 
               <Show when={plan.error()}>
                 {(m) => (
