@@ -7,7 +7,8 @@
  *
  * The Cloudflare OAuth callback redirects to `/connections?connected=1`, which
  * the router forwards here query-intact; the one-time banner reads and strips
- * those params.
+ * those params. `/new` links may also include a safe `return=/new?...` target
+ * so users can create a Provider Connection, then jump back to the add flow.
  */
 import "../../../styles/wave-c.css";
 import {
@@ -20,11 +21,18 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { Link, Plug, Plus, Trash } from "lucide-solid";
+import { ArrowLeft, Link, Plug, Plus, Trash } from "lucide-solid";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import { connectionStatusLabel, connectionTone } from "../../../lib/labels.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
+import {
+  INSTALL_RETURN_QUERY_PARAM,
+  installReturnContext,
+  installReturnPathFromContext,
+  installReturnPathFromReturnParam,
+  type InstallReturnContext,
+} from "../../../lib/install-return-context.ts";
 import {
   type Connection,
   type ControlApiError,
@@ -56,6 +64,7 @@ import {
 
 /** Sentinel `<select>` value for the generic own-key provider path. */
 const GENERIC_ENV_PROVIDER_OPTION = "__generic_env_provider__";
+const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
 
 interface EnvPair {
   readonly name: string;
@@ -82,6 +91,18 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     spaceId,
     listProviderConnections,
   );
+  const installReturn = currentInstallReturnContext();
+  const installReturnHref = installReturn
+    ? installReturnPathFromContext(installReturn)
+    : undefined;
+  const installReturnDetails = () =>
+    installReturn
+      ? t("conn.return.subtitle", {
+          source: installReturn.sourceLabel,
+          ref: installReturn.displayRef || t("conn.return.defaultRef"),
+          path: installReturn.path || t("conn.return.rootPath"),
+        })
+      : "";
 
   // ----- register form state -----------------------------------------------
   const [provider, setProvider] = createSignal(PROVIDERS[0]?.provider ?? "");
@@ -309,6 +330,27 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             </Match>
           </Switch>
         )}
+      </Show>
+
+      <Show when={installReturn && installReturnHref}>
+        <Card>
+          <CardHeader
+            title={t("conn.return.title", {
+              name: installReturn?.label ?? "",
+            })}
+            subtitle={installReturnDetails()}
+            actions={
+              <Button
+                variant="secondary"
+                href={installReturnHref}
+                icon={<ArrowLeft size={16} />}
+                onClick={clearStoredInstallReturn}
+              >
+                {t("conn.return.cta")}
+              </Button>
+            }
+          />
+        </Card>
       </Show>
 
       <Show when={(providerConnections() ?? []).length > 0}>
@@ -725,4 +767,51 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       </Switch>
     </div>
   );
+}
+
+function currentInstallReturnContext(): InstallReturnContext | undefined {
+  if (typeof window === "undefined") return undefined;
+  const params = new URLSearchParams(window.location.search);
+  const explicitReturn = params.get(INSTALL_RETURN_QUERY_PARAM);
+  const explicitReturnPath = installReturnPathFromReturnParam(explicitReturn);
+  if (explicitReturnPath) {
+    storeInstallReturn(explicitReturnPath);
+    return installReturnContext(explicitReturnPath);
+  }
+
+  if (!params.has("connected") && !params.has("connection_error")) {
+    return undefined;
+  }
+
+  const storedReturn = readStoredInstallReturn();
+  const storedReturnPath = installReturnPathFromReturnParam(storedReturn);
+  if (!storedReturnPath) {
+    clearStoredInstallReturn();
+    return undefined;
+  }
+  return installReturnContext(storedReturnPath);
+}
+
+function storeInstallReturn(returnPath: string): void {
+  try {
+    window.sessionStorage.setItem(INSTALL_RETURN_STORAGE_KEY, returnPath);
+  } catch {
+    // Storage may be blocked; the explicit URL return param still works.
+  }
+}
+
+function readStoredInstallReturn(): string | null {
+  try {
+    return window.sessionStorage.getItem(INSTALL_RETURN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredInstallReturn(): void {
+  try {
+    window.sessionStorage.removeItem(INSTALL_RETURN_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures; the navigation itself is the important action.
+  }
 }

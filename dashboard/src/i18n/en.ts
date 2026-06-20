@@ -405,6 +405,11 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.scope.space": "Workspace",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
+  "conn.return.title": "Continue adding {name}",
+  "conn.return.subtitle": "{source} / {ref} / {path}",
+  "conn.return.defaultRef": "default ref",
+  "conn.return.rootPath": "root module",
+  "conn.return.cta": "Back to add Capsule",
   "conn.add.title": "Add a connection",
   "conn.add.subtitle":
     "Pick a provider, then paste a token or register env values.",
