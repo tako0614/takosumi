@@ -69,6 +69,7 @@ export const ja = {
   "auth.providerChecking": "利用可否を確認中です",
   "auth.providerUnavailable": "現在利用できません",
   "auth.providerRetryNeeded": "確認できませんでした",
+  "auth.googleAccount": "Google アカウント",
   "auth.noProvidersTitle": "現在サインインできません",
   "auth.noProvidersMessage":
     "現在利用できるサインイン方法がありません。しばらくしてから再試行してください。続く場合はサポートに連絡してください。",
@@ -94,7 +95,7 @@ export const ja = {
   "auth.failed": "サインインに失敗しました",
   "auth.backToSignIn": "サインインへ戻る",
   "auth.incompleteCallback":
-    "OAuth response が不完全です (code / state / provider のいずれかが欠落)。再度サインインしてください。",
+    "サインインの戻り値が不完全です (code / state / provider のいずれかが欠落)。再度サインインしてください。",
 
   // --- 404 --------------------------------------------------------------
   "notFound.title": "ページが見つかりません",
@@ -205,17 +206,16 @@ export const ja = {
   "app.recentRuns.title": "最近の実行",
   "app.recentRuns.empty": "最近の実行はありません。",
   "app.recentRuns.open": "詳細",
-  "app.bindings.title": "Provider connections",
+  "app.bindings.title": "外部サービス接続",
   "app.bindings.subtitle":
-    "OpenTofu provider ごとに使う provider connection を選びます。通常は変更不要です。",
-  "app.bindings.add": "プロバイダを追加",
+    "OpenTofu が使う外部サービス接続を選びます。通常は変更不要です。",
+  "app.bindings.add": "接続先を追加",
   "app.bindings.aliasPlaceholder": "alias（任意）",
-  "app.bindings.selectConnection": "connection を選択",
+  "app.bindings.selectConnection": "接続を選択",
   "app.bindings.remove": "削除",
-  "app.bindings.errorProvider":
-    "provider connection {index} の provider を入力してください。",
+  "app.bindings.errorProvider": "接続 {index} の接続先を入力してください。",
   "app.bindings.errorConnection":
-    "{provider} の ready な provider connection を選択してください。",
+    "{provider} の利用可能な接続を選択してください。",
   "app.danger.destroyTitle": "Capsule を削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
@@ -301,13 +301,13 @@ export const ja = {
   "new.git.path": "Path（モジュールパス）",
   "new.name": "Capsule 名",
   "new.managed.notice":
-    "Takosumi が運営管理の接続でこの Capsule を動かせるか確認します。まず取得元を確認し、未対応の provider があれば自分の確認済み接続を追加します。",
+    "Takosumi Cloud の接続でこの Capsule を追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
   "new.managed.needCredential":
-    "この Capsule には、まだこの Workspace で使えない provider 接続が必要です。",
+    "この Capsule を追加するには、まだこの Workspace にない外部サービス接続が必要です。",
   "new.managed.connectFirst": "接続を設定する",
-  "new.managed.byoTitle": "自分の provider key を使う",
+  "new.managed.byoTitle": "自分のクラウド接続を使う",
   "new.managed.byoBody":
-    "運営管理の接続は、この Takosumi 環境で有効化された provider にだけ使われます。それ以外の AWS / GCP / GitHub / Kubernetes や自分の Cloudflare account が必要な Capsule では、確認済みの接続を追加してください。",
+    "Takosumi Cloud の接続で対応できない AWS / GCP / Kubernetes や自分の Cloudflare アカウントが必要な Capsule では、確認済みの接続を追加してください。",
   "new.managed.byoLink": "接続を設定する",
   "new.compat.check": "取得元を登録して確認",
   "new.compat.checking": "登録して確認中...",
@@ -318,16 +318,16 @@ export const ja = {
   "new.compat.unsupported": "今は追加できません",
   "new.proceed": "確認して追加",
   "new.proceedHint": "先に「取得元を登録して確認」してから進めてください。",
-  "new.providers.title": "Provider connections",
+  "new.providers.title": "外部サービス接続",
   "new.providers.subtitle":
-    "最初の変更確認に進む前に、provider ごとに使う provider connection を選びます。必要な provider が未設定の場合、Takosumi は別の接続を勝手に使わず、選択を求めて停止します。",
+    "最初の確認に進む前に、この Capsule が使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
   "new.providers.noneRequired":
-    "この Capsule は最初の変更確認で provider credential を要求していません。",
+    "この Capsule は最初の確認で追加の接続を要求していません。",
   "new.providers.alias": "alias: {alias}",
-  "new.providers.selectConnection": "connection を選択",
-  "new.providers.manageConnections": "provider connection を管理",
+  "new.providers.selectConnection": "接続を選択",
+  "new.providers.manageConnections": "接続を管理",
   "new.providers.errorConnection":
-    "{provider} の ready な provider connection を選択してください。",
+    "{provider} の利用可能な接続を選択してください。",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
   "new.step.create": "Capsule を作成",
@@ -398,15 +398,15 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "プロバイダの認証情報を Workspace ごとに登録します。値は書き込み専用で、一度保存すると再表示されません。",
-  "conn.providerConnections.title": "Provider connections",
+    "外部サービスの認証情報を Workspace ごとに登録します。値は書き込み専用で、一度保存すると再表示されません。",
+  "conn.providerConnections.title": "外部サービス接続",
   "conn.providerConnections.subtitle":
-    "この Workspace で使える credential ownership です。値は書き込み専用のままです。",
-  "conn.providerConnections.provider": "プロバイダ",
+    "この Workspace で使える接続です。値は書き込み専用のままです。",
+  "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.ownership": "所有",
   "conn.providerConnections.status": "状態",
-  "conn.ownership.ownKey": "自分の provider key",
+  "conn.ownership.ownKey": "自分の接続情報",
   "conn.ownership.takosProvided": "運営管理",
   "conn.scope.operator": "運営管理",
   "conn.scope.space": "Workspace",
@@ -419,9 +419,9 @@ export const ja = {
   "conn.return.cta": "Capsule 追加に戻る",
   "conn.add.title": "接続を追加",
   "conn.add.subtitle":
-    "プロバイダを選び、トークンを貼り付けるか環境変数として登録します。",
-  "conn.add.provider": "プロバイダ",
-  "conn.add.genericEnvOption": "自分の provider key を使う",
+    "接続先を選び、トークンを貼り付けるか環境変数として登録します。",
+  "conn.add.provider": "接続先",
+  "conn.add.genericEnvOption": "任意の接続情報を使う",
   "conn.add.displayName": "表示名（任意）",
   "conn.add.displayNamePlaceholder": "本番 Cloudflare",
   "conn.guided.intro":

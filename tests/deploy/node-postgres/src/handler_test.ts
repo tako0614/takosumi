@@ -73,6 +73,27 @@ test("node-postgres ignores retired GitHub OAuth env", () => {
   expect(config.upstreamOAuth).toBeUndefined();
 });
 
+test("node-postgres rejects retired custom OIDC GitHub provider id", () => {
+  expect(() =>
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "upstream-subject-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_PROVIDER_ID: "GitHub",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_ISSUER: "https://github.com/login/oauth",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_AUTHORIZATION_ENDPOINT:
+        "https://github.com/login/oauth/authorize",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_TOKEN_ENDPOINT:
+        "https://github.com/login/oauth/access_token",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT:
+        "https://api.github.com/user",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID: "github-client",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET: "github-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI:
+        "https://accounts.example/v1/auth/upstream/callback",
+    }),
+  ).toThrow("Custom upstream OIDC provider id GitHub is reserved or retired");
+});
+
 test("node-postgres platform readiness open requires production hardening gate", () => {
   expect(() =>
     parseEnv({
