@@ -29,6 +29,7 @@ export const en: Record<keyof typeof ja, string> = {
   "common.minutesAgo": "{n}m ago",
   "common.hoursAgo": "{n}h ago",
   "common.daysAgo": "{n}d ago",
+  "common.empty": "No data.",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
@@ -307,13 +308,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
   "new.managed.notice":
-    "Takosumi Cloud checks whether this can be added. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
+    "Takosumi checks whether this can be added. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
   "new.managed.needCredential":
     "Adding this needs an external service connection that is not available in this Workspace yet.",
   "new.managed.connectFirst": "Set up a connection",
   "new.managed.byoTitle": "Use your own cloud connection",
   "new.managed.byoBody":
-    "If Takosumi Cloud cannot cover the AWS, GCP, Kubernetes, or personal Cloudflare account this needs, add your verified connection.",
+    "Add or select the Provider Connection this Capsule needs for AWS, GCP, Kubernetes, Cloudflare, or another provider.",
   "new.managed.byoLink": "Set up a connection",
   "new.compat.check": "Check and continue",
   "new.compat.recheck": "Check again",

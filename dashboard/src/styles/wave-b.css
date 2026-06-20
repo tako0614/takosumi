@@ -347,6 +347,11 @@
   align-items: center;
 }
 @media (max-width: 720px) {
+  .wb-install-form {
+    padding-bottom: calc(
+      var(--tg-mobile-tab-h) + var(--tg-s-8) + env(safe-area-inset-bottom, 0px)
+    );
+  }
   .wb-output-row {
     grid-template-columns: 1fr;
   }
@@ -358,7 +363,9 @@
   }
   .wb-install-form > .wb-form-actions {
     position: sticky;
-    bottom: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
+    bottom: calc(
+      var(--tg-mobile-tab-h) + var(--tg-s-2) + env(safe-area-inset-bottom, 0px)
+    );
     z-index: 25;
     padding: var(--tg-s-2) 0;
     background: linear-gradient(

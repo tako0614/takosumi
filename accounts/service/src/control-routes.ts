@@ -2281,10 +2281,7 @@ async function createInstallation(
   if (vars !== undefined && Object.keys(vars).length > 0) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
-    if (
-      baseConfig.spaceId !== undefined &&
-      baseConfig.spaceId !== spaceId
-    ) {
+    if (baseConfig.spaceId !== undefined && baseConfig.spaceId !== spaceId) {
       return errorJson(
         "invalid_request",
         "installConfigId is not available to the target Space.",
@@ -3035,6 +3032,11 @@ async function createControlConnection(
   if (!values || Object.keys(values).length === 0) {
     return errorJson("invalid_request", "values is required", 400);
   }
+  const scopeHints = connectionScopeHintsFromValues(
+    provider,
+    values,
+    body.scopeHints,
+  );
   const createRequest: CreateConnectionRequest = {
     spaceId,
     provider,
@@ -3053,9 +3055,7 @@ async function createControlConnection(
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
-    ...(connectionScopeHints(body.scopeHints)
-      ? { scopeHints: connectionScopeHints(body.scopeHints) }
-      : {}),
+    ...(scopeHints ? { scopeHints } : {}),
     values,
   };
   const response = await operations.createConnection(createRequest);
@@ -3696,6 +3696,25 @@ function connectionScopeHints(
     const v = stringValue(value[key]);
     if (v) hints[key] = v;
   }
+  return Object.keys(hints).length > 0
+    ? (hints as ConnectionScopeHints)
+    : undefined;
+}
+
+function connectionScopeHintsFromValues(
+  provider: string,
+  values: Readonly<Record<string, string>>,
+  explicit: unknown,
+): ConnectionScopeHints | undefined {
+  const derived: Record<string, string> = {};
+  if (provider === "cloudflare") {
+    const accountId = stringValue(values.CLOUDFLARE_ACCOUNT_ID);
+    if (accountId) derived.accountId = accountId;
+  }
+  const hints = {
+    ...derived,
+    ...(connectionScopeHints(explicit) ?? {}),
+  };
   return Object.keys(hints).length > 0
     ? (hints as ConnectionScopeHints)
     : undefined;

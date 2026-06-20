@@ -18,6 +18,7 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../lib/theme.ts";
+import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
@@ -264,7 +265,12 @@ export default function SignInView() {
       <div class="auth-flow">
         <a href="/" class="auth-brand">
           <BrandLogoMark />
-          <span class="auth-brand-text">Takosumi</span>
+          <span class="auth-brand-text">
+            Takosumi
+            <Show when={isTakosumiCloudRuntime()}>
+              <span class="auth-brand-sub">Cloud</span>
+            </Show>
+          </span>
         </a>
         <SignInPanel />
       </div>

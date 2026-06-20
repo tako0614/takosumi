@@ -231,6 +231,7 @@ export const ALLOWED_KEYS: Record<
     "environment",
     "sourceId",
     "installConfigId",
+    "vars",
   ]),
   installationPatch: new Set(["status"]),
   runApprove: new Set(["reason"]),

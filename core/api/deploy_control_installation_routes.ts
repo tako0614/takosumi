@@ -6,7 +6,10 @@
  * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
-import type { CreateInstallationRequest } from "../domains/installations/mod.ts";
+import type {
+  CreateInstallationRequest,
+  InstallationsService,
+} from "../domains/installations/mod.ts";
 import type {
   InstallConfig,
   Installation,
@@ -14,6 +17,7 @@ import type {
   PublicInstallConfig,
   PublicInstallation,
 } from "takosumi-contract/installations";
+import type { JsonValue } from "takosumi-contract";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -25,6 +29,7 @@ import {
   DEPLOYMENT_ID_PATTERN,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
+import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
@@ -52,6 +57,13 @@ const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
 
 interface PatchInstallationRequest {
   readonly status?: InstallationStatus;
+}
+
+interface CreateInstallationRouteRequest extends Omit<
+  CreateInstallationRequest,
+  "spaceId"
+> {
+  readonly vars?: Readonly<Record<string, JsonValue>>;
 }
 
 const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
@@ -285,12 +297,38 @@ export function mountDeployControlInstallationRoutes(
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        const body = await readJsonBody<
-          Omit<CreateInstallationRequest, "spaceId">
-        >(c, "installationCreate");
+        const body = await readJsonBody<CreateInstallationRouteRequest>(
+          c,
+          "installationCreate",
+        );
+        const { vars: rawVars, ...request } = body as Omit<
+          CreateInstallationRouteRequest,
+          "vars"
+        > & { readonly vars?: unknown };
+        const vars =
+          rawVars === undefined ? undefined : jsonRecordValue(rawVars);
+        if (rawVars !== undefined && vars === undefined) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "vars must be an object of JSON values keyed by OpenTofu variable names",
+          );
+        }
+        const installConfigId =
+          vars !== undefined && Object.keys(vars).length > 0
+            ? (
+                await createScopedInstallConfigWithVariables({
+                  installations: installations!,
+                  spaceId: id,
+                  baseInstallConfigId: request.installConfigId,
+                  installationName: request.name,
+                  vars,
+                })
+              ).id
+            : request.installConfigId;
         const installation = await installations!.createInstallation({
-          ...body,
+          ...request,
           spaceId: id,
+          installConfigId,
         });
         return c.json({ installation: publicInstallation(installation) }, 201);
       },
@@ -577,4 +615,75 @@ export function mountDeployControlInstallationRoutes(
       },
     }),
   );
+}
+
+async function createScopedInstallConfigWithVariables(input: {
+  readonly installations: InstallationsService;
+  readonly spaceId: string;
+  readonly baseInstallConfigId: string;
+  readonly installationName: string;
+  readonly vars: Readonly<Record<string, JsonValue>>;
+}): Promise<InstallConfig> {
+  for (const [key, value] of Object.entries(input.vars)) {
+    if (!isJsonValue(value)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `vars.${key} must be a JSON value`,
+      );
+    }
+  }
+  const baseConfig = await input.installations.getInstallConfig(
+    input.baseInstallConfigId,
+  );
+  if (
+    baseConfig.spaceId !== undefined &&
+    baseConfig.spaceId !== input.spaceId
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `installConfigId ${input.baseInstallConfigId} is not available to space ${input.spaceId}`,
+    );
+  }
+  const now = new Date().toISOString();
+  return await input.installations.putInstallConfig({
+    ...baseConfig,
+    id: `cfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    spaceId: input.spaceId,
+    name: `${input.installationName}-config`,
+    variableMapping: { ...baseConfig.variableMapping, ...input.vars },
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value !== "object") return false;
+  return Object.values(value as Record<string, unknown>).every(isJsonValue);
+}
+
+function jsonRecordValue(
+  value: unknown,
+): Readonly<Record<string, JsonValue>> | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  const out: Record<string, JsonValue> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!isJsonValue(item)) return undefined;
+    out[key] = item;
+  }
+  return out;
+}
+
+function isPlainJsonObject(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
