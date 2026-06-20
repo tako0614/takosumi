@@ -66,13 +66,13 @@
 }
 .tg-btn-primary {
   background: var(--tg-accent);
-  color: #fff;
+  color: var(--tg-accent-fg);
   border-color: var(--tg-accent);
   box-shadow: none;
 }
 .tg-btn-primary:hover:not(:disabled) {
   background: var(--tg-accent-hover);
-  color: #fff;
+  color: var(--tg-accent-fg);
 }
 .tg-btn-secondary {
   background: transparent;
@@ -95,13 +95,13 @@
 }
 .tg-btn-danger {
   background: var(--tg-danger);
-  color: #fff;
+  color: var(--tg-danger-fg);
   border-color: var(--tg-danger);
   box-shadow: none;
 }
 .tg-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tg-danger) 85%, #fff);
-  color: #fff;
+  color: var(--tg-danger-fg);
 }
 .tg-btn-sm {
   padding: 0.35em 0.7em;
@@ -528,13 +528,13 @@
 }
 .btn-primary {
   background: var(--tg-accent);
-  color: #fff;
+  color: var(--tg-accent-fg);
   border-color: var(--tg-accent);
   box-shadow: none;
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--tg-accent-hover);
-  color: #fff;
+  color: var(--tg-accent-fg);
 }
 .btn-secondary {
   background: transparent;
@@ -548,7 +548,7 @@
 }
 .btn-danger {
   background: var(--tg-danger);
-  color: #fff;
+  color: var(--tg-danger-fg);
   border: 1px solid var(--tg-danger);
   padding: 0.6em 1.2em;
   border-radius: var(--tg-r-md);
@@ -565,7 +565,7 @@
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
   background: color-mix(in srgb, var(--tg-danger) 85%, #fff);
-  color: #fff;
+  color: var(--tg-danger-fg);
 }
 .btn-danger:disabled {
   opacity: 0.5;

@@ -11,6 +11,12 @@ import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
 import { formatDateTime, locale, setLocale, t } from "../../i18n/index.ts";
+import type { MessageKey } from "../../i18n/index.ts";
+import {
+  setThemePreference,
+  themePreference,
+  type ThemePreference,
+} from "../../lib/theme.ts";
 import {
   Button,
   Card,
@@ -19,6 +25,12 @@ import {
   KVList,
   PageHeader,
 } from "../../components/ui/index.ts";
+
+const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
+  system: "theme.system",
+  light: "theme.light",
+  dark: "theme.dark",
+};
 
 export default function AccountView() {
   return (
@@ -100,6 +112,24 @@ function Inner(props: { readonly session: SessionRecord }) {
             >
               English
             </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title={t("account.theme.title")}
+            subtitle={t("account.theme.body")}
+          />
+          <div class="wc-form-actions">
+            {(["system", "light", "dark"] as const).map((theme) => (
+              <Button
+                variant={themePreference() === theme ? "primary" : "secondary"}
+                type="button"
+                onClick={() => setThemePreference(theme)}
+              >
+                {t(THEME_LABEL_KEY[theme])}
+              </Button>
+            ))}
           </div>
         </Card>
 

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja" data-theme="dark">
+<html lang="ja">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,15 +9,43 @@
       content="Takosumi dashboard for managing OpenTofu Capsules, provider connections, runs, state, and audit history."
     />
     <meta name="robots" content="noindex, nofollow" />
-    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="theme-color" content="#f6f7f9" />
     <link rel="icon" type="image/png" href="/tako.png" />
     <link rel="apple-touch-icon" href="/tako.png" />
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("tg_theme");
+          const preference =
+            stored === "light" || stored === "dark" || stored === "system"
+              ? stored
+              : "system";
+          const resolved =
+            preference === "dark" ||
+            (preference === "system" &&
+              matchMedia("(prefers-color-scheme: dark)").matches)
+              ? "dark"
+              : "light";
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.dataset.themePreference = preference;
+          document.documentElement.style.colorScheme = resolved;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+          document.documentElement.dataset.themePreference = "system";
+        }
+      })();
+    </script>
     <style>
       html,
       body {
         margin: 0;
-        background: #0a0a0a;
-        color: #fafafa;
+        background: #f6f7f9;
+        color: #111827;
+      }
+      html[data-theme="dark"],
+      html[data-theme="dark"] body {
+        background: #101316;
+        color: #f7f7f8;
       }
     </style>
   </head>
