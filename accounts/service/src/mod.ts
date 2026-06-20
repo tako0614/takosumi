@@ -128,7 +128,10 @@ import {
   handleUpstreamCallbackRequest,
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
-export { handleAuthProvidersRequest } from "./upstream-oauth-routes.ts";
+export {
+  handleAuthProvidersRequest,
+  isRetiredUpstreamOAuthProviderId,
+} from "./upstream-oauth-routes.ts";
 import {
   type InstallationRoute,
   matchAccountTokenRevokeRoute,

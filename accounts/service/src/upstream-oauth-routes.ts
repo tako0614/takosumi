@@ -24,6 +24,11 @@ import {
 
 const upstreamOAuthStateCookie = "takosumi_oauth_state";
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
+const retiredUpstreamOAuthProviderIds = new Set(["github"]);
+
+export function isRetiredUpstreamOAuthProviderId(providerId: string): boolean {
+  return retiredUpstreamOAuthProviderIds.has(providerId.trim().toLowerCase());
+}
 
 export function upstreamOAuthNotConfigured(): Response {
   return json(
@@ -331,6 +336,7 @@ function resolveUpstreamClient(
     (candidate) => candidate.providerId === providerId,
   );
   if (!client) return null;
+  if (isRetiredUpstreamOAuthProviderId(client.providerId)) return null;
   const provider =
     client.provider ?? builtinUpstreamOAuthProvider(client.providerId);
   if (!provider) return null;

@@ -2903,6 +2903,51 @@ test("accounts handler redirects to configured custom upstream OIDC providers", 
   );
 });
 
+test("accounts handler rejects retired custom upstream OIDC GitHub provider ids", async () => {
+  const provider = customOidcOAuthProvider({
+    id: "github",
+    issuer: "https://github.com/login/oauth",
+    authorizationEndpoint: "https://github.com/login/oauth/authorize",
+    tokenEndpoint: "https://github.com/login/oauth/access_token",
+    userInfoEndpoint: "https://api.github.com/user",
+  });
+  const handler = createAccountsHandler({
+    upstreamOAuth: {
+      subjectSecret: "subject-secret",
+      providers: [
+        {
+          providerId: "github",
+          clientId: "github-client",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+          provider,
+        },
+      ],
+    },
+  });
+
+  const authorizeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/authorize?provider=github&state=state-github",
+    ),
+  );
+  const callbackResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/callback?provider=github&code=code-github&state=state-github",
+      {
+        headers: {
+          cookie: `takosumi_oauth_state=${encodeURIComponent("github:state-github")}`,
+        },
+      },
+    ),
+  );
+
+  expect(authorizeResponse.status).toEqual(400);
+  expect((await authorizeResponse.json()).error).toEqual("unknown_provider");
+  expect(callbackResponse.status).toEqual(400);
+  expect((await callbackResponse.json()).error).toEqual("unknown_provider");
+});
+
 test("accounts handler rejects custom upstream provider ids without provider objects", async () => {
   const handler = createAccountsHandler({
     upstreamOAuth: {

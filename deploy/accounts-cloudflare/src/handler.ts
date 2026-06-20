@@ -17,6 +17,7 @@ import {
   exportDownloadUrl,
   googleOAuthProvider,
   handleAuthProvidersRequest,
+  isRetiredUpstreamOAuthProviderId,
   type JsonWebKeySet,
   type PlatformAccessPolicy,
   type OidcClientAuthMethod,
@@ -853,6 +854,11 @@ function parseCustomOidcUpstreamProvider(
   ) {
     throw new TypeError(
       "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
+    );
+  }
+  if (isRetiredUpstreamOAuthProviderId(providerId)) {
+    throw new TypeError(
+      `Custom upstream OIDC provider id ${providerId} is reserved or retired`,
     );
   }
   return {
