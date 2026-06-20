@@ -589,6 +589,11 @@
   color: inherit;
   font-family: var(--tg-font-display);
 }
+.takosumi-brand-mark {
+  display: block;
+  object-fit: contain;
+  border-radius: var(--tg-r-xs);
+}
 .wordmark-text {
   font-size: var(--tg-fs-lg);
   letter-spacing: -0.015em;
