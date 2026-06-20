@@ -406,8 +406,10 @@ function Inner() {
     return providerTail(required) === providerTail(connection);
   };
 
+  const visibleProviderConnections = () =>
+    providerConnections() ?? providerConnections.latest ?? [];
   const readyProviderConnections = () =>
-    (providerConnections.latest ?? []).filter(
+    visibleProviderConnections().filter(
       (connection) => connection.status === "ready",
     );
   const connectionMatchesOwnershipOptions = (
