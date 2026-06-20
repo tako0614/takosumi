@@ -39,8 +39,9 @@ The `/internal/v1/runner-profiles`, `/internal/v1/plan-runs`, `/internal/v1/appl
 `/internal/v1/installations/*` routes are internal seams for accounts-plane and CLI adapters. They are not the
 edge-public Takosumi model and should not appear in operator-facing capability or OpenAPI inventories.
 
-Destroy is represented as a guarded destroy plan -> approval -> destroy apply Run workflow. Internally, the legacy seam may still
-materialize reviewed plan artifacts through older plan/apply run records. The runner adapter calls the `RUNNER`
+Destroy is represented as a guarded `destroy_plan` -> approval -> `destroy_apply`
+Run workflow. Internally, the legacy seam may still materialize reviewed plan
+artifacts through older plan/apply run records. The runner adapter calls the `RUNNER`
 Durable Object, whose Cloudflare Container materializes source snapshots, writes variables as
 `takosumi.auto.tfvars.json`, and runs OpenTofu. Plan creates a reviewed `tfplan` artifact and records its digest. Apply
 restores that reviewed artifact from R2, verifies the digest, recreates the source workspace if needed, and executes
