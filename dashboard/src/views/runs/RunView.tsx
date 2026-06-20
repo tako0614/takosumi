@@ -14,6 +14,8 @@
  * (destructive plans need an explicit second confirmation), billing `blocked`
  * gates the deploy button.
  */
+import "../../styles/wave-a.css";
+import "../../styles/wave-b.css";
 import {
   createEffect,
   createMemo,

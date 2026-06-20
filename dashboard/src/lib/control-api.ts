@@ -26,6 +26,7 @@ import type {
   InstallConfig as ContractInstallConfig,
   Installation as ContractInstallation,
   InstallationProviderConnectionSet as ContractInstallationProviderConnectionSet,
+  JsonValue as ContractJsonValue,
   OutputShare as ContractOutputShare,
   ProviderCatalogEntry as ContractProviderCatalogEntry,
   ProviderConnection as ContractProviderConnection,
@@ -983,6 +984,7 @@ export async function createInstallation(input: {
   readonly environment: string;
   readonly sourceId: string;
   readonly installConfigId: string;
+  readonly vars?: Readonly<Record<string, ContractJsonValue>>;
 }): Promise<Installation> {
   const body = await controlFetch<{ installation: Installation }>(
     `${BASE}/spaces/${encodeURIComponent(input.spaceId)}/installations`,
@@ -993,6 +995,9 @@ export async function createInstallation(input: {
         environment: input.environment,
         sourceId: input.sourceId,
         installConfigId: input.installConfigId,
+        ...(input.vars && Object.keys(input.vars).length > 0
+          ? { vars: input.vars }
+          : {}),
       },
     },
   );
