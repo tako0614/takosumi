@@ -1090,6 +1090,11 @@ export async function checkCapsuleCompatibility(input: {
         readonly allowed?: boolean;
         readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
       }[];
+      readonly resources?: readonly {
+        readonly type?: string;
+        readonly count?: number;
+        readonly allowed?: boolean;
+      }[];
     };
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
@@ -1121,6 +1126,13 @@ export async function checkCapsuleCompatibility(input: {
       allowed: provider.allowed ?? true,
       ownershipOptions: provider.ownershipOptions ?? ["own_key"],
     }));
+  const resources = (body.report.resources ?? [])
+    .filter((resource) => resource.type !== undefined)
+    .map((resource) => ({
+      type: resource.type!,
+      ...(typeof resource.count === "number" ? { count: resource.count } : {}),
+      allowed: resource.allowed ?? true,
+    }));
   return {
     level: body.report.level,
     summary:
@@ -1128,7 +1140,7 @@ export async function checkCapsuleCompatibility(input: {
       "Compatibility check completed for the synced SourceSnapshot.",
     diagnostics,
     providers,
-    resources: [],
+    resources,
     ...(input.installConfigId
       ? { installConfigId: input.installConfigId }
       : {}),

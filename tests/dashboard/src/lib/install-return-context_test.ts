@@ -114,16 +114,24 @@ describe("installReturnContext", () => {
   });
 
   test("builds Provider Connections hrefs with a safe /new return parameter", () => {
-    const returnPath =
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu";
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+      vars: { project_name: "takos-space" },
+    });
+    expect(returnPath).toBeDefined();
     const href = providerConnectionsHrefForInstallReturn(returnPath);
     const url = new URL(href, "https://app.takosumi.test");
 
-    expect(url.pathname).toEqual("/space/settings/connections");
+    expect(url.pathname).toEqual("/workspace/settings/connections");
     expect(url.searchParams.get("return")).toEqual(returnPath);
     expect(
       installReturnPathFromReturnParam(url.searchParams.get("return")),
     ).toEqual(returnPath);
+    expect(installReturnContext(url.searchParams.get("return"))).toMatchObject({
+      vars: { project_name: "takos-space" },
+    });
   });
 
   test("keeps pinned full commit refs in Provider Connections return hrefs", () => {
@@ -138,7 +146,7 @@ describe("installReturnContext", () => {
     const href = providerConnectionsHrefForInstallReturn(returnPath);
     const url = new URL(href, "https://app.takosumi.test");
 
-    expect(url.pathname).toEqual("/space/settings/connections");
+    expect(url.pathname).toEqual("/workspace/settings/connections");
     expect(url.searchParams.get("return")).toEqual(returnPath);
     expect(installReturnContext(url.searchParams.get("return"))).toMatchObject({
       ref: fullRef,
@@ -158,11 +166,11 @@ describe("installReturnContext", () => {
       providerConnectionsHrefForInstallReturn(
         "/new?git=http%3A%2F%2Fexample.com%2Facme%2Fworker.git&ref=main&path=deploy",
       ),
-    ).toEqual("/space/settings/connections");
+    ).toEqual("/workspace/settings/connections");
     expect(
       providerConnectionsHrefForInstallReturn(
         "//evil.example/new?git=https://github.com/acme/worker.git",
       ),
-    ).toEqual("/space/settings/connections");
+    ).toEqual("/workspace/settings/connections");
   });
 });

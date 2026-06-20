@@ -12,6 +12,7 @@ import {
   refreshSession,
   type SessionRecord,
 } from "../../lib/session.ts";
+import { t } from "../../../../i18n/index.ts";
 
 interface Props {
   children: (session: SessionRecord) => JSX.Element;
@@ -74,7 +75,7 @@ export default function AuthGuard(props: Props) {
     <Switch>
       <Match when={state() === "loading"}>
         <div class="auth-page">
-          <p class="auth-spinner">読み込み中...</p>
+          <p class="auth-spinner">{t("common.loading")}</p>
         </div>
       </Match>
       <Match when={state() === "authenticated" && session()}>

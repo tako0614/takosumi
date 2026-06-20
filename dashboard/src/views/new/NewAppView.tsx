@@ -29,6 +29,7 @@ import {
 } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
 import { Download } from "lucide-solid";
+import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
@@ -418,6 +419,8 @@ function Inner() {
   const supportsProjectNameInput = () =>
     isTakosOpenTofuCapsule(gitUrl(), path()) ||
     prefill?.vars?.project_name !== undefined;
+  const supportsCloudflareScopeInput = () =>
+    isTakosOpenTofuCapsule(gitUrl(), path());
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(gitUrl()));
     const suffix = spaceSuffix(spaceId());
@@ -425,10 +428,18 @@ function Inner() {
   };
   const projectNameVariable = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
-  const installVariables = () =>
-    supportsProjectNameInput()
-      ? { project_name: projectNameVariable() }
-      : undefined;
+  const installVariables = ():
+    | Readonly<Record<string, JsonValue>>
+    | undefined => {
+    const variables: Record<string, JsonValue> = {};
+    if (supportsProjectNameInput()) {
+      variables.project_name = projectNameVariable();
+    }
+    if (supportsCloudflareScopeInput()) {
+      variables.cloudflare = {};
+    }
+    return Object.keys(variables).length > 0 ? variables : undefined;
+  };
   const currentInstallReturnPath = () =>
     installReturnPathFromPrefill({
       git: gitUrl(),

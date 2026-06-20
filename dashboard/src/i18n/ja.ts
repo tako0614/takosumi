@@ -32,6 +32,7 @@ export const ja = {
   "common.minutesAgo": "{n}分前",
   "common.hoursAgo": "{n}時間前",
   "common.daysAgo": "{n}日前",
+  "common.empty": "データがありません",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
@@ -313,13 +314,13 @@ export const ja = {
   "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
   "new.managed.notice":
-    "Takosumi Cloud で追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
+    "Takosumi で追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
   "new.managed.needCredential":
     "追加するには、まだこの Workspace にない外部サービス接続が必要です。",
   "new.managed.connectFirst": "接続を設定する",
   "new.managed.byoTitle": "自分のクラウド接続を使う",
   "new.managed.byoBody":
-    "Takosumi Cloud の接続で対応できない AWS / GCP / Kubernetes や自分の Cloudflare アカウントが必要な場合は、確認済みの接続を追加してください。",
+    "この Capsule に必要な AWS / GCP / Kubernetes / Cloudflare などの Provider Connection を追加または選択してください。",
   "new.managed.byoLink": "接続を設定する",
   "new.compat.check": "確認して続ける",
   "new.compat.recheck": "もう一度確認",

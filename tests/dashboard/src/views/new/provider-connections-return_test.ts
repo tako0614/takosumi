@@ -101,7 +101,9 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {
-    expect(newAppViewSource).toContain("defaultProviderRowsWithReadyConnections");
+    expect(newAppViewSource).toContain(
+      "defaultProviderRowsWithReadyConnections",
+    );
     expect(newAppViewSource).toContain("const visibleProviderConnections = ()");
     expect(newAppViewSource).toContain(
       "providerConnections() ?? providerConnections.latest ?? []",
@@ -111,9 +113,22 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "candidates.some((connection) => connection.id === row.connectionId)",
     );
-    expect(newAppViewSource).toContain('selected={!row.connectionId}');
+    expect(newAppViewSource).toContain("selected={!row.connectionId}");
     expect(newAppViewSource).toContain("connection.id === row.connectionId");
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
+  });
+
+  test("Cloudflare connection form forwards account id as a scope hint", () => {
+    expect(connectionsTabSource).toContain("scopeHintsFromConnectionValues");
+    expect(connectionsTabSource).toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(connectionsTabSource).toContain(
+      "scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues)",
+    );
+  });
+
+  test("compatibility adapter preserves backend resource summaries", () => {
+    expect(controlApiSource).toContain("body.report.resources ?? []");
+    expect(controlApiSource).not.toContain("resources: []");
   });
 
   test("/new only proceeds when the compatibility report is runnable", () => {
@@ -131,9 +146,7 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("/new retry still saves Provider Connections after a partial install create", () => {
-    const createIndex = newAppViewSource.indexOf(
-      "await createInstallation({",
-    );
+    const createIndex = newAppViewSource.indexOf("await createInstallation({");
     const setCreatedIndex = newAppViewSource.indexOf(
       "setCreatedInstallationId(installationId);",
     );
@@ -147,9 +160,8 @@ describe("/new Provider Connections return context", () => {
     expect(saveIndex).toBeGreaterThan(setCreatedIndex);
     expect(doneIndex).toBeGreaterThan(saveIndex);
     expect(
-      newAppViewSource.match(
-        /await putInstallationProviderConnectionSet\(/g,
-      ) ?? [],
+      newAppViewSource.match(/await putInstallationProviderConnectionSet\(/g) ??
+        [],
     ).toHaveLength(1);
   });
 

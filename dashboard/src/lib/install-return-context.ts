@@ -77,7 +77,7 @@ export function installReturnPathFromPrefill(
 }
 
 export function installReturnPathFromContext(
-  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name">,
+  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name" | "vars">,
 ): string | undefined {
   return installReturnPathFromPrefill(context);
 }

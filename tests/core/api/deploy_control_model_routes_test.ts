@@ -194,6 +194,67 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
   expect((await dupRes.json()).error.code).toBe("failed_precondition");
 });
 
+test("model e2e: create Installation with vars clones a Space-scoped InstallConfig", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: { project_name: "takos-vars", cloudflare: {} },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const installation = (await createRes.json()).installation as {
+    installConfigId: string;
+  };
+  expect(installation.installConfigId).not.toBe(installConfigId);
+
+  const config = await operations.installations.getInstallConfig(
+    installation.installConfigId,
+  );
+  expect(config.spaceId).toBe(spaceId);
+  expect(config.variableMapping).toEqual({
+    project_name: "takos-vars",
+    cloudflare: {},
+  });
+});
+
+test("model e2e: create Installation rejects non-object vars", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "bad-vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: "project_name=takos",
+      }),
+    },
+  );
+  expect(createRes.status).toBe(400);
+  const body = await createRes.json();
+  expect(body.error.message).toContain("vars must be an object");
+});
+
 test("model e2e: GET /internal/v1/installations/{id} returns the new shape", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "reader");
