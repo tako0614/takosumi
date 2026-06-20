@@ -46,6 +46,163 @@ Out of scope for the first open gate:
 - paid enforcement before Stripe, entitlement, invoice, dunning, refund, and
   support drills pass readiness.
 
+## Launch Risk Controls
+
+These controls are Cloud-only launch controls for the closed official hosted
+deployment. They do not add billing, managed resources, compatibility gateways,
+or official resource pools to OSS Takosumi or Takosumi for Operators.
+
+Do not mark Takosumi Cloud open based on this section alone. Operator signoff,
+legal signoff, provider drills, incident drills, Stripe flows, support mailbox
+checks, restore drills, rollback drills, and security operation rehearsals must
+still pass launch-readiness evidence.
+
+### Usage Aggregation Policy
+
+Policy reference:
+
+```text
+policy://takosumi-cloud/usage-aggregation/showback-v1
+```
+
+Takosumi Cloud aggregates customer-visible usage by Workspace. Capsule,
+Project, Run, provider, and meter are dimensions used for drill-down, not payer
+ownership.
+
+The initial closed-GA aggregation window is daily UTC. Each aggregation job must
+record:
+
+- `workspace_id`
+- `project_id` when available
+- `capsule_id` when available
+- meter id
+- quantity
+- source Run or platform event reference
+- aggregation window start and end
+- reconciliation timestamp
+
+The aggregation job may run in `showback` mode while access is closed. It must
+not block plan/apply/destroy until Stripe, entitlement, invoice,
+failed-payment, dunning, refund, and support readiness have passed.
+
+### Spend Cap
+
+Spend cap reference:
+
+```text
+policy://takosumi-cloud/spend-cap/starter-closed-ga
+```
+
+Closed-GA starter Workspaces use a USD-denominated monthly spend cap in showback
+mode. The default launch cap is:
+
+```text
+25 USD / Workspace / calendar month
+```
+
+While access is closed, exceeding the cap must create operator-visible evidence
+and keep additional paid or managed resource usage blocked unless an operator
+override is recorded. It must not silently open paid billing.
+
+Paid enforcement requires billing-entitlement readiness. Until that passes,
+spend-cap evidence proves only that the cap policy exists and is reviewable.
+
+### LLM And Tool Usage Caps
+
+LLM usage policy reference:
+
+```text
+policy://takosumi-cloud/llm-usage/starter-closed-ga
+```
+
+Tool usage policy reference:
+
+```text
+policy://takosumi-cloud/tool-usage/starter-closed-ga
+```
+
+Takosumi Cloud must distinguish hosted platform operations from customer Capsule
+execution. LLM and tool usage caps apply to Cloud-only hosted features that
+consume operator resources, such as compatibility helpers, review assistants, or
+managed service helpers when they are enabled.
+
+Capsule OpenTofu provider execution remains controlled through Provider
+Connections, Credential Recipes, Provider Bindings, runner policy, and egress
+policy. Generic provider credentials are not operator LLM/tool spend.
+
+### Release Artifact Policy
+
+Policy reference:
+
+```text
+policy://takosumi-cloud/release-artifacts/immutability-v1
+```
+
+Immutability reference:
+
+```text
+artifact-retention://takosumi-cloud/platform-worker/v1
+```
+
+Production promotion must keep immutable references for:
+
+- commit SHA
+- Cloudflare Worker version id
+- dashboard asset digest
+- runner image digest or Cloudflare Container smoke reference
+- D1 migration transcript when schema changes
+- rollback target Worker version id
+
+Mutable labels such as `latest` are not valid rollback targets. This policy
+only proves the artifact policy exists. CI-equivalent evidence, SBOM, signature,
+image digest, package version, branch protection export, and rollback drill
+evidence remain separate launch-readiness requirements.
+
+### Billing Support Runbook
+
+Runbook reference:
+
+```text
+runbook://takosumi-cloud/support/billing-closed-ga-v1
+```
+
+Owner:
+
+```text
+support-owner:takosumi-cloud-operator
+```
+
+Billing support covers:
+
+- explaining `disabled`, `showback`, and `enforce` modes;
+- locating the customer's Workspace and billing state;
+- confirming whether paid enforcement is enabled for the cohort;
+- collecting sanitized Stripe or provider event references without exposing
+  secrets;
+- recording customer-facing support notes;
+- escalating suspected payment, entitlement, dunning, refund, or credit issues;
+- pausing enforcement for a Workspace only with an audited operator override.
+
+Support responses must not promise refund, credit, deletion, export, or
+provider-side resource cleanup until the matching operation has actually run and
+evidence has been recorded.
+
+### Security Controls Draft
+
+The security threat model, runner sandbox review, and vulnerability SLA must be
+accepted through security-operations evidence before they count as completed.
+This launch brief intentionally does not mark those items complete.
+
+Minimum topics for the security review:
+
+- hosted runner isolation and cleanup;
+- secret injection only into temporary run sandboxes;
+- log redaction;
+- provider egress policy;
+- operator-only access to upstream Cloud credentials;
+- fail-closed Gateway behavior for unsupported provider operations;
+- vulnerability intake, triage, patch, and customer notification SLA.
+
 ## SKU
 
 The first customer-facing SKU is:
@@ -170,6 +327,20 @@ launch-readiness domain and staged rehearsal step.
 
 This document backs `domains.offering-definition.evidence.launch-brief`.
 
+It can also back these operator-review policy evidence refs:
+
+- `billing-entitlement.evidence.usage-aggregation-policy`
+- `quota-abuse-spend-control.evidence.quota-plan`
+- `quota-abuse-spend-control.evidence.spend-cap`
+- `quota-abuse-spend-control.evidence.llm-tool-usage-cap`
+- `release-provenance.evidence.artifact-policy`
+- `legal-privacy-support.evidence.billing-support-runbook`
+
 It does not satisfy `operator-signoff`. Operator signoff must be added as a
 separate evidence reference after a human operator accepts the launch scope,
 quota, billing, support, AUP, and beta scope.
+
+It also does not satisfy legal signoff, security threat-model acceptance,
+sandbox review, vulnerability SLA evidence, Stripe flows, support mailbox
+checks, incident drills, restore drills, rollback drills, quota abuse drills, or
+any provider/resource operation coverage.
