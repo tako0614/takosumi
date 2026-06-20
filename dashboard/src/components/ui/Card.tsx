@@ -30,7 +30,7 @@ export function CardHeader(props: CardHeaderProps): JSX.Element {
   return (
     <div class="tg-card-header">
       <div class="tg-card-header-text">
-        <h3 class="tg-card-title">{props.title}</h3>
+        <p class="tg-card-title">{props.title}</p>
         <Show when={props.subtitle}>
           <p class="tg-card-subtitle">{props.subtitle}</p>
         </Show>

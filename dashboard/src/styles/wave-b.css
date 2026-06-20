@@ -160,7 +160,7 @@
   cursor: pointer;
   font-size: var(--tg-fs-sm);
   font-weight: 600;
-  color: var(--tg-fg-subtle);
+  color: var(--tg-fg-muted);
   padding: var(--tg-s-2) 0;
 }
 .wb-disclosure[open] > summary {
