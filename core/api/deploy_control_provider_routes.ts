@@ -147,6 +147,14 @@ export function mountDeployControlProviderRoutes(
           "providerEnvPut",
         );
         ensureConnectionPermission(principal, body.spaceId);
+        if (body.secretRef && body.spaceId) {
+          const backingConnection = await controller.getConnection(
+            body.secretRef,
+          );
+          if (backingConnection.scope === "operator") {
+            ensureConnectionPermission(principal, undefined, "operator");
+          }
+        }
         return c.json(
           {
             providerEnv: publicProviderEnv(

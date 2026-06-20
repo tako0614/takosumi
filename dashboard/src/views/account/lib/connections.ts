@@ -4,6 +4,7 @@
  * form. Pure client-side presentation data — the Connection CRUD itself goes
  * through `lib/control-api.ts` (`/api/v1/connections*`).
  */
+import { type MessageKey, t } from "../../../i18n/index.ts";
 
 /**
  * One env-name field a provider exposes in the register form. `secret: true`
@@ -41,9 +42,9 @@ export interface ProviderDescriptor {
   readonly fields: readonly ProviderCredentialField[];
   /**
    * Optional guided-token helper. When present, the connections screen leads
-   * with "<provider> に接続" → deep-link → paste, and demotes the raw field
-   * form to an advanced "詳細設定" fallback. Absent providers keep the plain
-   * field form as the only path.
+   * with provider-specific setup copy, deep-link, paste, and demotes the raw
+   * field form to an advanced fallback. Absent providers keep the plain field
+   * form as the only path.
    */
   readonly tokenHelper?: ProviderTokenHelper;
   /**
@@ -53,6 +54,8 @@ export interface ProviderDescriptor {
    */
   readonly oauthCandidate?: boolean;
 }
+
+const providerCopy = (key: MessageKey) => t(key);
 
 /**
  * Cloudflare "Create API Token" deep-link. Cloudflare's dashboard accepts a
@@ -87,33 +90,43 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   {
     provider: "cloudflare",
-    label: "Cloudflare",
+    get label() {
+      return providerCopy("conn.provider.cloudflare.label");
+    },
     oauthCandidate: true,
     tokenHelper: {
       envName: "CLOUDFLARE_API_TOKEN",
       createTokenUrl: CLOUDFLARE_CREATE_TOKEN_URL,
-      steps: [
-        "下のボタンで Cloudflare のトークン作成画面を開きます。",
-        "Cloudflare の画面で「概要に進む」→「トークンを作成」を押します（権限はあらかじめ選ばれています）。",
-        "表示されたトークンをコピーして、ここに貼り付けます。",
-      ],
+      get steps() {
+        return [
+          providerCopy("conn.provider.cloudflare.helper.stepOpen"),
+          providerCopy("conn.provider.cloudflare.helper.stepCreate"),
+          providerCopy("conn.provider.cloudflare.helper.stepPaste"),
+        ];
+      },
     },
-    fields: [
-      {
-        envName: "CLOUDFLARE_API_TOKEN",
-        label: "API トークン",
-        required: true,
-        secret: true,
-        placeholder: "cloudflare API token",
-      },
-      {
-        envName: "CLOUDFLARE_ACCOUNT_ID",
-        label: "アカウント ID（任意）",
-        required: false,
-        secret: false,
-        placeholder: "0123abcd...",
-      },
-    ],
+    get fields() {
+      return [
+        {
+          envName: "CLOUDFLARE_API_TOKEN",
+          label: providerCopy("conn.provider.cloudflare.apiToken.label"),
+          required: true,
+          secret: true,
+          placeholder: providerCopy(
+            "conn.provider.cloudflare.apiToken.placeholder",
+          ),
+        },
+        {
+          envName: "CLOUDFLARE_ACCOUNT_ID",
+          label: providerCopy("conn.provider.cloudflare.accountId.label"),
+          required: false,
+          secret: false,
+          placeholder: providerCopy(
+            "conn.provider.cloudflare.accountId.placeholder",
+          ),
+        },
+      ];
+    },
   },
 ];
 

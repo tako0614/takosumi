@@ -191,6 +191,56 @@ test("secret Provider Env binding resolves through its backing Connection", asyn
   expect(mintableConnectionIds(resolved)).toEqual(["penv_space_cf"]);
 });
 
+test("operator-backed Provider Env is Cloud-only and resolves only when enabled", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(connection({ id: "conn_operator_cf" }));
+
+  await expect(
+    service.putProviderEnv("penv_operator_cf", {
+      spaceId: model.space.id,
+      providerSource: CLOUDFLARE,
+      displayName: "Takosumi Cloud Cloudflare",
+      materialization: "secret",
+      requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+      secretRef: "conn_operator_cf",
+    }),
+  ).rejects.toThrow(/operator-scoped/);
+
+  const cloudService = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_cloud`,
+    now: () => NOW,
+    allowOperatorBackedProviderEnvs: true,
+  });
+  await cloudService.putProviderEnv("penv_operator_cf", {
+    spaceId: model.space.id,
+    providerSource: CLOUDFLARE,
+    displayName: "Takosumi Cloud Cloudflare",
+    materialization: "secret",
+    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+    secretRef: "conn_operator_cf",
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "dp_operator",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [{ provider: CLOUDFLARE, envId: "penv_operator_cf" }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(
+    service.resolveProviderEnvBindings(model.installation),
+  ).rejects.toThrow(/operator-scoped/);
+
+  const resolved = await cloudService.resolveProviderEnvBindings(
+    model.installation,
+  );
+  expect(resolved[0]?.connection?.id).toBe("conn_operator_cf");
+  expect(resolved[0]?.connection?.scope).toBe("operator");
+});
+
 test("oauth Provider Env binding uses the same backing Connection boundary", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(

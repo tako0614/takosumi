@@ -5,6 +5,7 @@
  * and the backend's OAuth-callback redirect (`/connections?connected=1` →
  * `/space/settings/connections?connected=1`) work unchanged.
  */
+import "../../styles/wave-a.css";
 import { Match, Show, Switch } from "solid-js";
 import { Settings2 } from "lucide-solid";
 import { useParams } from "@solidjs/router";

@@ -300,7 +300,9 @@ function Inner() {
     isFullCommitSha(initialRef) ? initialRef : null,
   );
   const [path, setPath] = createSignal(prefill?.path || ".");
-  const initialName = prefill ? capsuleNameFromUrl(prefill.git) : "";
+  const initialName = prefill
+    ? (prefill.name ?? capsuleNameFromUrl(prefill.git))
+    : "";
   const [name, setName] = createSignal(initialName);
   const [resourcePrefix, setResourcePrefix] = createSignal(
     prefill?.vars?.project_name ?? "",
@@ -424,6 +426,7 @@ function Inner() {
       git: gitUrl(),
       ref: effectiveRef(),
       path: path().trim() || ".",
+      name: name().trim(),
       ...(supportsProjectNameInput()
         ? { vars: { project_name: projectNameVariable() } }
         : {}),
@@ -810,14 +813,14 @@ function Inner() {
         });
         installationId = installation.id;
         setCreatedInstallationId(installationId);
-        await putInstallationProviderConnectionSet(
-          installationId,
-          providerConnectionsPayload(),
-        );
-        setStepInstall("done");
       } else {
-        setStepInstall("done");
+        setStepInstall("running");
       }
+      await putInstallationProviderConnectionSet(
+        installationId,
+        providerConnectionsPayload(),
+      );
+      setStepInstall("done");
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");

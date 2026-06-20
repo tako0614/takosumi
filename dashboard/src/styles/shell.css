@@ -413,7 +413,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: clamp(32px, 7vh, 72px) var(--tg-s-5);
+  padding: clamp(64px, 10vh, 104px) var(--tg-s-5)
+    clamp(40px, 8vh, 72px);
   background: var(--tg-bg);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
@@ -426,6 +427,13 @@
 .auth-page > * {
   position: relative;
   z-index: 1;
+}
+.auth-flow {
+  width: min(100%, 384px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
 }
 .auth-theme-switcher {
   position: absolute;
@@ -463,6 +471,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--tg-s-4);
+  align-self: center;
   margin-bottom: var(--tg-s-5);
   color: var(--tg-fg);
   text-decoration: none;
@@ -492,7 +501,7 @@
 }
 .sign-in-panel {
   width: 100%;
-  max-width: 384px;
+  max-width: none;
 }
 .sign-in-title {
   font-family: var(--tg-font-display);
@@ -644,8 +653,9 @@
 @media (max-width: 520px) {
   .auth-page {
     align-items: stretch;
-    justify-content: flex-start;
-    padding-top: clamp(76px, 12vh, 112px);
+    justify-content: center;
+    padding: clamp(76px, 12vh, 108px) var(--tg-s-4)
+      clamp(32px, 8vh, 64px);
   }
 
   .auth-theme-switcher {
@@ -654,12 +664,11 @@
   }
 
   .auth-brand {
-    align-self: center;
-    margin-bottom: var(--tg-s-6);
+    margin-bottom: var(--tg-s-5);
   }
 
-  .sign-in-panel {
-    max-width: none;
+  .auth-flow {
+    width: 100%;
   }
 
   .sign-in-title {

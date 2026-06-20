@@ -456,6 +456,17 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.add.genericEnvOption": "Use custom credentials",
   "conn.add.displayName": "Display name (optional)",
   "conn.add.displayNamePlaceholder": "Production Cloudflare",
+  "conn.provider.cloudflare.label": "Cloudflare",
+  "conn.provider.cloudflare.helper.stepOpen":
+    "Use the button below to open Cloudflare's token creation screen.",
+  "conn.provider.cloudflare.helper.stepCreate":
+    "On Cloudflare, continue to the summary, then create the token. The permissions are preselected.",
+  "conn.provider.cloudflare.helper.stepPaste":
+    "Copy the token Cloudflare shows, then paste it here.",
+  "conn.provider.cloudflare.apiToken.label": "API token",
+  "conn.provider.cloudflare.apiToken.placeholder": "cloudflare API token",
+  "conn.provider.cloudflare.accountId.label": "Account ID (optional)",
+  "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
   "conn.guided.intro":
     "Connect to {provider}. Create a token on {provider}'s own screen and paste it here.",
   "conn.guided.openProvider": "Open {provider} to create a token",

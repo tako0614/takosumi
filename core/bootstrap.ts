@@ -304,6 +304,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuConnectionVault?: ConnectionVault;
   /**
+   * Cloud-only compatibility seam: allows a Space-scoped ProviderConnection to
+   * be backed by an operator-scoped Connection, surfaced publicly as
+   * `takos_provided`. OSS/self-host defaults to false.
+   */
+  readonly allowOperatorBackedProviderEnvs?: boolean;
+  /**
    * At-rest secret crypto for the built-in {@link StaticSecretConnectionVault}.
    * When `opentofuConnectionVault` is not supplied but this IS, the bootstrap
    * constructs the default vault over the shared OpenTofu store with this crypto
@@ -793,6 +799,8 @@ export async function createTakosumiService(
   const spacesService = new SpacesService({ store: sharedOpenTofuStore });
   const connectionsService = new ConnectionsService({
     store: sharedOpenTofuStore,
+    allowOperatorBackedProviderEnvs:
+      options.allowOperatorBackedProviderEnvs === true,
   });
   const installationsService = new InstallationsService({
     store: sharedOpenTofuStore,
@@ -832,6 +840,8 @@ export async function createTakosumiService(
     ...(options.ownKeyProviderRunner
       ? { ownKeyProviderRunner: options.ownKeyProviderRunner }
       : {}),
+    allowOperatorBackedProviderEnvs:
+      options.allowOperatorBackedProviderEnvs === true,
     ...(opentofuConnectionVault ? { vault: opentofuConnectionVault } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
     sourcesService,

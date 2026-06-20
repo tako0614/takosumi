@@ -22,6 +22,7 @@ export interface InstallPrefill {
   readonly git: string;
   readonly ref: string;
   readonly path: string;
+  readonly name?: string;
   readonly vars?: Readonly<Record<string, string>>;
 }
 
@@ -33,13 +34,22 @@ export function parseInstallPrefill(
   const packed = parsePackedSource(params.get("source"));
   const git = params.get("git") ?? packed?.git ?? "";
   if (!isSafeHttpsGitUrl(git)) return undefined;
+  const name = parseOptionalName(params.get("name"));
   const vars = parseVariableParams(params);
   return {
     git,
     ref: (params.get("ref") ?? packed?.ref ?? "").trim(),
     path: (params.get("path") ?? packed?.path ?? "").trim(),
+    ...(name ? { name } : {}),
     ...(Object.keys(vars).length > 0 ? { vars } : {}),
   };
+}
+
+function parseOptionalName(value: string | null): string | undefined {
+  const name = value?.trim();
+  if (!name) return undefined;
+  if (/[\r\n\0]/u.test(name)) return undefined;
+  return name.slice(0, 96);
 }
 
 function parseVariableParams(

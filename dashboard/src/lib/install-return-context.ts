@@ -8,6 +8,7 @@ export interface InstallReturnContext {
   readonly git: string;
   readonly ref: string;
   readonly path: string;
+  readonly name?: string;
   readonly vars?: Readonly<Record<string, string>>;
   readonly label: string;
   readonly host: string;
@@ -40,7 +41,7 @@ export function installReturnContext(
 
   return {
     ...prefill,
-    label: capsuleNameFromUrl(prefill.git),
+    label: prefill.name || capsuleNameFromUrl(prefill.git),
     host: new URL(prefill.git).host,
     sourceLabel: sourceLabelFromGit(prefill.git),
     displayRef: displayRef(prefill.ref),
@@ -49,12 +50,14 @@ export function installReturnContext(
 
 export function installReturnPathFromPrefill(
   prefill: Pick<InstallPrefill, "git"> &
-    Partial<Pick<InstallPrefill, "ref" | "path" | "vars">>,
+    Partial<Pick<InstallPrefill, "ref" | "path" | "name" | "vars">>,
 ): string | undefined {
   const params = new URLSearchParams();
   params.set("git", prefill.git.trim());
   params.set("ref", prefill.ref?.trim() ?? "");
   params.set("path", prefill.path?.trim() || ".");
+  const name = prefill.name?.trim();
+  if (name) params.set("name", name);
   for (const [key, value] of Object.entries(prefill.vars ?? {}).sort()) {
     params.set(`var.${key}`, value);
   }
@@ -66,6 +69,7 @@ export function installReturnPathFromPrefill(
   canonical.set("git", safe.git);
   canonical.set("ref", safe.ref);
   canonical.set("path", safe.path || ".");
+  if (safe.name) canonical.set("name", safe.name);
   for (const [key, value] of Object.entries(safe.vars ?? {}).sort()) {
     canonical.set(`var.${key}`, value);
   }
@@ -73,7 +77,7 @@ export function installReturnPathFromPrefill(
 }
 
 export function installReturnPathFromContext(
-  context: Pick<InstallReturnContext, "git" | "ref" | "path">,
+  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name">,
 ): string | undefined {
   return installReturnPathFromPrefill(context);
 }

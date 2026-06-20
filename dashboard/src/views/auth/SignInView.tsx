@@ -261,11 +261,13 @@ export default function SignInView() {
   return (
     <main class="auth-page">
       <ThemeSwitcher />
-      <a href="/" class="auth-brand">
-        <BrandLogoMark />
-        <span class="auth-brand-text">Takosumi</span>
-      </a>
-      <SignInPanel />
+      <div class="auth-flow">
+        <a href="/" class="auth-brand">
+          <BrandLogoMark />
+          <span class="auth-brand-text">Takosumi</span>
+        </a>
+        <SignInPanel />
+      </div>
     </main>
   );
 }

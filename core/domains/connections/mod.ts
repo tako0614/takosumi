@@ -122,12 +122,19 @@ export interface ConnectionsServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
+  /**
+   * Takosumi Cloud may expose a Space-scoped ProviderConnection that is backed
+   * by an operator-scoped Connection. OSS leaves this disabled so self-hosted
+   * operator credentials never become bindable by accident.
+   */
+  readonly allowOperatorBackedProviderEnvs?: boolean;
 }
 
 export class ConnectionsService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
+  readonly #allowOperatorBackedProviderEnvs: boolean;
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
@@ -136,6 +143,8 @@ export class ConnectionsService {
       ((prefix) =>
         `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
+    this.#allowOperatorBackedProviderEnvs =
+      dependencies.allowOperatorBackedProviderEnvs === true;
   }
 
   async putProviderEnv(
@@ -172,11 +181,22 @@ export class ConnectionsService {
       }
       if (
         input.spaceId !== undefined &&
+        backingConnection.scope === "space" &&
         backingConnection.spaceId !== input.spaceId
       ) {
         throw new OpenTofuControllerError(
           "permission_denied",
           `Provider Env backing Connection ${input.secretRef} belongs to another Space`,
+        );
+      }
+      if (
+        input.spaceId !== undefined &&
+        backingConnection.scope === "operator" &&
+        !this.#allowOperatorBackedProviderEnvs
+      ) {
+        throw new OpenTofuControllerError(
+          "permission_denied",
+          `Provider Env backing Connection ${input.secretRef} is operator-scoped and cannot back OSS Provider Connections`,
         );
       }
       if (
@@ -317,10 +337,23 @@ export class ConnectionsService {
         `Provider Env ${env.id} has no backing Connection`,
       );
     }
-    if (env.spaceId !== undefined && connection.spaceId !== env.spaceId) {
+    if (
+      env.spaceId !== undefined &&
+      connection.scope === "space" &&
+      connection.spaceId !== env.spaceId
+    ) {
       throw new OpenTofuControllerError(
         "permission_denied",
         `Provider Env ${env.id} backing Connection belongs to another Space`,
+      );
+    }
+    if (
+      connection.scope === "operator" &&
+      !this.#allowOperatorBackedProviderEnvs
+    ) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `Provider Env ${env.id} backing Connection is operator-scoped and cannot back OSS Provider Connections`,
       );
     }
     if (connection.status !== "verified") {

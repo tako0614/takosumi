@@ -129,6 +129,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.
   const [values, setValues] = createSignal<Record<string, string>>({});
   const [helperToken, setHelperToken] = createSignal("");
+  const [oauthBusy, setOauthBusy] = createSignal(false);
 
   const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
   const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
@@ -272,10 +273,22 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   });
   const oauthAvailable = createMemo(() => !!oauthProbe()?.authorizationUrl);
 
-  const startOAuth = () => {
-    const url = oauthProbe()?.authorizationUrl;
-    if (!url) return;
-    window.location.assign(url);
+  const startOAuth = async () => {
+    if (!oauthAvailable()) return;
+    setOauthBusy(true);
+    setOauthNotice(null);
+    try {
+      const started = await startCloudflareOAuth({
+        spaceId: spaceId(),
+        displayName: displayName().trim() || undefined,
+      });
+      window.location.assign(started.authorizationUrl);
+    } catch (e) {
+      if (isOAuthUnavailable(e)) return;
+      setOauthNotice({ kind: "error", code: "start_failed" });
+    } finally {
+      setOauthBusy(false);
+    }
   };
 
   // Per-connection test / remove.
@@ -611,7 +624,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                           <Button
                             variant="secondary"
                             type="button"
-                            onClick={() => startOAuth()}
+                            busy={oauthBusy()}
+                            onClick={() => void startOAuth()}
                           >
                             {t("conn.guided.oauth", {
                               provider: descriptor()?.label ?? "",
