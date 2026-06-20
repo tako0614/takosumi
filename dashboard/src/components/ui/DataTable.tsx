@@ -1,4 +1,5 @@
 import { For, type JSX, Show } from "solid-js";
+import { t } from "../../i18n/index.ts";
 
 export interface Column<T> {
   /** Header label. */
@@ -79,7 +80,7 @@ export default function DataTable<T>(props: Props<T>): JSX.Element {
           >
             <tr>
               <td class="tg-table-state" colSpan={colCount()}>
-                {props.empty ?? "データがありません"}
+                {props.empty ?? t("common.empty")}
               </td>
             </tr>
           </Show>

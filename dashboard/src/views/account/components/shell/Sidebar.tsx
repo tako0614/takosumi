@@ -17,6 +17,7 @@ import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";
 import type { MessageKey } from "../../../../i18n/index.ts";
+import { isTakosumiCloudRuntime } from "../../../../lib/deployment-brand.ts";
 
 /**
  * True only in the takos-embedded build of this shared dashboard source (set via
@@ -57,7 +58,11 @@ export default function Sidebar() {
   return (
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <Wordmark href={TAKOS_EMBEDDED ? undefined : "/"} size={22} />
+        <Wordmark
+          href={TAKOS_EMBEDDED ? undefined : "/"}
+          size={22}
+          showSub={!TAKOS_EMBEDDED && isTakosumiCloudRuntime()}
+        />
         <Show when={TAKOS_EMBEDDED}>
           <span class="sidebar-context-label">{t("nav.deployContext")}</span>
         </Show>

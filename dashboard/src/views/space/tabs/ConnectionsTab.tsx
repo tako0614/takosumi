@@ -146,6 +146,14 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const setFieldValue = (envName: string, value: string) => {
     setValues((prev) => ({ ...prev, [envName]: value }));
   };
+  const scopeHintsFromConnectionValues = (
+    providerId: string,
+    connectionValues: Readonly<Record<string, string>>,
+  ): { readonly accountId?: string } | undefined => {
+    if (providerId !== "cloudflare") return undefined;
+    const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
+    return accountId ? { accountId } : undefined;
+  };
 
   const setEnvPair = (index: number, patch: Partial<EnvPair>) => {
     setEnvPairs((prev) =>
@@ -222,6 +230,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       spaceId: spaceId(),
       provider: d.provider,
       displayName: displayName().trim() || undefined,
+      scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues),
       values: submitValues,
     });
     await afterConnectionCreated(connection);

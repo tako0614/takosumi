@@ -3261,7 +3261,10 @@ test("Connections create: registers a Space-owned connection; token never echoed
       displayName: "本番 Cloudflare",
       // caller tries to widen to Gateway-backed operator coverage; ignore it.
       scope: "operator",
-      values: { CLOUDFLARE_API_TOKEN: "super-secret-token-value" },
+      values: {
+        CLOUDFLARE_API_TOKEN: "super-secret-token-value",
+        CLOUDFLARE_ACCOUNT_ID: "acct_dashboard",
+      },
     },
   });
   const response = await handleControlRoute({
@@ -3278,6 +3281,7 @@ test("Connections create: registers a Space-owned connection; token never echoed
     provider?: string;
     kind?: string;
     scope?: string;
+    scopeHints?: { accountId?: string };
     values?: Record<string, string>;
   };
   expect(passed.spaceId).toEqual("space_a");
@@ -3285,6 +3289,7 @@ test("Connections create: registers a Space-owned connection; token never echoed
   expect(passed.kind).toEqual("cloudflare_api_token");
   // Forced Space scope regardless of the caller-supplied `scope: "operator"`.
   expect(passed.scope).toEqual("space");
+  expect(passed.scopeHints?.accountId).toEqual("acct_dashboard");
   // The write-only token reaches the facade…
   expect(passed.values?.CLOUDFLARE_API_TOKEN).toEqual(
     "super-secret-token-value",
