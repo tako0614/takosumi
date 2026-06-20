@@ -35,7 +35,9 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.add": "Add",
   "nav.activity": "Activity",
   "nav.notifications": "Notifications",
+  "nav.notificationsShort": "Alerts",
   "nav.spaceSettings": "Workspace settings",
+  "nav.spaceSettingsShort": "Settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back",
@@ -153,7 +155,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.attentionView": "View notifications",
   "apps.empty.title": "No Capsules yet",
   "apps.empty.message":
-    "Start from an example Capsule or add an OpenTofu Capsule from a Git URL.",
+    "Use an example Capsule or add an OpenTofu Capsule by Git URL.",
   "apps.empty.cta": "Add Capsule",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
@@ -291,14 +293,14 @@ export const en: Record<keyof typeof ja, string> = {
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add Capsule",
   "new.subtitle":
-    "Start from a known Capsule or add any OpenTofu Capsule from a Git URL.",
+    "Use a known Capsule or add any OpenTofu Capsule by Git URL.",
   "new.tab.catalog": "Examples",
-  "new.tab.git": "From Git URL",
+  "new.tab.git": "Git URL",
   "new.catalog.intro":
     "Example OpenTofu Capsule sources. Picking one only pre-fills the source.",
   "new.catalog.select": "Use this Capsule",
   "new.deeplink.summary":
-    "The source for “{capsule}” was filled in from a link. Review it before adding.",
+    "A link filled in the source for “{capsule}”. Review it before adding.",
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path (module path)",
