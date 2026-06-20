@@ -2,7 +2,7 @@
  * Graph view — the Space dependency DAG, rendered structurally as topological
  * LAYERS (producers above consumers) with no graph/d3 layout dependency. A
  * cycle (which the backend forbids) is surfaced as a remaining-nodes block
- * rather than hanging. Reached from the Installation list and Space settings.
+ * rather than hanging. Reached from the Capsule list and Workspace settings.
  */
 import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";

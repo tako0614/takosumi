@@ -64,13 +64,13 @@ CLOUDFLARE_ACCOUNT_ID="$(
 The command:
 
 1. uses the same signed-in account session surface as the dashboard and creates
-   a temporary Space-scoped Cloudflare ProviderConnection;
+   a temporary Workspace-scoped Cloudflare ProviderConnection;
 2. uploads the no-build `cloudflare-hello-worker` OpenTofu Capsule;
 3. plans and applies it with an explicit ProviderConnection binding;
 4. verifies the Worker script through the real Cloudflare API;
-5. starts the canonical destroy flow (`DELETE installation` → approve
+5. starts the canonical destroy flow (`DELETE capsule` through the current compatibility route → approve
    destroy-plan → apply destroy-plan);
-6. verifies the Worker script is gone, then revokes the temporary Space
+6. verifies the Worker script is gone, then revokes the temporary Workspace
    ProviderConnection unless `--keep-connection` is set.
 
 R2 remains a Layer 1 / own-key direct integration smoke. Do not use

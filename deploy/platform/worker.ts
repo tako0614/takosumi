@@ -4,9 +4,11 @@
 // dashboard SPA) and the OpenTofu-native deploy-control plane in one process.
 // The accounts handler owns the public HTTP surface and serves the dashboard SPA
 // from its built-in ASSETS fallback (non-API GET/HEAD). Public `/api` control
-// routes are still the canonical Takosumi Space / Source / Connection /
-// Installation / Dependency / SourceSnapshot / DependencySnapshot /
-// StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup surface, but this platform worker reaches the
+// routes are still the current compatibility surface. Public Takosumi wording
+// maps that surface to Workspace / Project / Capsule / Source /
+// ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
+// StateVersion / Output / Runner / AuditEvent / Backup while migration from
+// legacy Space / Installation / Deployment rows continues. This platform worker reaches the
 // deploy-control implementation in-process through the typed `operations` seam
 // injected below. There is no separate control-plane worker.
 // The two Durable Object classes (coordination leases/alarms + the OpenTofu
@@ -131,8 +133,7 @@ export default {
   // Scheduled cron tick. Always runs source polling (Core Specification §6: scan
   // active autoSync sources and enqueue a deduped source_sync). When the
   // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
-  // §28 drift sweep (one space_drift_check RunGroup per Space with active
-  // Installations).
+  // current compatibility drift sweep for Workspaces with active Capsules.
   async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
     await runScheduledSourcePoll(env as unknown as DeployControlEnv);
     if (driftCheckEnabled(env)) {
@@ -681,8 +682,8 @@ export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
 
 async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
   const operations = await deployControlSeam(env).operations();
-  // Adapt the two methods the sweep needs: active Installation listing from the
-  // controller and grouped drift checks through the RunGroups service.
+  // Adapt the two methods the sweep needs: active Capsule listing from the
+  // controller and grouped drift checks through the current compatibility service.
   const driftOps: DriftSweepOperations = {
     listActiveInstallations: (limit) =>
       operations.controller.listActiveInstallations(limit),

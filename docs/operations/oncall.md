@@ -15,15 +15,15 @@ product docs が所有します。
 対象:
 
 - login / session / OIDC issuer
-- Space / Source / Connection / Installation / Dependency / SourceSnapshot /
-  DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup APIs
-- Provider Catalog / Provider Connection APIs and policy gates
-- Connection drivers and custom runner policy
-- SourceSnapshot / compatibility check / plan / apply / destroy flow
+- Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe /
+  ProviderBinding / Secret / Run / StateVersion / Output / AuditEvent APIs
+- ProviderConnection / CredentialRecipe APIs and policy gates
+- ProviderBinding resolution and custom runner policy
+- source snapshot / compatibility check / plan / apply / destroy flow
 - runner queue and container execution
-- StateSnapshot / OutputSnapshot / artifact / backup storage
-- Space billing / credit ledger
-- dashboard and Activity views
+- StateVersion / Output / artifact / backup storage
+- Workspace quota / showback ledger
+- dashboard and AuditEvent views
 
 Takosumi CLI / internal operator scripts are support tooling only and are not
 the incident command surface.
@@ -44,11 +44,11 @@ incident channel.
 
 ## SEV Classification
 
-| SEV   | Customer impact                                                                                           | Examples                                                                                                                                                                                                                                    | Ack target      | Update cadence              |
-| ----- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
-| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption                                                                                                                       | 5 min           | 15 min                      |
-| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists                                    | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage, Provider Catalog outage, secret-backed provider mint failure, secret-backed provider egress policy regression | 15 min          | 30 min                      |
-| SEV-3 | isolated Space / non-critical degradation, operational toil                                               | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                                       | 1 business hour | daily or on material change |
+| SEV   | Customer impact                                                                                           | Examples                                                                                                                                                                                                                        | Ack target      | Update cadence              |
+| ----- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
+| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Workspace data exposure, known secret leak, state/artifact corruption                                                                                                       | 5 min           | 15 min                      |
+| SEV-2 | major feature degradation, multiple Workspaces affected, workaround exists                                | plan/apply mostly failing, queue backlog, runner container startup failures, quota/showback write failure, ProviderConnection / CredentialRecipe outage, secret-backed provider mint failure, provider egress policy regression | 15 min          | 30 min                      |
+| SEV-3 | isolated Workspace / non-critical degradation, operational toil                                           | single Capsule Run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                                | 1 business hour | daily or on material change |
 
 When scope is unclear, start at SEV-2 or higher. Suspected customer data
 exposure is SEV-1 until disproven.
@@ -56,7 +56,7 @@ exposure is SEV-1 until disproven.
 ## Paging Path
 
 1. Alert fires from Takosumi monitoring: HTTP 5xx / latency, deploy success
-   rate, runner queue age, D1/R2 health, billing ledger drift, secret rotation
+   rate, runner queue age, D1/R2 health, quota/showback ledger drift, secret rotation
    failure.
 2. Paging provider routes to primary on-call.
 3. Primary acknowledges within target and opens incident channel.
@@ -81,7 +81,7 @@ exposure is SEV-1 until disproven.
 2. Open war room with `#inc-<date>-<slug>` naming and pin impact, affected
    surfaces, mitigation owner, next update time.
 3. Freeze non-essential platform deploys and optionally pause new plan/apply
-   dispatch for affected Spaces.
+   dispatch for affected Workspaces.
 4. Capture timeline events for alerts, ack, mitigation attempts, rollback,
    customer updates, recovery signals.
 5. Prefer reversible mitigation: rollback platform worker version, pause queue,

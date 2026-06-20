@@ -143,7 +143,7 @@
           "refId": "A"
         }
       ],
-      "title": "Top Installation Usage",
+      "title": "Top Capsule Usage",
       "type": "bargauge"
     },
     {
@@ -285,7 +285,7 @@
         },
         "hide": 0,
         "includeAll": true,
-        "label": "Space",
+        "label": "Workspace",
         "name": "space_id",
         "query": "label_values(takosumi_usage_credits_total, space_id)",
         "refresh": 1,

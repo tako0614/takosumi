@@ -1,5 +1,5 @@
 /**
- * TopBar: [Space switcher] ......... [bell + needs-attention badge] [UserMenu].
+ * TopBar: [Workspace switcher] ......... [bell + needs-attention badge] [UserMenu].
  *
  * The bell badge counts unseen needs-attention events (run failures / drift /
  * revoked connections) across every Space, via the cached feed loader in

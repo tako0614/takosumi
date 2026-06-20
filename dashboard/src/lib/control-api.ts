@@ -5,7 +5,7 @@
  * The dashboard SPA authenticates with the Accounts HttpOnly `takosumi_session`
  * cookie, not the operator deploy-control bearer. Accounts resolves the cookie
  * into a scoped principal and then delegates to the in-process control facade;
- * `/api/v1/*` remains the product control API for Spaces, Installations, Runs,
+ * `/api/v1/*` remains the product control API for Workspaces, Capsules, Runs,
  * Connections, and related resources.
  *
  * Unlike the account-plane `/v1/installation-projections` routes (snake_case wire

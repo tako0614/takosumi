@@ -35,13 +35,13 @@ run_worker_first = true
 [observability]
 enabled = true
 
-# Accounts plane store (OIDC / billing / Installation ledger).
+# Accounts plane store (OIDC / billing / Capsule projection ledger).
 [[d1_databases]]
 binding = "TAKOSUMI_ACCOUNTS_DB"
 database_name = "takosumi-accounts"
 database_id = "replace-with-accounts-d1-database-id"
 
-# OpenTofu Capsule ledger (Runs / Deployments / OutputSnapshots).
+# OpenTofu Capsule ledger (Runs / StateVersions / Outputs plus legacy rows during migration).
 [[d1_databases]]
 binding = "TAKOSUMI_CONTROL_DB"
 database_name = "takosumi-deploy"

@@ -1,10 +1,13 @@
-# core (first-party base-installation module)
+# core (first-party base Capsule module)
 
-The base Installation under a Space (spec §5/§10). For the MVP this is a pure value-plumbing module: it takes a single
-`base_domain` and exposes generic service origins as outputs for Capsules that need a stable public origin.
+This plain OpenTofu module is a small value-plumbing helper for generated-root
+and reference-runner flows. It takes a single `base_domain` and exposes generic
+origin values as outputs for Capsules that need a stable public origin or
+runtime projection.
 
-- No providers, no cloud resources. It uses only HCL `variable` / `locals` /
-  `output`, so it plans against an empty provider set.
+- No providers, no managed resources, and no Takosumi-specific manifest or
+  resource driver. It uses only HCL `variable` / `locals` / `output`, so it
+  plans against an empty provider set.
 - Inputs: `base_domain` (string, required), `display_name` (string, optional).
 - Outputs: `base_domain`, `public_origin` (`https://<base_domain>`), `member_issuer`
   (`https://<base_domain>/auth`), `service_registry_url`

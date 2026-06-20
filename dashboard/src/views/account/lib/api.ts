@@ -2,7 +2,7 @@
  * Typed RPC client for the ACCOUNT-PLANE endpoints the dashboard still needs:
  * auth (upstream OAuth) and Stripe billing checkout/portal. The account-plane
  * `/v1/installation-projections` projection surface and legacy `/v1/connections`
- * group are gone from the SPA — Installations and connections live entirely on
+ * group are gone from the SPA — Capsules and connections live entirely on
  * the session-authed control surface (`lib/control-api.ts`); session reads go
  * through `./session.ts` directly.
  *

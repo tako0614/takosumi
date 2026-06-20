@@ -1,8 +1,9 @@
 # Takosumi Service Graph v1
 
-> This document defines the Takosumi-owned service contract projected from OpenTofu Capsules. Takos is a
-> first-party consumer/provider profile of this contract; generic capability tokens describe service classes, while
-> service ids and names may identify the producer.
+> This document describes an output-projected runtime contract/profile for services exposed by OpenTofu Capsules.
+> It is not a Takosumi-specific manifest, an OSS resource driver, or a managed-resource backend. Takos is a first-party
+> consumer/provider profile of this projection; generic capability tokens describe service classes, while service ids
+> and names may identify the producer.
 
 ## 1. Purpose
 
@@ -10,7 +11,7 @@ Takosumi manages OpenTofu Capsules, Run ledgers, StateVersions, Outputs, Provide
 audit. Many Capsules also expose runtime services: HTTP APIs, MCP servers, Git endpoints, object stores, SQL endpoints,
 agent runtimes, OIDC clients, event webhooks, and billing/reporting ports.
 
-Takosumi Service Graph v1 is the standard shape for those services:
+Takosumi Service Graph v1 is the runtime projection shape for those services:
 
 - a producer Capsule exposes a **ServiceExport**;
 - a consumer Capsule requests a **ServiceBinding**;
@@ -18,11 +19,12 @@ Takosumi Service Graph v1 is the standard shape for those services:
 - Takosumi records enough audit evidence to explain which Capsule exposed a service, which consumer bound to it,
   which Output generation supplied it, which Run made it current, and which grant was issued.
 
-This replaces ad hoc product-local service publication lists. New service contracts use Service Graph v1 names only.
+Where a runtime service profile is needed, new docs and payloads use Service Graph v1 projection names instead of
+product-local service publication lists.
 
 ## 2. Ownership
 
-Service Graph is a Takosumi standard because it is built from Takosumi-owned records:
+The projection is built from Takosumi-owned records:
 
 | Concern              | Owner                                                                         |
 | -------------------- | ----------------------------------------------------------------------------- |
@@ -42,10 +44,11 @@ Service Graph v1 is not:
 
 - a replacement for OpenTofu provider schemas, resource graphs, or state;
 - a required in-repository manifest or DSL;
+- an OSS resource driver, compatibility gateway, or managed-resource system;
 - a service mesh or traffic proxy;
 - a secret transport through OpenTofu outputs;
 - a provider credential model. Provider credentials stay outside Service Graph and are resolved through Provider Connections,
-  Connection / Vault backing material, policy, and runner phase boundaries.
+  Credential Recipes, Provider Bindings, Vault backing material, policy, and runner phase boundaries.
 
 ## 4. Core Records
 
@@ -57,21 +60,21 @@ Capsule-scoped export.
 
 Canonical fields:
 
-| field                    | meaning                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `id`                     | Takosumi-generated stable export id                                                                          |
-| `workspaceId`            | owning Workspace                                                                                             |
-| `producerCapsuleId`      | Capsule that owns the service, or the distribution Capsule for same-origin services          |
-| `applyRunId`             | successful apply Run that made this export current                                                           |
-| `stateVersionId`         | StateVersion current when this export was projected                                                          |
-| `outputId`               | Output generation the export came from                                                                       |
-| `name`                   | producer-local stable name, unique within the Capsule                                                        |
-| `capabilities`           | capability tokens such as `protocol.mcp.server` or `storage.object`                                          |
-| `endpoints`              | non-secret endpoint descriptors                                                                              |
-| `auth`                   | accepted auth schemes, without secret values                                                                 |
-| `metadata`               | display and protocol metadata, never authority                                                               |
-| `visibility`             | `private`, `space`, `public`, or `shared`                                                                    |
-| `status`                 | `ready`, `unavailable`, `revoked`, or `stale`                                                                |
+| field               | meaning                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `id`                | Takosumi-generated stable export id                                                 |
+| `workspaceId`       | owning Workspace                                                                    |
+| `producerCapsuleId` | Capsule that owns the service, or the distribution Capsule for same-origin services |
+| `applyRunId`        | successful apply Run that made this export current                                  |
+| `stateVersionId`    | StateVersion current when this export was projected                                 |
+| `outputId`          | Output generation the export came from                                              |
+| `name`              | producer-local stable name, unique within the Capsule                               |
+| `capabilities`      | capability tokens such as `protocol.mcp.server` or `storage.object`                 |
+| `endpoints`         | non-secret endpoint descriptors                                                     |
+| `auth`              | accepted auth schemes, without secret values                                        |
+| `metadata`          | display and protocol metadata, never authority                                      |
+| `visibility`        | `private`, `space`, `public`, or `shared`                                           |
+| `status`            | `ready`, `unavailable`, `revoked`, or `stale`                                       |
 
 The current wire value `space` means Workspace-visible in the Final Plan model.
 It is not a reintroduction of the retired Takosumi Space public concept.
@@ -79,21 +82,21 @@ It is not a reintroduction of the retired Takosumi Space public concept.
 ### 4.2 ServiceBinding
 
 A ServiceBinding is a consumer Capsule's request to use a service. It is service-side configuration, not a
-required repo manifest. A binding can be created by UI, API, dashboard install flow, first-party distribution seed, or
+required repo manifest. A binding can be created by UI, API, dashboard Capsule flow, first-party distribution seed, or
 operator policy.
 
 Canonical fields:
 
-| field                    | meaning                                                                   |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `id`                     | Takosumi-generated binding id                                             |
-| `workspaceId`            | consumer Workspace                                                        |
-| `consumerCapsuleId`      | Capsule or runtime projection that will receive the binding               |
-| `target`                 | consumer runtime or generated-root input target that receives the binding |
-| `selector`               | capability / producer / name / visibility constraints                     |
-| `grantRequest`           | requested scopes, audiences, env names, and token ttl hints               |
-| `dependencyMode`         | `variable_injection`, `remote_state`, or `published_output`               |
-| `status`                 | `pending`, `bound`, `blocked`, `revoked`, or `stale`                      |
+| field               | meaning                                                                   |
+| ------------------- | ------------------------------------------------------------------------- |
+| `id`                | Takosumi-generated binding id                                             |
+| `workspaceId`       | consumer Workspace                                                        |
+| `consumerCapsuleId` | Capsule or runtime projection that will receive the binding               |
+| `target`            | consumer runtime or generated-root input target that receives the binding |
+| `selector`          | capability / producer / name / visibility constraints                     |
+| `grantRequest`      | requested scopes, audiences, env names, and token ttl hints               |
+| `dependencyMode`    | `variable_injection`, `remote_state`, or `published_output`               |
+| `status`            | `pending`, `bound`, `blocked`, `revoked`, or `stale`                      |
 
 When a host wires ServiceBinding resolution into the plan lifecycle, the selected ServiceExport must be pinned into the
 consumer's plan-time output-to-input snapshot. The current reference service exposes fail-closed binding resolution and
@@ -106,19 +109,19 @@ A ServiceGrant is runtime authority created for one binding. It is never stored 
 
 Canonical fields:
 
-| field                    | meaning                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `id`                     | grant id                                                          |
-| `bindingId`              | bound ServiceBinding                                              |
-| `serviceExportId`        | selected ServiceExport                                            |
-| `consumerCapsuleId`      | consumer receiving the grant                                      |
-| `scopes`                 | explicit permission tokens                                        |
-| `audience`               | service audience                                                  |
-| `material`               | non-secret injection metadata such as env names and endpoint keys |
-| `secretRef`              | internal vault/accounts reference for the token or credential     |
-| `expiresAt`              | expiration if the grant is token-backed                           |
-| `rotatedAt`              | rotation timestamp                                                |
-| `status`                 | `active`, `expired`, `revoked`, or `superseded`                   |
+| field               | meaning                                                           |
+| ------------------- | ----------------------------------------------------------------- |
+| `id`                | grant id                                                          |
+| `bindingId`         | bound ServiceBinding                                              |
+| `serviceExportId`   | selected ServiceExport                                            |
+| `consumerCapsuleId` | consumer receiving the grant                                      |
+| `scopes`            | explicit permission tokens                                        |
+| `audience`          | service audience                                                  |
+| `material`          | non-secret injection metadata such as env names and endpoint keys |
+| `secretRef`         | internal vault/accounts reference for the token or credential     |
+| `expiresAt`         | expiration if the grant is token-backed                           |
+| `rotatedAt`         | rotation timestamp                                                |
+| `status`            | `active`, `expired`, `revoked`, or `superseded`                   |
 
 The value behind `secretRef` is issued by Takosumi Accounts or Vault and delivered through the runtime secret injection
 path. The internal ledger stores only the reference and audit evidence; public API responses and projections expose
@@ -160,56 +163,57 @@ The standard namespaces are:
 | `messaging.*`     | queues, pub/sub, streams, and async delivery services               |
 | `events.*`        | event ingress, subscriptions, and webhook-style event services      |
 | `observability.*` | logs, metrics, traces, and audit/telemetry export services          |
-| `billing.*`       | metering, usage reporting, and billing integration ports            |
+| `billing.*`       | showback, usage reporting, and billing integration ports            |
 | `deployment.*`    | deployment result, output, and activation read services             |
 | `control.*`       | scoped control-plane APIs for resources owned by the same operator  |
 | `governance.*`    | policy, compliance evidence, and approval services                  |
 
 Initial standard capabilities:
 
-| capability                 | meaning                                                               |
-| -------------------------- | --------------------------------------------------------------------- |
-| `protocol.mcp.server`      | MCP server endpoint                                                   |
-| `protocol.http.api`        | generic HTTP API endpoint                                             |
-| `protocol.grpc.api`        | gRPC API endpoint                                                     |
-| `protocol.websocket.api`   | WebSocket API endpoint                                                |
-| `interface.ui.surface`     | embeddable or launchable UI surface                                   |
-| `interface.file.handler`   | file open/edit handler metadata                                       |
-| `storage.object`           | object/blob storage API                                               |
-| `storage.filesystem`       | file-tree storage API                                                 |
-| `storage.key_value`        | key-value storage API                                                 |
-| `storage.sql`              | SQL/database API                                                      |
-| `storage.vector`           | vector index or vector-search API                                     |
-| `storage.search_index`     | text/search index API                                                 |
-| `source.repository`        | repository metadata, refs, and object access                          |
-| `source.git.smart_http`    | Git Smart HTTP endpoint                                               |
-| `compute.job_runner`       | asynchronous job execution endpoint                                   |
-| `compute.sandbox`          | sandboxed execution environment                                       |
-| `automation.agent_runtime` | agent/task runtime endpoint                                           |
-| `automation.tool_provider` | tool provider usable by a runtime or agent                            |
-| `ai.model`                 | model inference endpoint                                              |
-| `ai.embedding_model`       | embedding model endpoint                                              |
-| `identity.oidc`            | OIDC issuer/client projection                                         |
-| `identity.oauth.client`    | OAuth client projection                                               |
-| `auth.bootstrap_token`     | one-time or short-lived bootstrap token delivery                      |
-| `auth.token_exchange`      | token exchange endpoint                                               |
-| `auth.webhook_signing`     | webhook/event signing secret authority                                |
-| `messaging.queue`          | queue service                                                         |
-| `messaging.pubsub`         | publish/subscribe service                                             |
-| `events.webhook`           | event ingest webhook                                                  |
-| `events.subscription`      | event subscription stream                                             |
-| `observability.logs`       | log read/export endpoint                                              |
-| `observability.metrics`    | metric read/export endpoint                                           |
-| `observability.traces`     | trace read/export endpoint                                            |
-| `billing.usage`            | usage reporting or billing port                                       |
-| `deployment.outputs`       | non-secret deployment output read API                                 |
+| capability                 | meaning                                                                   |
+| -------------------------- | ------------------------------------------------------------------------- |
+| `protocol.mcp.server`      | MCP server endpoint                                                       |
+| `protocol.http.api`        | generic HTTP API endpoint                                                 |
+| `protocol.grpc.api`        | gRPC API endpoint                                                         |
+| `protocol.websocket.api`   | WebSocket API endpoint                                                    |
+| `interface.ui.surface`     | embeddable or launchable UI surface                                       |
+| `interface.file.handler`   | file open/edit handler metadata                                           |
+| `storage.object`           | object/blob storage API                                                   |
+| `storage.filesystem`       | file-tree storage API                                                     |
+| `storage.key_value`        | key-value storage API                                                     |
+| `storage.sql`              | SQL/database API                                                          |
+| `storage.vector`           | vector index or vector-search API                                         |
+| `storage.search_index`     | text/search index API                                                     |
+| `source.repository`        | repository metadata, refs, and object access                              |
+| `source.git.smart_http`    | Git Smart HTTP endpoint                                                   |
+| `compute.job_runner`       | asynchronous job execution endpoint                                       |
+| `compute.sandbox`          | sandboxed execution environment                                           |
+| `automation.agent_runtime` | agent/task runtime endpoint                                               |
+| `automation.tool_provider` | tool provider usable by a runtime or agent                                |
+| `ai.model`                 | model inference endpoint                                                  |
+| `ai.embedding_model`       | embedding model endpoint                                                  |
+| `identity.oidc`            | OIDC issuer/client projection                                             |
+| `identity.oauth.client`    | OAuth client projection                                                   |
+| `auth.bootstrap_token`     | one-time or short-lived bootstrap token delivery                          |
+| `auth.token_exchange`      | token exchange endpoint                                                   |
+| `auth.webhook_signing`     | webhook/event signing secret authority                                    |
+| `messaging.queue`          | queue service                                                             |
+| `messaging.pubsub`         | publish/subscribe service                                                 |
+| `events.webhook`           | event ingest webhook                                                      |
+| `events.subscription`      | event subscription stream                                                 |
+| `observability.logs`       | log read/export endpoint                                                  |
+| `observability.metrics`    | metric read/export endpoint                                               |
+| `observability.traces`     | trace read/export endpoint                                                |
+| `billing.usage`            | usage reporting, showback, or billing integration port                    |
+| `deployment.outputs`       | non-secret deployment output read API                                     |
 | `control.api`              | scoped same-Workspace support callbacks for a producer-owned resource set |
-| `governance.policy`        | policy decision or policy evidence service                            |
-| `governance.approval`      | approval request/decision service                                     |
+| `governance.policy`        | policy decision or policy evidence service                                |
+| `governance.approval`      | approval request/decision service                                         |
 
 Compatibility aliases are not part of v1. Records that use older product-local names are invalid; any historical data
-cleanup must rewrite them before they are served or persisted as Service Graph records. Products can define profiles
-that require subsets of these capabilities. For example, Takos uses
+cleanup must rewrite them before they are served or persisted as Service Graph records. `billing.*` capabilities do not
+make official billing an OSS feature; official billing, payment enforcement, and usage metering sold as a service are
+Takosumi Cloud-only. Products can define profiles that require subsets of these capabilities. For example, Takos uses
 `protocol.mcp.server` for MCP tool loading, `source.repository` / `source.git.smart_http` for Git UX,
 `storage.filesystem` / `storage.object` for files, and `automation.agent_runtime` for agent task execution.
 
@@ -224,7 +228,7 @@ OpenTofu/Terraform runs, ProviderConnections, CredentialRecipes,
 ProviderBindings, StateVersions, Outputs, Runners, and AuditEvents. The gateway
 is not a provider credential and not an OpenTofu output secret.
 
-The installation projection material for this service is:
+The runtime projection material for this service is:
 
 | field                 | value / meaning                                                 |
 | --------------------- | --------------------------------------------------------------- |
@@ -258,7 +262,8 @@ projected to an installed service.
 ## 6. OpenTofu Projection
 
 Takosumi does not require a manifest. A Capsule may optionally expose service records through a well-known OpenTofu
-output named `service_exports`, or an operator may map arbitrary outputs into ServiceExport records in InstallConfig.
+output named `service_exports`, or an operator may map arbitrary outputs into ServiceExport records through service-side
+Capsule configuration or operator policy.
 
 Example:
 
@@ -322,16 +327,16 @@ secret just because it can discover an endpoint.
 
 Supported auth schemes in v1:
 
-| scheme           | authority source                                       |
-| ---------------- | ------------------------------------------------------ |
+| scheme           | authority source                                           |
+| ---------------- | ---------------------------------------------------------- |
 | `none`           | public or workspace-visible endpoint with no runtime token |
-| `bearer`         | Takosumi Accounts / Vault ServiceGrant                 |
-| `oidc`           | Takosumi Accounts OIDC issuer/client projection        |
-| `signed_webhook` | webhook signing secret held behind a ServiceGrant      |
+| `bearer`         | Takosumi Accounts / Vault ServiceGrant                     |
+| `oidc`           | Takosumi Accounts OIDC issuer/client projection            |
+| `signed_webhook` | webhook signing secret held behind a ServiceGrant          |
 
 Provider credentials are not ServiceGrants. A ServiceGrant authorizes runtime service use after a Capsule has been
-deployed. Provider credentials authorize OpenTofu plan/apply/destroy and remain in the Provider Connection /
-internal provider resolver / Connection-Vault backing model.
+deployed. Provider credentials authorize OpenTofu plan/apply/destroy and remain in the ProviderConnection /
+CredentialRecipe / ProviderBinding / vault-runner boundary.
 
 ## 9. Takos Profile
 
@@ -348,6 +353,8 @@ the standard itself:
 
 Takos-specific UI decisions, app launcher ranking, bundled app seeding, chat/agent UX, and memory behavior stay in
 Takos. Service identity, binding, grant, output generation, dependency pinning, and audit stay in Takosumi.
+MCP is represented by the `protocol.mcp.server` runtime capability in this Takos profile; it is not a Takosumi-specific
+repo manifest or OSS resource-driver interface.
 
 ## 10. Adoption Rule
 
@@ -360,7 +367,8 @@ New code, docs, generated examples, API payloads, and public schemas must use Se
 
 Do not introduce product-prefixed capability tokens for generic service capabilities. Producer-qualified service ids
 and names are allowed when they identify the actual producer. Do not document secondary product-local registries as part
-of the standard. Do not require Capsule repositories to adopt a Takosumi-specific manifest.
+of the standard. Do not require Capsule repositories to adopt a Takosumi-specific manifest, and do not describe
+ServiceExport as an OSS resource class or managed-resource driver.
 
 Current implementation anchors:
 

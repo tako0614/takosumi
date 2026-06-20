@@ -1,5 +1,5 @@
 /**
- * Space settings — 接続. Port of the former ConnectionsView, now fully on the
+ * Workspace settings — 接続. Port of the former ConnectionsView, now fully on the
  * session-authed control surface (`/api/v1/connections*`): list / create /
  * test / revoke all go through control-api (the legacy `/v1/connections` RPC
  * is gone). Secret values are write-only — kept in component state only until
@@ -285,9 +285,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     },
     {
       header: t("conn.providerConnections.ownership"),
-      cell: (d) => (
-        <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>
-      ),
+      cell: (d) => <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>,
     },
     {
       header: t("conn.providerConnections.status"),

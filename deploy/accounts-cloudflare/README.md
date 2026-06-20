@@ -2,9 +2,10 @@
 
 This directory is **not a standalone deployable Worker anymore**. It is the
 Cloudflare reference entry point for the account-plane handler
-(session cookie, upstream sign-in, billing checkout/portal, installed-service
-OIDC material, Installation projection ledger, and export handoff), consumed
-in-process by two build targets:
+(session cookie, upstream sign-in, OIDC issuer/client projection, dashboard
+account-plane routes, Capsule runtime projection/export handoff, and any
+Cloud-only billing hooks supplied by the host composition), consumed in-process
+by two build targets:
 
 - the operator Takosumi platform worker in `takosumi/deploy/platform/`, served at
   `app.takosumi.com`;
@@ -23,19 +24,23 @@ Both host workers reference this module through the
 custom-domain route, and deploy command.
 
 Accounts is a backing layer, not a second control plane. Product control-plane
-resources (Spaces, Sources, Installations, Runs, Connections, Deployments, and
-OutputSnapshots) are created and read through `/api/v1/*`. The
-`/v1/installation-projections` routes are supporting account-plane projections
-for installed services: OIDC client metadata, billing usage endpoints, export
-handoff, and service-token material. Accounts OIDC should be described as
-installed-service identity projection and operator-managed sign-in support, not
-as a generic login/consent platform for arbitrary public clients.
+resources (Workspaces, Projects, Capsules, Sources, ProviderConnections,
+CredentialRecipes, ProviderBindings, Secrets, Runs, StateVersions, Outputs,
+Runners, and AuditEvents) are created and read through `/api/v1/*`. The current
+`/v1/installation-projections` route family keeps a legacy path name, but its
+role is supporting account-plane projection for Capsule runtimes: OIDC client
+metadata, Service Graph grant material, operator/showback usage projection when
+enabled, and export handoff. Accounts OIDC should be described as Capsule
+runtime identity projection and operator-managed sign-in support, not as a
+generic login/consent platform for arbitrary public clients. Official billing,
+usage metering sold as a service, and payment gates are Takosumi Cloud-only.
 
 ## Files
 
 - `src/handler.ts` — env parsing, D1 store construction, cached Accounts handler
   construction, signed R2 metadata-export worker. Exports `createCloudflareWorker`
-  (consumed in-process by the Takos mount) and `createR2InstallationExportWorker`.
+  (consumed in-process by the host worker) and `createR2InstallationExportWorker`
+  (legacy helper name for Capsule/account export artifacts).
 - `src/routes.ts` — `isAccountsApiPath` / `isWorkerLocalPath` / `ACCOUNTS_API_PREFIXES`
   path classification (also mirrored by `deploy/node-postgres/src/static-assets.ts`).
 - `src/routes_test.ts`, `src/worker_test.ts` — coverage for the kept handler/routes
@@ -45,7 +50,7 @@ as a generic login/consent platform for arbitrary public clients.
 ## Routing shape
 
 The handler keeps `/healthz` and signed `/__takosumi/exports/...` downloads as
-edge-local routes. Those downloads serve installation export artifacts created
+edge-local routes. Those downloads serve Capsule/account export artifacts created
 for portability/import flows; they are not the operator's control/state backup
 or disaster-recovery store. Every account-plane path is handled directly by
 `createEphemeralAccountsHandler` (or `createAccountsHandler` when a stable ES256
