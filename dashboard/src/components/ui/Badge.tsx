@@ -20,7 +20,9 @@ interface Props {
 /** Token-driven pill. One badge for all status / tag / policy chips. */
 export function Badge(props: Props): JSX.Element {
   return (
-    <span class={`tg-badge ${TONE_CLASS[props.tone ?? "neutral"]} ${props.class ?? ""}`}>
+    <span
+      class={`tg-badge ${TONE_CLASS[props.tone ?? "neutral"]} ${props.class ?? ""}`}
+    >
       {props.children}
     </span>
   );

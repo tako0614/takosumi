@@ -5,12 +5,12 @@
  * catalog is just curated starting points, not a registry with special powers.
  *
  * Inclusion rule — an entry must be a REAL standalone capsule: installing it
- * from Takosumi alone (no separate build pipeline, no takos-app installer)
+ * from Takosumi alone (no separate product-specific installer)
  * must provision something via `tofu plan/apply`. Audited 2026-06 and trimmed
  * accordingly:
- *   - yurucommu / road-to-me: manifest-only takos-app repos (one outputs.tf
- *     carrying `takos_app_manifest`) — installing them here plans ZERO
- *     resources. They belong to the takos product's own app installer.
+ *   - product-distribution repos that only publish application metadata rather
+ *     than infrastructure are excluded because installing them here would plan
+ *     zero resources.
  *   - providers/cloudflare/modules/* : first-party deployment TEMPLATES whose
  *     module/ expects a runner-built artifact and pipeline-supplied inputs
  *     (`localModulePath`, build commands) — not standalone Git capsules.
@@ -29,29 +29,32 @@ export interface CatalogEntry {
   readonly description: Record<Locale, string>;
 }
 
+const TAKOSUMI_CATALOG_REF = "fcc47907b0154d8bf53872a3336e5653fc88792e";
+const TAKOS_CATALOG_REF = "e343560dc63bb0440614da2589169404d8543efa";
+
 export const CATALOG: readonly CatalogEntry[] = [
   {
     id: "cloudflare-hello-worker",
     git: "https://github.com/tako0614/takosumi.git",
-    ref: "main",
+    ref: TAKOSUMI_CATALOG_REF,
     path: "providers/cloudflare/modules/cloudflare-hello-worker/module",
     suggestedName: "hello",
     name: { ja: "Hello Worker（スターター）", en: "Hello Worker (starter)" },
     description: {
-      ja: "ビルド不要のスターター。apply だけで Cloudflare Worker が立ち上がり、workers.dev のページ URL が出力されます。まず動くものを 5 分で。",
-      en: "A no-build starter: apply alone brings up a Cloudflare Worker and outputs a reachable workers.dev URL. Something live in 5 minutes.",
+      ja: "ビルド不要のスターター。apply で Cloudflare Worker script を作成し、公開 URL は dispatcher/custom route の projection がある場合だけ出力します。",
+      en: "A no-build starter: apply creates a Cloudflare Worker script. A public URL is output only when dispatcher/custom-route projection is configured.",
     },
   },
   {
     id: "takos",
     git: "https://github.com/tako0614/takos.git",
-    ref: "main",
+    ref: TAKOS_CATALOG_REF,
     path: "deploy/opentofu",
     suggestedName: "takos",
     name: { ja: "Takos", en: "Takos" },
     description: {
-      ja: "AI ファーストのチャット & エージェントの全インフラ（D1 / KV / R2 / Queues / DO）を provision します。アプリ本体の起動には wrangler でのデプロイが別途必要です。",
-      en: "Provisions all infrastructure (D1 / KV / R2 / Queues / DO) for the AI-first chat & agent app. Launching the app itself needs a separate wrangler deploy step.",
+      ja: "AI ファーストのチャット & エージェント環境を Takosumi の Installation / Run / Deployment 台帳で管理します。出力と次の手順は apply 後の OutputSnapshot に従います。",
+      en: "Manages the AI-first chat & agent environment through the Takosumi Installation / Run / Deployment ledger. Follow the OutputSnapshot after apply for addresses and next steps.",
     },
   },
 ];

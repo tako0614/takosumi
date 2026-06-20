@@ -20,7 +20,9 @@ export default function EmptyState(props: Props): JSX.Element {
         <InkBackdrop density="shell" />
       </Show>
       <Show when={props.icon}>
-        <span class="tg-empty-icon" aria-hidden="true">{props.icon}</span>
+        <span class="tg-empty-icon" aria-hidden="true">
+          {props.icon}
+        </span>
       </Show>
       <h2 class="tg-empty-title">{props.title}</h2>
       <Show when={props.message}>

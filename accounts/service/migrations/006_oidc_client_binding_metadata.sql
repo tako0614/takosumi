@@ -2,7 +2,7 @@ ALTER TABLE installation_v1.oidc_clients
   ADD COLUMN IF NOT EXISTS service_id text;
 
 UPDATE installation_v1.oidc_clients
-  SET service_id = 'identity.primary.oidc'
+  SET service_id = 'takosumi.identity.oidc'
   WHERE service_id IS NULL;
 
 ALTER TABLE installation_v1.oidc_clients

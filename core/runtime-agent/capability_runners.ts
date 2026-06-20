@@ -11,7 +11,7 @@
  *
  * The runtime-agent sits UPSTREAM of the service in the dependency graph, so it
  * cannot reuse the service's `defaultTarRunner`
- * (`src/service/shared/runtime/capability-runners.ts`) without
+ * (`core/shared/runtime/capability-runners.ts`) without
  * inverting the layering / creating an import cycle. The default here is
  * therefore built over the runtime-agent's own local subprocess primitive
  * (`./subprocess/tar-runner.ts`), which is a Node/Bun-compatible subprocess

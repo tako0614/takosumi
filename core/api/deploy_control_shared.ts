@@ -1,13 +1,13 @@
 /**
- * Shared primitives for the §30 public OpenTofu deployment-control-plane HTTP
- * surface. The public route table is split into per-resource-group sibling
+ * Shared primitives for the §30 OpenTofu deployment-control-plane internal
+ * HTTP seam. The internal route table is split into per-resource-group sibling
  * modules (`deploy_control_*_routes.ts`); each owns its handlers + its slice of
- * the {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory. This module
+ * the {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory. This module
  * holds the cross-group glue: the dependency / principal types, the auth +
  * id-validation + body-limit helpers, the {@link defineRoute} wrapper that
  * collapses the per-handler authorize -> validate-id -> runHandler prologue, and
  * the error-envelope plumbing. Everything here is service-local to the
- * `deployControl-public` family.
+ * `deployControl-internal` family.
  */
 
 import type { Context, Hono } from "hono";
@@ -38,6 +38,7 @@ import type { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
+import type { ServiceGraphOperations } from "../domains/service-graph/mod.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -69,7 +70,7 @@ export interface DeployControlEndpoint extends ApiEndpoint {
  */
 export function mountNotImplementedFromDescriptor(
   app: Hono,
-  dependencies: DeployControlPublicRouteDependencies,
+  dependencies: DeployControlInternalRouteDependencies,
   endpoints: readonly DeployControlEndpoint[],
 ): void {
   const stub =
@@ -124,10 +125,11 @@ const UUID_PATTERN =
 const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
+export const PROVIDER_ENV_ID_PATTERN = /^(?:penv|conn)_[0-9a-zA-Z]{8,64}$/;
 export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 export const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 export const RUN_ID_PATTERN =
-  /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|backup_[0-9a-zA-Z]{4,64})$/;
+  /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|(?:backup|restore)_[0-9a-zA-Z]{4,64})$/;
 export const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
 export const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 export const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
@@ -206,7 +208,16 @@ export const ALLOWED_KEYS: Record<
     "installationId",
     "installConfigId",
   ]),
-  operatorConnectionDefault: new Set(["provider", "connectionId"]),
+  providerEnvPut: new Set([
+    "spaceId",
+    "providerSource",
+    "displayName",
+    "materialization",
+    "status",
+    "requiredEnvNames",
+    "secretRef",
+    "expiresAt",
+  ]),
   spaceCreate: new Set([
     "handle",
     "displayName",
@@ -229,6 +240,31 @@ export const ALLOWED_KEYS: Record<
     "outputs",
     "visibility",
   ]),
+  serviceExportCreate: new Set([
+    "id",
+    "producerCapsuleId",
+    "outputId",
+    "outputGeneration",
+    "stateVersionId",
+    "applyRunId",
+    "name",
+    "capabilities",
+    "visibility",
+    "status",
+    "endpoints",
+    "auth",
+    "labels",
+    "metadata",
+  ]),
+  serviceBindingCreate: new Set([
+    "id",
+    "target",
+    "selector",
+    "dependencyMode",
+    "grantRequest",
+    "dependencySnapshotId",
+  ]),
+  serviceGrantCreate: new Set(["id", "material", "expiresAt", "rotatedAt"]),
   outputShareCreate: new Set([
     "fromSpaceId",
     "toSpaceId",
@@ -244,6 +280,7 @@ export const ALLOWED_KEYS: Record<
     "environment",
     "snapshotId",
     "vars",
+    "providerEnvBindings",
     "planOnly",
     "autoApprove",
   ]),
@@ -262,18 +299,21 @@ export type DeployControlRouteName =
   | "spacePatch"
   | "installationCreate"
   | "installationPatch"
-  | "operatorConnectionDefault"
+  | "providerEnvPut"
   | "runApprove"
   | "dependencyCreate"
+  | "serviceExportCreate"
+  | "serviceBindingCreate"
+  | "serviceGrantCreate"
   | "outputShareCreate"
   | "creditsTopUp"
   | "subscriptionChange"
   | "deploy";
 
-export interface DeployControlPublicRouteDependencies {
+export interface DeployControlInternalRouteDependencies {
   /**
    * DeployControl bearer resolver. When unset or empty, deploy control routes are
-   * disabled and return 404 so public hosts do not leak an unconfigured
+   * disabled and return 404 so hosts do not leak an unconfigured
    * surface.
    */
   readonly getDeployControlToken?: () => string | undefined;
@@ -295,9 +335,9 @@ export interface DeployControlPublicRouteDependencies {
   readonly controller?: OpenTofuDeploymentController;
   /**
    * Optional provider OAuth helpers. These are helper flows for creating
-   * write-only provider env-set Connections; they are not a third credential
-   * source. When a helper is absent, its route still authenticates first and
-   * returns `501 not_implemented`.
+   * write-only Provider Connection backing material; they are not a third
+   * credential source. When a helper is absent, its route still authenticates
+   * first and returns `501 not_implemented`.
    */
   readonly connectionOAuthHelpers?: ConnectionOAuthHelpers;
   /**
@@ -317,13 +357,20 @@ export interface DeployControlPublicRouteDependencies {
    * Installation / InstallConfig routes return 501 after successful auth.
    */
   readonly installationsService?: InstallationsService;
-  /** Operator default connections + provider binding resolution (spec §9). */
+  /** Internal provider resolver creation plus provider connection resolution. */
   readonly connectionsService?: ConnectionsService;
   /**
    * Dependencies domain service (Core Specification §14 / §15). When unset, the
    * Dependency routes return 501 after successful auth.
    */
   readonly dependenciesService?: DependenciesService;
+  /**
+   * Service Graph v1 domain service. This supports runtime ServiceExport /
+   * ServiceBinding / ServiceGrant records over OutputSnapshot,
+   * DependencySnapshot, and Accounts/Vault authority. When unset, Service Graph
+   * routes return 501 after auth.
+   */
+  readonly serviceGraphService?: ServiceGraphOperations;
   /**
    * OutputShares domain service (Core Specification §18). When unset, the
    * cross-Space OutputShare routes return 501 after successful auth.
@@ -452,13 +499,13 @@ export type DeployControlAuthResult =
  * The cross-group context handed to every per-resource-group mount function. It
  * pairs the resolved {@link OpenTofuDeploymentController} (guaranteed present —
  * the controller-absent path is handled by the descriptor-driven 501 fallback)
- * with the raw {@link DeployControlPublicRouteDependencies} (for the optional
+ * with the raw {@link DeployControlInternalRouteDependencies} (for the optional
  * per-domain services + the bearer resolver) and the shared body-limit
  * middleware.
  */
 export interface DeployControlRouteContext {
   readonly app: Hono;
-  readonly dependencies: DeployControlPublicRouteDependencies;
+  readonly dependencies: DeployControlInternalRouteDependencies;
   readonly controller: OpenTofuDeploymentController;
   /** Hono body-limit middleware shared by every JSON-body route. */
   readonly deployControlBodyLimit: ReturnType<typeof bodyLimit>;
@@ -518,7 +565,7 @@ export interface DefineRouteOptions {
    * backing domain service is unwired; the route then answers 501 after auth.
    */
   readonly requireService?: (
-    dependencies: DeployControlPublicRouteDependencies,
+    dependencies: DeployControlInternalRouteDependencies,
   ) => string | undefined;
   readonly handler: (args: RouteHandlerArgs) => Promise<Response>;
 }
@@ -570,7 +617,7 @@ function validateRouteParam(
 
 export async function authorizeDeployControl(
   c: Context,
-  dependencies: DeployControlPublicRouteDependencies,
+  dependencies: DeployControlInternalRouteDependencies,
 ): Promise<DeployControlAuthResult> {
   const configuredToken = dependencies.getDeployControlToken?.();
   if (!configuredToken && !dependencies.authorizeDeployControlBearer) {
@@ -704,7 +751,8 @@ export function ensureSpaceCreatePermission(
  * An explicit `scope: "operator"` request must come from the unrestricted
  * bearer (`spaceIds === "*"`) even when a spaceId is also supplied: a hybrid
  * `{ spaceId, scope: "operator" }` request must not let a space session mint an
- * operator default (privilege-escalation guard; the vault rejects the row too).
+ * operator-scoped provider connection (privilege-escalation guard; the vault
+ * rejects the row too).
  */
 export function ensureConnectionPermission(
   principal: DeployControlPrincipal,
@@ -979,7 +1027,11 @@ export function parsePageParams(
       return {
         kind: "invalid",
         response: c.json(
-          errorEnvelope(c, "invalid_argument", "limit must be a positive integer"),
+          errorEnvelope(
+            c,
+            "invalid_argument",
+            "limit must be a positive integer",
+          ),
           400,
         ),
       };
@@ -989,7 +1041,11 @@ export function parsePageParams(
       return {
         kind: "invalid",
         response: c.json(
-          errorEnvelope(c, "invalid_argument", "limit must be a positive integer"),
+          errorEnvelope(
+            c,
+            "invalid_argument",
+            "limit must be a positive integer",
+          ),
           400,
         ),
       };

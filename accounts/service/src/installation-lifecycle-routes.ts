@@ -5,22 +5,18 @@
  * sibling modules, each owning one handler family plus its family-local
  * helpers:
  *
- *   - installation-create-import-routes.ts  — create / import
+ *   - installation-create-import-routes.ts  — create
  *   - installation-status-routes.ts         — status / uninstall / revision
  *   - installation-plan-materialize-routes.ts — plan / materialize / usage
  *   - installation-export-routes.ts         — export request / poll / download
  *
  * Cross-family helpers (deploy-control projections, activated-HTTP-domain
- * projections, shared use-edge / permission-scope parsers, revision digests)
+ * projections, shared service-binding / service-grant parsers, revision digests)
  * live in installation-lifecycle-shared.ts; the hash-chained ledger-event
  * append helper is re-exported through installation-ledger-events.ts. This
- * module re-exports the public handler surface so existing importers
- * (mod.ts, use-takos-routes.ts) keep their import path unchanged.
+ * module is the stable lifecycle route entrypoint.
  */
-export {
-  handleCreateAppInstallation,
-  handleImportAppInstallation,
-} from "./installation-create-import-routes.ts";
+export { handleCreateAppInstallation } from "./installation-create-import-routes.ts";
 export {
   handleUninstallAppInstallation,
   handleUpdateAppInstallationRevision,

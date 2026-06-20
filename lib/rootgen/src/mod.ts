@@ -22,7 +22,7 @@
  * `generateInstallationRoot` is the installType-aware entry point. It emits the
  * same three files plus, when the Installation declares provider bindings,
  * provider blocks + a `providers = { ... }` module map; and for `app_source` it
- * threads a generated `artifact_path` variable. Per-binding credential split:
+ * threads a generated `artifact_path` variable. Per-connection credential split:
  * a provider with an arg mapping gets one `variable "<provider>_<alias>_<arg>"`
  * { sensitive = true, ephemeral = true }` per credential arg, and its provider
  * block sets that provider argument from the variable. The Vault mints the
@@ -75,15 +75,15 @@ export type GeneratedRootInstallType =
   | "app_source";
 
 /** One OpenTofu provider binding emitted into the generated root. */
-export interface RootProviderBinding {
+export interface RootInstallationProviderEnvBinding {
   /** Provider rule, short (`cloudflare`) or registry form (`cloudflare/cloudflare`). */
   readonly provider: string;
-  /** Optional OpenTofu provider alias required by the child module. */
+  /** Optional root provider alias selected by this Provider Binding. */
   readonly alias?: string;
   /**
    * Optional provider API base URL. The control plane sets this for a managed
-   * (takosumi-hosted) cloudflare run so the provider talks to the Takosumi
-   * cf-proxy (which lands worker scripts in the WfP dispatch namespace) instead
+   * (platform-hosted) cloudflare run so the provider talks to the Takosumi
+   * Gateway provider endpoint (which lands worker scripts in the WfP dispatch namespace) instead
    * of api.cloudflare.com directly. Rendered as `base_url = "…"` in the provider
    * block. A capsule cannot override it: the generated root passes providers in,
    * so a capsule's own provider block fails tofu plan (fail-closed redirect).
@@ -101,31 +101,32 @@ export interface GenerateInstallationRootInput {
    * block. When empty/omitted the root is structurally identical to
    * {@link generateRootModule}.
    */
-  readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
+  readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
   /**
-   * Provider Env Set delivered TF_VAR names (see {@link GenerateGenericCapsuleRootInput}).
+   * Generic Env Provider delivered TF_VAR names (see {@link GenerateGenericCapsuleRootInput}).
    */
-  readonly envSetVarNames?: readonly string[];
+  readonly genericEnvVarNames?: readonly string[];
 }
 
 export interface GenerateGenericCapsuleRootInput {
   readonly requiredProviders: readonly string[];
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
+  readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
   /**
-   * Provider Env Set delivered TF_VAR names. A `provider_env_set` Connection
+   * Generic Env Provider delivered TF_VAR names. A `generic_env_provider` Connection
    * delivers each of its `envNames` to the runner as a `TF_VAR_<NAME>` env var,
    * but OpenTofu SILENTLY DROPS a `TF_VAR_<NAME>` for which the root declares no
    * `variable "<NAME>"`. So the generated root MUST declare a matching
    * `variable "<NAME>" { type = string sensitive = true }` for every delivered
-   * name; otherwise the env-set credential never reaches the provider/child
+   * name; otherwise the generic env credential never reaches the provider/child
    * module (the value is dropped). These are generic passthrough variables — NOT
-   * wired into a provider block (the env-set provider reads its own env / process
-   * `TF_VAR_<NAME>`), distinct from the per-alias provider-credential split. Each
-   * name is declared exactly once; an empty/omitted list emits nothing.
+   * wired into a provider block (the generic-env helper reads its own env /
+   * process `TF_VAR_<NAME>`), distinct from the per-alias provider-credential
+   * split. Each name is declared exactly once; an empty/omitted list emits
+   * nothing.
    */
-  readonly envSetVarNames?: readonly string[];
+  readonly genericEnvVarNames?: readonly string[];
 }
 
 /** Module input name an `app_source` template reads the built artifact path from. */
@@ -156,15 +157,15 @@ export function generateRootModule(
  *   template declares that input. The build phase produces the artifact in the
  *   Container with ZERO credentials (invariant 3); the deploy module consumes it.
  *
- * When `providerBindings` is non-empty, provider blocks and a
+ * When `providerEnvBindings` is non-empty, provider blocks and a
  * `providers = { ... }` map are emitted.
  */
 export function generateInstallationRoot(
   input: GenerateInstallationRootInput,
 ): GeneratedRootModule {
   const { template, inputs, installType } = input;
-  const providerBindings = input.providerBindings ?? [];
-  const envSetVarNames = input.envSetVarNames ?? [];
+  const providerEnvBindings = input.providerEnvBindings ?? [];
+  const genericEnvVarNames = input.genericEnvVarNames ?? [];
   const wantsArtifact =
     installType === "app_source" && ARTIFACT_PATH_INPUT in template.inputs;
   return {
@@ -173,8 +174,8 @@ export function generateInstallationRoot(
       "main.tf": renderInstallationMainTf(
         template,
         inputs,
-        providerBindings,
-        envSetVarNames,
+        providerEnvBindings,
+        genericEnvVarNames,
         wantsArtifact,
       ),
       "outputs.tf": renderOutputsTf(template),
@@ -192,15 +193,15 @@ export function generateInstallationRoot(
 export function generateGenericCapsuleRoot(
   input: GenerateGenericCapsuleRootInput,
 ): GeneratedRootModule {
-  const providerBindings = input.providerBindings ?? [];
-  const envSetVarNames = input.envSetVarNames ?? [];
+  const providerEnvBindings = input.providerEnvBindings ?? [];
+  const genericEnvVarNames = input.genericEnvVarNames ?? [];
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(input.requiredProviders),
       "main.tf": renderGenericMainTf(
         input.inputs,
-        providerBindings,
-        envSetVarNames,
+        providerEnvBindings,
+        genericEnvVarNames,
       ),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
@@ -253,7 +254,7 @@ function renderMainTf(
 }
 
 /**
- * Comment header for a provider-bound generated root. Per-binding credential
+ * Comment header for a provider-bound generated root. Per-connection credential
  * split is emitted as `var.<provider>_<alias>_<arg>` when an alias is present,
  * otherwise `var.<provider>_<arg>`.
  */
@@ -265,7 +266,7 @@ const PROVIDER_BINDINGS_COMMENT = [
 ].join("\n");
 
 /**
- * The per-binding credential variable name for one provider arg:
+ * The per-connection credential variable name for one provider arg:
  * `<localProvider>_<alias>_<arg>` or `<localProvider>_<arg>`.
  * Used as the rootgen `variable` name and as the `TF_VAR_…` env name the Vault
  * mints; the two MUST stay byte-identical.
@@ -281,14 +282,14 @@ function aliasCredentialVarName(
 function renderInstallationMainTf(
   template: TemplateDefinition,
   inputs: Readonly<Record<string, TemplateInputValue>>,
-  providerBindings: ReadonlyArray<RootProviderBinding>,
-  envSetVarNames: readonly string[],
+  providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
+  genericEnvVarNames: readonly string[],
   wantsArtifact: boolean,
 ): string {
   const sections: string[] = [];
 
-  appendProviderSections(sections, providerBindings);
-  appendEnvSetVariableSections(sections, envSetVarNames);
+  appendProviderSections(sections, providerEnvBindings);
+  appendGenericEnvVariableSections(sections, genericEnvVarNames);
 
   // Generated artifact_path variable for app_source installs.
   if (wantsArtifact) {
@@ -306,7 +307,7 @@ function renderInstallationMainTf(
     `  source = ${hclString(TEMPLATE_MODULE_SOURCE)}`,
   ];
 
-  appendProviderMap(moduleLines, providerBindings);
+  appendProviderMap(moduleLines, providerEnvBindings);
 
   // Emit inputs in the template's declared order for deterministic golden output.
   for (const name of Object.keys(template.inputs)) {
@@ -326,15 +327,15 @@ function renderInstallationMainTf(
 
 function appendProviderSections(
   sections: string[],
-  providerBindings: ReadonlyArray<RootProviderBinding>,
+  providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
 ): void {
   // Provider blocks. A provider WITH a credential arg mapping wires sensitive
   // root variables; a provider WITHOUT one keeps a credential-free block.
-  if (providerBindings.length > 0) {
+  if (providerEnvBindings.length > 0) {
     sections.push(PROVIDER_BINDINGS_COMMENT);
     // Sensitive credential variables come first (declared before the alias blocks
     // that consume them), in binding/arg order for deterministic golden output.
-    for (const binding of providerBindings) {
+    for (const binding of providerEnvBindings) {
       const localProvider = providerLocalName(binding.provider);
       for (const credArg of providerCredentialArgs(binding.provider)) {
         const varName = aliasCredentialVarName(
@@ -353,7 +354,7 @@ function appendProviderSections(
         );
       }
     }
-    for (const binding of providerBindings) {
+    for (const binding of providerEnvBindings) {
       const localProvider = providerLocalName(binding.provider);
       const credArgs = providerCredentialArgs(binding.provider);
       const aliasLines = [`provider ${hclString(localProvider)} {`];
@@ -378,28 +379,29 @@ function appendProviderSections(
 }
 
 /**
- * Declares a root `variable "<NAME>"` for each Provider Env Set delivered name.
+ * Declares a root `variable "<NAME>"` for each Generic Env Provider delivered name.
  *
- * The Vault delivers a `provider_env_set` Connection's values to the runner as
+ * The Vault delivers a `generic_env_provider` Connection's values to the runner as
  * `TF_VAR_<NAME>` env vars, but OpenTofu SILENTLY DROPS any `TF_VAR_<NAME>` for
- * which the root declares no `variable "<NAME>"` — so without this the env-set
- * credential never reaches the provider / child module. Each block is emitted as
- * a sensitive string variable (matching the file's `hclString` + `sensitive`
- * style); env-set values are static secrets, so unlike the per-alias credential
- * split they are NOT marked `ephemeral`. Names are deduped (declared once) and
- * emitted in first-seen order for deterministic golden output. The values are
- * generic passthrough — not wired into any provider block — so the env-set
- * provider reads them through its own env / `var.<NAME>` in the child module.
+ * which the root declares no `variable "<NAME>"` — so without this the generic
+ * env credential never reaches the provider / child module. Each block is
+ * emitted as a sensitive string variable (matching the file's `hclString` +
+ * `sensitive` style); generic env values are static secrets, so unlike the
+ * per-alias credential split they are NOT marked `ephemeral`. Names are deduped
+ * (declared once) and emitted in first-seen order for deterministic golden
+ * output. The values are generic passthrough — not wired into any provider block
+ * — so the provider reads them through its own env / `var.<NAME>` in the child
+ * module.
  */
-function appendEnvSetVariableSections(
+function appendGenericEnvVariableSections(
   sections: string[],
-  envSetVarNames: readonly string[],
+  genericEnvVarNames: readonly string[],
 ): void {
   const seen = new Set<string>();
-  for (const name of envSetVarNames) {
+  for (const name of genericEnvVarNames) {
     if (seen.has(name)) continue;
     seen.add(name);
-    assertIdentifier(name, "rootgen: provider env set variable name");
+    assertIdentifier(name, "rootgen: generic env provider variable name");
     sections.push(
       [
         `variable ${hclString(name)} {`,
@@ -424,18 +426,18 @@ function renderOutputsTf(template: TemplateDefinition): string {
 
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
-  providerBindings: ReadonlyArray<RootProviderBinding>,
-  envSetVarNames: readonly string[],
+  providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
+  genericEnvVarNames: readonly string[],
 ): string {
   const sections: string[] = [];
-  appendProviderSections(sections, providerBindings);
-  appendEnvSetVariableSections(sections, envSetVarNames);
+  appendProviderSections(sections, providerEnvBindings);
+  appendGenericEnvVariableSections(sections, genericEnvVarNames);
 
   const moduleLines = [
     'module "app" {',
     `  source = ${hclString(TEMPLATE_MODULE_SOURCE)}`,
   ];
-  appendProviderMap(moduleLines, providerBindings);
+  appendProviderMap(moduleLines, providerEnvBindings);
   for (const name of Object.keys(inputs).sort()) {
     assertIdentifier(name, "rootgen: input name");
     moduleLines.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
@@ -447,21 +449,52 @@ function renderGenericMainTf(
 
 function appendProviderMap(
   moduleLines: string[],
-  providerBindings: ReadonlyArray<RootProviderBinding>,
+  providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
 ): void {
-  const refs: string[] = [];
-  for (const binding of providerBindings) {
-    const localProvider = providerLocalName(binding.provider);
-    refs.push(
-      binding.alias ? `${localProvider}.${binding.alias}` : localProvider,
-    );
-  }
-  if (refs.length === 0) return;
+  const entries = providerMapEntries(providerEnvBindings);
+  if (entries.length === 0) return;
   moduleLines.push("", "  providers = {");
-  for (const ref of refs) {
-    moduleLines.push(`    ${ref} = ${ref}`);
+  for (const entry of entries) {
+    moduleLines.push(`    ${entry.childRef} = ${entry.rootRef}`);
   }
   moduleLines.push("  }", "");
+}
+
+interface ProviderMapEntry {
+  readonly childRef: string;
+  readonly rootRef: string;
+}
+
+function providerMapEntries(
+  providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
+): ProviderMapEntry[] {
+  const byChildLocalProvider = new Map<string, ProviderMapEntry>();
+  for (const binding of providerEnvBindings) {
+    const localProvider = providerLocalName(binding.provider);
+    const rootRef = rootProviderRef(localProvider, binding.alias);
+    const existing = byChildLocalProvider.get(localProvider);
+    if (existing) {
+      if (existing.rootRef === rootRef) continue;
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `rootgen: multiple provider bindings for ${localProvider} require child module configuration_aliases`,
+      );
+    }
+    byChildLocalProvider.set(localProvider, {
+      childRef: localProvider,
+      rootRef,
+    });
+  }
+  return Array.from(byChildLocalProvider.values());
+}
+
+function rootProviderRef(
+  localProvider: string,
+  alias: string | undefined,
+): string {
+  if (!alias) return localProvider;
+  assertIdentifier(alias, "rootgen: provider alias");
+  return `${localProvider}.${alias}`;
 }
 
 function renderGenericOutputsTf(

@@ -1,6 +1,6 @@
 import { createSignal, For } from "solid-js";
 import type { JSX } from "solid-js";
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 interface Tab {
   readonly key: string;
@@ -13,25 +13,31 @@ interface Tab {
 const TABS: readonly Tab[] = [
   {
     key: "install",
-    label: "1. module を install",
-    subtitle: "Git repo → Installation",
+    label: "1. Capsule を作る",
+    subtitle: "Git repo → Capsule",
     source: () => (
       <>
-        <span class="c"># Git の OpenTofu module を Installation に</span>
+        <span class="c"># Git の OpenTofu module を Capsule に</span>
         {"\n"}
-        <span class="k">GET</span>{" "}
-        /install?git=https://git.example.com/acme/api.git&ref=main{"\n"}
-        <span class="c">{"  "}↳ /new に取得元が入力済みで着地（追加は確認してから）</span>
+        <span class="k">POST</span> /api/v1/projects/prj_live/capsules{"\n"}
+        <span class="c">
+          {"  "}source.git = https://git.example.com/acme/api.git
+        </span>
         {"\n"}
-        <span class="k">POST</span> /api/spaces/sp_prod/installations{"\n"}
-        <span class="c">{"  "}✓ Installation created</span>
+        <span class="c">{"  "}source.ref = main · source.path = infra</span>
         {"\n"}
-        <span class="c">{"  "}✓ Run run_8f2a…  waiting approval</span>
+        <span class="c">{"  "}✓ Capsule created</span>
+        {"\n"}
+        <span class="k">bind</span> cloudflare.default → cloudflare-prod{"\n"}
+        <span class="c">{"  "}↳ ProviderConnection から env/file を注入</span>
+        {"\n"}
+        <span class="k">POST</span> /api/v1/capsules/cap_api/runs/plan{"\n"}
+        <span class="c">{"  "}✓ Run run_8f2a… reviewed plan ready</span>
       </>
     ),
     output: () => (
       <>
-        <span class="c">Installation が 1 つ、</span>
+        <span class="c">Capsule が 1 つ、</span>
         {"\n"}
         <span class="c">reviewed plan が 1 本。</span>
         {"\n"}
@@ -42,21 +48,25 @@ const TABS: readonly Tab[] = [
   {
     key: "apply",
     label: "2. reviewed plan を apply",
-    subtitle: "Run(plan) → Run(apply) → Deployment",
+    subtitle: "Run(plan) → Run(apply) → StateVersion",
     source: () => (
       <>
         <span class="c"># planDigest を pin して apply</span>
         {"\n"}
-        <span class="k">POST</span> /api/runs/run_8f2a/approve{"\n"}
-        <span class="k">GET</span> /api/runs/run_apply_3c1d{"\n"}
-        <span class="c">{"  "}✓ Run apply_3c1d…  applied</span>
+        <span class="c">
+          {"  "}# waiting_approval の時だけ approve を挟む
+        </span>
+        {"\n"}
+        <span class="k">POST</span> /api/v1/runs/run_8f2a/apply{"\n"}
+        <span class="k">GET</span> /api/v1/runs/run_apply_3c1d{"\n"}
+        <span class="c">{"  "}✓ Run apply_3c1d… applied</span>
       </>
     ),
     output: () => (
       <>
-        <span class="c">→ Deployment live</span>
+        <span class="c">→ StateVersion recorded</span>
         {"\n"}
-        <span class="c">→ OutputSnapshot recorded (non-secret projection)</span>
+        <span class="c">→ Outputs captured (secret values redacted)</span>
         {"\n"}
         <span class="c">→ policy decision と audit event も台帳に。</span>
       </>
@@ -68,16 +78,18 @@ const TABS: readonly Tab[] = [
     subtitle: "Connection と policy で portable",
     source: () => (
       <>
-        <span class="c"># Connection / policy で実行境界を選ぶ</span>
+        <span class="c"># ProviderBinding だけを切り替える</span>
         {"\n"}
-        <span class="k">PATCH</span> /api/installations/ins_api/deployment-profile{"\n"}
-        <span class="c">{"  "}↳ cloudflare.main: default</span>
+        <span class="k">bind</span> ProviderConnection{"\n"}
+        <span class="c">{"  "}↳ cloudflare.default: cloudflare-dev</span>
         {"\n"}
-        <span class="c">{"  "}↳ aws.archive: Space AWS role</span>
+        <span class="c">{"  "}↳ cloudflare.default: cloudflare-prod</span>
         {"\n"}
         {"\n"}
-        <span class="k">POST</span> /api/installations/ins_api/plan{"\n"}
-        <span class="c">{"  "}↳ ProviderBinding と policy から実行境界を解決</span>
+        <span class="k">POST</span> /api/v1/capsules/cap_api/runs/plan{"\n"}
+        <span class="c">
+          {"  "}↳ 同じ module に別の credential/env を注入
+        </span>
       </>
     ),
     output: () => (
@@ -100,12 +112,14 @@ export default function Showcase() {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
     e.preventDefault();
     const i = TABS.findIndex((t) => t.key === active());
-    const n = e.key === "ArrowRight"
-      ? (i + 1) % TABS.length
-      : (i - 1 + TABS.length) % TABS.length;
+    const n =
+      e.key === "ArrowRight"
+        ? (i + 1) % TABS.length
+        : (i - 1 + TABS.length) % TABS.length;
     setActive(TABS[n].key);
-    (e.currentTarget.parentElement?.children[n] as HTMLElement | undefined)
-      ?.focus();
+    (
+      e.currentTarget.parentElement?.children[n] as HTMLElement | undefined
+    )?.focus();
   };
 
   return (
@@ -113,10 +127,11 @@ export default function Showcase() {
       <SplatField density="section" />
       <div class="container">
         <span class="eyebrow">how it works</span>
-        <h2>install → plan / apply → どこへでも。</h2>
+        <h2>Capsule → plan / apply → output まで。</h2>
         <p class="lede">
-          Git の OpenTofu module を install → reviewed plan を apply →
-          Connection と policy で実行先を選ぶ。3 step。Takos も、この仕組みで動いています。
+          Git の OpenTofu module を Capsule にする。ProviderConnection を選ぶ。
+          reviewed plan を apply する。secret は manifest に置かず、Run
+          の一時環境にだけ注入します。
         </p>
         <div class="showcase">
           <div

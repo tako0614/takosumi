@@ -13,17 +13,7 @@ import { NoopTestKms } from "../../core/adapters/kms/mod.ts";
 import { MemoryNotificationSink } from "../../core/adapters/notification/mod.ts";
 import { LocalOperatorConfig } from "../../core/adapters/operator-config/mod.ts";
 import { NoopProviderMaterializer } from "../../core/adapters/provider/mod.ts";
-import {
-  type AckInput,
-  type DeadLetterInput,
-  type EnqueueInput,
-  type LeaseInput,
-  MemoryQueueAdapter,
-  type NackInput,
-  type QueueLease,
-  type QueueMessage,
-  type QueuePort,
-} from "../../core/adapters/queue/mod.ts";
+import { MemoryQueueAdapter } from "../../core/adapters/queue/mod.ts";
 import { MemoryEncryptedSecretStore } from "../../core/adapters/secret-store/mod.ts";
 import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ImmutableSourceAdapter } from "../../core/adapters/source/mod.ts";
@@ -32,7 +22,7 @@ import type { EnqueueRun } from "../../core/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
-import type { CloudflareWorkerEnv, Queue } from "./bindings.ts";
+import type { CloudflareWorkerEnv } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
 import { createCloudflareD1OpenTofuDeploymentStore } from "./d1_opentofu_store.ts";
 import { CloudflareD1SnapshotStorageDriver } from "./d1_storage.ts";
@@ -51,8 +41,10 @@ export async function createWorkerServiceApp(
   options: { readonly runnerProfiles?: readonly RunnerProfile[] } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
-  const storage = new CloudflareD1SnapshotStorageDriver(env.TAKOS_D1);
-  const deployStores = createCloudflareD1DeployStores(env.TAKOS_D1);
+  const storage = new CloudflareD1SnapshotStorageDriver(
+    env.TAKOSUMI_CONTROL_DB,
+  );
+  const deployStores = createCloudflareD1DeployStores(env.TAKOSUMI_CONTROL_DB);
   const adapters = createWorkerAdapters({
     env,
     runtimeEnv,
@@ -72,7 +64,10 @@ export async function createWorkerServiceApp(
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
-  const backupArtifactStore = backupArtifactStoreFromEnv(env.R2_BACKUPS, runtimeEnv);
+  const backupArtifactStore = backupArtifactStoreFromEnv(
+    env.R2_BACKUPS,
+    runtimeEnv,
+  );
   const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
   const sensitiveOutputResolver = sensitiveOutputResolverFromEnv(
     env.R2_ARTIFACTS,
@@ -93,10 +88,10 @@ export async function createWorkerServiceApp(
     takosumiDeploymentRecordStore: deployStores.deploymentRecordStore,
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
     opentofuDeploymentStore: createCloudflareD1OpenTofuDeploymentStore(
-      env.TAKOS_D1,
+      env.TAKOSUMI_CONTROL_DB,
     ),
     opentofuRunner,
-    userEnvSetProviderRunner: opentofuRunner,
+    ownKeyProviderRunner: opentofuRunner,
     secretCrypto,
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
@@ -132,7 +127,7 @@ export async function createWorkerServiceApp(
  * {@link CoordinationObject} via its `acquire-lease` / `release-lease` POST
  * API. Returns undefined when the DO binding is absent, leaving the controller
  * on its in-process serialization. The same single DO instance
- * (`takos-control-plane`) backs the lease keyspace used by the rest of the
+ * (`takosumi-control-plane`) backs the lease keyspace used by the rest of the
  * coordination surface, so environment leases share that storage.
  */
 function durableObjectInstallationCoordination(
@@ -140,8 +135,7 @@ function durableObjectInstallationCoordination(
 ): InstallationCoordination | undefined {
   const namespace = env.COORDINATION;
   if (!namespace) return undefined;
-  const stub = () =>
-    namespace.get(namespace.idFromName("takos-control-plane"));
+  const stub = () => namespace.get(namespace.idFromName("takosumi-control-plane"));
   const post = async (path: string, body: unknown): Promise<unknown> => {
     const response = await stub().fetch(
       new Request(`https://takos-coordination.internal/${path}`, {
@@ -150,7 +144,10 @@ function durableObjectInstallationCoordination(
         body: JSON.stringify(body),
       }),
     );
-    const payload = await response.json() as { result?: unknown; error?: string };
+    const payload = (await response.json()) as {
+      result?: unknown;
+      error?: string;
+    };
     if (!response.ok || payload.error) {
       throw new Error(
         `coordination ${path} failed: ${payload.error ?? response.status}`,
@@ -160,11 +157,11 @@ function durableObjectInstallationCoordination(
   };
   return {
     async acquireLease(input) {
-      const result = await post("acquire-lease", {
+      const result = (await post("acquire-lease", {
         scope: input.scope,
         holderId: input.holderId,
         ttlMs: input.ttlMs,
-      }) as {
+      })) as {
         scope: string;
         holderId: string;
         token: string;
@@ -179,12 +176,12 @@ function durableObjectInstallationCoordination(
       // so the renewal harness stops renewing instead of surfacing the error and
       // killing the apply it is babysitting.
       try {
-        const result = await post("renew-lease", {
+        const result = (await post("renew-lease", {
           scope: input.scope,
           holderId: input.holderId,
           token: input.token,
           ttlMs: input.ttlMs,
-        }) as {
+        })) as {
           scope: string;
           holderId: string;
           token: string;
@@ -203,11 +200,11 @@ function durableObjectInstallationCoordination(
       }
     },
     async releaseLease(input) {
-      return await post("release-lease", {
+      return (await post("release-lease", {
         scope: input.scope,
         holderId: input.holderId,
         token: input.token,
-      }) as boolean;
+      })) as boolean;
     },
   };
 }
@@ -218,9 +215,7 @@ function durableObjectInstallationCoordination(
  * the queue is not bound, so the controller falls back to its inline dispatcher.
  * The message carries only the run identity (never variables or credentials).
  */
-function openTofuRunEnqueuer(
-  env: CloudflareWorkerEnv,
-): EnqueueRun | undefined {
+function openTofuRunEnqueuer(env: CloudflareWorkerEnv): EnqueueRun | undefined {
   const queue = env.RUN_QUEUE;
   if (!queue) return undefined;
   return async (dispatch) => {
@@ -285,9 +280,7 @@ function createWorkerAdapters(input: {
     storage: input.storage,
     kms: new NoopTestKms({ clock, idGenerator }),
     observability: new InMemoryObservabilitySink(),
-    queue: input.env.TAKOS_QUEUE
-      ? new CloudflareQueueAdapter(input.env.TAKOS_QUEUE)
-      : new MemoryQueueAdapter({ clock, idGenerator }),
+    queue: new MemoryQueueAdapter({ clock, idGenerator }),
     objectStorage: new CloudflareR2ObjectStorage(input.env.R2_ARTIFACTS),
     runtimeAgent,
   };
@@ -299,58 +292,16 @@ function cloudflareRuntimeEnv(
 ): Record<string, string | undefined> {
   const runtimeEnv: Record<string, string | undefined> = {
     TAKOSUMI_PROCESS_ROLE: role,
-    TAKOS_RUNTIME_MODE: "cloudflare-worker",
+    TAKOSUMI_RUNTIME_MODE: "cloudflare-worker",
   };
   for (const [key, value] of Object.entries(env)) {
     if (
-      typeof value === "string" || typeof value === "number" ||
+      typeof value === "string" ||
+      typeof value === "number" ||
       typeof value === "boolean"
     ) {
       runtimeEnv[key] = String(value);
     }
   }
   return runtimeEnv;
-}
-
-class CloudflareQueueAdapter implements QueuePort {
-  constructor(private readonly queue: Queue<unknown>) {}
-
-  async enqueue<TPayload = unknown>(
-    input: EnqueueInput<TPayload>,
-  ): Promise<QueueMessage<TPayload>> {
-    await this.queue.send(input.payload);
-    const now = new Date().toISOString();
-    return {
-      id: input.messageId ?? crypto.randomUUID(),
-      queue: input.queue,
-      payload: input.payload,
-      status: "queued",
-      priority: input.priority ?? 0,
-      attempts: 0,
-      maxAttempts: input.maxAttempts ?? 3,
-      enqueuedAt: now,
-      availableAt: input.availableAt ?? now,
-      metadata: { ...(input.metadata ?? {}) },
-    };
-  }
-
-  lease<TPayload = unknown>(
-    _input: LeaseInput,
-  ): Promise<QueueLease<TPayload> | undefined> {
-    return Promise.resolve(undefined);
-  }
-
-  ack(_input: AckInput): Promise<void> {
-    return Promise.resolve();
-  }
-
-  nack<TPayload = unknown>(_input: NackInput): Promise<QueueMessage<TPayload>> {
-    throw new Error("Cloudflare Queue consumer ack/nack is not exposed here");
-  }
-
-  deadLetter<TPayload = unknown>(
-    _input: DeadLetterInput,
-  ): Promise<QueueMessage<TPayload>> {
-    throw new Error("Cloudflare Queue dead-letter is not exposed here");
-  }
 }

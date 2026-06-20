@@ -1,5 +1,5 @@
 export interface CloudflareWorkerEnv extends Record<string, unknown> {
-  readonly TAKOS_D1: D1Database;
+  readonly TAKOSUMI_CONTROL_DB: D1Database;
   readonly R2_ARTIFACTS: R2Bucket;
   /**
    * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
@@ -14,25 +14,27 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_STATE?: R2Bucket;
   /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
   readonly R2_BACKUPS?: R2Bucket;
-  readonly TAKOS_QUEUE?: Queue<unknown>;
   readonly RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly COORDINATION: DurableObjectNamespace;
   readonly RUNNER?: DurableObjectNamespace;
-  /**
-   * Operator control-plane bearer (shared with the Deploy Control API). Gates the
-   * internal `/coordination/*` Durable Object route; when unset that route is not
-   * exposed.
-   */
+  /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
   /**
+   * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
+   * Production edge deployments omit this so generic internal APIs stay 404.
+   */
+  readonly TAKOSUMI_EXPOSE_INTERNAL_EDGE?: string;
+  readonly LOCAL_SUBSTRATE_TEST_BED?: string;
+  /**
    * Operator-curated provider surface: CSV of runner profile ids the operator
-   * enables (e.g. `"cloudflare-default,aws-template"`). Only listed ids appear in
+   * enables (e.g. `"cloudflare-default,aws-provider-env-candidate"`). Only listed ids appear in
    * `/v1/runner-profiles` and policy evaluation, each with
    * `takosumi.com/profile-enabled=true`. Unset/empty defaults to
    * `"cloudflare-default"`.
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
   readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
@@ -49,7 +51,8 @@ export type OpenTofuRunAction =
   | "destroy"
   | "source_sync"
   | "compatibility_check"
-  | "backup";
+  | "backup"
+  | "restore";
 
 /**
  * Run-dispatch message on `RUN_QUEUE`. The producer (the

@@ -7,7 +7,6 @@ import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
   TAKOSUMI_ACCOUNTS_JWKS_PATH,
@@ -24,7 +23,7 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_USERINFO_PATH,
-  TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH,
+  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
 export type {
@@ -44,13 +43,10 @@ export {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
+import type { AccountsInstallationExportBundle } from "./export-bundle.ts";
 import type {
-  AccountsInstallationExportBundle,
-  planInstallationImport,
-} from "./export-bundle.ts";
-import type {
-  AppBindingKind,
-  AppBindingRecord,
+  ServiceBindingMaterialKind,
+  ServiceBindingMaterialRecord,
   InstallationRecord,
 } from "./ledger.ts";
 import {
@@ -65,7 +61,6 @@ import {
   handleDownloadAppInstallationExport,
   handlePlanAppInstallationDeployment,
   handleGetAppInstallationExportOperation,
-  handleImportAppInstallation,
   handleReportInstallationBillingUsage,
   handleRequestAppInstallationExport,
   handleRequestAppInstallationMaterialize,
@@ -126,7 +121,6 @@ import {
   requireAccountSession,
   TAKOSUMI_ACCOUNTS_SESSION_ME_PATH,
 } from "./account-session.ts";
-import { handleUseTakosStart } from "./use-takos-routes.ts";
 import { handleConsumeLaunchToken } from "./installation-routes-internal.ts";
 import {
   handleAuthProvidersRequest,
@@ -134,15 +128,16 @@ import {
   handleUpstreamCallbackRequest,
   upstreamOAuthNotConfigured,
 } from "./upstream-oauth-routes.ts";
+export { handleAuthProvidersRequest } from "./upstream-oauth-routes.ts";
 import {
   type InstallationRoute,
   matchAccountTokenRevokeRoute,
   matchInstallationRoute,
 } from "./route-matchers.ts";
 import {
-  handleInstallationPlanRunProxy,
-  type DeployControlProxyOptions,
-} from "./deploy-control-proxy.ts";
+  handleInstallationPlanRunFacade,
+  type DeployControlFacadeOptions,
+} from "./deploy-control-facade.ts";
 import {
   type ControlPlaneOperations,
   handleControlRoute,
@@ -150,26 +145,26 @@ import {
 } from "./control-routes.ts";
 import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
 import {
-  isWorkloadPlatformServiceResolveContext,
-  resolveTakosumiWorkloadPlatformService,
-  TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVE_PATH,
-} from "./workload-platform-services.ts";
+  isServiceGraphMaterialResolveContext,
+  resolveTakosumiServiceGraphMaterial,
+  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH,
+} from "./service-graph-material-resolver.ts";
 import {
-  handleIngestInstallationWorkloadEvent,
-  handleListInstallationWorkloadServices,
-  handleListWorkloadServices,
-  handleRotateInstallationWorkloadServiceToken,
-} from "./workload-service-routes.ts";
+  handleIngestInstallationServiceEvent,
+  handleListInstallationServiceGraphServices,
+  handleListServiceGraphServices,
+  handleRotateInstallationServiceGraphServiceToken,
+  type ServiceGraphRuntimeAvailability,
+} from "./service-graph-service-routes.ts";
 import {
-  managedOfferingAccessBlocked,
-  type ManagedOfferingAccessPolicy,
-  managedOfferingGuardedInstallationMutation,
-} from "./managed-offering-policy.ts";
+  platformAccessBlocked,
+  type PlatformAccessPolicy,
+  platformGuardedInstallationMutation,
+} from "./platform-access-policy.ts";
 import {
   requireAppInstallationAccountAccess,
-  requireAppInstallationAccountOrWorkloadControlAccess,
+  requireAppInstallationAccountOrServiceGraphControlAccess,
   requireAppInstallationCreateWriteAccess,
-  requireAppInstallationImportWriteAccess,
   requireInstallationPlanRunWriteAccess,
 } from "./installation-auth.ts";
 
@@ -179,20 +174,21 @@ export {
   requestInstallationApply,
   requestInstallationPlanRun,
   requestRollback,
-} from "./deploy-control-proxy.ts";
+} from "./deploy-control-facade.ts";
 export type {
   DeployControlOperations,
-  DeployControlProxyOptions,
-} from "./deploy-control-proxy.ts";
+  DeployControlFacadeOptions,
+} from "./deploy-control-facade.ts";
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
-export { createOpenManagedOfferingAccessPolicy } from "./managed-offering-policy.ts";
+export { requireCurrentServiceGraphServiceAccessToken } from "./service-graph-service-tokens.ts";
+export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
 export type {
-  ManagedOfferingAccessPolicy,
-  ManagedOfferingReadinessReportForOpenAccess,
-} from "./managed-offering-policy.ts";
+  PlatformAccessPolicy,
+  PlatformReadinessReportForOpenAccess,
+} from "./platform-access-policy.ts";
 
 export * from "./subject.ts";
 export * from "./store.ts";
@@ -202,29 +198,29 @@ export * from "./identity.ts";
 export * from "./billing.ts";
 export * from "./jwt.ts";
 // `ledger.ts` re-export is intentionally selective: the v1 contract reset
-// (Wave 6) removed `RuntimeBindingRecord` / `AppBindingRecord` / `AppGrantRecord`
+// (Wave 6) removed `RuntimeBindingRecord` / `ServiceBindingMaterialRecord` / `ServiceGrantMaterialRecord`
 // / `InstallationEventRecord` / `AppInstallationLedgerStore` from the public
 // surface. They remain `@internal` to `accounts-service` for ledger storage
 // only and are not re-exported from the package barrel.
 export {
   APP_INSTALLATION_STATUS_TRANSITIONS,
-  assertValidAppBindingDeclaration,
-  assertValidAppBindingRecord,
-  assertValidAppGrantRecord,
+  assertValidServiceBindingMaterialDeclaration,
+  assertValidServiceBindingMaterialRecord,
+  assertValidServiceGrantMaterialRecord,
   buildInstallationEvent,
   canTransitionAppInstallationStatus,
-  isAppBindingKind,
-  isAppGrantCapability,
+  isServiceBindingMaterialKind,
+  isServiceGrantMaterialCapability,
   isValidBindingName,
   transitionAppInstallationStatus,
-  validateAppBindingDeclaration,
-  validateAppBindingRecord,
-  validateAppGrantRecord,
+  validateServiceBindingMaterialDeclaration,
+  validateServiceBindingMaterialRecord,
+  validateServiceGrantMaterialRecord,
   verifyInstallationEventHashChain,
 } from "./ledger.ts";
 export type {
-  AppBindingKind,
-  AppGrantCapability,
+  ServiceBindingMaterialKind,
+  ServiceGrantMaterialCapability,
   AppInstallationMode,
   AppInstallationStatus,
   InstallationRecord,
@@ -235,8 +231,8 @@ export type {
 } from "./ledger.ts";
 export * from "./runtime.ts";
 export * from "./export-bundle.ts";
-export * from "./export-archive.ts";
-export * from "./workload-platform-services.ts";
+export * from "./export-download-url.ts";
+export * from "./service-graph-material-resolver.ts";
 export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
 export {
@@ -257,7 +253,7 @@ export interface AccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: LaunchTokenOptions;
-  deployControl?: DeployControlProxyOptions;
+  deployControl?: DeployControlFacadeOptions;
   /**
    * In-process deploy-control operations facade backing the session-authed
    * `/api/v1/*` account-plane routes the dashboard SPA calls (M10). The
@@ -268,13 +264,13 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   billingReconciler?: StripeSpaceBillingReconciler;
   billingCreditReconciler?: StripeSpaceCreditReconciler;
-  bindingMaterializer?: AppBindingMaterializer;
+  bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
   exportWorker?: AppInstallationExportWorker;
-  importDataRestorer?: AppInstallationImportDataRestorer;
-  managedOfferingAccess?: ManagedOfferingAccessPolicy;
-  workloadPlatformServices?: WorkloadPlatformServiceResolverHttpOptions;
+  platformAccess?: PlatformAccessPolicy;
+  serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
+  serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   /**
    * Allowlist of origins permitted as Stripe checkout `successUrl` /
    * `cancelUrl` redirect targets. When omitted the operator MUST set the
@@ -310,17 +306,17 @@ export interface EphemeralAccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: EphemeralLaunchTokenOptions;
-  deployControl?: DeployControlProxyOptions;
+  deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
   billingReconciler?: StripeSpaceBillingReconciler;
   billingCreditReconciler?: StripeSpaceCreditReconciler;
-  bindingMaterializer?: AppBindingMaterializer;
+  bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
   exportWorker?: AppInstallationExportWorker;
-  importDataRestorer?: AppInstallationImportDataRestorer;
-  managedOfferingAccess?: ManagedOfferingAccessPolicy;
-  workloadPlatformServices?: WorkloadPlatformServiceResolverHttpOptions;
+  platformAccess?: PlatformAccessPolicy;
+  serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
+  serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   billingRedirectAllowlist?: readonly string[];
   billingPlans?: readonly BillingPlan[];
   exportDownloadSigningSecret?: string | Uint8Array;
@@ -344,7 +340,7 @@ export interface EphemeralAccountsHandlerOptions {
   allowEphemeralKeyOnHttpsIssuer?: boolean;
 }
 
-export interface WorkloadPlatformServiceResolverHttpOptions {
+export interface ServiceGraphMaterialResolverHttpOptions {
   readonly token: string;
   readonly billingPortalUrl?: string;
   readonly internalUrl?: string;
@@ -377,25 +373,25 @@ export interface StripeBillingOptions {
   webhookToleranceSeconds?: number;
 }
 
-export interface AppBindingMaterializerInput {
+export interface ServiceBindingMaterializerInput {
   installation: InstallationRecord;
-  binding: AppBindingRecord;
+  binding: ServiceBindingMaterialRecord;
   declaration?: Record<string, unknown>;
   issuer: string;
 }
 
-export interface AppBindingMaterializationResult {
+export interface ServiceBindingMaterializationResult {
   configRef: string;
   secretRefs?: readonly string[];
   env?: Record<string, string>;
 }
 
-export type AppBindingMaterializer = (
-  input: AppBindingMaterializerInput,
+export type ServiceBindingMaterializer = (
+  input: ServiceBindingMaterializerInput,
 ) =>
-  | AppBindingMaterializationResult
+  | ServiceBindingMaterializationResult
   | undefined
-  | Promise<AppBindingMaterializationResult | undefined>;
+  | Promise<ServiceBindingMaterializationResult | undefined>;
 
 export interface AppInstallationMaterializeRequest {
   readonly mode: "dedicated";
@@ -437,9 +433,9 @@ interface AppInstallationConfirmRecord {
 export interface AppInstallationMaterializeContinuityEvidence {
   readonly sourceDataNamespace: string | null;
   readonly oidcClient: Record<string, unknown> | null;
-  readonly preservedUseEdges: readonly {
+  readonly preservedServiceBindings: readonly {
     readonly name: string;
-    readonly kind: AppBindingKind;
+    readonly kind: ServiceBindingMaterialKind;
     readonly configRef: string;
     readonly secretRefs: readonly string[];
   }[];
@@ -485,48 +481,6 @@ export type AppInstallationExportWorker = (
   | AppInstallationExportWorkerResult
   | Promise<AppInstallationExportWorkerResult>;
 
-export interface AppInstallationImportDataManifestFile {
-  readonly path: string;
-  readonly mediaType?: string;
-  readonly byteLength: number;
-  /**
-   * Content integrity digest of the decoded file bytes, formatted as
-   * `sha256:<64 lowercase hex>`. Required so a same-length corrupted,
-   * truncated-then-padded, or substituted file is rejected before it is
-   * restored into a tenant installation; byteLength alone cannot detect this.
-   */
-  readonly contentDigest: string;
-}
-
-export interface AppInstallationImportDataManifest {
-  readonly kind: "takosumi.accounts.installation-export-data-manifest@v1";
-  readonly version: "v1";
-  readonly files: readonly AppInstallationImportDataManifestFile[];
-}
-
-export interface AppInstallationImportDataEntry extends AppInstallationImportDataManifestFile {
-  readonly content: Uint8Array;
-}
-
-export interface AppInstallationImportDataRestorerInput {
-  readonly installation: InstallationRecord;
-  readonly bundle: AccountsInstallationExportBundle;
-  readonly importPlan: ReturnType<typeof planInstallationImport>;
-  readonly dataManifest?: AppInstallationImportDataManifest;
-  readonly entries: readonly AppInstallationImportDataEntry[];
-}
-
-export interface AppInstallationImportDataRestorerResult {
-  readonly restoredEntries?: readonly string[];
-  readonly evidence?: Record<string, unknown>;
-}
-
-export type AppInstallationImportDataRestorer = (
-  input: AppInstallationImportDataRestorerInput,
-) =>
-  | AppInstallationImportDataRestorerResult
-  | Promise<AppInstallationImportDataRestorerResult>;
-
 export interface UpstreamOAuthOptions {
   subjectSecret: string | Uint8Array | CryptoKey;
   providers: readonly UpstreamOAuthClientRegistration[];
@@ -564,7 +518,6 @@ export interface EphemeralLaunchTokenOptions {
 }
 
 export const TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_SUFFIX = "/launch-token";
-export const TAKOSUMI_ACCOUNTS_USE_TAKOS_PATH = "/start";
 
 const emptyJwks: JsonWebKeySet = { keys: [] };
 
@@ -618,11 +571,10 @@ export async function createEphemeralAccountsHandler(
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
     exportWorker: options.exportWorker,
-    importDataRestorer: options.importDataRestorer,
-    managedOfferingAccess: options.managedOfferingAccess ?? {
+    platformAccess: options.platformAccess ?? {
       status: "closed",
     },
-    workloadPlatformServices: options.workloadPlatformServices,
+    serviceGraphMaterialResolver: options.serviceGraphMaterialResolver,
     billingRedirectAllowlist: options.billingRedirectAllowlist,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
     launchTokens: {
@@ -695,35 +647,43 @@ export function createAccountsHandler(
     }
 
     if (
-      url.pathname === TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVE_PATH
+      url.pathname === TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH
     ) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.workloadPlatformServices) {
+      if (!options.serviceGraphMaterialResolver) {
         return errorJson("not_found", "not found", 404);
       }
-      const authBlocked = requireWorkloadPlatformServiceResolverAccess({
+      const authBlocked = requireServiceGraphMaterialResolverAccess({
         request,
-        token: options.workloadPlatformServices.token,
+        token: options.serviceGraphMaterialResolver.token,
       });
       if (authBlocked) return authBlocked;
       const body = await readJsonObject(request);
-      if (!isWorkloadPlatformServiceResolveContext(body)) {
-        return errorJson("invalid_request", "request body must contain installationId plus sourceRef or kind", 400);
+      if (!isServiceGraphMaterialResolveContext(body)) {
+        return errorJson(
+          "invalid_request",
+          "request body must contain installationId plus sourceRef or kind",
+          400,
+        );
       }
-      const material = await resolveTakosumiWorkloadPlatformService({
+      const material = await resolveTakosumiServiceGraphMaterial({
         store,
         issuer,
-        internalUrl: options.workloadPlatformServices.internalUrl,
-        billingPortalUrl: options.workloadPlatformServices.billingPortalUrl,
+        internalUrl: options.serviceGraphMaterialResolver.internalUrl,
+        billingPortalUrl: options.serviceGraphMaterialResolver.billingPortalUrl,
         allowDeployControlInstallations:
-          options.workloadPlatformServices.allowDeployControlInstallations,
+          options.serviceGraphMaterialResolver.allowDeployControlInstallations,
         context: body,
       });
       if (Array.isArray(material)) {
         return json({ materials: material });
       }
       if (!material) {
-        return errorJson("platform_service_not_found", "platform service not found", 404);
+        return errorJson(
+          "platform_service_not_found",
+          "platform service not found",
+          404,
+        );
       }
       return json({ material });
     }
@@ -744,6 +704,7 @@ export function createAccountsHandler(
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;
       return await handleAuthorize({
+        request,
         url,
         flow: options.oidcFlow,
         clients,
@@ -784,10 +745,10 @@ export function createAccountsHandler(
       if (request.method === "GET") {
         // First-login personal-Space hook (spec §4). The dashboard hits this
         // route first after sign-in; fire-and-forget the idempotent ensure so
-        // a personal Space exists without coupling it to the OAuth seam (closes
-        // the M9 TODO). Never awaited on the response path — a failure here must
-        // not affect the session read. `request.clone()` keeps the body/headers
-        // intact for the response handler (this is a GET, so only headers).
+        // a personal Space exists without coupling it to the OAuth seam. Never
+        // awaited on the response path: a failure here must not affect the
+        // session read. `request.clone()` keeps the body/headers intact for the
+        // response handler (this is a GET, so only headers).
         void maybeEnsurePersonalSpaceForSession({
           request: request.clone(),
           store,
@@ -817,9 +778,9 @@ export function createAccountsHandler(
       return methodNotAllowed("GET, POST");
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH) {
+    if (url.pathname === TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      return await handleListWorkloadServices({ request, store });
+      return await handleListServiceGraphServices({ request, store });
     }
 
     const accountTokenRevokeRoute = matchAccountTokenRevokeRoute(url.pathname);
@@ -849,6 +810,7 @@ export function createAccountsHandler(
       return handleUpstreamAuthorizeRequest({
         url,
         upstreamOAuth: options.upstreamOAuth,
+        secureCookie: isProductionIssuer,
       });
     }
 
@@ -860,6 +822,7 @@ export function createAccountsHandler(
         url,
         store,
         upstreamOAuth: options.upstreamOAuth,
+        secureCookie: isProductionIssuer,
       });
     }
 
@@ -900,21 +863,20 @@ export function createAccountsHandler(
         request,
         store,
         passkeys: options.passkeys,
+        secureCookie: isProductionIssuer,
       });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      // Checkout has two gates: the managed-offering admission policy
-      // (consistent with the other managed-takos offering entrypoint /start)
+      // Checkout has two gates: the platform-readiness admission policy
+      // (consistent with the other platform readiness entry points)
       // and an account session. The webhook route below intentionally bypasses
       // BOTH so internal Stripe -> us events keep converging while the managed
       // offering surfaces stay blocked.
       const limited = checkoutLimiter.consume(request);
       if (limited) return limited;
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
+      const blocked = platformAccessBlocked(options.platformAccess);
       if (blocked) return blocked;
       const session = await requireAccountSession({
         request: request.clone(),
@@ -939,9 +901,7 @@ export function createAccountsHandler(
       if (request.method !== "POST") return methodNotAllowed("POST");
       const limited = checkoutLimiter.consume(request);
       if (limited) return limited;
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
+      const blocked = platformAccessBlocked(options.platformAccess);
       if (blocked) return blocked;
       const session = await requireAccountSession({
         request: request.clone(),
@@ -963,10 +923,10 @@ export function createAccountsHandler(
       // Stripe webhooks are server-to-server (Stripe -> us) and are
       // authenticated via the Stripe signature, not via an Account session.
       // We deliberately keep webhook processing ENABLED even when the
-      // managed-offering access policy is "closed": billing state must keep
+      // platform-readiness access policy is "closed": billing state must keep
       // converging (refunds, dunning, subscription cancellations, etc.) even
       // while public-facing surfaces are blocked. Only the user-facing
-      // checkout entry point above is gated by managedOfferingAccessBlocked.
+      // checkout entry point above is gated by platformAccessBlocked.
       if (!options.stripeBilling) return billingNotConfigured();
       return await handleStripeWebhookRequest({
         request,
@@ -985,29 +945,15 @@ export function createAccountsHandler(
       });
       if (authBlocked) return authBlocked;
       if (!options.deployControl) {
-        return errorJson("feature_unavailable", "Installation PlanRun is temporarily unavailable.", 503);
+        return errorJson(
+          "feature_unavailable",
+          "Installation PlanRun is temporarily unavailable.",
+          503,
+        );
       }
-      return await handleInstallationPlanRunProxy({
+      return await handleInstallationPlanRunFacade({
         request,
         deployControl: options.deployControl,
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_USE_TAKOS_PATH) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const blocked = managedOfferingAccessBlocked(
-        options.managedOfferingAccess,
-      );
-      if (blocked) return blocked;
-      if (!options.launchTokens) return launchTokensNotConfigured();
-      return await handleUseTakosStart({
-        request,
-        url,
-        store,
-        issuer,
-        launchTokens: options.launchTokens,
-        bindingMaterializer: options.bindingMaterializer,
-        sharedCellRuntime: options.sharedCellRuntime,
       });
     }
 
@@ -1036,35 +982,15 @@ export function createAccountsHandler(
       return methodNotAllowed("GET, POST");
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const authBlocked = await requireAppInstallationImportWriteAccess({
-        request: request.clone(),
-        store,
-      });
-      if (authBlocked) return authBlocked;
-      return await handleImportAppInstallation({
-        request,
-        store,
-        issuer,
-        launchTokens: options.launchTokens,
-        bindingMaterializer: options.bindingMaterializer,
-        sharedCellRuntime: options.sharedCellRuntime,
-        importDataRestorer: options.importDataRestorer,
-      });
-    }
-
     const installationRoute = matchInstallationRoute(url.pathname);
     if (installationRoute) {
       if (
-        managedOfferingGuardedInstallationMutation(
+        platformGuardedInstallationMutation(
           installationRoute.kind,
           request.method,
         )
       ) {
-        const blocked = managedOfferingAccessBlocked(
-          options.managedOfferingAccess,
-        );
+        const blocked = platformAccessBlocked(options.platformAccess);
         if (blocked) return blocked;
       }
       const accountAccess = installationRouteAccountAccess(
@@ -1073,11 +999,11 @@ export function createAccountsHandler(
       );
       if (accountAccess) {
         const authBlocked = await (
-          installationRouteAllowsWorkloadControl(
+          installationRouteAllowsServiceGraphControl(
             installationRoute,
             request.method,
           )
-            ? requireAppInstallationAccountOrWorkloadControlAccess
+            ? requireAppInstallationAccountOrServiceGraphControlAccess
             : requireAppInstallationAccountAccess
         )({
           request,
@@ -1205,30 +1131,32 @@ export function createAccountsHandler(
         installationRoute.kind === "events-ingest" &&
         request.method === "POST"
       ) {
-        return await handleIngestInstallationWorkloadEvent({
+        return await handleIngestInstallationServiceEvent({
           installationId: installationRoute.installationId,
           request,
           store,
         });
       }
       if (installationRoute.kind === "services" && request.method === "GET") {
-        return await handleListInstallationWorkloadServices({
+        return await handleListInstallationServiceGraphServices({
           installationId: installationRoute.installationId,
           request,
           store,
           issuer,
+          runtimeAvailability: options.serviceGraphRuntimeAvailability,
         });
       }
       if (
         installationRoute.kind === "service-rotate-token" &&
         request.method === "POST"
       ) {
-        return await handleRotateInstallationWorkloadServiceToken({
+        return await handleRotateInstallationServiceGraphServiceToken({
           installationId: installationRoute.installationId,
           serviceId: installationRoute.serviceId,
           request,
           store,
           issuer,
+          runtimeAvailability: options.serviceGraphRuntimeAvailability,
         });
       }
       if (
@@ -1481,22 +1409,30 @@ function clientIpFromRequest(request: Request): string {
 }
 
 function reservedOidcEndpoint(): Response {
-  return errorJson("feature_unavailable", "Sign-in is temporarily unavailable.", 503);
+  return errorJson(
+    "feature_unavailable",
+    "Sign-in is temporarily unavailable.",
+    503,
+  );
 }
 
 function billingNotConfigured(): Response {
-  return errorJson("feature_unavailable", "Billing is temporarily unavailable.", 503);
+  return errorJson(
+    "feature_unavailable",
+    "Billing is temporarily unavailable.",
+    503,
+  );
 }
 
 function passkeysNotConfigured(): Response {
-  return errorJson("feature_unavailable", "Passkeys are temporarily unavailable.", 503);
+  return errorJson(
+    "feature_unavailable",
+    "Passkeys are temporarily unavailable.",
+    503,
+  );
 }
 
-function launchTokensNotConfigured(): Response {
-  return errorJson("feature_unavailable", "App launch is temporarily unavailable.", 503);
-}
-
-function requireWorkloadPlatformServiceResolverAccess(input: {
+function requireServiceGraphMaterialResolverAccess(input: {
   request: Request;
   token: string;
 }): Response | undefined {
@@ -1510,7 +1446,7 @@ function requireWorkloadPlatformServiceResolverAccess(input: {
   }
   return errorJson(
     "unauthorized",
-    "workload platform service resolver token is required",
+    "service graph material resolver token is required",
     401,
     undefined,
     { "www-authenticate": "Bearer" },
@@ -1547,26 +1483,11 @@ function installationRouteAccountAccess(
   return undefined;
 }
 
-function installationRouteAllowsWorkloadControl(
+function installationRouteAllowsServiceGraphControl(
   route: InstallationRoute,
   method: string,
 ): boolean {
-  if (
-    (route.kind === "deployment" ||
-      route.kind === "deployment-plan-run" ||
-      route.kind === "rollback" ||
-      route.kind === "materialize" ||
-      route.kind === "export") &&
-    method === "POST"
-  ) {
-    return true;
-  }
-  if (
-    (route.kind === "events" ||
-      route.kind === "export-operation" ||
-      route.kind === "export-download") &&
-    method === "GET"
-  ) {
+  if (route.kind === "events" && method === "GET") {
     return true;
   }
   return false;

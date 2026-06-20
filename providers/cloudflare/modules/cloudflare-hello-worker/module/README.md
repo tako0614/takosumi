@@ -1,16 +1,16 @@
 # cloudflare-hello-worker (first-party starter Capsule module)
 
 A runnable Cloudflare Worker with **no build step** — the Worker source is
-baked inline, so `tofu apply` alone produces something you can open. It is the
-"5 minutes to a live thing" starter: install → reviewed plan → apply → the
-`url` output is a reachable workers.dev page.
+baked inline, so `tofu apply` creates a real Worker script without a separate
+build. Public ingress is projected by dispatcher/custom-route configuration
+outside this module.
 
 - Provider: `cloudflare/cloudflare` (v5). Authentication is via environment
   variables minted by Takosumi at dispatch (`CLOUDFLARE_API_TOKEN`,
   `CLOUDFLARE_ACCOUNT_ID`); this module never embeds secrets.
 - Inputs: `accountId` (string, required), `appName` (string, optional, default
-  `takosumi-hello`), `accountSubdomain` (string, optional — the
-  `<this>.workers.dev` label used to render the public URL),
+  `takosumi-hello`), `publicUrl` (string, optional — a dispatcher/custom-route
+  URL supplied by the surrounding platform when configured),
   `compatibilityDate` (string, optional).
 - Outputs: `worker_name`, `url`.
 

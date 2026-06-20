@@ -3,7 +3,7 @@ create table if not exists takosumi_provider_templates_entries (
   id               text    primary key,
   provider_source  text    not null unique,
   primary_credential_source     text    not null
-    check (primary_credential_source in ('takosumi_managed','user_env_set','user_env_set','user_env_set')),
+    check (primary_credential_source in ('takosumi_managed','user_env_set')),
   default_eligible integer not null,
   entry_json       jsonb   not null,
   created_at       text    not null,
@@ -31,7 +31,7 @@ create index if not exists takosumi_provider_env_sets_provider_source_idx
 create index if not exists takosumi_provider_env_sets_status_idx
   on takosumi_provider_env_sets (status);
 
-create table if not exists takosumi_provider_env_sets (
+create table if not exists takosumi_provider_env_pins (
   id               text  primary key,
   space_id         text  not null,
   provider_pack_id text  not null,
@@ -40,9 +40,9 @@ create table if not exists takosumi_provider_env_sets (
   pin_json         jsonb not null,
   created_at       text  not null
 );
-create index if not exists takosumi_provider_env_sets_space_idx
-  on takosumi_provider_env_sets (space_id);
-create index if not exists takosumi_provider_env_sets_pack_idx
-  on takosumi_provider_env_sets (provider_pack_id);
-create index if not exists takosumi_provider_env_sets_provider_source_idx
-  on takosumi_provider_env_sets (provider_source);
+create index if not exists takosumi_provider_env_pins_space_idx
+  on takosumi_provider_env_pins (space_id);
+create index if not exists takosumi_provider_env_pins_pack_idx
+  on takosumi_provider_env_pins (provider_pack_id);
+create index if not exists takosumi_provider_env_pins_provider_source_idx
+  on takosumi_provider_env_pins (provider_source);

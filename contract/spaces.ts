@@ -2,7 +2,7 @@
  * Space owner-namespace contract.
  *
  * A Space is the owner namespace directly under which Installations live —
- * close to a GitHub user/org (`@shota`, `@company`). It holds members, sources,
+ * close to a GitHub user/org (`@acme`, `@company`). It holds members, sources,
  * connections, installations, the dependency graph, policy, activity, and
  * optional billing. A personal Space is auto-created on first login.
  *
@@ -17,7 +17,7 @@ export type SpaceType = "personal" | "organization";
 
 export interface Space {
   readonly id: string;
-  /** Unique handle without the `@` prefix (`shota` for `@shota`). */
+  /** Unique handle without the `@` prefix (`acme` for `@acme`). */
   readonly handle: string;
   readonly displayName: string;
   readonly type: SpaceType;

@@ -1,5 +1,5 @@
 import { createSignal, For, onCleanup, onMount } from "solid-js";
-import Wordmark from "./brand/Wordmark";
+import Wordmark from "./brand/Wordmark.tsx";
 
 interface NavLink {
   readonly href: string;
@@ -13,7 +13,11 @@ const NAV_LINKS: readonly NavLink[] = [
   { href: "#ecosystem", label: "Ecosystem" },
   { href: "#showcase", label: "How" },
   { href: "/docs/", label: "Docs", rel: "external" },
-  { href: "https://app.takosumi.com/", label: "Cloud", rel: "noopener" },
+  {
+    href: "https://app.takosumi.com/sign-in",
+    label: "Dashboard",
+    rel: "noopener",
+  },
 ];
 
 export default function Nav() {
@@ -58,10 +62,10 @@ export default function Nav() {
           </a>
           <a
             class="btn btn-primary nav-cta"
-            href="https://app.takosumi.com/signup"
-            rel="noopener"
+            href="/docs/getting-started/quickstart"
+            rel="external"
           >
-            新規登録
+            5 分で動かす
           </a>
           <details class="nav-menu">
             <summary class="nav-icon nav-menu-toggle" aria-label="メニュー">

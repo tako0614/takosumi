@@ -1,8 +1,8 @@
 # core (first-party base-installation module)
 #
 # The base Installation under a Space (spec §5/§10). For MVP this is a pure
-# value-plumbing module: it derives the canonical Takos service origins from a
-# single `base_domain` input and exposes them as outputs. It declares NO
+# value-plumbing module: it derives generic service origins from a single
+# `base_domain` input and exposes them as outputs. It declares NO
 # providers and creates NO cloud resources, so it plans against an empty
 # provider set.
 
@@ -44,5 +44,5 @@ output "member_issuer" {
 
 output "service_registry_url" {
   description = "Well-known service registry URL advertised by this installation."
-  value       = "${local.public_origin}/.well-known/takos-services.json"
+  value       = "${local.public_origin}/.well-known/takosumi-services.json"
 }

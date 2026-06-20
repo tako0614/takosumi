@@ -57,8 +57,8 @@ type PgPoolConstructor = new (config: PgPoolConfig) => PgPool;
  * points behave the same regardless of how `pg` is loaded.
  */
 function resolvePoolCtor(): PgPoolConstructor {
-  const candidate = (pgModule as { default?: { Pool?: PgPoolConstructor } })
-    .default?.Pool ??
+  const candidate =
+    (pgModule as { default?: { Pool?: PgPoolConstructor } }).default?.Pool ??
     (pgModule as unknown as { Pool?: PgPoolConstructor }).Pool;
   if (!candidate) throw new Error("npm:pg Pool export missing");
   return candidate;
@@ -151,10 +151,7 @@ export async function createAccountsStoreResource(
 export async function loadAccountsMigrations(): Promise<
   readonly AccountsMigration[]
 > {
-  const migrationsDir = new URL(
-    "../../service/migrations/",
-    import.meta.url,
-  );
+  const migrationsDir = new URL("../../service/migrations/", import.meta.url);
   const entries = [];
   for (const entry of await readdir(migrationsDir, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith(".sql")) entries.push(entry.name);
@@ -165,9 +162,10 @@ export async function loadAccountsMigrations(): Promise<
     const version = Number(name.slice(0, 3));
     if (!Number.isInteger(version) || version !== index + 1) {
       throw new TypeError(
-        `migration ${name} must use prefix ${
-          String(index + 1).padStart(3, "0")
-        }`,
+        `migration ${name} must use prefix ${String(index + 1).padStart(
+          3,
+          "0",
+        )}`,
       );
     }
     const sql = await readFile(new URL(name, migrationsDir), "utf8");
@@ -192,10 +190,10 @@ export function accountsMigratePlan(
     kind: "takosumi.accounts.migrate@v1",
     database: databaseConfig
       ? {
-        configured: true,
-        driver: "postgres",
-        source: databaseConfig.source,
-      }
+          configured: true,
+          driver: "postgres",
+          source: databaseConfig.source,
+        }
       : { configured: false },
     migrations: migrations.map((migration) => ({
       version: migration.version,
@@ -212,17 +210,17 @@ export function launchTokenCleanupPlan(
   const now = parseOptionalIsoDateOption(options, "now") ?? new Date();
   const expiredRetentionHours =
     optionalNonNegativeIntegerStrictOption(options, "expiredRetentionHours") ??
-      24;
+    24;
   const usedRetentionHours =
     optionalNonNegativeIntegerStrictOption(options, "usedRetentionHours") ?? 24;
   return {
     kind: "takosumi.accounts.launch-token-cleanup@v1",
     database: databaseConfig
       ? {
-        configured: true,
-        driver: "postgres",
-        source: databaseConfig.source,
-      }
+          configured: true,
+          driver: "postgres",
+          source: databaseConfig.source,
+        }
       : { configured: false, driver: "postgres" },
     dryRun: booleanOption(options, "dryRun"),
     now: now.toISOString(),
@@ -274,7 +272,7 @@ const ADVISORY_LOCK_LABEL = "takosumi_accounts_migrations";
  * Cloudflare D1 is the SQLite-backed Workers binding used by the Cloudflare
  * reference distribution (`deploy/accounts-cloudflare/`). Unlike the Postgres
  * `applyAccountsMigrations` path — which streams the
- * `packages/accounts-service/migrations/*.sql` files directly — D1 ships its
+ * `accounts/service/migrations/*.sql` files directly — D1 ships its
  * accounts schema through `D1_ACCOUNTS_STORE_INIT_SQL` (a single-line,
  * idempotent `CREATE TABLE IF NOT EXISTS` script that the D1AccountsStore
  * runs on first request). The CLI command exists to:
@@ -419,9 +417,12 @@ export type D1ExecuteTarget = "remote" | "local";
  * `npx wrangler d1 execute`. Tests inject their own implementation to keep
  * the suite hermetic.
  *
- * `target` selects `--remote` (default) or `--local`. An optional `env`
- * passes `--env <profile>` so operators can target a wrangler deploy profile
- * (e.g. `staging`) when one is configured.
+ * `databaseId` is the historical field name in this CLI API. Wrangler 4's
+ * `d1 execute` positional is a database name or binding, not a UUID-only
+ * argument, so operators should pass the realized database name from the
+ * wrangler config. `target` selects `--remote` (default) or `--local`. An
+ * optional `env` passes `--env <profile>` so operators can target a wrangler
+ * deploy profile (e.g. `staging`) when one is configured.
  */
 export function defaultD1ExecuteCommand(
   options: { readonly target?: D1ExecuteTarget; readonly env?: string } = {},
@@ -455,13 +456,15 @@ export function defaultD1ExecuteCommand(
       if (accountId) args.push("--account-id", accountId);
       return await runWrangler(args);
     },
-    async query<T>(
-      { databaseId, accountId, sql }: {
-        readonly databaseId: string;
-        readonly accountId?: string;
-        readonly sql: string;
-      },
-    ): Promise<readonly T[]> {
+    async query<T>({
+      databaseId,
+      accountId,
+      sql,
+    }: {
+      readonly databaseId: string;
+      readonly accountId?: string;
+      readonly sql: string;
+    }): Promise<readonly T[]> {
       const args = [
         "d1",
         "execute",
@@ -476,8 +479,8 @@ export function defaultD1ExecuteCommand(
       const { stdout } = await runWrangler(args);
       const parsed: unknown = JSON.parse(stdout);
       const envelopes: ReadonlyArray<WranglerD1JsonEnvelope> = Array.isArray(
-          parsed,
-        )
+        parsed,
+      )
         ? (parsed as ReadonlyArray<WranglerD1JsonEnvelope>)
         : [parsed as WranglerD1JsonEnvelope];
       const rows: T[] = [];
@@ -540,17 +543,16 @@ function commandOutput(
  * When `dryRun` is true, the plan is returned with empty `applied` /
  * `skipped` arrays and no wrangler calls are made.
  */
-export async function applyD1AccountsMigrations(
-  input: {
-    readonly databaseId: string;
-    readonly accountId?: string;
-    readonly dryRun: boolean;
-    readonly target?: D1ExecuteTarget;
-    readonly env?: string;
-    readonly command?: D1ExecuteCommand;
-  },
-): Promise<D1MigrateReport> {
-  const command = input.command ??
+export async function applyD1AccountsMigrations(input: {
+  readonly databaseId: string;
+  readonly accountId?: string;
+  readonly dryRun: boolean;
+  readonly target?: D1ExecuteTarget;
+  readonly env?: string;
+  readonly command?: D1ExecuteCommand;
+}): Promise<D1MigrateReport> {
+  const command =
+    input.command ??
     defaultD1ExecuteCommand({
       ...(input.target ? { target: input.target } : {}),
       ...(input.env ? { env: input.env } : {}),
@@ -577,14 +579,12 @@ export async function applyD1AccountsMigrations(
   await exec({ ...targetArgs, sql: D1_SCHEMA_MIGRATIONS_TABLE_SQL });
   const existingRows = await command.query<{ version: number | string }>({
     ...targetArgs,
-    sql:
-      "SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version",
+    sql: "SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version",
   });
   const existingVersions = new Set<number>();
   for (const row of existingRows) {
-    const value = typeof row.version === "number"
-      ? row.version
-      : Number(row.version);
+    const value =
+      typeof row.version === "number" ? row.version : Number(row.version);
     if (Number.isInteger(value)) existingVersions.add(value);
   }
   const applied: number[] = [];
@@ -595,10 +595,10 @@ export async function applyD1AccountsMigrations(
       continue;
     }
     await exec({ ...targetArgs, sql: migration.sql });
-    const insertSql =
-      `INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (${migration.version}, '${
-        migration.name.replaceAll("'", "''")
-      }', ${Date.now()});`;
+    const insertSql = `INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (${migration.version}, '${migration.name.replaceAll(
+      "'",
+      "''",
+    )}', ${Date.now()});`;
     await exec({ ...targetArgs, sql: insertSql });
     applied.push(migration.version);
   }
@@ -618,10 +618,9 @@ export async function applyAccountsMigrations(
   try {
     // Serialize concurrent migration runs cluster-wide via a session-scoped
     // advisory lock keyed by hashtext(label). Released in the finally block.
-    await client.query(
-      `SELECT pg_advisory_lock(hashtext($1))`,
-      [ADVISORY_LOCK_LABEL],
-    );
+    await client.query(`SELECT pg_advisory_lock(hashtext($1))`, [
+      ADVISORY_LOCK_LABEL,
+    ]);
     advisoryLockHeld = true;
     await client.query(`CREATE SCHEMA IF NOT EXISTS accounts_v1`);
     await client.query(
@@ -675,10 +674,9 @@ export async function applyAccountsMigrations(
   } finally {
     if (advisoryLockHeld) {
       try {
-        await client.query(
-          `SELECT pg_advisory_unlock(hashtext($1))`,
-          [ADVISORY_LOCK_LABEL],
-        );
+        await client.query(`SELECT pg_advisory_unlock(hashtext($1))`, [
+          ADVISORY_LOCK_LABEL,
+        ]);
       } catch {
         // Connection may already be invalid; the lock auto-releases on
         // session end via pool.end() below.

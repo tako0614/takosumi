@@ -61,6 +61,13 @@ const SCP_LIKE = /^(?<user>[^@/:]+)@(?<host>[^:/]+):(?<path>.+)$/;
 export function evaluateSourceUrl(raw: string): SourceUrlPolicyResult {
   const value = raw.trim();
   if (value.length === 0) return { ok: false, reason: "empty" };
+  // Git/libcurl and WHATWG URL parsing disagree on backslashes in the
+  // authority/path boundary (for example `https://github.com\@10.0.0.1/...`).
+  // Reject ambiguous raw URLs before parsing so the host we validate is the host
+  // git will dial.
+  if (/[\\\r\n\0]/.test(value)) {
+    return { ok: false, reason: "malformed" };
+  }
 
   // file:// — local filesystem access.
   if (/^file:\/\//i.test(value)) {
@@ -141,10 +148,7 @@ function evaluateUrlForm(
   return okHost(scheme, url.hostname);
 }
 
-function okHost(
-  scheme: SourceUrlScheme,
-  host: string,
-): SourceUrlPolicyResult {
+function okHost(scheme: SourceUrlScheme, host: string): SourceUrlPolicyResult {
   const normalized = host.toLowerCase();
   if (
     normalized === "localhost" ||

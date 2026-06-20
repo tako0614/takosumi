@@ -1,65 +1,69 @@
 # Operator
 
-Operator は Takosumi platform worker を動かし、storage、auth、dashboard、billing / OIDC、hosted runner、operator-internal な実行境界設定を管理します。core の public surface は Space / Source / Connection / Provider Template / Provider Env Set /
-OpenTofu Capsule / Capsule Normalizer / Compatibility Report / Capsule Gate / Installation /
-InstallConfig / DeploymentProfile / ProviderBinding / Dependency / SourceSnapshot / DependencySnapshot /
-StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup / Billing / Activity です。
+Operator は Takosumi for Operators を自分のユーザー向けに運用する主体です。
+
+Takosumi for Operators は OSS です。Cloudflare Compatibility Gateway、managed edge、
+managed storage、official billing、official resource backend は含めません。
 
 ## Responsibilities
 
-- control-plane の token と auth boundary を設定する
-- operator-internal execution boundary (substrate / runner image / resource limit / provider allowlist seed) を定義する ([Operator execution boundaries](./operator-execution-boundaries.md))
-- Provider Template と provider env set policy を管理する
-- Connection / operator default connection と secret delivery を管理する。hosted managed default は Cloudflare only から始める
+- control-plane auth / token boundary を設定する
+- runner substrate / runner image / resource limits / provider allowlist seed を定義する
+- Provider Catalog と Provider Connection policy を管理する
+- ProviderConnection の sealed backing material / secret delivery を管理する
 - state backend と lock backend を管理する
-- OpenTofu runner image / container / queue を管理する
-- Cloudflare Workers for Platforms を使う場合は dispatch namespace、outbound Worker、tenant Worker binding policy を管理する
-- provider credential / control-plane token / state backend credential を tenant Worker に渡さない証跡を管理する
-- dashboard から Installation / Run / Deployment / OutputSnapshot / Activity / Billing projection を見せる
-- managed offering を開く場合は billing、OIDC、support boundary、audit evidence を揃える
+- OpenTofu runner image / local/docker/remote/operator runner pool を管理する
+- provider credential / control-plane token / state backend credential を user workload に渡さない
+- dashboard / API / audit / quota / billing-placeholder を運用する
+- tenant isolation、workspace isolation、runner pool isolation、network egress policy の evidence を持つ
 
-## Workload integrations
+## OSS Boundary
 
-Hosted/operator distribution は、OIDC client material、billing portal link、webhook ingest endpoint、same-Space
-control callback のような integration token / service projection を deployed workload に渡せます。これらは
-**operator integration detail** であり、Takosumi core の public concept ではありません。新しい core resource にせず、
-Installation / Deployment / OutputSnapshot / Backup / Billing / Activity / Connection policy record から導出します。
+Takosumi for Operators が運用するのは既存 OpenTofu/Terraform provider の実行です。
 
-Integration token rule:
-
-- raw token value は作成/rotation 時に一度だけ返す
-- 通常の read は secret reference、expiry、非 secret metadata だけを返す
-- token は 1 つの Space と 1 つの intended capability に scope する
-- token は operator execution boundary、provider credential、state backend、billing ownership、account token、OIDC issuer
-  configuration を管理できない
-- token 作成、rotation、利用は token value を保存せず Activity または redacted internal audit evidence に記録する
-
-## Production readiness
-
-Reference implementation checks が passing でも、managed offering が public GA とは限りません。public GA には次の operator evidence が必要です。
-
-| Area                | Required evidence                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Website             | `takosumi.com` custom domain、TLS、`/docs/` build                                                                                                                                                                                                                                                                                                                               |
-| Hosted runner       | Cloudflare Container runner で non-production provider apply が成功した記録                                                                                                                                                                                                                                                                                                     |
-| Account surface     | dashboard、OIDC、billing、credential delivery、audit trail                                                                                                                                                                                                                                                                                                                      |
-| State               | remote state backend と lock evidence                                                                                                                                                                                                                                                                                                                                           |
-| Policy              | provider allowlist / credential delivery evidence / network policy / allowed host pattern の enforcement                                                                                                                                                                                                                                                                        |
-| Provider templates  | Cloudflare Takosumi-provided evidence、AWS/GCP/GitHub/Kubernetes provider-template policy、user env set / egress / runner-class evidence                                                                                                                                                                                                                                      |
-| Provider live proof | 有効化した execution boundary ごとの non-production `plan/apply/destroy` 証跡。MVP は Cloudflare reference boundary を基準にし、AWS / GCP / GitHub / Kubernetes は user env set provider として Connection / network / state / live proof を揃えた場合だけ対象。Azure / DigitalOcean なども provider env set と explicit policy evidence で扱う |
-| Tenant runtime      | Workers for Platforms dispatch namespace と outbound Worker の isolation proof                                                                                                                                                                                                                                                                                                  |
-| Secret boundary     | runner diagnostics、failure audit、OpenTofu output、tenant Worker binding の leak test                                                                                                                                                                                                                                                                                          |
-
-## Local service
-
-```bash
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<token>
-export TAKOSUMI_DEV_MODE=1
-bun src/cli/main.ts server --port 8788
+```text
+ProviderConnection
+  -> CredentialRecipe
+  -> temporary env/file injection
+  -> OpenTofu/Terraform provider
 ```
 
-Production では `TAKOSUMI_DEV_MODE` を使わず、persistent storage、managed auth、secret store、runner substrate を operator config で注入します。
+Operator OSS は provider-compatible Gateway endpoint を公開しません。
 
-## Public site
+## Cloud Boundary
 
-`takosumi/website/` は landing page、`takosumi/docs/` は docs site です。`bun run website:build` は landing と `/docs/` を単一 Cloudflare Pages artifact にまとめます。
+Takosumi Cloud は closed な公式 hosted deployment です。
+
+Cloud だけが以下を持てます。
+
+```text
+Cloudflare Compatibility Gateway
+Takosumi Managed Edge Worker
+Takosumi Object Storage
+Takosumi App Database
+Takosumi KV / Queue
+Takosumi Cloud Container
+official billing / quota / usage / support
+official resource pools
+```
+
+これらの実装・tests・secrets・deployment config は closed Cloud repo に置きます。
+
+## Production Readiness
+
+OSS Operator GA の readiness は以下です。
+
+| Area | Required evidence |
+| --- | --- |
+| Website/docs | docs build, custom domain/TLS if hosted publicly |
+| Runner | non-production OpenTofu plan/apply/destroy proof |
+| Accounts/auth | dashboard, session/OIDC as configured, audit trail |
+| State | state backend, lock evidence, backup/restore drill |
+| Secrets | encrypted storage, rotation process, redaction proof |
+| Provider catalog | own-key ProviderConnection policy and helper coverage |
+| Network | provider allowlist and egress enforcement |
+| Tenant isolation | workspace/team separation and runner isolation |
+| Audit | run, secret, state, and admin action evidence |
+
+Cloud GA adds managed resource, compatibility gateway, official billing, abuse,
+support, usage metering, and deprovision proof requirements.

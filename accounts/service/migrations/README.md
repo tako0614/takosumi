@@ -6,12 +6,12 @@ Accounts (identity, billing, Installation ownership, OIDC issuer).
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).
 - **Ledger table**: `accounts_v1.schema_migrations(version, name, checksum,
-  applied_at)`.
+applied_at)`.
 - **Checksum**: each applied migration records `sha256:<hex>` of the SQL
   file. The runner refuses to re-apply if the file is later edited.
 - **Concurrency guard**: the runner takes a Postgres advisory lock keyed by
   `hashtext('takosumi_accounts_migrations')` before reading the ledger.
-- **Runner source**: `takosumi/packages/cli/src/cli-accounts-db.ts`
+- **Runner source**: `takosumi/accounts/cli/src/cli-accounts-db.ts`
   (`loadAccountsMigrations`, `applyAccountsMigrations`).
 
 ## Naming convention
@@ -38,9 +38,12 @@ position in the sorted list. The runner validates this and rejects gaps.
 
 2. **Apply** (against the production / staging Postgres):
 
+   Set `TAKOSUMI_PRIVATE` to the operator-private checkout or vault mount that
+   contains the gitignored `.secrets/<env>/` files.
+
    ```bash
    cd takosumi
-   TAKOSUMI_ACCOUNTS_DATABASE_URL=postgres://... \
+   TAKOSUMI_ACCOUNTS_DATABASE_URL="$(cat "$TAKOSUMI_PRIVATE/.secrets/staging/TAKOSUMI_ACCOUNTS_DATABASE_URL")" \
      bun run cli -- accounts migrate
    ```
 

@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
+  launchReadinessMigrateFinalModelHelpText,
   launchReadinessProductionTopologyMergeHelpText,
   launchReadinessProductionTopologyPreflightHelpText,
   launchReadinessProductionTopologyTemplateHelpText,
@@ -14,23 +15,24 @@ import {
   parseOptions,
 } from "./cli-options.ts";
 import {
-  buildManagedOfferingPublicSummary,
-  buildManagedOfferingReadinessTemplate,
+  buildPlatformReadinessPublicSummary,
+  buildPlatformReadinessTemplate,
   buildProductionTopologyTemplate,
   checkedEvidenceRef,
-  defaultManagedOfferingPublicSummary,
-  formatManagedOfferingPublicSummaryMarkdownRow,
-  formatManagedOfferingReadinessReport,
+  defaultPlatformReadinessPublicSummary,
+  formatPlatformReadinessPublicSummaryMarkdownRow,
+  formatPlatformReadinessReport,
   formatProductionTopologyMergeReport,
   formatProductionTopologyPreflightReport,
-  managedOfferingPublicSummaryErrors,
-  managedOfferingReadinessDigest,
+  platformReadinessPublicSummaryErrors,
+  platformReadinessDigest,
   mergeProductionTopologyPreflightReports,
+  migratePlatformReadinessDocumentToFinalModel,
   publicEvidenceRefClass,
-  validateManagedOfferingPublicSummaryArtifact,
-  validateManagedOfferingReadinessDocument,
+  validatePlatformReadinessPublicSummaryArtifact,
+  validatePlatformReadinessDocument,
   validateProductionTopologyDocument,
-} from "./cli-managed-offering.ts";
+} from "./cli-platform-readiness.ts";
 import type { CliIo } from "./cli-io.ts";
 
 export async function runLaunchReadinessValidate(
@@ -57,15 +59,15 @@ export async function runLaunchReadinessValidate(
   }
 
   const report = {
-    ...validateManagedOfferingReadinessDocument(document),
-    evidenceDigest: await managedOfferingReadinessDigest(document),
+    ...validatePlatformReadinessDocument(document),
+    evidenceDigest: await platformReadinessDigest(document),
   };
   if (booleanOption(options, "json")) {
     io.stdout(JSON.stringify(report, null, 2));
   } else if (report.ready) {
-    io.stdout("Managed offering launch readiness evidence is complete.");
+    io.stdout("Platform readiness launch readiness evidence is complete.");
   } else {
-    io.stdout(formatManagedOfferingReadinessReport(report));
+    io.stdout(formatPlatformReadinessReport(report));
   }
   return report.ready ? 0 : 1;
 }
@@ -97,8 +99,8 @@ export async function runLaunchReadinessPublicSummary(
   }
 
   const report = {
-    ...validateManagedOfferingReadinessDocument(document),
-    evidenceDigest: await managedOfferingReadinessDigest(document),
+    ...validatePlatformReadinessDocument(document),
+    evidenceDigest: await platformReadinessDigest(document),
   };
   const evidenceRef = optionalStringOption(options, "evidenceRef");
   if (report.ready && !evidenceRef) {
@@ -117,9 +119,10 @@ export async function runLaunchReadinessPublicSummary(
     evidenceRefClass = publicEvidenceRefClass(evidenceRefResult.ref);
   }
 
-  const publicSummary = optionalStringOption(options, "publicSummary") ??
-    defaultManagedOfferingPublicSummary(report.ready);
-  const publicSummaryErrors = managedOfferingPublicSummaryErrors(
+  const publicSummary =
+    optionalStringOption(options, "publicSummary") ??
+    defaultPlatformReadinessPublicSummary(report.ready);
+  const publicSummaryErrors = platformReadinessPublicSummaryErrors(
     publicSummary,
     { requireLaunchScope: report.ready },
   );
@@ -128,14 +131,14 @@ export async function runLaunchReadinessPublicSummary(
     return 2;
   }
 
-  const summary = buildManagedOfferingPublicSummary({
+  const summary = buildPlatformReadinessPublicSummary({
     document,
     report,
     evidenceRefClass,
     publicSummary,
   });
   if (booleanOption(options, "markdownRow")) {
-    io.stdout(formatManagedOfferingPublicSummaryMarkdownRow(summary));
+    io.stdout(formatPlatformReadinessPublicSummaryMarkdownRow(summary));
   } else {
     io.stdout(JSON.stringify(summary, null, 2));
   }
@@ -169,10 +172,10 @@ async function runLaunchReadinessPublicSummaryValidate(
   }
 
   const readinessReport = {
-    ...validateManagedOfferingReadinessDocument(readinessDocument),
-    evidenceDigest: await managedOfferingReadinessDigest(readinessDocument),
+    ...validatePlatformReadinessDocument(readinessDocument),
+    evidenceDigest: await platformReadinessDigest(readinessDocument),
   };
-  const report = validateManagedOfferingPublicSummaryArtifact(
+  const report = validatePlatformReadinessPublicSummaryArtifact(
     summary,
     readinessDocument,
     readinessReport,
@@ -180,11 +183,11 @@ async function runLaunchReadinessPublicSummaryValidate(
   if (booleanOption(options, "json")) {
     io.stdout(JSON.stringify(report, null, 2));
   } else if (report.valid) {
-    io.stdout("Managed offering public summary is valid.");
+    io.stdout("Platform readiness public summary is valid.");
   } else {
     io.stdout(
       [
-        "Managed offering public summary is invalid.",
+        "Platform readiness public summary is invalid.",
         ...report.errors.map((error) => `Error: ${error}`),
       ].join("\n"),
     );
@@ -192,17 +195,70 @@ async function runLaunchReadinessPublicSummaryValidate(
   return report.valid ? 0 : 1;
 }
 
-export function runLaunchReadinessTemplate(
-  args: string[],
-  io: CliIo,
-): number {
+export function runLaunchReadinessTemplate(args: string[], io: CliIo): number {
   const options = parseOptions(args);
   if (options.help) {
     io.stdout(launchReadinessTemplateHelpText());
     return 0;
   }
-  io.stdout(JSON.stringify(buildManagedOfferingReadinessTemplate(), null, 2));
+  io.stdout(JSON.stringify(buildPlatformReadinessTemplate(), null, 2));
   return 0;
+}
+
+export async function runLaunchReadinessMigrateFinalModel(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const options = parseOptions(args);
+  if (options.help) {
+    io.stdout(launchReadinessMigrateFinalModelHelpText());
+    return 0;
+  }
+  const file = optionalStringOption(options, "file");
+  const out = optionalStringOption(options, "out");
+  const dryRun = booleanOption(options, "dryRun");
+  const check = booleanOption(options, "check");
+  if (!file) {
+    io.stderr("--file is required");
+    return 2;
+  }
+  if (!out && !dryRun && !check) {
+    io.stderr("--out is required unless --dry-run or --check is set");
+    return 2;
+  }
+
+  let document;
+  try {
+    document = JSON.parse(await readFile(file, "utf8"));
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
+  const result = migratePlatformReadinessDocumentToFinalModel(document);
+  if (out && !dryRun && !check) {
+    await writeFile(out, `${JSON.stringify(result.document, null, 2)}\n`);
+  }
+
+  if (booleanOption(options, "json")) {
+    io.stdout(JSON.stringify(result.report, null, 2));
+  } else if (result.report.changed) {
+    io.stdout(
+      [
+        "Platform readiness evidence contains legacy final-model names.",
+        ...result.report.changes.map(
+          (change) =>
+            `  ${change.kind}: ${change.from} -> ${change.to} (${change.count})`,
+        ),
+        out && !dryRun && !check ? `Wrote migrated evidence to ${out}` : null,
+      ]
+        .filter((line): line is string => typeof line === "string")
+        .join("\n"),
+    );
+  } else {
+    io.stdout("Platform readiness evidence already uses final-model names.");
+  }
+  return check && result.report.changed ? 1 : 0;
 }
 
 export function runLaunchReadinessProductionTopologyTemplate(
@@ -282,9 +338,7 @@ export async function runLaunchReadinessProductionTopologyMerge(
   let productionReport;
   try {
     stagingReport = JSON.parse(await readFile(stagingReportFile, "utf8"));
-    productionReport = JSON.parse(
-      await readFile(productionReportFile, "utf8"),
-    );
+    productionReport = JSON.parse(await readFile(productionReportFile, "utf8"));
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;

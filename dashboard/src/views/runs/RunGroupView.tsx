@@ -17,11 +17,7 @@ import {
   type Run,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
-import {
-  operationLabel,
-  runStatusLabel,
-  runTone,
-} from "../../lib/labels.ts";
+import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
@@ -43,7 +39,7 @@ function Inner() {
   const [group, { refetch }] = createResource(groupId, getRunGroup);
 
   const anyWaiting = createMemo(() =>
-    (group()?.runs ?? []).some((r) => r.status === "waiting_approval")
+    (group()?.runs ?? []).some((r) => r.status === "waiting_approval"),
   );
 
   const approveAll = createAction(async () => {
@@ -75,7 +71,7 @@ function Inner() {
       cell: (r) => (
         <Show when={r.installationId} fallback={<span class="muted">—</span>}>
           {(id) => (
-            <a href={`/apps/${encodeURIComponent(id())}`}>
+            <a href={`/installations/${encodeURIComponent(id())}`}>
               <code>{id()}</code>
             </a>
           )}
@@ -161,7 +157,11 @@ function Inner() {
                   />
                   <KVList items={items()} />
                   <Show when={approveAll.error()}>
-                    {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
                   </Show>
                 </Card>
 

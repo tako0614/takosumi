@@ -8,7 +8,7 @@
  * registrations became byte-identical, so the duplicate is removed and only the
  * DeploymentOutput read (no installation-group equivalent) remains.
  * This group owns its handlers and an internal descriptor slice used only for
- * route metadata; it is intentionally excluded from the public descriptor
+ * route metadata; it is intentionally excluded from the internal descriptor
  * inventory surfaced by `/capabilities` and `/openapi.json`.
  */
 

@@ -5,7 +5,12 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore, PersonalAccessTokenRecord } from "./store.ts";
 import { base64UrlEncodeBytes } from "./encoding.ts";
-import { errorJson, json, readJsonObject, stringValue } from "./http-helpers.ts";
+import {
+  errorJson,
+  json,
+  readJsonObject,
+  stringValue,
+} from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
 import {
   decodePageCursor,
@@ -32,7 +37,11 @@ export async function handleListPersonalAccessTokens(input: {
   if (!session.ok) return session.response;
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return errorJson("invalid_request", "limit must be a positive integer", 400);
+    return errorJson(
+      "invalid_request",
+      "limit must be a positive integer",
+      400,
+    );
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
@@ -70,13 +79,12 @@ export async function handleCreatePersonalAccessToken(input: {
     body.expires_at ?? body.expiresAt,
     now,
   );
-  if (
-    !name ||
-    name.length > 80 ||
-    !scopes ||
-    expiresAtResult === "invalid"
-  ) {
-    return errorJson("invalid_request", "name, one or more scopes, and optional future expires_at are required", 400);
+  if (!name || name.length > 80 || !scopes || expiresAtResult === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "name, one or more scopes, and optional future expires_at are required",
+      400,
+    );
   }
 
   const token = generatePersonalAccessToken();
@@ -90,10 +98,13 @@ export async function handleCreatePersonalAccessToken(input: {
     expiresAt: expiresAtResult,
   };
   await input.store.savePersonalAccessToken(token, record);
-  return json({
-    token,
-    token_record: personalAccessTokenMetadata(record),
-  }, 201);
+  return json(
+    {
+      token,
+      token_record: personalAccessTokenMetadata(record),
+    },
+    201,
+  );
 }
 
 export async function handleRevokePersonalAccessToken(input: {
@@ -158,8 +169,10 @@ export function personalAccessTokenIsActive(
   record: PersonalAccessTokenRecord,
   now: number,
 ): boolean {
-  return record.revokedAt === undefined &&
-    (record.expiresAt === undefined || record.expiresAt > now);
+  return (
+    record.revokedAt === undefined &&
+    (record.expiresAt === undefined || record.expiresAt > now)
+  );
 }
 
 export function personalAccessTokenIntrospectionBody(

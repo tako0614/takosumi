@@ -1,4 +1,4 @@
-import type { AuditEvent } from "../../domains/audit/types.ts";
+import type { AuditEvent } from "../audit/types.ts";
 import type { ChainedAuditEvent } from "./audit_chain.ts";
 import type { ObservabilitySink } from "./sink.ts";
 import type {

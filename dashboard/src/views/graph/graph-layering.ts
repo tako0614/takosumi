@@ -23,8 +23,11 @@ export function layerGraph(graph: SpaceGraph): LayeredGraph {
   const producersByConsumer = new Map<string, string[]>();
   for (const node of graph.nodes) producers.set(node.installationId, new Set());
   for (const edge of graph.edges) {
-    producers.get(edge.consumerInstallationId)?.add(edge.producerInstallationId);
-    const producerName = nodeById.get(edge.producerInstallationId)?.name ??
+    producers
+      .get(edge.consumerInstallationId)
+      ?.add(edge.producerInstallationId);
+    const producerName =
+      nodeById.get(edge.producerInstallationId)?.name ??
       edge.producerInstallationId;
     const list = producersByConsumer.get(edge.consumerInstallationId) ?? [];
     list.push(producerName);

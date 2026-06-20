@@ -1,15 +1,15 @@
 // `sha256HexText` is owned by the accounts contract so the dashboard SPA and
 // this server hash permission digests with the exact same function. Re-export
-// it here to keep the existing call sites importing from "./encoding".
+// it here to keep the existing call sites importing from "./encoding.ts".
 export { sha256HexText } from "@takosjp/takosumi-accounts-contract";
 
 export function base64UrlEncodeBytes(value: Uint8Array): string {
   let binary = "";
   for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 export function base64UrlEncodeJson(value: unknown): string {

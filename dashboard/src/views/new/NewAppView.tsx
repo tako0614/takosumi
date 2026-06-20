@@ -1,8 +1,8 @@
 /**
- * Add an app (`/new`) — catalog + Git URL, one flow.
+ * Add an Installation (`/new`) — Starter Capsules + Git URL, one flow.
  *
  * Three entry shapes, identical install path:
- *   - カタログ: curated first-party / official capsules (src/catalog.ts).
+ *   - Starter Capsules: curated first-party / known Capsule coordinates (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
  *   - Git URL: the raw source form (the developer power path).
  *   - External install link: another site links `/install?git=…` (or the
@@ -11,20 +11,14 @@
  *     summary states the provenance and the visitor still confirms in this
  *     client (compatibility check → explicit add). No worker-side handling.
  *
- * The flow runs four resumable steps — createSource → syncSource →
- * createInstallation → plan — and lands on `/runs/:id`. A 409
- * source_sync_required surfaces a humane retry instead of a raw error. The
- * managed-default nudge only warns about credentials when the operator default
- * CANNOT cover the apply AND the Space has no connection of its own.
+ * The flow runs five explicit steps — register/fetch → compatibility →
+ * provider connection review → createInstallation → plan — and
+ * lands on `/runs/:id`. A 409 source_sync_required surfaces a humane retry
+ * instead of a raw error. OSS Takosumi requires a ready Provider Connection
+ * before apply.
  */
 import "../../styles/wave-b.css";
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Show,
-} from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
 import { Download } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -41,17 +35,19 @@ import {
   createInstallation,
   createSource,
   extractRunId,
-  type ProviderBindings,
+  type InstallationProviderConnectionBindings,
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
   type InstallConfig,
-  getManagedDefaultStatus,
-  listConnections,
+  listProviderConnections,
   listInstallConfigs,
   planInstallation,
-  putDeploymentProfile,
+  putInstallationProviderConnectionSet,
   syncSource,
   waitForLatestSourceSnapshot,
+  type CapsuleCompatibilityProvider,
+  type ProviderConnection,
+  type ProviderCredentialOwnership,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
@@ -64,10 +60,19 @@ import {
   FormField,
   Input,
   PageHeader,
+  Select,
   type Tone,
 } from "../../components/ui/index.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
+
+interface ProviderConnectionRow {
+  readonly provider: string;
+  readonly alias: string;
+  readonly connectionId: string;
+  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
+  readonly resourceTypes: readonly string[];
+}
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -124,35 +129,27 @@ function Inner() {
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
+  const [providerRows, setProviderRows] = createSignal<ProviderConnectionRow[]>(
+    [],
+  );
 
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
   const [configs] = createResource(spaceId, listInstallConfigs);
-  const [managedDefaults] = createResource(spaceId, getManagedDefaultStatus);
-  const [connections] = createResource(spaceId, listConnections);
-  // Fail to the safe side while loading: never claim managed coverage we have
-  // not verified, never show a false "no connection" nag before the list is in.
-  const managedAvailable = () => {
-    if (managedDefaults.loading || managedDefaults.error) return false;
-    return managedDefaults.latest?.available === true;
-  };
-  const hasSpaceConnection = () => {
-    if (connections.loading || connections.error) return true;
-    const list = connections.latest;
-    if (list === undefined) return true;
-    return list.some((connection) => connection.status !== "revoked");
-  };
-  const needsCloudCredential = () =>
-    !managedAvailable() && !hasSpaceConnection();
-
+  const [providerConnections] = createResource(
+    spaceId,
+    listProviderConnections,
+  );
   const configList = createMemo<readonly InstallConfig[]>(
     () => configs() ?? [],
   );
+  const defaultGitInstallConfig = () =>
+    configList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
     const list = configList();
     if (list.length === 0) return list;
     const current = installConfigId();
     if (!current || !list.some((config) => config.id === current)) {
-      setInstallConfigId(list[0]!.id);
+      setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
     }
     return list;
   };
@@ -181,10 +178,139 @@ function Inner() {
     return null;
   };
 
-  const deploymentProfileBindings = (): ProviderBindings => [];
+  const providerConnectionLabel = (connection: ProviderConnection) =>
+    `${connection.displayName || connection.providerSource} (${t("conn.ownership.ownKey")})`;
+
+  const canonicalProvider = (provider: string) => provider.toLowerCase().trim();
+  const providerTail = (provider: string) => {
+    const normalized = canonicalProvider(provider);
+    return normalized.split("/").at(-1) ?? normalized;
+  };
+  const sameProviderFamily = (
+    requiredProvider: string,
+    connectionProvider: string,
+  ) => {
+    const required = canonicalProvider(requiredProvider);
+    const connection = canonicalProvider(connectionProvider);
+    if (required === connection) return true;
+    return providerTail(required) === providerTail(connection);
+  };
+
+  const readyProviderConnections = () =>
+    (providerConnections.latest ?? []).filter(
+      (connection) => connection.status === "ready",
+    );
+  const connectionMatchesOwnershipOptions = (
+    connection: ProviderConnection,
+    ownershipOptions: readonly ProviderCredentialOwnership[],
+  ) => connection.ownership === "own_key" && ownershipOptions.includes("own_key");
+  const providerConnectionsForProvider = (
+    provider: string,
+    ownershipOptions: readonly ProviderCredentialOwnership[],
+  ) =>
+    readyProviderConnections().filter(
+      (connection) =>
+        connectionMatchesOwnershipOptions(connection, ownershipOptions) &&
+        sameProviderFamily(provider, connection.providerSource),
+    );
+  const hasProviderConnection = () => {
+    if (providerConnections.loading || providerConnections.error) return true;
+    if (providerConnections.latest === undefined) return true;
+    return readyProviderConnections().length > 0;
+  };
+  const needsCloudCredential = () =>
+    !hasProviderConnection();
+
+  const defaultConnectionForProvider = (
+    provider: string,
+    ownershipOptions: readonly ProviderCredentialOwnership[],
+    _resourceTypes: readonly string[],
+  ): string => {
+    const candidates = providerConnectionsForProvider(
+      provider,
+      ownershipOptions,
+    );
+    return candidates[0]?.id ?? "";
+  };
+
+  const ownershipOptionsForProvider = (
+    provider: CapsuleCompatibilityProvider,
+  ): readonly ProviderCredentialOwnership[] =>
+    provider.ownershipOptions.length > 0
+      ? provider.ownershipOptions
+      : ["own_key"];
+
+  const rowsFromCompatibility = (
+    result: CapsuleCompatibilityResult,
+  ): ProviderConnectionRow[] =>
+    result.providers
+      .filter((provider) => provider.allowed)
+      .flatMap((provider) => {
+        const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
+        const ownershipOptions = ownershipOptionsForProvider(provider);
+        const resourceTypes = result.resources
+          .filter(
+            (resource) =>
+              resource.allowed &&
+              resource.type
+                .toLowerCase()
+                .startsWith(`${providerTail(provider.source)}_`),
+          )
+          .map((resource) => resource.type);
+        return aliases.map((alias) => ({
+          provider: provider.source,
+          alias,
+          connectionId: defaultConnectionForProvider(
+            provider.source,
+            ownershipOptions,
+            resourceTypes,
+          ),
+          ownershipOptions,
+          resourceTypes,
+        }));
+      });
+
+  const updateProviderRow = (
+    index: number,
+    patch: Partial<ProviderConnectionRow>,
+  ) =>
+    setProviderRows((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+
+  const providerConnectionError = (): string | null => {
+    for (const row of providerRows()) {
+      const candidates = providerConnectionsForProvider(
+        row.provider,
+        row.ownershipOptions,
+      );
+      if (!row.connectionId.trim()) {
+        return t("new.providers.errorConnection", {
+          provider: row.provider,
+        });
+      }
+      if (
+        !candidates.some((connection) => connection.id === row.connectionId)
+      ) {
+        return t("new.providers.errorConnection", {
+          provider: row.provider,
+        });
+      }
+    }
+    return null;
+  };
+
+  const providerConnectionsPayload =
+    (): InstallationProviderConnectionBindings =>
+      providerRows().map((row) => ({
+        provider: row.provider,
+        ...(row.alias ? { alias: row.alias } : {}),
+        connectionId: row.connectionId,
+      }));
 
   const resetCompatibility = () => {
     setCompatibility(null);
+    setProviderRows([]);
     setError(null);
   };
 
@@ -198,7 +324,9 @@ function Inner() {
   };
 
   const canContinue = () =>
-    compatibility() !== null && compatibility()?.level !== "unsupported";
+    compatibility() !== null &&
+    compatibility()?.level !== "unsupported" &&
+    providerConnectionError() === null;
 
   const runCompatibilityCheck = async () => {
     const validationError = validate();
@@ -222,6 +350,7 @@ function Inner() {
         setStepSource("done");
         setStepSync("done");
       }
+      setProviderRows(rowsFromCompatibility(result));
       setCompatibility(result);
     } catch (err) {
       const apiError = err instanceof ControlApiError ? err : undefined;
@@ -238,7 +367,7 @@ function Inner() {
       return;
     }
     if (!canContinue()) {
-      setError(t("new.proceedHint"));
+      setError(providerConnectionError() ?? t("new.proceedHint"));
       return;
     }
     setBusy(true);
@@ -264,11 +393,17 @@ function Inner() {
         setStepSource("done");
       }
 
-      // Step 2 — sync the Source to resolve an immutable snapshot.
-      setStepSync("running");
-      await syncSource(sourceId);
-      await waitForLatestSourceSnapshot(sourceId);
-      setStepSync("done");
+      // Step 2 — sync the Source to resolve an immutable snapshot. When the
+      // compatibility check already created and synced the Source, reuse that
+      // snapshot instead of adding a second source_sync run.
+      if (stepSync() !== "done") {
+        setStepSync("running");
+        await syncSource(sourceId);
+        await waitForLatestSourceSnapshot(sourceId);
+        setStepSync("done");
+      } else {
+        setStepSync("done");
+      }
 
       // Step 3 — create the Installation bound to the chosen InstallConfig.
       setStepInstall("running");
@@ -280,7 +415,10 @@ function Inner() {
         installConfigId:
           compatibility()?.installConfigId ?? selectedInstallConfigId(),
       });
-      await putDeploymentProfile(installation.id, deploymentProfileBindings());
+      await putInstallationProviderConnectionSet(
+        installation.id,
+        providerConnectionsPayload(),
+      );
       setStepInstall("done");
 
       // Step 4 — create the first plan Run, then jump to the run screen.
@@ -312,10 +450,10 @@ function Inner() {
     s === "running"
       ? "is-active"
       : s === "done"
-      ? "is-done"
-      : s === "error"
-      ? "is-error"
-      : "";
+        ? "is-done"
+        : s === "error"
+          ? "is-error"
+          : "";
 
   const gitFields = () => (
     <>
@@ -387,7 +525,7 @@ function Inner() {
           />
         }
       >
-        {/* tab strip: catalog | git url */}
+        {/* tab strip: starter capsules | git url */}
         <nav class="tg-tabs" aria-label="Add method">
           <button
             type="button"
@@ -409,13 +547,18 @@ function Inner() {
 
         <Show when={activeTab() === "catalog"}>
           <Card>
-            <CardHeader title={t("new.tab.catalog")} subtitle={t("new.catalog.intro")} />
+            <CardHeader
+              title={t("new.tab.catalog")}
+              subtitle={t("new.catalog.intro")}
+            />
             <ul class="av-catalog">
               <For each={CATALOG}>
                 {(entry) => (
                   <li class="av-catalog-item">
                     <div class="av-catalog-text">
-                      <span class="av-catalog-name">{entry.name[locale()]}</span>
+                      <span class="av-catalog-name">
+                        {entry.name[locale()]}
+                      </span>
                       <span class="av-catalog-desc">
                         {entry.description[locale()]}
                       </span>
@@ -450,11 +593,6 @@ function Inner() {
                   {t("new.deeplink.summary", {
                     capsule: capsuleNameFromUrl(gitUrl() || prefill!.git),
                   })}
-                </p>
-              </Show>
-              <Show when={managedAvailable() && !hasSpaceConnection()}>
-                <p class="wb-note" role="note">
-                  {t("new.managed.notice")}
                 </p>
               </Show>
               <Show when={needsCloudCredential()}>
@@ -539,6 +677,78 @@ function Inner() {
                   )}
                 </Show>
 
+                <Show when={compatibility()}>
+                  <section class="wb-inline-panel">
+                    <div class="wb-compat-head">
+                      <h3 class="tg-card-title">{t("new.providers.title")}</h3>
+                    </div>
+                    <p class="wb-note">{t("new.providers.subtitle")}</p>
+                    <Show
+                      when={providerRows().length > 0}
+                      fallback={
+                        <p class="wb-note">{t("new.providers.noneRequired")}</p>
+                      }
+                    >
+                      <div class="wb-provider-grid">
+                        <For each={providerRows()}>
+                          {(row, index) => {
+                            const options = () =>
+                              providerConnectionsForProvider(
+                                row.provider,
+                                row.ownershipOptions,
+                              );
+                            return (
+                              <div class="wb-provider-row">
+                                <div class="wb-provider-meta">
+                                  <code>{row.provider}</code>
+                                  <Show when={row.alias}>
+                                    <span class="muted">
+                                      {t("new.providers.alias", {
+                                        alias: row.alias,
+                                      })}
+                                    </span>
+                                  </Show>
+                                </div>
+                                <Select
+                                  value={row.connectionId}
+                                  onChange={(e) =>
+                                    updateProviderRow(index(), {
+                                      connectionId: e.currentTarget.value,
+                                    })
+                                  }
+                                >
+                                  <option value="">
+                                    {t("new.providers.selectConnection")}
+                                  </option>
+                                  <For each={options()}>
+                                    {(connection) => (
+                                      <option value={connection.id}>
+                                        {providerConnectionLabel(connection)}
+                                      </option>
+                                    )}
+                                  </For>
+                                </Select>
+                              </div>
+                            );
+                          }}
+                        </For>
+                      </div>
+                      <Show when={providerConnectionError()}>
+                        {(m) => (
+                          <p class="wb-error" role="alert">
+                            {m()}
+                          </p>
+                        )}
+                      </Show>
+                      <p class="wb-note">
+                        <A href="/space/settings/connections" class="link">
+                          {t("new.providers.manageConnections")}
+                        </A>
+                      </p>
+                    </Show>
+                  </section>
+                </Show>
+
                 <div class="wb-form-actions">
                   <Button
                     variant="secondary"
@@ -571,7 +781,11 @@ function Inner() {
                 </div>
 
                 <Show when={error()}>
-                  {(m) => <p class="wb-error" role="alert">{m()}</p>}
+                  {(m) => (
+                    <p class="wb-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
                 </Show>
               </form>
 
@@ -602,4 +816,3 @@ function Inner() {
     </AppShell>
   );
 }
-

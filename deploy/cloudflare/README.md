@@ -2,16 +2,14 @@
 
 This directory is the Cloudflare deployment scaffold for the Takosumi control-plane and OpenTofu runner boundary. It is
 used by the platform worker composition and local-substrate profiles, but it is not a standalone public API product.
-The public control-plane model is the `/api` Space / Source / Connection / Installation / Dependency / SourceSnapshot /
-DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup / Activity surface. Cloudflare Containers host the OpenTofu runner that executes queued
-`plan`, `apply`, and `destroy` runs.
+The public control-plane model is the `/api` surface for OpenTofu/Terraform source, capsule, connection, run, state,
+output, and audit workflows. Cloudflare Containers host the OpenTofu runner that executes queued `plan`, `apply`, and
+`destroy` runs.
 
 ## Files
 
 - `wrangler.toml`: control-plane Worker, D1, R2, Queue, coordination Durable Object, and OpenTofu runner container binding template. Wrangler runs a Bun custom build and uploads the bundled Worker without a second esbuild pass.
-- `wrangler.dispatch.toml`: Workers for Platforms dynamic dispatch Worker template. It has only the dispatch namespace binding and non-secret vars.
 - `../../worker/src/index.ts`: Worker entrypoint.
-- `../../providers/cloudflare/hosting/wfp_dispatch_worker.ts`: tenant / user Worker dynamic dispatch entrypoint. It resolves the user Worker from the first URL path segment and strips operator-only headers before dispatch. It does not enforce tenant egress allowlists.
 - `../../worker/src/handler.ts`: route dispatcher that keeps edge-local health/storage probes local, forwards canonical Takosumi API requests to the service app, and dispatches OpenTofu execution to the runner container binding.
 - `../../worker/src/d1_storage.ts`: D1-backed snapshot storage driver for service stores.
 - `../../worker/src/d1_deploy_stores.ts`: D1-backed deployment record and revoke-debt stores.
@@ -24,7 +22,8 @@ DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapsho
 The Worker forwards the canonical Takosumi `/api/v1` control-plane routes to the embedded service app:
 
 - Spaces, Sources, Connections, Installations, Dependencies, OutputShares, Runs, RunGroups, Deployments, and Activity.
-- `/install` external install links when this scaffold is mounted by a platform composition.
+- `/install` is not forwarded to this service app. It is a dashboard SPA path that preserves query parameters and
+  pre-fills `/new` when this scaffold is mounted by a platform composition.
 
 The `/internal/v1/runner-profiles`, `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, and
 `/internal/v1/installations/*` routes are internal seams for accounts-plane and CLI adapters. They are not the
@@ -48,23 +47,19 @@ Internal/service paths are also forwarded to the embedded service app:
 The Worker-local routes remain at the edge:
 
 - `/healthz` reports Worker health only.
-- `/coordination/*` routes to `CoordinationObject`.
 
 The only container binding here is the OpenTofu runner. The single edge-public API surface is `/api/v1`; any
 `/internal/v1` execution profile / plan-run / apply-run references describe the internal seam only.
 
-## Workers for Platforms Boundary
+## Cloud-Only Managed Edge Boundary
 
-Workers for Platforms is the tenant / user Worker dispatch runtime, not the OpenTofu runner. In the Cloudflare reference topology:
+This OSS scaffold does not include Workers for Platforms dispatch, Cloudflare Compatibility Gateway, or managed edge
+resource backends. Those belong to closed Takosumi Cloud. The OSS Cloudflare runner path uses the existing
+`cloudflare/cloudflare` provider with user/operator Provider Connections and temporary run-time credential injection.
 
-- The Takosumi Worker and D1/R2/Queue/Durable Object bindings run the control plane.
-- Cloudflare Containers materialize `git` / `prepared` / operator-enabled `local` sources, run `tofu plan -out <tfplan>`, `tofu apply <tfplan>`, and destroy-plan apply operations with runner-only provider credentials.
-- A separate Workers for Platforms dispatch namespace routes tenant / user Worker traffic.
-- An outbound Worker should enforce tenant egress policy before user Worker traffic reaches external services. This checked-in dispatch Worker does not configure or prove that enforcement.
-
-Do not bind operator provider credentials, Deploy Control bearer tokens, state backend credentials, or storage admin credentials into user Workers. User Workers may receive tenant-scoped bindings only. If a tenant workload needs a secret-like value, materialize a tenant-scoped short-lived token or a tenant-owned binding rather than an operator secret.
-
-The current scaffold records the intended WfP boundary in internal execution policy through `cloudflareWorkersForPlatforms` and `secretExposurePolicy`. The dispatch namespace, outbound Worker script, outbound binding configuration, and isolation proof are operator-live evidence items. Treat `enforceNetworkPolicy: true` as satisfied only when the operator can show that the dispatch namespace has an outbound Worker configured and that the outbound Worker enforces the declared allowlist. The platform worker exposes an operator-bearer-gated `/internal/platform/hardening-gates` hook so production automation can require pinned evidence refs and SHA-256 digests for the real Cloudflare Container smoke, egress enforcement proof, Provider Template proof, and secret-boundary proof before opening the managed offering.
+Do not bind operator provider credentials, control-plane bearer tokens, state backend credentials, or storage admin
+credentials into user workloads. Provider material enters the OpenTofu runner only through explicit Provider
+Connections and per-run env/file injection.
 
 ## Persistence
 
@@ -81,11 +76,8 @@ The OpenTofu runner scaffold expects its working directory at `TOFU_WORK_DIR` (d
 
 1. Replace placeholder D1/R2/Queue identifiers in `wrangler.toml`.
 2. Configure Worker secrets/vars such as `TAKOSUMI_INTERNAL_API_SECRET`, `TAKOSUMI_SECRET_STORE_PASSPHRASE`, and optional `TAKOSUMI_METRICS_SCRAPE_TOKEN`.
-3. Pin the runner image inputs, including `OPENTOFU_VERSION`, and provide provider credentials through Cloudflare secrets or a container-safe secret injection path.
-4. If tenant / user Workers are enabled, create the Workers for Platforms dispatch namespace and outbound Worker without operator secret bindings. Configure the dispatch namespace outbound Worker and keep proof that it enforces the internal execution-profile / policy allowlist.
-5. Record a real Cloudflare Container smoke proof (not Miniflare/local Docker) showing the deployed `OpenTofuRunnerObject` can start the container, answer `/healthz`, and run the operator-approved non-production OpenTofu fixture.
-6. Record egress enforcement proof for the live dispatch namespace/outbound Worker when WfP tenant Workers are enabled.
-7. Deploy the control-plane Worker with `wrangler deploy --config deploy/cloudflare/wrangler.toml` from the product root or `wrangler deploy` from this directory. Docker must be available because Wrangler builds and uploads the runner image.
-8. Deploy the tenant dispatch Worker with `wrangler deploy --config deploy/cloudflare/wrangler.dispatch.toml`. Keep provider credentials, Deploy Control tokens, D1 admin bindings, and R2 admin bindings out of this Worker.
+3. Pin the runner image inputs, including `OPENTOFU_VERSION`. Provider material must enter through explicit Provider Connections and the Vault / per-phase mint path.
+4. Record a real Cloudflare Container smoke proof (not Miniflare/local Docker) showing the deployed `OpenTofuRunnerObject` can start the container, answer `/healthz`, and run the operator-approved non-production OpenTofu fixture.
+5. Deploy the control-plane Worker with `wrangler deploy --config deploy/cloudflare/wrangler.toml` from the product root or `wrangler deploy` from this directory. Docker must be available because Wrangler builds and uploads the runner image.
 
 Use `/healthz` for Worker-only health. If a migration service app is mounted, do not replace service `/readyz` with a Worker-local response; service readiness should still come from that mounted app.

@@ -2,8 +2,8 @@ import { freezeClone } from "../../shared/freeze.ts";
 import type {
   RuntimeNetworkPolicy,
   RuntimeNetworkPolicyId,
-  ServiceGrant,
-  ServiceGrantId,
+  NetworkServiceGrant,
+  NetworkServiceGrantId,
   WorkloadIdentity,
   WorkloadIdentityId,
 } from "./types.ts";
@@ -27,16 +27,15 @@ export interface WorkloadIdentityStore {
   ): Promise<WorkloadIdentity | undefined>;
 }
 
-export interface ServiceGrantStore {
-  put(grant: ServiceGrant): Promise<ServiceGrant>;
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined>;
+export interface NetworkServiceGrantStore {
+  put(grant: NetworkServiceGrant): Promise<NetworkServiceGrant>;
+  get(id: NetworkServiceGrantId): Promise<NetworkServiceGrant | undefined>;
   listByIdentity(
     identityId: WorkloadIdentityId,
-  ): Promise<readonly ServiceGrant[]>;
+  ): Promise<readonly NetworkServiceGrant[]>;
 }
 
-export class InMemoryRuntimeNetworkPolicyStore
-  implements RuntimeNetworkPolicyStore {
+export class InMemoryRuntimeNetworkPolicyStore implements RuntimeNetworkPolicyStore {
   readonly #policies = new Map<RuntimeNetworkPolicyId, RuntimeNetworkPolicy>();
   put(policy: RuntimeNetworkPolicy): Promise<RuntimeNetworkPolicy> {
     const frozen = freezeClone(policy);
@@ -51,8 +50,8 @@ export class InMemoryRuntimeNetworkPolicyStore
     groupId: string,
   ): Promise<readonly RuntimeNetworkPolicy[]> {
     return Promise.resolve(
-      [...this.#policies.values()].filter((policy) =>
-        policy.spaceId === spaceId && policy.groupId === groupId
+      [...this.#policies.values()].filter(
+        (policy) => policy.spaceId === spaceId && policy.groupId === groupId,
       ),
     );
   }
@@ -75,30 +74,32 @@ export class InMemoryWorkloadIdentityStore implements WorkloadIdentityStore {
   ): Promise<WorkloadIdentity | undefined> {
     for (const identity of this.#identities.values()) {
       if (
-        identity.spaceId === spaceId && identity.groupId === groupId &&
+        identity.spaceId === spaceId &&
+        identity.groupId === groupId &&
         identity.componentName === componentName
-      ) return Promise.resolve(identity);
+      )
+        return Promise.resolve(identity);
     }
     return Promise.resolve(undefined);
   }
 }
 
-export class InMemoryServiceGrantStore implements ServiceGrantStore {
-  readonly #grants = new Map<ServiceGrantId, ServiceGrant>();
-  put(grant: ServiceGrant): Promise<ServiceGrant> {
+export class InMemoryNetworkServiceGrantStore implements NetworkServiceGrantStore {
+  readonly #grants = new Map<NetworkServiceGrantId, NetworkServiceGrant>();
+  put(grant: NetworkServiceGrant): Promise<NetworkServiceGrant> {
     const frozen = freezeClone(grant);
     this.#grants.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined> {
+  get(id: NetworkServiceGrantId): Promise<NetworkServiceGrant | undefined> {
     return Promise.resolve(this.#grants.get(id));
   }
   listByIdentity(
     identityId: WorkloadIdentityId,
-  ): Promise<readonly ServiceGrant[]> {
+  ): Promise<readonly NetworkServiceGrant[]> {
     return Promise.resolve(
-      [...this.#grants.values()].filter((grant) =>
-        grant.fromIdentityId === identityId
+      [...this.#grants.values()].filter(
+        (grant) => grant.fromIdentityId === identityId,
       ),
     );
   }

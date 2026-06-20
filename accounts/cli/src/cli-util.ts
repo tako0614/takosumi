@@ -5,11 +5,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isRecord(value)) {
-    return `{${
-      Object.keys(value).sort().map((key) =>
-        `${JSON.stringify(key)}:${canonicalJson(value[key])}`
-      ).join(",")
-    }}`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value ?? null);
 }
@@ -31,18 +30,23 @@ export async function materializeApprovalDigest(input: {
   plan: Record<string, unknown>;
   cutover: Record<string, unknown>;
 }): Promise<string> {
-  return `sha256:${await sha256Hex(canonicalJson({
-    operation: "materialize",
-    installationId: input.installationId,
-    mode: input.mode,
-    region: input.region,
-    plan: input.plan,
-    cutover: input.cutover,
-  }))}`;
+  return `sha256:${await sha256Hex(
+    canonicalJson({
+      operation: "materialize",
+      installationId: input.installationId,
+      mode: input.mode,
+      region: input.region,
+      plan: input.plan,
+      cutover: input.cutover,
+    }),
+  )}`;
 }
 
 export function splitCsv(value: string): string[] {
-  return value.split(",").map((part) => part.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 export function stringValue(value: unknown): string | undefined {
@@ -102,6 +106,10 @@ export function accountsApiErrorMessage(
   fallback: string,
 ): string {
   if (!isRecord(value)) return fallback;
-  return stringValue(value.error_description) ?? stringValue(value.message) ??
-    stringValue(value.error) ?? fallback;
+  return (
+    stringValue(value.error_description) ??
+    stringValue(value.message) ??
+    stringValue(value.error) ??
+    fallback
+  );
 }

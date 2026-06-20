@@ -27,17 +27,16 @@ export function aggregateBillingUsage(
   const rollups = new Map<string, BillingUsageRollup>();
   const sorted = records
     .filter((record) => billingUsageRecordMatchesPolicy(record, policy))
-    .sort((left, right) =>
-      left.reportedAt - right.reportedAt ||
-      left.usageReportId.localeCompare(right.usageReportId)
+    .sort(
+      (left, right) =>
+        left.reportedAt - right.reportedAt ||
+        left.usageReportId.localeCompare(right.usageReportId),
     );
 
   for (const record of sorted) {
-    const key = [
-      record.billingAccountId,
-      record.meter,
-      record.unit,
-    ].join("\u0000");
+    const key = [record.billingAccountId, record.meter, record.unit].join(
+      "\u0000",
+    );
     const existing = rollups.get(key);
     if (!existing) {
       rollups.set(key, {

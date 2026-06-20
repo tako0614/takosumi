@@ -9,7 +9,7 @@
  * without inverting the layering; this local primitive is the runtime-agent's
  * own serve boundary. The fetch-handler <-> `node:http` bridge mirrors the
  * service runtime adapter's Node server
- * (`src/service/shared/runtime/node.ts`).
+ * (`core/shared/runtime/node.ts`).
  */
 
 import { createServer } from "node:http";
@@ -68,15 +68,16 @@ async function handleRequestNode(
     else if (Array.isArray(v)) headers.set(k, v.join(","));
   }
   const method = req.method ?? "GET";
-  const body = method !== "GET" && method !== "HEAD"
-    ? new ReadableStream<Uint8Array>({
-      start(controller) {
-        req.on("data", (chunk: Uint8Array) => controller.enqueue(chunk));
-        req.on("end", () => controller.close());
-        req.on("error", (err: Error) => controller.error(err));
-      },
-    })
-    : null;
+  const body =
+    method !== "GET" && method !== "HEAD"
+      ? new ReadableStream<Uint8Array>({
+          start(controller) {
+            req.on("data", (chunk: Uint8Array) => controller.enqueue(chunk));
+            req.on("end", () => controller.close());
+            req.on("error", (err: Error) => controller.error(err));
+          },
+        })
+      : null;
   const init: RequestInit & { duplex?: "half" } = { method, headers, body };
   if (body) init.duplex = "half";
   const response = await handler(new Request(url, init));

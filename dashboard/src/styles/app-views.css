@@ -1,4 +1,4 @@
-/* Rebuilt app-centric views (app list / app detail / run summary / new flow /
+/* Rebuilt Installation-centric views (Installation list / detail / run summary / new flow /
  * space settings). Token-driven (--tg-*) like the rest of the design system.
  * Successor of the wave-* per-cluster files, which disappear with the legacy
  * views they styled. */
@@ -86,7 +86,9 @@
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
   overflow: hidden;
-  transition: border-color 120ms ease, transform 120ms ease;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease;
 }
 .av-grid > li:hover {
   border-color: color-mix(in srgb, var(--tg-accent) 55%, var(--tg-line));
@@ -128,7 +130,7 @@
   padding: 0 var(--tg-s-4) var(--tg-s-4);
 }
 
-/* ===== recent runs strip (app detail / deploys) ===== */
+/* ===== recent runs strip (Installation detail / deploys) ===== */
 .av-run-list {
   list-style: none;
   margin: 0;

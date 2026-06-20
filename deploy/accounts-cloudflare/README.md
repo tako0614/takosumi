@@ -2,7 +2,8 @@
 
 This directory is **not a standalone deployable Worker anymore**. It is the
 Cloudflare reference entry point for the account-plane handler
-(OIDC issuer / dashboard API / Installation ledger / billing), consumed
+(session cookie, upstream sign-in, billing checkout/portal, installed-service
+OIDC material, Installation projection ledger, and export handoff), consumed
 in-process by two build targets:
 
 - the operator Takosumi platform worker in `takosumi/deploy/platform/`, served at
@@ -21,6 +22,15 @@ Both host workers reference this module through the
 `src/handler.ts`. The host worker supplies the actual mount, bindings, secrets,
 custom-domain route, and deploy command.
 
+Accounts is a backing layer, not a second control plane. Product control-plane
+resources (Spaces, Sources, Installations, Runs, Connections, Deployments, and
+OutputSnapshots) are created and read through `/api/v1/*`. The
+`/v1/installation-projections` routes are supporting account-plane projections
+for installed services: OIDC client metadata, billing usage endpoints, export
+handoff, and service-token material. Accounts OIDC should be described as
+installed-service identity projection and operator-managed sign-in support, not
+as a generic login/consent platform for arbitrary public clients.
+
 ## Files
 
 - `src/handler.ts` — env parsing, D1 store construction, cached Accounts handler
@@ -35,7 +45,9 @@ custom-domain route, and deploy command.
 ## Routing shape
 
 The handler keeps `/healthz` and signed `/__takosumi/exports/...` downloads as
-edge-local routes. Every account-plane path is handled directly by
+edge-local routes. Those downloads serve installation export artifacts created
+for portability/import flows; they are not the operator's control/state backup
+or disaster-recovery store. Every account-plane path is handled directly by
 `createEphemeralAccountsHandler` (or `createAccountsHandler` when a stable ES256
 JWK is configured) with a `D1AccountsStore`. The D1 schema is initialized lazily
 and idempotently before the first account-plane handler is built. Export requests
@@ -51,7 +63,7 @@ bookkeeping table is created on first contact, but the handler never advances th
 recorded version itself — that is the migration runner's job. The handler reads
 only `version` from this table; the table name and column shape are identical to
 the table the `accounts migrate-d1` runner writes
-(`D1_SCHEMA_MIGRATIONS_TABLE_SQL` in `packages/cli/src/cli-accounts-db.ts`), so a
+(`D1_SCHEMA_MIGRATIONS_TABLE_SQL` in `accounts/cli/src/cli-accounts-db.ts`), so a
 `migrate-d1` run is visible to this gate.
 
 - A brand-new D1 database (no `takosumi_accounts_schema_migrations` rows) is the

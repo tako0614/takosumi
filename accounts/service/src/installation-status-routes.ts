@@ -4,18 +4,12 @@
  * Pure-move decomposition of the former installation-lifecycle-routes
  * god-file; behavior is identical to the prior single-file handlers.
  */
+import { takosumiAccountsInstallationEventsPath } from "@takosjp/takosumi-accounts-contract";
 import {
-  takosumiAccountsInstallationEventsPath,
-} from "@takosjp/takosumi-accounts-contract";
-import {
-  type AppGrantRecord,
-  type InstallationEventRecord,
   type InstallationRecord,
   transitionAppInstallationStatus,
 } from "./ledger.ts";
-import type {
-  AccountsStore,
-} from "./store.ts";
+import type { AccountsStore } from "./store.ts";
 import {
   activatedHttpDomainProjectionFromEvents,
   findOperationEvent,
@@ -25,9 +19,8 @@ import {
   installationExportedEvent,
   installationMaterializeFailedEvent,
   installationMaterializeSucceededEvent,
-  installationUninstalledEvent,
-  serializeAppBinding,
-  serializeAppGrant,
+  serializeServiceBindingMaterial,
+  serializeServiceGrantMaterial,
   serializeAppInstallation,
   serializeInstallationEvent,
 } from "./installation-helpers.ts";
@@ -35,26 +28,24 @@ import {
   materializeCompletionFromStatusPatch,
   validateOperationCompletionFromStatusPatch,
 } from "./installation-materialize-helpers.ts";
+import { exportDownloadUrl } from "./export-download-url.ts";
+import { consoleErrorRedacted } from "./redacted-log.ts";
 import {
   errorJson,
   appInstallationStatusValue,
   isRecord,
   json,
   readJsonObject,
-  readOptionalJsonObject,
   stringValue,
 } from "./http-helpers.ts";
-import type {
-  DeployControlProxyOptions,
-} from "./deploy-control-proxy.ts";
-import {
-  appendLedgerEvent,
-} from "./installation-ledger-events.ts";
+import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
+import { appendLedgerEvent } from "./installation-ledger-events.ts";
+import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
 import {
   activatedHttpDomainEventPayload,
   activatedHttpDomainInactiveEventPayload,
-  appBindingRecordsFromValue,
-  appGrantRecordsFromValue,
+  serviceBindingMaterialRecordsFromValue,
+  serviceGrantMaterialRecordsFromValue,
   appInstallationModeValue,
   appInstallationRevisionConfirmFromValue,
   appInstallationRevisionPayload,
@@ -64,6 +55,7 @@ import {
   revisionEnvelopeResponse,
   rollbackCoreDeploymentForCloudProjection,
 } from "./installation-lifecycle-shared.ts";
+import { redactPublicString } from "./public-redaction.ts";
 
 export async function handleUpdateAppInstallationStatus(input: {
   installationId: string;
@@ -74,36 +66,42 @@ export async function handleUpdateAppInstallationStatus(input: {
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const status = appInstallationStatusValue(body.status);
   if (!status) return errorJson("invalid_request", "invalid request", 400);
-  const requestedMode = body.mode === undefined
-    ? undefined
-    : appInstallationModeValue(body.mode);
+  const requestedMode =
+    body.mode === undefined ? undefined : appInstallationModeValue(body.mode);
   if (body.mode !== undefined && !requestedMode) {
     return errorJson("invalid_request", "invalid request", 400);
   }
-  const failedOperation = body.operation === undefined
-    ? undefined
-    : installationFailedOperationValue(body.operation);
+  const failedOperation =
+    body.operation === undefined
+      ? undefined
+      : installationFailedOperationValue(body.operation);
   if (body.operation !== undefined && !failedOperation) {
     return errorJson("invalid_request", "invalid request", 400);
   }
   if (failedOperation && !stringValue(body.operationId)) {
-    return errorJson("invalid_request", "operationId is required when operation is provided", 400);
+    return errorJson(
+      "invalid_request",
+      "operationId is required when operation is provided",
+      400,
+    );
   }
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
+  if (!installation)
+    return errorJson("installation_not_found", "installation not found", 404);
 
   let updated;
   const now = Date.now();
   try {
     updated = transitionAppInstallationStatus(installation, status, now);
   } catch (error) {
-    console.error(
-      "installation_status_conflict",
-      error instanceof Error ? error.stack ?? error.message : String(error),
+    consoleErrorRedacted("installation_status_conflict", error);
+    return errorJson(
+      "state_conflict",
+      "installation status transition is not allowed",
+      409,
     );
-    return errorJson("state_conflict", "installation status transition is not allowed", 409);
   }
   const statusOperationId = stringValue(body.operationId);
   if (updated.status === "exported" && statusOperationId) {
@@ -123,6 +121,38 @@ export async function handleUpdateAppInstallationStatus(input: {
       operationId: statusOperationId,
     });
     if (failedCompletion instanceof Response) return failedCompletion;
+  }
+  const exportedDownloadUrl = stringValue(body.downloadUrl);
+  const exportedDownloadExpiresAt = stringValue(body.downloadExpiresAt);
+  if (updated.status === "exported") {
+    if (statusOperationId && !exportedDownloadUrl) {
+      return errorJson(
+        "invalid_request",
+        "downloadUrl is required when completing an export operation",
+        400,
+      );
+    }
+    if (exportedDownloadUrl) {
+      try {
+        exportDownloadUrl(exportedDownloadUrl, "export status downloadUrl");
+      } catch {
+        return errorJson(
+          "invalid_request",
+          "downloadUrl must be HTTPS or loopback HTTP",
+          400,
+        );
+      }
+    }
+    if (
+      exportedDownloadExpiresAt &&
+      !Number.isFinite(Date.parse(exportedDownloadExpiresAt))
+    ) {
+      return errorJson(
+        "invalid_request",
+        "downloadExpiresAt must be a valid timestamp",
+        400,
+      );
+    }
   }
   let runtimeBinding;
   let materializeSucceededEvent;
@@ -157,7 +187,11 @@ export async function handleUpdateAppInstallationStatus(input: {
         ],
       });
       if (closed) {
-        return errorJson("operation_already_closed", "materialize operation already has a completion event", 409);
+        return errorJson(
+          "operation_already_closed",
+          "materialize operation already has a completion event",
+          409,
+        );
       }
     }
   }
@@ -166,13 +200,14 @@ export async function handleUpdateAppInstallationStatus(input: {
   let exportedEvent;
   let failedOperationEvent;
   if (updated.status !== installation.status) {
+    const publicReason = publicOptionalString(body.reason);
     await appendLedgerEvent(input.store, {
       installationId: input.installationId,
       eventType: "installation.status_changed",
       payload: {
         from: installation.status,
         to: updated.status,
-        reason: stringValue(body.reason),
+        reason: publicReason,
       },
       now: updated.updatedAt,
     });
@@ -184,25 +219,38 @@ export async function handleUpdateAppInstallationStatus(input: {
           operationId: stringValue(body.operationId) ?? null,
           from: installation.status,
           to: updated.status,
-          reason: stringValue(body.reason),
-          downloadUrl: stringValue(body.downloadUrl) ?? null,
-          downloadExpiresAt: stringValue(body.downloadExpiresAt) ?? null,
+          reason: publicReason,
+          downloadUrl: exportedDownloadUrl ?? null,
+          downloadExpiresAt: exportedDownloadExpiresAt ?? null,
         },
         now: updated.updatedAt,
       });
     }
     if (updated.status === "failed" && failedOperation) {
+      const fallback =
+        failedOperation === "materialize"
+          ? "materialize worker failed"
+          : "export failed";
+      const failureReason = publicInstallationOperationErrorMessage(
+        body.reason,
+        fallback,
+      );
+      const failureError = publicInstallationOperationErrorMessage(
+        body.error ?? body.reason,
+        fallback,
+      );
       failedOperationEvent = await appendLedgerEvent(input.store, {
         installationId: input.installationId,
-        eventType: failedOperation === "materialize"
-          ? installationMaterializeFailedEvent
-          : installationExportFailedEvent,
+        eventType:
+          failedOperation === "materialize"
+            ? installationMaterializeFailedEvent
+            : installationExportFailedEvent,
         payload: {
           operationId: stringValue(body.operationId),
           from: installation.status,
           to: updated.status,
-          reason: stringValue(body.reason),
-          error: stringValue(body.error) ?? stringValue(body.reason) ?? null,
+          reason: failureReason,
+          error: failureError,
         },
         now: updated.updatedAt,
       });
@@ -218,7 +266,7 @@ export async function handleUpdateAppInstallationStatus(input: {
         toMode: requestedMode,
         runtimeTargetId: updated.runtimeBindingId ?? null,
         preserveDigest: materializePreserveDigest ?? null,
-        reason: stringValue(body.reason),
+        reason: publicOptionalString(body.reason),
       },
       now: updated.updatedAt,
     });
@@ -228,11 +276,16 @@ export async function handleUpdateAppInstallationStatus(input: {
     ...(exportedEvent
       ? { event: serializeInstallationEvent(exportedEvent) }
       : materializeSucceededEvent
-      ? { event: serializeInstallationEvent(materializeSucceededEvent) }
-      : failedOperationEvent
-      ? { event: serializeInstallationEvent(failedOperationEvent) }
-      : {}),
+        ? { event: serializeInstallationEvent(materializeSucceededEvent) }
+        : failedOperationEvent
+          ? { event: serializeInstallationEvent(failedOperationEvent) }
+          : {}),
   });
+}
+
+function publicOptionalString(value: unknown): string | undefined {
+  const text = stringValue(value);
+  return text === undefined ? undefined : redactPublicString(text);
 }
 
 export async function handleUninstallAppInstallation(input: {
@@ -240,92 +293,12 @@ export async function handleUninstallAppInstallation(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
-  const body = await readOptionalJsonObject(input.request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  void input;
+  return errorJson(
+    "destroy_plan_required",
+    "Installation removal must use the Takosumi deploy-control destroy-plan flow.",
+    410,
   );
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
-
-  const existingEvents = await input.store.listInstallationEvents(
-    input.installationId,
-  );
-  const existingUninstallEvent = [...existingEvents].reverse().find((event) =>
-    event.eventType === installationUninstalledEvent
-  );
-  const grants = await input.store.listAppGrantsForInstallation(
-    input.installationId,
-  );
-  const activeGrants = grants.filter((grant) => !grant.revokedAt);
-  const now = Date.now();
-  const reason = stringValue(body.reason);
-  let updated = installation;
-  let statusEvent: InstallationEventRecord | undefined;
-
-  if (
-    installation.status === "installing" || installation.status === "ready"
-  ) {
-    updated = transitionAppInstallationStatus(installation, "suspended", now);
-    await input.store.saveAppInstallation(updated);
-    statusEvent = await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
-      eventType: "installation.status_changed",
-      payload: {
-        from: installation.status,
-        to: updated.status,
-        reason: reason ?? "uninstall requested",
-      },
-      now: updated.updatedAt,
-    });
-  }
-
-  const revokedGrants: AppGrantRecord[] = [];
-  for (const grant of activeGrants) {
-    const revoked = { ...grant, revokedAt: now };
-    await input.store.saveAppGrant(revoked);
-    revokedGrants.push(revoked);
-    await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
-      eventType: "permission_scope.revoked",
-      payload: {
-        permissionScopeId: grant.grantId,
-        capability: grant.capability,
-      },
-      now,
-    });
-  }
-
-  const shouldAppendUninstallEvent = Boolean(statusEvent) ||
-    revokedGrants.length > 0 || !existingUninstallEvent;
-  if (!statusEvent && shouldAppendUninstallEvent) {
-    updated = { ...installation, updatedAt: now };
-    await input.store.saveAppInstallation(updated);
-  }
-  const uninstallEvent = shouldAppendUninstallEvent
-    ? await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
-      eventType: installationUninstalledEvent,
-      payload: {
-        from: installation.status,
-        to: updated.status,
-        reason,
-        retainedLedger: true,
-        revokedPermissionScopeIds: revokedGrants.map((grant) => grant.grantId),
-      },
-      now: updated.updatedAt,
-    })
-    : existingUninstallEvent;
-
-  return json({
-    installation: serializeAppInstallation(updated),
-    revoked_permission_scopes: revokedGrants.map(serializeAppGrant),
-    ...(statusEvent
-      ? { status_event: serializeInstallationEvent(statusEvent) }
-      : {}),
-    ...(uninstallEvent
-      ? { event: serializeInstallationEvent(uninstallEvent) }
-      : {}),
-  });
 }
 
 export async function handleUpdateAppInstallationRevision(input: {
@@ -333,135 +306,36 @@ export async function handleUpdateAppInstallationRevision(input: {
   operation: "deployment" | "rollback";
   request: Request;
   store: AccountsStore;
-  deployControl?: DeployControlProxyOptions;
+  deployControl?: DeployControlFacadeOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
+  if (!installation)
+    return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return errorJson("state_conflict", `${input.operation} requires a ready AppInstallation`, 409);
+    return errorJson(
+      "state_conflict",
+      `${input.operation} requires a ready Installation projection`,
+      409,
+    );
   }
-  if (input.deployControl) {
-    return await handleCoreDeployControlBackedRevision({
-      installationId: input.installationId,
-      operation: input.operation,
-      body,
-      store: input.store,
-      deployControl: input.deployControl,
-      installation,
-    });
+  if (!input.deployControl) {
+    return errorJson(
+      "deploy_control_required",
+      "Installation projection revision requires the Takosumi deploy-control ledger.",
+      503,
+    );
   }
-
-  const source = isRecord(body.source) ? body.source : {};
-  const sourceGitUrl = stringValue(source.gitUrl) ??
-    stringValue(source.url) ?? installation.sourceGitUrl;
-  const sourceRef = stringValue(source.ref) ?? stringValue(body.ref) ??
-    stringValue(body.to);
-  const sourceCommit = stringValue(source.commit) ??
-    stringValue(body.sourceCommit);
-  const planDigest = stringValue(source.planDigest) ??
-    stringValue(body.planDigest);
-  const artifactDigest = stringValue(source.artifactDigest) ??
-    stringValue(body.artifactDigest);
-  if (!sourceRef || !sourceCommit || !planDigest) {
-    return errorJson("invalid_request", "source.ref, source.commit, and source.planDigest are required", 400);
-  }
-  if (
-    normalizeSourceGitUrl(sourceGitUrl) !==
-      normalizeSourceGitUrl(installation.sourceGitUrl)
-  ) {
-    return errorJson("source_mismatch", "deployment and rollback must keep the installation source git URL", 409);
-  }
-  const appId = stringValue(body.appId);
-  if (appId && appId !== installation.appId) {
-    return errorJson("app_mismatch", "deployment and rollback must keep the installation appId", 409);
-  }
-
-  const now = Date.now();
-  const requestedBindings = appBindingRecordsFromValue({
-    value: body.useEdges,
+  return await handleCoreDeployControlBackedRevision({
     installationId: input.installationId,
-    now,
-  });
-  if (requestedBindings instanceof Response) return requestedBindings;
-  const requestedGrants = appGrantRecordsFromValue({
-    value: body.permissionScopes,
-    installationId: input.installationId,
-    now,
-  });
-  if (requestedGrants instanceof Response) return requestedGrants;
-
-  const confirmResult = await appInstallationRevisionConfirmFromValue({
-    value: body.confirm,
     operation: input.operation,
-    installationId: input.installationId,
-    appId: installation.appId,
-    sourceGitUrl,
-    sourceRef,
-    sourceCommit,
-    planDigest,
-    artifactDigest: artifactDigest ?? null,
-    requestedBindings,
-    requestedGrants,
-  });
-  if (confirmResult instanceof Response) return confirmResult;
-
-  const updated: InstallationRecord = {
-    ...installation,
-    sourceGitUrl,
-    sourceRef,
-    sourceCommit,
-    planDigest,
-    ...(artifactDigest
-      ? { artifactDigest }
-      : { artifactDigest: undefined }),
-    updatedAt: now,
-  };
-  await input.store.saveAppInstallation(updated);
-  const event = await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
-    eventType: input.operation === "deployment"
-      ? "installation.deployed"
-      : "installation.rolled_back",
-    payload: {
-      reason: stringValue(body.reason),
-      confirm: confirmResult,
-      previous: appInstallationRevisionPayload(installation),
-      next: appInstallationRevisionPayload(updated),
-      requestedUseEdges: requestedBindings.map(serializeAppBinding),
-      requestedPermissionScopes: requestedGrants.map(serializeAppGrant),
-    },
-    now,
-  });
-
-  const bindings = await input.store.listAppBindingsForInstallation(
-    input.installationId,
-  );
-  const grants = await input.store.listAppGrantsForInstallation(
-    input.installationId,
-  );
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installationId,
-  );
-  const runtimeBinding = updated.runtimeBindingId
-    ? await input.store.findRuntimeBinding(updated.runtimeBindingId)
-    : undefined;
-  const events = await input.store.listInstallationEvents(input.installationId);
-  return json({
-    ...installationEnvelope({
-      installation: updated,
-      bindings,
-      grants,
-      oidcClient,
-      runtimeBinding,
-      activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
-      eventsUrl: takosumiAccountsInstallationEventsPath(input.installationId),
-    }),
-    operation: input.operation,
-    event: serializeInstallationEvent(event),
+    body,
+    store: input.store,
+    deployControl: input.deployControl,
+    installation,
   });
 }
 
@@ -470,7 +344,7 @@ async function handleCoreDeployControlBackedRevision(input: {
   operation: "deployment" | "rollback";
   body: Record<string, unknown>;
   store: AccountsStore;
-  deployControl: DeployControlProxyOptions;
+  deployControl: DeployControlFacadeOptions;
   installation: InstallationRecord;
 }): Promise<Response> {
   const now = Date.now();
@@ -483,9 +357,11 @@ async function handleCoreDeployControlBackedRevision(input: {
     const coreRollback = await rollbackCoreDeploymentForCloudProjection({
       deployControl: input.deployControl,
       installationId: input.installationId,
-      deploymentId: stringValue(input.body.deploymentId) ??
+      deploymentId:
+        stringValue(input.body.deploymentId) ??
         stringValue(input.body.deployment_id),
-      planRunId: stringValue(input.body.planRunId) ??
+      planRunId:
+        stringValue(input.body.planRunId) ??
         stringValue(input.body.plan_run_id) ??
         (expected ? stringValue(expected.planRunId) : undefined),
       expected,
@@ -501,15 +377,16 @@ async function handleCoreDeployControlBackedRevision(input: {
       installationId: input.installationId,
       eventType: "installation.rolled_back",
       payload: {
-        reason: stringValue(input.body.reason),
+        reason: publicOptionalString(input.body.reason),
         previous: appInstallationRevisionPayload(input.installation),
         next: appInstallationRevisionPayload(updated),
         coreDeployment: {
           id: coreRollback.deploymentId,
-          rollback: isRecord(coreRollback.payload) &&
-              isRecord(coreRollback.payload.rollback)
-            ? coreRollback.payload.rollback
-            : undefined,
+          rollback:
+            isRecord(coreRollback.payload) &&
+            isRecord(coreRollback.payload.rollback)
+              ? coreRollback.payload.rollback
+              : undefined,
         },
       },
       now,
@@ -520,9 +397,9 @@ async function handleCoreDeployControlBackedRevision(input: {
       payload: coreRollback.activatedHttpDomain
         ? activatedHttpDomainEventPayload(coreRollback.activatedHttpDomain)
         : activatedHttpDomainInactiveEventPayload({
-          deploymentId: coreRollback.deploymentId,
-          now,
-        }),
+            deploymentId: coreRollback.deploymentId,
+            now,
+          }),
       now,
     });
     return await revisionEnvelopeResponse({
@@ -533,38 +410,57 @@ async function handleCoreDeployControlBackedRevision(input: {
     });
   }
 
-  const sourceGitUrl = stringValue(source?.url) ?? input.installation.sourceGitUrl;
-  const sourceRef = stringValue(source?.ref) ?? stringValue(input.body.ref) ??
+  const sourceGitUrl =
+    stringValue(source?.url) ?? input.installation.sourceGitUrl;
+  const sourceRef =
+    stringValue(source?.ref) ??
+    stringValue(input.body.ref) ??
     stringValue(input.body.to);
-  const sourceCommit = stringValue(expected?.sourceCommit) ??
-    stringValue(source?.commit) ?? stringValue(input.body.sourceCommit);
-  const planDigest = stringValue(expected?.planDigest) ??
+  const sourceCommit =
+    stringValue(expected?.sourceCommit) ??
+    stringValue(source?.commit) ??
+    stringValue(input.body.sourceCommit);
+  const planDigest =
+    stringValue(expected?.planDigest) ??
     stringValue(source?.planDigest) ??
     stringValue(input.body.planDigest);
-  const artifactDigest = stringValue(source?.artifactDigest) ??
+  const artifactDigest =
+    stringValue(source?.artifactDigest) ??
     stringValue(input.body.artifactDigest);
   if (!sourceRef || !sourceCommit || !planDigest) {
-    return errorJson("invalid_request", "deployment through Takosumi deploy control requires source.ref plus expected.sourceCommit and expected.planDigest", 400);
+    return errorJson(
+      "invalid_request",
+      "deployment through Takosumi deploy control requires source.ref plus expected.sourceCommit and expected.planDigest",
+      400,
+    );
   }
   if (
     normalizeSourceGitUrl(sourceGitUrl) !==
-      normalizeSourceGitUrl(input.installation.sourceGitUrl)
+    normalizeSourceGitUrl(input.installation.sourceGitUrl)
   ) {
-    return errorJson("source_mismatch", "deployment must keep the installation source git URL", 409);
+    return errorJson(
+      "source_mismatch",
+      "deployment must keep the installation source git URL",
+      409,
+    );
   }
   const appId = stringValue(input.body.appId);
   if (appId && appId !== input.installation.appId) {
-    return errorJson("app_mismatch", "deployment must keep the installation appId", 409);
+    return errorJson(
+      "app_mismatch",
+      "deployment must keep the installation appId",
+      409,
+    );
   }
 
-  const requestedBindings = appBindingRecordsFromValue({
-    value: input.body.useEdges,
+  const requestedBindings = serviceBindingMaterialRecordsFromValue({
+    value: input.body.serviceBindings,
     installationId: input.installationId,
     now,
   });
   if (requestedBindings instanceof Response) return requestedBindings;
-  const requestedGrants = appGrantRecordsFromValue({
-    value: input.body.permissionScopes,
+  const requestedGrants = serviceGrantMaterialRecordsFromValue({
+    value: input.body.serviceGrants,
     installationId: input.installationId,
     now,
   });
@@ -609,12 +505,16 @@ async function handleCoreDeployControlBackedRevision(input: {
     installationId: input.installationId,
     eventType: "installation.deployed",
     payload: {
-      reason: stringValue(input.body.reason),
+      reason: publicOptionalString(input.body.reason),
       confirm: confirmResult,
       previous: appInstallationRevisionPayload(input.installation),
       next: appInstallationRevisionPayload(updated),
-      requestedUseEdges: requestedBindings.map(serializeAppBinding),
-      requestedPermissionScopes: requestedGrants.map(serializeAppGrant),
+      requestedServiceBindings: requestedBindings.map(
+        serializeServiceBindingMaterial,
+      ),
+      requestedServiceGrants: requestedGrants.map(
+        serializeServiceGrantMaterial,
+      ),
       coreDeployment: { id: coreDeploy.deploymentId },
     },
     now,
@@ -625,9 +525,9 @@ async function handleCoreDeployControlBackedRevision(input: {
     payload: coreDeploy.activatedHttpDomain
       ? activatedHttpDomainEventPayload(coreDeploy.activatedHttpDomain)
       : activatedHttpDomainInactiveEventPayload({
-        deploymentId: coreDeploy.deploymentId,
-        now,
-      }),
+          deploymentId: coreDeploy.deploymentId,
+          now,
+        }),
     now,
   });
 

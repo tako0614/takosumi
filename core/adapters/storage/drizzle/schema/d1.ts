@@ -75,59 +75,64 @@ export const connections = sqliteTable(
   ],
 );
 
-export const secretBlobs = sqliteTable(names.secretBlobs, {
-  id: text("id").primaryKey(),
-  connectionId: text("connection_id").notNull(),
-  spaceId: text("space_id"),
-  kind: text("kind").notNull(),
-  ciphertext: text("ciphertext").notNull(),
-  encryptedDek: text("encrypted_dek").notNull(),
-  nonce: text("nonce").notNull(),
-  aad: text("aad").notNull(),
-  keyVersion: integer("key_version").notNull(),
-  createdAt: text("created_at").notNull(),
-  rotatedAt: text("rotated_at"),
-  blobJson: jsonText("blob_json").notNull(),
-}, (table) => [
-  uniqueIndex("secret_blobs_connection_idx").on(table.connectionId),
-]);
-
-export const operatorConnectionDefaults = sqliteTable(
-  names.operatorConnectionDefaults,
+export const secretBlobs = sqliteTable(
+  names.secretBlobs,
   {
     id: text("id").primaryKey(),
-    provider: text("provider").notNull(),
     connectionId: text("connection_id").notNull(),
-    recordJson: jsonText("record_json").notNull(),
+    spaceId: text("space_id"),
+    kind: text("kind").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    encryptedDek: text("encrypted_dek").notNull(),
+    nonce: text("nonce").notNull(),
+    aad: text("aad").notNull(),
+    keyVersion: integer("key_version").notNull(),
     createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
+    rotatedAt: text("rotated_at"),
+    blobJson: jsonText("blob_json").notNull(),
   },
   (table) => [
-    uniqueIndex("operator_connection_defaults_provider_idx").on(
-      table.provider,
-    ),
+    uniqueIndex("secret_blobs_connection_idx").on(table.connectionId),
   ],
 );
 
-export const providerTemplates = sqliteTable(
-  names.providerTemplates,
+export const providerEnvs = sqliteTable(
+  names.providerEnvs,
   {
     id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
     providerSource: text("provider_source").notNull(),
-    primaryCredentialSource: text("primary_credential_source").notNull(),
-    defaultEligible: integer("default_eligible").notNull(),
+    materialization: text("materialization").notNull(),
+    status: text("status").notNull(),
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("provider_templates_source_unique").on(
-      table.providerSource,
+    index("provider_envs_space_idx").on(table.spaceId),
+    index("provider_envs_provider_source_idx").on(table.providerSource),
+    index("provider_envs_materialization_idx").on(table.materialization),
+    index("provider_envs_status_idx").on(table.status),
+  ],
+);
+
+export const providerCatalog = sqliteTable(
+  names.providerCatalog,
+  {
+    id: text("id").primaryKey(),
+    providerSource: text("provider_source").notNull(),
+    primaryMaterialization: text("primary_materialization").notNull(),
+    gatewayEligible: integer("gateway_eligible").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("provider_catalog_source_unique").on(table.providerSource),
+    index("provider_catalog_primary_materialization_idx").on(
+      table.primaryMaterialization,
     ),
-    index("provider_templates_primary_credential_source_idx").on(table.primaryCredentialSource),
-    index("provider_templates_default_eligible_idx").on(
-      table.defaultEligible,
-    ),
+    index("provider_catalog_gateway_eligible_idx").on(table.gatewayEligible),
   ],
 );
 
@@ -210,8 +215,8 @@ export const capsuleCompatibilityReports = sqliteTable(
   ],
 );
 
-export const deploymentProfiles = sqliteTable(
-  names.deploymentProfiles,
+export const providerEnvBindingSets = sqliteTable(
+  names.providerEnvBindingSets,
   {
     id: text("id").primaryKey(),
     spaceId: text("space_id").notNull(),
@@ -222,11 +227,13 @@ export const deploymentProfiles = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("deployment_profiles_installation_environment_unique").on(
+    uniqueIndex("provider_env_binding_sets_installation_environment_unique").on(
       table.installationId,
       table.environment,
     ),
-    index("deployment_profiles_installation_idx").on(table.installationId),
+    index("provider_env_binding_sets_installation_idx").on(
+      table.installationId,
+    ),
   ],
 );
 

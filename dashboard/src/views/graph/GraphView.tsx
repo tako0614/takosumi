@@ -2,7 +2,7 @@
  * Graph view — the Space dependency DAG, rendered structurally as topological
  * LAYERS (producers above consumers) with no graph/d3 layout dependency. A
  * cycle (which the backend forbids) is surfaced as a remaining-nodes block
- * rather than hanging. Reached from the app list and Space settings.
+ * rather than hanging. Reached from the Installation list and Space settings.
  */
 import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
@@ -16,10 +16,7 @@ import {
   type GraphNode,
 } from "../../lib/control-api.ts";
 import { layerGraph } from "./graph-layering.ts";
-import {
-  installationStatusLabel,
-  installationTone,
-} from "../../lib/labels.ts";
+import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import {
   Badge,
@@ -44,7 +41,7 @@ function NodeBox(props: {
       <div class="wb-graph-node-head">
         <a
           class="wb-graph-node-name"
-          href={`/apps/${encodeURIComponent(props.node.installationId)}`}
+          href={`/installations/${encodeURIComponent(props.node.installationId)}`}
         >
           {props.node.name}
         </a>
@@ -124,7 +121,10 @@ function Inner() {
                       <div class="wb-graph-layer">
                         <div class="wb-graph-layer-label">
                           {t("graph.layer", { n: i() })}
-                          <span class="wb-graph-layer-rule" aria-hidden="true" />
+                          <span
+                            class="wb-graph-layer-rule"
+                            aria-hidden="true"
+                          />
                         </div>
                         <div class="wb-graph-nodes">
                           <For each={layer}>

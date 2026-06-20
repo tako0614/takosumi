@@ -18,20 +18,20 @@ export const APPS: readonly Chip[] = [
 ];
 
 export const PROVIDERS: readonly Chip[] = [
-  { label: "Cloudflare", hint: "managed default" },
-  { label: "AWS", hint: "Space Connection" },
-  { label: "GCP", hint: "Space Connection" },
-  { label: "Kubernetes", hint: "Space Connection" },
-  { label: "Custom Provider", hint: "Space / self-host" },
+  { label: "Cloudflare", hint: "ProviderConnection" },
+  { label: "AWS", hint: "ProviderConnection" },
+  { label: "GCP", hint: "CredentialRecipe" },
+  { label: "Kubernetes", hint: "ProviderBinding" },
+  { label: "Custom Provider", hint: "generic env" },
 ];
 
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "OpenTofu-native deploy control plane。Run / Deployment / OutputSnapshot を cloud、VM、cluster、管理サービスへ記録。",
+    "OpenTofu-native deploy control plane。Capsule / Run / StateVersion / Output を記録し、provider resource は cloud、VM、cluster、管理サービス側に作る。",
 };
 
 export const ACCOUNTS = {
   label: "Takosumi Accounts",
-  description: "OIDC issuer + Installation 台帳 (operator distribution)",
+  description: "OIDC issuer + account / billing context",
 };

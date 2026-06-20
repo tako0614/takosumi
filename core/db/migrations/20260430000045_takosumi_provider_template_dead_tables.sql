@@ -1,4 +1,8 @@
 -- Migration: 20260430000045_takosumi_provider_template_dead_tables
+drop index if exists takosumi_provider_env_pins_pack_idx;
+drop index if exists takosumi_provider_env_pins_provider_source_idx;
+drop index if exists takosumi_provider_env_pins_space_idx;
+drop table if exists takosumi_provider_env_pins;
 drop index if exists takosumi_provider_env_sets_pack_idx;
 drop index if exists takosumi_provider_env_sets_status_idx;
 drop index if exists takosumi_provider_env_sets_provider_source_idx;

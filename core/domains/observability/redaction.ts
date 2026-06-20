@@ -27,6 +27,19 @@ const URL_CREDENTIAL_PATTERN =
   /\b([a-z][a-z0-9+.\-]*:\/\/[^:/?#\s@]+:)([^@/?#\s]+)@/gi;
 const ASSIGNMENT_SECRET_PATTERN =
   /\b((?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)|(?:[A-Za-z_][A-Za-z0-9_.-]*(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)[A-Za-z0-9_.-]*))(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&]+)/gi;
+const SECRET_VALUE_PATTERNS = [
+  /\bsk-[A-Za-z0-9_-]{8,}\b/,
+  /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{8,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bgh[opsru]_[A-Za-z0-9_]{8,}\b/,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+] as const;
+const SECRET_VALUE_REPLACEMENTS = SECRET_VALUE_PATTERNS.map(
+  (pattern) => new RegExp(pattern.source, `${pattern.flags}g`),
+);
 
 export interface RedactionOptions {
   readonly redactedValue?: string;
@@ -41,6 +54,10 @@ export function isSecretKey(
   if (options.secretKeyPattern) return options.secretKeyPattern.test(key);
   return DEFAULT_SECRET_KEY_PATTERN.test(key) ||
     SECRET_KEY_SUBSTRINGS.test(normalizeSecretKey(key));
+}
+
+export function containsSecretLikeString(value: string): boolean {
+  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 export function redactJsonObject(
@@ -77,7 +94,7 @@ export function redactString(
   options: RedactionOptions = {},
 ): string {
   const replacement = redacted(options);
-  return value
+  let redactedValue = value
     // Mask the password in scheme://user:password@host DSNs/URIs (Postgres,
     // AMQP, Redis, SMTP, …) which OpenTofu/provider errors routinely echo.
     .replace(
@@ -101,6 +118,10 @@ export function redactString(
       ASSIGNMENT_SECRET_PATTERN,
       (_match, key: string, sep: string) => `${key}${sep}${replacement}`,
     );
+  for (const pattern of SECRET_VALUE_REPLACEMENTS) {
+    redactedValue = redactedValue.replace(pattern, replacement);
+  }
+  return redactedValue;
 }
 
 function redacted(options: RedactionOptions): string {

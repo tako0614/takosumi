@@ -18,7 +18,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 8,
         "x": 0,
         "y": 0
@@ -26,12 +26,12 @@
       "id": 1,
       "targets": [
         {
-          "expr": "sum(rate(takosumi_deploy_operation_count{operationKind=\"apply\",status=\"succeeded\"}[5m])) / sum(rate(takosumi_deploy_operation_count{operationKind=\"apply\"}[5m]))",
+          "expr": "sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\",status=\"succeeded\"}[5m])) / clamp_min(sum(rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\"}[5m])), 1)",
           "legendFormat": "apply success rate",
           "refId": "A"
         }
       ],
-      "title": "Deploy Success Rate",
+      "title": "Apply Success Rate",
       "type": "stat"
     },
     {
@@ -46,7 +46,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 8,
         "x": 8,
         "y": 0
@@ -54,12 +54,40 @@
       "id": 2,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{operationKind=\"apply\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_apply_duration_seconds_bucket{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\",operationKind=\"apply\"}[5m])) by (le))",
           "legendFormat": "p95 apply latency",
           "refId": "A"
         }
       ],
       "title": "Apply Latency P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "max(takosumi_runner_queue_age_seconds{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"})",
+          "legendFormat": "{{runtime_cell_id}} queue age",
+          "refId": "A"
+        }
+      ],
+      "title": "Runner Queue Age",
       "type": "timeseries"
     },
     {
@@ -76,27 +104,164 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 0
+        "x": 0,
+        "y": 7
       },
-      "id": 3,
+      "id": 4,
       "targets": [
         {
-          "expr": "sum(rate(takosumi_deploy_operation_count{operationKind=\"rollback\"}[5m]))",
-          "legendFormat": "rollback rate",
+          "expr": "sum by (runtime_cell_id, status) (rate(takosumi_deploy_operation_count{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\",operationKind=~\"plan|apply|destroy_apply\"}[5m]))",
+          "legendFormat": "{{runtime_cell_id}} / {{status}}",
           "refId": "A"
         }
       ],
-      "title": "Rollback Rate",
+      "title": "Run Throughput By Runtime Cell",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 7
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "sum by (runtime_cell_id) (takosumi_runner_active_runs{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"})",
+          "legendFormat": "{{runtime_cell_id}} active",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Runner Runs",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_runner_container_startup_seconds_bucket{environment=~\"$environment\",runtime_cell_id=~\"$runtime_cell_id\"}[5m])) by (le, runtime_cell_id))",
+          "legendFormat": "{{runtime_cell_id}} p95 startup",
+          "refId": "A"
+        }
+      ],
+      "title": "Runner Container Startup P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 15
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(takosumi_api_request_duration_seconds_bucket{environment=~\"$environment\",route=~\"/api/.*\"}[5m])) by (le, route))",
+          "legendFormat": "{{route}} p95",
+          "refId": "A"
+        }
+      ],
+      "title": "API Latency P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 15
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (space_id, capsule_id, operationKind, status) (increase(takosumi_deploy_operation_count{environment=~\"$environment\",space_id=~\"$space_id\",capsule_id=~\"$capsule_id\"}[1h]))",
+          "legendFormat": "{{space_id}} / {{capsule_id}} / {{operationKind}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Per Capsule Run Outcomes",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(takosumi_oidc_request_count{environment=~\"$environment\"}[5m]))",
+          "legendFormat": "oidc {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "OIDC Request Status",
       "type": "timeseries"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": [
-    "takosumi",
-    "deploy"
-  ],
+  "tags": ["takosumi", "deploy", "runtime"],
   "templating": {
     "list": [
       {
@@ -110,6 +275,70 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Environment",
+        "name": "environment",
+        "query": "label_values(takosumi_deploy_operation_count, environment)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Runtime Cell",
+        "name": "runtime_cell_id",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, runtime_cell_id)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Space",
+        "name": "space_id",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\"}, space_id)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Capsule",
+        "name": "capsule_id",
+        "query": "label_values(takosumi_deploy_operation_count{environment=~\"$environment\",space_id=~\"$space_id\"}, capsule_id)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
       }
     ]
   },
@@ -120,6 +349,6 @@
   "timezone": "browser",
   "title": "Takosumi Deploy Overview",
   "uid": "takosumi-deploy-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

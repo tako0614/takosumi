@@ -20,7 +20,7 @@
  */
 import type {
   AccountsHandler,
-  DeployControlProxyOptions,
+  DeployControlFacadeOptions,
 } from "@takosjp/takosumi-accounts-service";
 import {
   createTakosumiService,
@@ -42,12 +42,12 @@ export interface ComposedAppInput {
   readonly accountsHandler?: AccountsHandler;
   /**
    * Preferred production wiring: build the accounts handler after the embedded
-   * Takosumi service exists so the account-plane DeployControl facade can proxy to
-   * the in-process Deploy Control API instead of falling back to direct ledger
-   * mutations.
+   * Takosumi service exists so the account-plane DeployControl facade can use
+   * the in-process typed operations facade instead of falling back to direct
+   * ledger mutations.
    */
   readonly createAccountsHandler?: (
-    deployControl: DeployControlProxyOptions,
+    deployControl: DeployControlFacadeOptions,
   ) => AccountsHandler | Promise<AccountsHandler>;
   /**
    * Optional runtime env forwarded into the embedded Takosumi service. The composer
@@ -77,11 +77,10 @@ export interface ComposedAppInput {
   readonly preHandle?: (req: Request) => Promise<Response | undefined>;
   /**
    * Filesystem directory of the built dashboard SPA
-   * (`packages/dashboard-ui/.output/public`). When set, non-API GET/HEAD
-   * requests are served from here with an `index.html` SPA fallback, mirroring
-   * the Cloudflare Workers Static Assets profile. Resolved by
-   * `resolveStaticAssetsDir` in `server.ts`; omitted (no static serving) when
-   * no SPA build is present.
+   * (`dashboard/dist`). When set, non-API GET/HEAD requests are served from
+   * here with an `index.html` SPA fallback, mirroring the Cloudflare Workers
+   * Static Assets profile. Resolved by `resolveStaticAssetsDir` in `server.ts`;
+   * omitted (no static serving) when no SPA build is present.
    */
   readonly staticAssets?: string;
 }
@@ -92,11 +91,10 @@ type CreateTakosumiServiceArg = NonNullable<
 
 /**
  * Build the one composed Hono app this distribution serves. Returns an outer
- * `app` that gives the account-plane `/v1/app-installations/*` projection precedence
- * over the embedded service Deploy Control API (see the route-shadowing fix below) and
- * delegates everything else to the embedded service app, plus the `operations`
- * operate facade so the caller can drive install / deploy / rollback / status in
- * process if it wants to.
+ * `app` that forwards the account-plane `/v1/installation-projections/*`
+ * projection surface to the accounts handler, delegates the primary
+ * `/api/v1/*` deploy-control surface to the embedded service app, and exposes
+ * the in-process `operations` facade.
  */
 export async function buildComposedApp(
   input: ComposedAppInput,
@@ -129,7 +127,7 @@ export async function buildComposedApp(
     return await accountsHandler(c.req.raw);
   });
 
-  const deployControl = inProcessDeployControlProxy(created.operations);
+  const deployControl = inProcessDeployControlFacade(created.operations);
   accountsHandler ??= input.createAccountsHandler
     ? await input.createAccountsHandler(deployControl)
     : undefined;
@@ -140,22 +138,11 @@ export async function buildComposedApp(
   }
   const mountedAccountsHandler = accountsHandler;
 
-  // Route-shadowing fix. `createTakosumiService` registers the service Deploy Control API
-  // (`POST /v1/app-installations`, `/plan-runs`, `/:id/deployments[/plan-runs]`,
-  // `/:id/rollback`) on the service app FIRST. Hono composes matched handlers in
-  // registration order, so a later-registered handler on the same app can never
-  // preempt those service routes. That permanently shadowed this operator
-  // distribution's account-facing Installation projection — the account plane
-  // mints `inst_<uuid>` ids and serves the ownership ledger at the SAME
-  // `/v1/app-installations/*` paths, but every account-plane mutation hit the service
-  // routes instead (and the service's `^ins_[0-9a-zA-Z]{16,32}$` id guard rejects
-  // `inst_<uuid>` with 400, or 404s entirely when no deploy control token is set), so
-  // the projection was unreachable.
-  //
-  // The account-plane routes remain externally canonical for
-  // `/v1/app-installations/*`, but the handler is now wired with an in-process
-  // DeployControl proxy, so create/deploy/rollback operations delegate into the
-  // embedded service instead of bypassing the Deploy Control API apply flow.
+  // Mount the accounts projection route on the outer app before the embedded
+  // service fallback. Projection create/revision operations are wired with the
+  // in-process DeployControl facade, so they cannot bypass the canonical
+  // Installation / Run ledger even though the account plane owns identity,
+  // billing, export, and service-token projections.
   const app = new Hono();
   if (input.preHandle) {
     app.use("*", async (c, next) => {
@@ -177,13 +164,11 @@ export async function buildComposedApp(
       await next();
     });
   }
-  app.all(
-    TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
-    (c) => mountedAccountsHandler(c.req.raw),
+  app.all(TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH, (c) =>
+    mountedAccountsHandler(c.req.raw),
   );
-  app.all(
-    `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/*`,
-    (c) => mountedAccountsHandler(c.req.raw),
+  app.all(`${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/*`, (c) =>
+    mountedAccountsHandler(c.req.raw),
   );
   app.all("*", (c) => serviceApp.fetch(c.req.raw));
 
@@ -193,12 +178,12 @@ export async function buildComposedApp(
   return { ...created, app: app as unknown as CreatedTakosumiService["app"] };
 }
 
-function inProcessDeployControlProxy(
+function inProcessDeployControlFacade(
   operations: CreatedTakosumiService["operations"],
-): DeployControlProxyOptions {
-  // The proxy calls the embedded service's typed `operations` facade directly
+): DeployControlFacadeOptions {
+  // The facade calls the embedded service's typed `operations` facade directly
   // (no Bearer handshake, no JSON round-trip). This is the only transport —
-  // the account-plane deploy-control proxy is in-process only (per AGENTS.md).
+  // the account-plane deploy-control seam is in-process only (per AGENTS.md).
   return { operations };
 }
 
@@ -209,17 +194,16 @@ function embeddedServiceRuntimeEnv(
   readonly deployControlToken: string;
 } {
   const runtimeEnv: Record<string, string | undefined> = {
-    ...((globalThis as {
-      process?: { env?: Record<string, string | undefined> };
-    }).process?.env ?? {}),
+    ...((
+      globalThis as {
+        process?: { env?: Record<string, string | undefined> };
+      }
+    ).process?.env ?? {}),
     ...(configured ?? {}),
   };
-  const deployControlToken = nonEmpty(runtimeEnv.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
+  const deployControlToken =
+    nonEmpty(runtimeEnv.TAKOSUMI_DEPLOY_CONTROL_TOKEN) ??
     `embedded-${crypto.randomUUID()}`;
-  // The dedicated cf-proxy signing secret (`TAKOSUMI_CF_PROXY_SIGNING_SECRET`
-  // [+ `_PREVIOUS`]) is decoupled from the deploy-control bearer and flows
-  // through the spread unchanged; bootstrap falls back to the bearer for one
-  // release when it is unset, so this substrate stays managed-Cloudflare ready.
   return {
     runtimeEnv: {
       ...runtimeEnv,

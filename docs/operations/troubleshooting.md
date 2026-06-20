@@ -10,17 +10,17 @@
 
 ## 早見表
 
-| シナリオ                                  | 主なシグナル                                                | 1st action                                                                       |
-| ----------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| source_sync が失敗する                    | Run `failed` + source phase の git エラー                   | Source URL / ref と auth Connection (token / SSH key) の status を確認            |
-| plan が policy で止まる                   | Run `policyStatus: deny` / `warn`                           | plan JSON の policy 評価結果 (provider / resource allowlist / scope / provider env set policy / egress) を確認        |
-| apply が plan 検証で拒否される            | plan digest / source snapshot / compatibility report / dependency snapshot / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)  |
-| approval 待ちで進まない                   | Run `waiting_approval`                                      | approver に escalation。 destroy は destroy_plan → approval → destroy_apply の 2 段 |
-| 同じ Installation の run が進まない       | lease 取得待ち / Run `queued` のまま                        | CoordinationObject lease の保持 run を確認、 expired なら takeover を待つ          |
-| provider credential が拒否される          | plan/apply phase の provider エラー                         | Connection を test、 revoked / expired なら rotate して再 mint                    |
-| unknown provider が runnable にならない   | Compatibility Report の provider finding / missing credential source | Provider Template entry、Provider Env Set status、egress policy、custom runner availability を確認 |
-| producer 更新後に downstream が古い       | Installation `stale` マーク                                 | dependency graph を確認し、 RunGroup (Space update) で DAG 順に plan/apply        |
-| Runner Container が起動しない             | dispatch timeout / container error                          | runner image / Container 設定を確認、 queue DLQ を確認                            |
+| シナリオ                                | 主なシグナル                                                                                               | 1st action                                                                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| source_sync が失敗する                  | Run `failed` + source phase の git エラー                                                                  | Source URL / ref と auth Connection (token / SSH key) の status を確認                                               |
+| plan が policy で止まる                 | Run `policyStatus: deny` / `warn`                                                                          | plan JSON の policy 評価結果 (provider / resource allowlist / scope / secret-backed provider policy / egress) を確認 |
+| apply が plan 検証で拒否される          | plan digest / source snapshot / compatibility report / dependency snapshot / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)                                                      |
+| approval 待ちで進まない                 | Run `waiting_approval`                                                                                     | approver に escalation。 destroy は destroy_plan → approval → destroy_apply の 2 段                                  |
+| 同じ Installation の run が進まない     | lease 取得待ち / Run `queued` のまま                                                                       | CoordinationObject lease の保持 run を確認、 expired なら takeover を待つ                                            |
+| provider credential が拒否される        | plan/apply phase の provider エラー                                                                        | Connection を test、 revoked / expired なら rotate して再 mint                                                       |
+| unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | Provider Catalog entry、Provider Connection status、egress policy、custom runner availability を確認                 |
+| producer 更新後に downstream が古い     | Installation `stale` マーク                                                                                | dependency graph を確認し、 RunGroup (Space update) で DAG 順に plan/apply                                           |
+| Runner Container が起動しない           | dispatch timeout / container error                                                                         | runner image / Container 設定を確認、 queue DLQ を確認                                                               |
 
 ## 切り分けの基本
 

@@ -159,6 +159,13 @@ export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[]
       requiredGroups: [["DIGITALOCEAN_TOKEN"]],
     },
     {
+      shortName: "vercel",
+      match: /(^|\/)vercel\/vercel$/,
+      cloudFamily: "local-adapters",
+      envNames: ["VERCEL_API_TOKEN"],
+      requiredGroups: [["VERCEL_API_TOKEN"]],
+    },
+    {
       shortName: "kubernetes",
       match: /(^|\/)hashicorp\/kubernetes$/,
       cloudFamily: "k8s",
@@ -220,8 +227,8 @@ export function providerMatches(provider: string, rule: string): boolean {
  * against a canonical registry address
  * (`registry.opentofu.org/cloudflare/cloudflare`) through this env-rule table.
  * Unlike {@link providerMatches} this is symmetric — used by the Vault credential
- * mint and the Connection operator-default fall-through, which must key the same
- * way regardless of argument order. Returns `false` when either side is an
+ * mint and ProviderConnection resolution, which must key the same way regardless
+ * of argument order. Returns `false` when either side is an
  * unknown provider that is not an exact string match.
  */
 export function sameProviderFamily(left: string, right: string): boolean {

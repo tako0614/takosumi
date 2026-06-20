@@ -30,8 +30,8 @@ export function evaluatePolicy(input: {
   readonly allowNoProviders?: boolean;
 }): PolicyDecision {
   const reasons: string[] = [];
-  const templateReason = templateProfileDisabledReason(input.profile);
-  if (templateReason) reasons.push(templateReason);
+  const candidateReason = candidateProfileDisabledReason(input.profile);
+  if (candidateReason) reasons.push(candidateReason);
   // §25 layer 4 (provider allowlist) lives in the policy package. The
   // profile-scoped reason wording is rebuilt here so the contract reasons keep
   // naming the runner profile (the package is profile-agnostic).
@@ -46,7 +46,9 @@ export function evaluatePolicy(input: {
     );
   }
   for (const denied of provider.denied) {
-    reasons.push(`provider ${denied} is denied by runner profile ${input.profile.id}`);
+    reasons.push(
+      `provider ${denied} is denied by runner profile ${input.profile.id}`,
+    );
   }
   for (const notAllowed of provider.notAllowed) {
     reasons.push(
@@ -58,8 +60,11 @@ export function evaluatePolicy(input: {
   // is moot), a not-allowed provider is still checked to surface a complete set.
   if (input.profile.requireCredentialRefs === true) {
     for (const provider2 of input.requiredProviders) {
-      if (providerDenied(provider2, input.profile.deniedProviders ?? [])) continue;
-      if (!credentialRefPresent(provider2, input.profile.credentialRefs ?? [])) {
+      if (providerDenied(provider2, input.profile.deniedProviders ?? []))
+        continue;
+      if (
+        !credentialRefPresent(provider2, input.profile.credentialRefs ?? [])
+      ) {
         reasons.push(
           `credential reference for provider ${provider2} is missing from runner profile ${input.profile.id}`,
         );
@@ -73,14 +78,16 @@ export function evaluatePolicy(input: {
   };
 }
 
-function templateProfileDisabledReason(profile: RunnerProfile): string | undefined {
-  if (profile.labels?.["takosumi.com/profile-state"] !== "template") {
+function candidateProfileDisabledReason(
+  profile: RunnerProfile,
+): string | undefined {
+  if (profile.labels?.["takosumi.com/profile-state"] !== "candidate") {
     return undefined;
   }
   if (profile.labels?.["takosumi.com/profile-enabled"] === "true") {
     return undefined;
   }
-  return `runner profile ${profile.id} is a disabled template; clone it or set takosumi.com/profile-enabled=true after operator validation`;
+  return `runner profile ${profile.id} is a disabled candidate; set takosumi.com/profile-enabled=true after operator validation`;
 }
 
 function credentialRefPresent(

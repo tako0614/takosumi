@@ -249,7 +249,7 @@
   color: var(--tg-fg-muted);
 }
 
-/* --- Provider binding editor ----------------------------------------------- */
+/* --- Provider Connection binding editor ------------------------------------- */
 .wa-binding-grid {
   display: flex;
   flex-direction: column;
@@ -339,4 +339,3 @@
 .wa-meta-chip code {
   color: var(--tg-fg);
 }
-

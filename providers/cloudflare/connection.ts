@@ -1,7 +1,7 @@
 /**
  * Cloudflare connection credential driver façade.
  *
- * A thin, self-contained object the managed-provider registry
+ * A thin, self-contained object the provider runtime registry
  * (`@takosumi/providers`) can call to mint/verify Cloudflare provider
  * credentials. It does NOT open sealed blobs or touch the secret-boundary
  * crypto — the vault opens the connection's sealed values in core and hands the

@@ -25,9 +25,7 @@ const initialState: ConfirmDialogState = {
   resolve: null,
 };
 
-const [confirmDialogState, setConfirmDialogState] = createSignal(
-  initialState,
-);
+const [confirmDialogState, setConfirmDialogState] = createSignal(initialState);
 
 export function useConfirmDialog() {
   const confirm = (options: ConfirmDialogOptions): Promise<boolean> =>

@@ -13,11 +13,7 @@ import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { currentSpaceId } from "../../lib/space-state.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  EmptyState,
-  PageHeader,
-  Tabs,
-} from "../../components/ui/index.ts";
+import { EmptyState, PageHeader, Tabs } from "../../components/ui/index.ts";
 import GeneralTab from "./tabs/GeneralTab.tsx";
 import MembersTab from "./tabs/MembersTab.tsx";
 import ConnectionsTab from "./tabs/ConnectionsTab.tsx";
@@ -46,17 +42,21 @@ function Inner(props: { readonly session: SessionRecord }) {
   const tab = (): TabId => {
     const raw = params.tab;
     return raw === "members" ||
-        raw === "connections" ||
-        raw === "billing" ||
-        raw === "backups" ||
-        raw === "shares"
+      raw === "connections" ||
+      raw === "billing" ||
+      raw === "backups" ||
+      raw === "shares"
       ? raw
       : "general";
   };
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
 
   const tabItems = () => [
-    { href: "/space/settings", label: t("spaceSettings.tab.general"), end: true },
+    {
+      href: "/space/settings",
+      label: t("spaceSettings.tab.general"),
+      end: true,
+    },
     { href: "/space/settings/members", label: t("spaceSettings.tab.members") },
     {
       href: "/space/settings/connections",

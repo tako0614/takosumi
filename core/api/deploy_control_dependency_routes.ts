@@ -1,6 +1,6 @@
 /**
  * Dependency routes: create / list an Installation's DAG edges and delete a
- * single edge. Owns its handlers and its slice of the public descriptor
+ * single edge. Owns its handlers and its slice of the internal descriptor
  * inventory.
  */
 

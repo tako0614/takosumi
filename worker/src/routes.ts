@@ -10,10 +10,9 @@ export const TAKOSUMI_CLOUDFLARE_FRONT_HEADER =
  * Always-on process / observability endpoints, served regardless of role:
  * the canonical probes (`/healthz` / `/readyz` / `/livez`) plus
  * capabilities/openapi/metrics from the prefix registry. The legacy `/health`
- * probe was dropped in the health-dedup stage. Everything else routed to the
- * service app is the unified `/internal/v1` seam — derived from
- * {@link isInternalV1Path} so this classifier never drifts from the contract
- * taxonomy.
+ * probe was dropped in the health-dedup stage. The unified `/internal/v1` seam
+ * is classified separately so the host can keep it edge-closed by default and
+ * open it only for local-substrate/private probe ingress.
  */
 const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set<string>([
   ...PROCESS_OBSERVABILITY_PATHS,
@@ -21,8 +20,11 @@ const SERVICE_CONTROL_PLANE_EXACT_PATHS = new Set<string>([
 
 export function isServiceControlPlanePath(pathname: string): boolean {
   const normalized = normalizePathname(pathname);
-  if (SERVICE_CONTROL_PLANE_EXACT_PATHS.has(normalized)) return true;
-  return isInternalV1Path(normalized);
+  return SERVICE_CONTROL_PLANE_EXACT_PATHS.has(normalized);
+}
+
+export function isInternalControlPlanePath(pathname: string): boolean {
+  return isInternalV1Path(normalizePathname(pathname));
 }
 
 export function createServiceWorkerRequest(request: Request): Request {

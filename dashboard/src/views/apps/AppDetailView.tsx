@@ -1,12 +1,12 @@
 /**
- * App detail (`/apps/:id` + tab routes) — one app, four tabs:
+ * Installation detail (`/installations/:id` + tab routes) — one Installation, four tabs:
  *   概要     status / public outputs / dependencies / source
  *   デプロイ  Deployment generations + recent runs (+ rollback / backup)
- *   設定     source coordinates + provider bindings (advanced, folded)
+ *   設定     source coordinates + provider connections (advanced, folded)
  *   危険な操作 destroy (review-first)
  *
  * Replaces the flat ControlInstallationDetailView: the friendly layer leads,
- * expert material (bindings, snapshot ids) sits in the settings tab / detail
+ * expert material (provider connections, snapshot ids) sits in the settings tab / detail
  * sections. All mutations route through the same control-plane actions as
  * before (plan / destroy plan / rollback plan / backup / put profile).
  */
@@ -28,24 +28,23 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
   type ControlApiError,
-  type ProviderBinding,
-  type ProviderBindingMode,
-  type ProviderBindings,
+  type InstallationProviderConnectionBinding,
+  type InstallationProviderConnectionBindings,
+  type ProviderConnection,
   createDeploymentRollbackPlan,
   createInstallationBackup,
   destroyPlanInstallation,
   extractRunId,
-  getDeploymentProfile,
+  getInstallationProviderConnectionSet,
   getInstallation,
   getSpaceGraph,
   listActivity,
-  listConnections,
   listDeployments,
   listInstallConfigs,
-  listOperatorConnectionDefaults,
+  listProviderConnections,
   listSources,
   planInstallation,
-  putDeploymentProfile,
+  putInstallationProviderConnectionSet,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
@@ -77,7 +76,6 @@ import {
   Skeleton,
   StatusBadge,
   Tabs,
-  Textarea,
 } from "../../components/ui/index.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
@@ -105,15 +103,15 @@ function Inner() {
   const spaceId = () => installation()?.spaceId;
   const [profile, { refetch: refetchProfile }] = createResource(
     installationId,
-    getDeploymentProfile,
+    getInstallationProviderConnectionSet,
   );
   const [sources] = createResource(spaceId, listSources);
   const [configs] = createResource(spaceId, listInstallConfigs);
   const [deployments] = createResource(installationId, listDeployments);
   const [graph] = createResource(spaceId, getSpaceGraph);
-  const [connections] = createResource(spaceId, listConnections);
-  const [operatorDefaults] = createResource(spaceId, async (id) =>
-    id ? await listOperatorConnectionDefaults(id) : [],
+  const [providerConnections] = createResource(
+    spaceId,
+    listProviderConnections,
   );
   const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
 
@@ -125,8 +123,12 @@ function Inner() {
       (item) => item.id === installation()?.installConfigId,
     ),
   );
-  const producers = createMemo(() => dependencyRows(installation(), graph(), "producer"));
-  const consumers = createMemo(() => dependencyRows(installation(), graph(), "consumer"));
+  const producers = createMemo(() =>
+    dependencyRows(installation(), graph(), "producer"),
+  );
+  const consumers = createMemo(() =>
+    dependencyRows(installation(), graph(), "consumer"),
+  );
 
   const deploymentHistory = createMemo(() =>
     [...(deployments() ?? [])].sort((a, b) =>
@@ -137,7 +139,9 @@ function Inner() {
     const list = deploymentHistory();
     const currentId = installation()?.currentDeploymentId;
     return (
-      (currentId && list.find((d) => d.id === currentId)) || list[0] || undefined
+      (currentId && list.find((d) => d.id === currentId)) ||
+      list[0] ||
+      undefined
     );
   });
   const publicOutputs = createMemo(() =>
@@ -187,7 +191,7 @@ function Inner() {
   };
 
   const tabItems = () => {
-    const base = `/apps/${encodeURIComponent(installationId())}`;
+    const base = `/installations/${encodeURIComponent(installationId())}`;
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
@@ -209,7 +213,11 @@ function Inner() {
             title={t("app.notFound")}
             message={(installation.error as ControlApiError).message}
             action={
-              <Button variant="secondary" href="/" icon={<ArrowLeft size={16} />}>
+              <Button
+                variant="secondary"
+                href="/"
+                icon={<ArrowLeft size={16} />}
+              >
                 {t("app.backToList")}
               </Button>
             }
@@ -248,10 +256,14 @@ function Inner() {
                 }
               />
 
-              <Tabs items={tabItems()} aria-label="App sections" />
+              <Tabs items={tabItems()} aria-label="Installation sections" />
 
               <Show when={plan.error()}>
-                {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                {(m) => (
+                  <p class="wa-error" role="alert">
+                    {m()}
+                  </p>
+                )}
               </Show>
 
               <div class="wa-stack">
@@ -295,15 +307,15 @@ function Inner() {
                   <Match when={tab() === "settings"}>
                     <SettingsTab
                       source={source()}
-                      bindings={profile()?.bindings}
-                      connections={connections() ?? []}
-                      operatorDefaults={operatorDefaults() ?? []}
+                      providerConnections={profile()?.connections}
+                      availableProviderConnections={providerConnections() ?? []}
                       installationId={installationId()}
                       onSaved={() =>
                         void Promise.all([
                           refetchProfile(),
                           refetchInstallation(),
-                        ])}
+                        ])
+                      }
                     />
                   </Match>
                   <Match when={tab() === "danger"}>
@@ -324,7 +336,11 @@ function Inner() {
                         </Button>
                       </div>
                       <Show when={destroyPlan.error()}>
-                        {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                        {(m) => (
+                          <p class="wa-error" role="alert">
+                            {m()}
+                          </p>
+                        )}
                       </Show>
                     </Card>
                   </Match>
@@ -347,9 +363,7 @@ interface DependencyRow {
 }
 
 function dependencyRows(
-  inst:
-    | { readonly id: string }
-    | undefined,
+  inst: { readonly id: string } | undefined,
   graph:
     | {
         readonly nodes: readonly { installationId: string; name: string }[];
@@ -403,8 +417,8 @@ function OverviewTab(props: {
     | undefined;
   readonly installation: {
     readonly id: string;
+    readonly currentDeploymentId?: string;
     readonly currentStateGeneration: number;
-    readonly currentOutputSnapshotId?: string;
   };
   readonly installConfigLabel: string;
 }) {
@@ -519,10 +533,12 @@ function OverviewTab(props: {
               value: props.installation.currentStateGeneration,
             },
             {
-              label: t("app.info.outputSnapshot"),
-              value: props.installation.currentOutputSnapshotId
-                ? <code>{props.installation.currentOutputSnapshotId}</code>
-                : <span class="muted">{t("common.none")}</span>,
+              label: t("app.info.deployment"),
+              value: props.installation.currentDeploymentId ? (
+                <code>{props.installation.currentDeploymentId}</code>
+              ) : (
+                <span class="muted">{t("common.none")}</span>
+              ),
             },
             {
               label: t("app.info.installConfig"),
@@ -654,10 +670,18 @@ function DeploysTab(props: {
           )}
         </Show>
         <Show when={props.backupError}>
-          {(m) => <p class="wa-error" role="alert">{m()}</p>}
+          {(m) => (
+            <p class="wa-error" role="alert">
+              {m()}
+            </p>
+          )}
         </Show>
         <Show when={props.rollbackError}>
-          {(m) => <p class="wa-error" role="alert">{m()}</p>}
+          {(m) => (
+            <p class="wa-error" role="alert">
+              {m()}
+            </p>
+          )}
         </Show>
         <Switch>
           <Match when={props.loading}>
@@ -776,75 +800,94 @@ function RunEventBadge(props: { readonly action: string }) {
 
 // === settings ================================================================
 
-interface ProviderBindingRow {
+interface InstallationProviderConnectionRow {
   readonly provider: string;
   readonly alias: string;
-  readonly mode: ProviderBindingMode;
   readonly connectionId: string;
-  readonly manualValues: string;
 }
 
-function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
+function providerConnectionToRow(
+  binding: InstallationProviderConnectionBinding,
+): InstallationProviderConnectionRow {
   return {
     provider: binding.provider,
     alias: binding.alias ?? "",
-    mode: binding.mode,
-    connectionId: binding.connectionId ?? "",
-    manualValues: binding.values
-      ? JSON.stringify(binding.values, null, 2)
-      : "",
+    connectionId: binding.connectionId,
   };
 }
 
-function buildBindings(
-  rows: readonly ProviderBindingRow[],
-): { readonly bindings: ProviderBindings } | { readonly error: string } {
-  const bindings: ProviderBinding[] = [];
+function canonicalProvider(provider: string): string {
+  return provider.toLowerCase().trim();
+}
+
+function providerTail(provider: string): string {
+  const normalized = canonicalProvider(provider);
+  return normalized.split("/").at(-1) ?? normalized;
+}
+
+function sameProviderFamily(
+  requiredProvider: string,
+  candidateProvider: string,
+) {
+  const required = canonicalProvider(requiredProvider);
+  const candidate = canonicalProvider(candidateProvider);
+  if (required === candidate) return true;
+  return providerTail(required) === providerTail(candidate);
+}
+
+function readyProviderConnectionsForProvider(
+  provider: string,
+  providerConnections: readonly ProviderConnection[],
+): readonly ProviderConnection[] {
+  return providerConnections.filter(
+    (connection) =>
+      connection.status === "ready" &&
+      sameProviderFamily(provider, connection.providerSource),
+  );
+}
+
+function providerConnectionLabel(
+  providerConnection: ProviderConnection,
+): string {
+  return `${providerConnection.displayName || providerConnection.providerSource} (${t("conn.ownership.ownKey")})`;
+}
+
+function buildProviderConnections(
+  rows: readonly InstallationProviderConnectionRow[],
+  options: {
+    readonly providerConnections: readonly ProviderConnection[];
+  },
+):
+  | { readonly connections: InstallationProviderConnectionBindings }
+  | { readonly error: string } {
+  const connections: InstallationProviderConnectionBinding[] = [];
   for (const [index, row] of rows.entries()) {
     const provider = row.provider.trim();
     if (!provider) {
       return { error: t("app.bindings.errorProvider", { index: index + 1 }) };
     }
-    const mode = row.mode ?? "default";
     const binding: {
       provider: string;
       alias?: string;
-      mode: ProviderBindingMode;
-      connectionId?: string;
-      values?: Record<string, unknown>;
-    } = { provider, mode };
+      connectionId: string;
+    } = { provider, connectionId: row.connectionId.trim() };
     const alias = row.alias.trim();
     if (alias) binding.alias = alias;
-    if (mode === "connection") {
-      const connectionId = row.connectionId.trim();
-      if (!connectionId) {
-        return { error: t("app.bindings.errorConnection", { provider }) };
-      }
-      binding.connectionId = connectionId;
+    const validConnections = readyProviderConnectionsForProvider(
+      provider,
+      options.providerConnections,
+    );
+    if (
+      !binding.connectionId ||
+      !validConnections.some(
+        (connection) => connection.id === binding.connectionId,
+      )
+    ) {
+      return { error: t("app.bindings.errorConnection", { provider }) };
     }
-    if (mode === "manual") {
-      const text = row.manualValues.trim();
-      if (!text) {
-        return { error: t("app.bindings.errorManualRequired", { provider }) };
-      }
-      let values: unknown;
-      try {
-        values = JSON.parse(text);
-      } catch {
-        return { error: t("app.bindings.errorManualJson", { provider }) };
-      }
-      if (
-        typeof values !== "object" ||
-        values === null ||
-        Array.isArray(values)
-      ) {
-        return { error: t("app.bindings.errorManualJson", { provider }) };
-      }
-      binding.values = values as Record<string, unknown>;
-    }
-    bindings.push(binding);
+    connections.push(binding);
   }
-  return { bindings };
+  return { connections };
 }
 
 function SettingsTab(props: {
@@ -857,47 +900,43 @@ function SettingsTab(props: {
         readonly status: string;
       }
     | undefined;
-  readonly bindings: ProviderBindings | undefined;
-  readonly connections: readonly {
-    readonly id: string;
-    readonly provider: string;
-    readonly displayName?: string;
-    readonly status: string;
-  }[];
-  readonly operatorDefaults: readonly { readonly provider: string }[];
+  readonly providerConnections:
+    | InstallationProviderConnectionBindings
+    | undefined;
+  readonly availableProviderConnections: readonly ProviderConnection[];
   readonly installationId: string;
   readonly onSaved: () => void;
 }) {
-  const [rows, setRows] = createSignal<ProviderBindingRow[]>([]);
+  const [rows, setRows] = createSignal<InstallationProviderConnectionRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
 
   createEffect(() => {
-    const bindings = props.bindings;
-    if (!bindings) return;
-    setRows(bindings.map(providerBindingToRow));
+    const providerConnections = props.providerConnections;
+    if (!providerConnections) return;
+    setRows(providerConnections.map(providerConnectionToRow));
   });
 
-  const defaultByProvider = createMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of props.operatorDefaults) {
-      map.set(item.provider, item.provider);
-    }
-    return map;
-  });
-
-  const update = (index: number, patch: Partial<ProviderBindingRow>) =>
+  const update = (
+    index: number,
+    patch: Partial<InstallationProviderConnectionRow>,
+  ) =>
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     );
 
   const saveProfile = createAction(async () => {
     setFormError(null);
-    const bindings = buildBindings(rows());
-    if ("error" in bindings) {
-      setFormError(bindings.error);
+    const providerConnections = buildProviderConnections(rows(), {
+      providerConnections: props.availableProviderConnections,
+    });
+    if ("error" in providerConnections) {
+      setFormError(providerConnections.error);
       return;
     }
-    await putDeploymentProfile(props.installationId, bindings.bindings);
+    await putInstallationProviderConnectionSet(
+      props.installationId,
+      providerConnections.connections,
+    );
     props.onSaved();
   });
 
@@ -945,55 +984,34 @@ function SettingsTab(props: {
           >
             <div class="wa-binding-grid">
               <For each={rows()}>
-                {(row, index) => (
-                  <div class="wa-binding-row">
-                    <div class="wa-binding-head">
-                      <Input
-                        value={row.provider}
-                        onInput={(e) =>
-                          update(index(), { provider: e.currentTarget.value })
-                        }
-                        placeholder="registry.opentofu.org/cloudflare/cloudflare"
-                      />
-                      <Input
-                        value={row.alias}
-                        onInput={(e) =>
-                          update(index(), { alias: e.currentTarget.value })
-                        }
-                        placeholder={t("app.bindings.aliasPlaceholder")}
-                      />
-                      <Show
-                        when={defaultByProvider().get(row.provider)}
-                        fallback={
-                          <span class="muted">
-                            {t("app.bindings.defaultUnset")}
-                          </span>
-                        }
-                      >
-                        {(provider) => (
-                          <span class="muted">
-                            {t("app.bindings.default", {
-                              provider: provider(),
-                            })}
-                          </span>
-                        )}
-                      </Show>
-                    </div>
-                    <div class="wa-binding-controls">
-                      <Select
-                        value={row.mode}
-                        onChange={(e) =>
-                          update(index(), {
-                            mode: e.currentTarget.value as ProviderBindingMode,
-                          })
-                        }
-                      >
-                        <option value="default">default</option>
-                        <option value="connection">connection</option>
-                        <option value="manual">manual</option>
-                        <option value="disabled">disabled</option>
-                      </Select>
-                      <Show when={row.mode === "connection"}>
+                {(row, index) => {
+                  const readyConnections = () =>
+                    readyProviderConnectionsForProvider(
+                      row.provider,
+                      props.availableProviderConnections,
+                    );
+                  return (
+                    <div class="wa-binding-row">
+                      <div class="wa-binding-head">
+                        <Input
+                          value={row.provider}
+                          onInput={(e) =>
+                            update(index(), {
+                              provider: e.currentTarget.value,
+                              connectionId: "",
+                            })
+                          }
+                          placeholder="registry.opentofu.org/cloudflare/cloudflare"
+                        />
+                        <Input
+                          value={row.alias}
+                          onInput={(e) =>
+                            update(index(), { alias: e.currentTarget.value })
+                          }
+                          placeholder={t("app.bindings.aliasPlaceholder")}
+                        />
+                      </div>
+                      <div class="wa-binding-controls">
                         <Select
                           value={row.connectionId}
                           onChange={(e) =>
@@ -1005,44 +1023,30 @@ function SettingsTab(props: {
                           <option value="">
                             {t("app.bindings.selectConnection")}
                           </option>
-                          <For each={props.connections}>
+                          <For each={readyConnections()}>
                             {(connection) => (
                               <option value={connection.id}>
-                                {connection.displayName ?? connection.provider}{" "}
-                                — {connection.status}
+                                {providerConnectionLabel(connection)}
                               </option>
                             )}
                           </For>
                         </Select>
-                      </Show>
-                      <Show when={row.mode === "manual"}>
-                        <Textarea
-                          rows={3}
-                          value={row.manualValues}
-                          onInput={(e) =>
-                            update(index(), {
-                              manualValues: e.currentTarget.value,
-                            })
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() =>
+                            setRows((prev) =>
+                              prev.filter((_, i) => i !== index()),
+                            )
                           }
-                          placeholder='{"name":"value"}'
-                          spellcheck={false}
-                        />
-                      </Show>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        type="button"
-                        onClick={() =>
-                          setRows((prev) =>
-                            prev.filter((_, i) => i !== index()),
-                          )
-                        }
-                      >
-                        {t("app.bindings.remove")}
-                      </Button>
+                        >
+                          {t("app.bindings.remove")}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                }}
               </For>
             </div>
             <div class="wa-form-actions">
@@ -1055,9 +1059,7 @@ function SettingsTab(props: {
                     {
                       provider: "",
                       alias: "",
-                      mode: "default",
                       connectionId: "",
-                      manualValues: "",
                     },
                   ])
                 }
@@ -1074,10 +1076,18 @@ function SettingsTab(props: {
               </Button>
             </div>
             <Show when={formError()}>
-              {(m) => <p class="wa-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wa-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
             <Show when={saveProfile.error()}>
-              {(m) => <p class="wa-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wa-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
           </form>
         </Card>

@@ -1,73 +1,114 @@
 /**
- * Connections domain: Takosumi-provided defaults + provider binding
- * resolution.
+ * Connections domain: Provider Env binding resolution.
  *
- * An Installation binds each required OpenTofu provider through its internal
- * provider-binding record:
- *
- *   - `default`    -> the instance-wide operator default connection
- *   - `connection` -> an explicit Connection (space-scoped to the
- *                     installation's Space, or operator-scoped)
- *   - `manual`     -> operator/user-provided values (no connection; the values
- *                     become module inputs, never credentials)
- *   - `disabled`   -> the provider is unavailable
- *
- * Resolution is pure lookup — the vault still decides per-phase what a
- * resolved connection may mint (invariants 3-5), and never trusts the caller.
+ * Connection rows remain the low-level sealed material/OAuth/source-credential
+ * substrate. OpenTofu provider execution is bound through vault-backed Provider
+ * Env rows (`oauth` or `secret`). Takosumi Cloud compatibility gateways and
+ * managed-resource backends are closed Cloud extensions, not OSS resolver
+ * materializations.
  */
 import type {
   Connection,
-  InstallConfig,
   Installation,
 } from "@takosumi/internal/deploy-control-api";
+import { randomUUID } from "node:crypto";
 import type {
-  ProviderBinding,
-  OperatorConnectionDefault,
-  ManagedDefaultStatus,
-} from "takosumi-contract/provider-bindings";
+  InstallationProviderEnvBinding,
+  InstallationProviderEnvBindings,
+  PutProviderEnvRequest,
+  ProviderEnv,
+} from "takosumi-contract/provider-envs";
 import {
-  providerEnvRule,
-  sameProviderFamily,
-} from "takosumi-contract/provider-env-rules";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
-import { OpenTofuControllerError } from "../deploy-control/errors.ts";
+  isProviderEnvMaterialization,
+  PROVIDER_ENV_STATUSES,
+  type ProviderEnvStatus,
+} from "takosumi-contract/provider-envs";
+import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { OpenTofuControllerError } from "../deploy-control/errors.ts";
+import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
-/** One provider binding's resolution outcome. */
-export interface ResolvedProviderBinding {
+/** One Provider Env binding's resolution outcome. */
+export interface ResolvedInstallationProviderEnvBinding {
   readonly provider: string;
   readonly alias?: string;
-  readonly mode: ProviderBinding["mode"];
-  /** Present for `connection` mode and for `default` with an operator default. */
+  readonly env: ProviderEnv;
+  readonly materialization: ProviderEnv["materialization"];
   readonly connection?: Connection;
-  /** Present for `manual` mode. */
-  readonly values?: Readonly<Record<string, unknown>>;
+}
+
+export function validateInstallationProviderEnvBindings(
+  value: unknown,
+  field = "providerEnvBindings",
+): InstallationProviderEnvBindings {
+  if (!Array.isArray(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be an array`,
+    );
+  }
+  return value.map((entry, index) =>
+    validateInstallationProviderEnvBinding(entry, `${field}[${index}]`),
+  );
+}
+
+function validateInstallationProviderEnvBinding(
+  value: unknown,
+  field: string,
+): InstallationProviderEnvBinding {
+  if (!isRecord(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be an object`,
+    );
+  }
+  const provider = nonEmptyField(value.provider, `${field}.provider`);
+  const envId = nonEmptyField(value.envId, `${field}.envId`);
+  const alias =
+    value.alias === undefined
+      ? undefined
+      : nonEmptyField(value.alias, `${field}.alias`);
+  const region =
+    value.region === undefined
+      ? undefined
+      : nonEmptyField(value.region, `${field}.region`);
+  return {
+    provider,
+    envId,
+    ...(alias ? { alias } : {}),
+    ...(region ? { region } : {}),
+  };
+}
+
+function nonEmptyField(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be a non-empty string`,
+    );
+  }
+  return value.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
- * Stable digest over a run's RESOLVED provider bindings (plan→apply TOCTOU pin).
- *
- * Hashes the identity-bearing fields of each binding — `provider`, optional
- * `alias`, `mode`, and the resolved `connectionId` — sorted into a canonical
- * order so the digest is independent of resolution order. It is pinned on the
- * PlanRun at plan completion and re-asserted at apply mint: if a Space owner (or
- * operator) swaps a Connection, flips a ProviderBinding mode, or repoints the
- * operator default between plan and apply, the recomputed digest diverges and
- * the apply fails closed (a plan was reviewed against DIFFERENT credentials than
- * the apply would mint). `manual` values are intentionally NOT hashed (they are
- * module inputs, not credentials, and may carry sensitive literals); a mode flip
- * to/from `manual` still changes `mode` and is caught. `undefined` (a run with
- * no installation context / no resolvable bindings) yields a fixed empty digest.
+ * Stable digest over a run's resolved Provider Env bindings.
  */
-export async function resolvedBindingsDigest(
-  resolved: readonly ResolvedProviderBinding[] | undefined,
+export async function resolvedProviderEnvBindingsDigest(
+  resolved: readonly ResolvedInstallationProviderEnvBinding[] | undefined,
 ): Promise<string> {
   const entries = (resolved ?? [])
     .map((entry) => ({
       provider: entry.provider,
       alias: entry.alias ?? null,
-      mode: entry.mode,
+      envId: entry.env.id,
+      materialization: entry.env.materialization,
+      status: entry.env.status,
       connectionId: entry.connection?.id ?? null,
+      envNames: [...entry.env.requiredEnvNames].sort(),
     }))
     .sort(
       (a, b) =>
@@ -83,11 +124,6 @@ export interface ConnectionsServiceDependencies {
   readonly now?: () => string;
 }
 
-export interface PutOperatorConnectionDefaultRequest {
-  readonly provider?: string;
-  readonly connectionId: string;
-}
-
 export class ConnectionsService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
@@ -95,256 +131,242 @@ export class ConnectionsService {
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
-    this.#newId = dependencies.newId ??
-      ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`);
+    this.#newId =
+      dependencies.newId ??
+      ((prefix) =>
+        `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
   }
 
-  /**
-   * Sets the instance-wide Takosumi-provided default connection for one provider.
-   * The connection must exist and be operator-scoped: a space connection is
-   * one Space's credential and must never become an instance-wide default.
-   */
-  async putOperatorConnectionDefault(
-    request: PutOperatorConnectionDefaultRequest,
-  ): Promise<OperatorConnectionDefault> {
-    const connection = await this.#store.getConnection(request.connectionId);
-    if (!connection) {
+  async putProviderEnv(
+    id: string | undefined,
+    input: PutProviderEnvRequest,
+  ): Promise<ProviderEnv> {
+    const providerSource = nonEmptyField(
+      input.providerSource,
+      "providerSource",
+    );
+    const displayName = nonEmptyField(input.displayName, "displayName");
+    if (!isProviderEnvMaterialization(input.materialization)) {
       throw new OpenTofuControllerError(
-        "not_found",
-        `connection ${request.connectionId} not found`,
+        "invalid_argument",
+        "materialization must be oauth or secret",
       );
     }
-    if (connection.scope !== "operator") {
+    let status = validateProviderEnvStatus(input.status ?? "ready");
+    if (!input.spaceId) {
       throw new OpenTofuControllerError(
-        "failed_precondition",
-        `connection ${request.connectionId} is space-scoped; operator defaults ` +
-          `require an operator-scoped connection`,
+        "invalid_argument",
+        "provider resolver records must be scoped to a Space in OSS",
       );
+    }
+    if (input.secretRef) {
+      const backingConnection = await this.#store.getConnection(
+        input.secretRef,
+      );
+      if (!backingConnection) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `Provider Env backing Connection ${input.secretRef} does not exist`,
+        );
+      }
+      if (
+        input.spaceId !== undefined &&
+        backingConnection.spaceId !== input.spaceId
+      ) {
+        throw new OpenTofuControllerError(
+          "permission_denied",
+          `Provider Env backing Connection ${input.secretRef} belongs to another Space`,
+        );
+      }
+      if (
+        input.status === undefined &&
+        backingConnection.status !== "verified"
+      ) {
+        status = "needs_setup";
+      }
+      if (status === "ready" && backingConnection.status !== "verified") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `Provider Env backing Connection ${input.secretRef} status ${backingConnection.status} is not verified`,
+        );
+      }
     }
     const now = this.#now();
-    return await this.#store.putOperatorConnectionDefault({
-      id: this.#newId("ocd"),
-      provider: request.provider ?? connection.provider,
-      connectionId: connection.id,
-      createdAt: now,
+    const existing = id ? await this.#store.getProviderEnv(id) : undefined;
+    const env: ProviderEnv = {
+      id: id ?? this.#newId("penv"),
+      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+      providerSource,
+      displayName,
+      materialization: input.materialization,
+      status,
+      requiredEnvNames: validateStringArray(
+        input.requiredEnvNames ?? [],
+        "requiredEnvNames",
+      ),
+      ...(input.secretRef ? { secretRef: input.secretRef } : {}),
+      ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-    });
+    };
+    return await this.#store.putProviderEnv(env);
   }
 
-  async listOperatorConnectionDefaults(): Promise<
-    readonly OperatorConnectionDefault[]
-  > {
-    return await this.#store.listOperatorConnectionDefaults();
-  }
-
-  /**
-   * Non-secret read of whether THIS instance's managed default (the operator
-   * key) can cover an install that configures NO Space connection (spec §7.1
-   * `takosumi_managed` default). An empty / `default`-mode ProviderBinding falls
-   * through to the operator default for its provider, so the dashboard uses this
-   * to decide whether to nudge the user to "connect your own cloud first" — it
-   * should only nudge when the managed default is NOT available.
-   *
-   * A default only counts as available when it is plausibly usable at apply
-   * time: its Connection must be `verified`, and for providers whose runner
-   * credential policy requires temporary credentials (cloudflare — the
-   * supply-chain ceiling sets `requireTemporary`), the Connection must have
-   * token vending configured (`scopeHints.cloudflareTokenVending`). A static
-   * (non-vending) cloudflare default mints a non-temporary token that apply then
-   * rejects (`credential_policy_failed: requires temporary credentials`), so it
-   * must NOT be reported as available here.
-   *
-   * The projection is intentionally credential-free: it reads the operator
-   * defaults' Connections to gate availability but returns ONLY a boolean and
-   * the covered provider source names. The operator default's id / connectionId
-   * / secret material NEVER leave this method — they stay on the bearer-gated §30
-   * surface. Binding resolution (`resolveProviderBindings`) is unaffected.
-   */
-  async getManagedDefaultStatus(): Promise<ManagedDefaultStatus> {
-    const defaults = await this.#store.listOperatorConnectionDefaults();
-    const usable = new Set<string>();
-    for (const entry of defaults) {
-      const connection = await this.#store.getConnection(entry.connectionId);
-      if (this.#managedDefaultUsable(connection)) usable.add(entry.provider);
+  async getProviderEnv(id: string): Promise<ProviderEnv> {
+    const env = await this.#store.getProviderEnv(nonEmptyField(id, "id"));
+    if (!env) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `Provider Env ${id} not found`,
+      );
     }
-    const providers = [...usable].sort((a, b) => a.localeCompare(b));
-    return { available: providers.length > 0, providers };
+    return env;
   }
 
-  /**
-   * Whether an operator default's Connection is plausibly usable to satisfy
-   * apply-time credential policy. Fail-closed: a missing or non-`verified`
-   * Connection is never usable, and a cloudflare default is usable only when it
-   * vends temporary tokens (the cloudflare-default runner profile rejects static
-   * credentials).
-   */
-  #managedDefaultUsable(connection: Connection | undefined): boolean {
-    if (!connection || connection.status !== "verified") return false;
-    if (providerEnvRule(connection.provider)?.shortName === "cloudflare") {
-      return connection.scopeHints?.cloudflareTokenVending !== undefined;
-    }
-    return true;
+  async listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
+    return await this.#store.listProviderEnvs(spaceId);
   }
 
-  /**
-   * Resolves the EXPLICIT provider bindings recorded in an Installation's
-   * DeploymentProfile. Unbound required providers are NOT synthesized here; the
-   * run-scoped {@link resolveProviderBindingsForRun} adds the operator-default
-   * fall-through once the run's required providers are known.
-   */
-  async resolveProviderBindings(
+  async resolveProviderEnvBindings(
     installation: Installation,
-  ): Promise<readonly ResolvedProviderBinding[]> {
-    const profile = await this.#store.getDeploymentProfileByInstallation(
-      installation.id,
-      installation.environment,
+  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
+    const set =
+      await this.#store.getInstallationProviderEnvBindingSetByInstallation(
+        installation.id,
+        installation.environment,
+      );
+    const bindings = validateInstallationProviderEnvBindings(
+      set?.bindings ?? [],
+      "installation provider env binding set bindings",
     );
     return await Promise.all(
-      (profile?.bindings ?? []).map((binding) =>
-        this.#resolveBinding(installation, binding)
-      ),
+      bindings.map((binding) => this.#resolveBinding(installation, binding)),
     );
   }
 
-  /**
-   * Run-scoped provider binding resolution: the EXPLICIT DeploymentProfile
-   * bindings PLUS the documented operator-default fall-through (spec §7.1
-   * `takosumi_managed`, ProviderBinding contract: "an empty ProviderBindings
-   * list ALWAYS resolves to `default` and falls through to the operator key").
-   *
-   * For every provider the run requires that has NO explicit binding of any
-   * mode, this synthesizes a `default` binding so the managed default (the
-   * operator key) covers an install that configured no Space connection. The
-   * synthesis is keyed by the operator default's OWN provider name so the
-   * subsequent exact-match lookup succeeds even when `requiredProviders` carries
-   * canonical registry addresses (e.g. `registry.opentofu.org/cloudflare/
-   * cloudflare`) while the operator default is registered under the short name
-   * (`cloudflare`). It is fail-closed: a required provider with no operator
-   * default (and no explicit binding) contributes nothing, so no credential is
-   * minted for it.
-   *
-   * Both the generated-root provider blocks and the per-alias credential mint
-   * derive from this same resolution, so the rootgen `TF_VAR_<provider>_<arg>`
-   * variables and the minted values line up byte-for-byte.
-   */
-  async resolveProviderBindingsForRun(
+  async resolveProviderEnvBindingsForRun(
     installation: Installation,
     requiredProviders: readonly string[],
-  ): Promise<readonly ResolvedProviderBinding[]> {
-    const explicit = await this.resolveProviderBindings(installation);
+  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
+    const explicit = await this.resolveProviderEnvBindings(installation);
     if (requiredProviders.length === 0) return explicit;
-    const operatorDefaults = await this.#store.listOperatorConnectionDefaults();
-    const synthesized: ResolvedProviderBinding[] = [];
-    const seen = new Set<string>();
-    for (const required of requiredProviders) {
-      // Respect any explicit binding for the provider (default / connection /
-      // manual / disabled): the user's configuration wins over the fall-through.
-      if (explicit.some((entry) => sameProviderFamily(required, entry.provider))) {
-        continue;
-      }
-      const match = operatorDefaults.find((entry) =>
-        sameProviderFamily(required, entry.provider)
-      );
-      // Fail closed: no operator default for this provider -> no credential.
-      if (!match) continue;
-      // Synthesize at most one default binding per operator-default provider.
-      if (seen.has(match.provider)) continue;
-      seen.add(match.provider);
-      synthesized.push(
-        await this.#resolveBinding(installation, {
-          provider: match.provider,
-          mode: "default",
-        }),
+
+    const missing = requiredProviders
+      .filter(
+        (required) =>
+          !explicit.some((entry) =>
+            sameProviderFamily(required, entry.provider),
+          ),
+      )
+      .sort();
+    if (missing.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `provider connection is required for providers: ${missing.join(", ")}`,
       );
     }
-    return synthesized.length === 0 ? explicit : [...explicit, ...synthesized];
+    return explicit;
   }
 
   async #resolveBinding(
     installation: Installation,
-    binding: ProviderBinding,
-  ): Promise<ResolvedProviderBinding> {
-    switch (binding.mode) {
-      case "disabled":
-        return {
-          provider: binding.provider,
-          ...(binding.alias ? { alias: binding.alias } : {}),
-          mode: "disabled",
-        };
-      case "manual":
-        return {
-          provider: binding.provider,
-          ...(binding.alias ? { alias: binding.alias } : {}),
-          mode: "manual",
-          values: binding.values ?? {},
-        };
-      case "connection": {
-        if (!binding.connectionId) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `provider ${binding.provider} binds mode "connection" without a connectionId`,
-          );
-        }
-        const connection = await this.#store.getConnection(binding.connectionId);
-        if (!connection) {
-          throw new OpenTofuControllerError(
-            "not_found",
-            `connection ${binding.connectionId} (provider ${binding.provider}) not found`,
-          );
-        }
-        // A space connection must belong to the installation's Space; an
-        // operator connection is usable from any Space.
-        if (
-          connection.scope === "space" &&
-          connection.spaceId !== installation.spaceId
-        ) {
-          throw new OpenTofuControllerError(
-            "permission_denied",
-            `connection ${binding.connectionId} belongs to another space`,
-          );
-        }
-        return {
-          provider: binding.provider,
-          ...(binding.alias ? { alias: binding.alias } : {}),
-          mode: "connection",
-          connection,
-        };
-      }
-      case "default": {
-        const fallback = await this.#store.getOperatorConnectionDefault(
-          binding.provider,
-        );
-        if (!fallback) {
-          return {
-            provider: binding.provider,
-            ...(binding.alias ? { alias: binding.alias } : {}),
-            mode: "default",
-          };
-        }
-        const connection = await this.#store.getConnection(fallback.connectionId);
-        return {
-          provider: binding.provider,
-          ...(binding.alias ? { alias: binding.alias } : {}),
-          mode: "default",
-          ...(connection ? { connection } : {}),
-        };
-      }
+    binding: InstallationProviderEnvBinding,
+  ): Promise<ResolvedInstallationProviderEnvBinding> {
+    const env = await this.#store.getProviderEnv(binding.envId);
+    if (!env) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `Provider Env ${binding.envId} (provider ${binding.provider}) not found`,
+      );
     }
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `unknown provider binding mode ${(binding as { mode?: string }).mode}`,
-    );
+    if (env.spaceId !== undefined && env.spaceId !== installation.spaceId) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `Provider Env ${binding.envId} belongs to another Space`,
+      );
+    }
+    if (env.spaceId === undefined) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `Provider Env ${binding.envId} is global and cannot be used by OSS Takosumi`,
+      );
+    }
+    if (!sameProviderFamily(binding.provider, env.providerSource)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Env ${binding.envId} provider ${env.providerSource} does not match binding provider ${binding.provider}`,
+      );
+    }
+    if (env.status !== "ready") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Env ${binding.envId} status ${env.status} is not ready`,
+      );
+    }
+    if (!env.secretRef) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Env ${env.id} has no backing Connection reference`,
+      );
+    }
+    const connection = await this.#store.getConnection(env.secretRef);
+    if (!connection) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Env ${env.id} has no backing Connection`,
+      );
+    }
+    if (env.spaceId !== undefined && connection.spaceId !== env.spaceId) {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `Provider Env ${env.id} backing Connection belongs to another Space`,
+      );
+    }
+    if (connection.status !== "verified") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Env ${env.id} backing Connection status ${connection.status} is not verified`,
+      );
+    }
+    return {
+      provider: binding.provider,
+      ...(binding.alias ? { alias: binding.alias } : {}),
+      env,
+      materialization: env.materialization,
+      connection,
+    };
   }
 }
 
-/**
- * Collects the connection ids a run's credential mint may draw from: the
- * resolved `connection` / `default` provider bindings. `manual` contributes module
- * values (not credentials) and `disabled` contributes nothing.
- */
+function validateProviderEnvStatus(value: string): ProviderEnvStatus {
+  if (!PROVIDER_ENV_STATUSES.includes(value as ProviderEnvStatus)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "status must be ready, needs_setup, expired, or blocked",
+    );
+  }
+  return value as ProviderEnvStatus;
+}
+
+function validateStringArray(
+  value: readonly string[],
+  field: string,
+): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be an array`,
+    );
+  }
+  return value.map((entry, index) =>
+    nonEmptyField(entry, `${field}[${index}]`),
+  );
+}
+
+/** Collects the connection ids a run's vault-backed credential mint may draw from. */
 export function mintableConnectionIds(
-  resolved: readonly ResolvedProviderBinding[],
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): readonly string[] {
   const ids = new Set<string>();
   for (const entry of resolved) {
@@ -359,6 +381,4 @@ export function createConnectionsService(
   return new ConnectionsService(dependencies);
 }
 
-// Re-exported so route/service composition can validate InstallConfig usage
-// alongside capability resolution without importing the store types directly.
-export type { ProviderBinding, InstallConfig };
+export type { InstallationProviderEnvBinding };

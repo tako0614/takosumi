@@ -130,6 +130,7 @@ export async function mintAwsAssumeRoleCredentials(
       AWS_DEFAULT_REGION: values.AWS_DEFAULT_REGION ?? region,
     },
     evidence: {
+      providerEnvId: connection.id,
       connectionId: connection.id,
       provider: connection.provider,
       delivery,

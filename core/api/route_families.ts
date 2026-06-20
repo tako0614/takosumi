@@ -1,5 +1,6 @@
 import type { TakosumiProcessRole } from "../process/mod.ts";
-import { DEPLOY_CONTROL_PUBLIC_ENDPOINTS } from "./deploy_control_public_routes.ts";
+import { isInternalV1Path } from "takosumi-contract/api-surface";
+import { DEPLOY_CONTROL_INTERNAL_ENDPOINTS } from "./deploy_control_internal_routes.ts";
 import { ARTIFACT_ENDPOINTS } from "./artifact_routes.ts";
 import { RUNTIME_AGENT_ENDPOINTS } from "./runtime_agent_routes.ts";
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
@@ -19,8 +20,9 @@ import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
  *
  * Each {@link RouteFamilyDescriptor} now carries an `endpoints` list of
  * {@link ApiEndpoint} descriptors co-located with the family's route module.
- * `capabilities.ts` and `openapi.ts` both derive their inventory from these
- * descriptors, so the public API contract can no longer drift apart.
+ * `capabilities.ts` and `openapi.ts` both derive their published inventory from
+ * these descriptors after filtering out host-internal seams, so the customer-safe
+ * process inventory can no longer drift apart.
  *
  * `app.ts` still owns the concrete mount calls and per-family option
  * validation/ordering (those are behaviorally sensitive and intentionally kept
@@ -41,6 +43,7 @@ export interface RouteFamilyMountInput {
 export type ApiEndpointAuth =
   | "none"
   | "internal-service"
+  | "inventory-bearer"
   | "deploy-token"
   | "artifact-read"
   | "deploy-control-token"
@@ -83,6 +86,12 @@ export interface ApiEndpoint {
   readonly summary: string;
   readonly auth: ApiEndpointAuth;
   readonly operationId: string;
+  /**
+   * Compatibility/RPC routes can be mounted without being advertised through
+   * `/capabilities` or `/openapi.json`. All `/internal/v1/*` routes are also
+   * suppressed from published inventory regardless of this flag.
+   */
+  readonly discoverable?: boolean;
   /** Primary OpenAPI tag for the endpoint (defaults to the family `id`). */
   readonly tag?: string;
   readonly openapi: ApiEndpointOpenApi;
@@ -110,7 +119,7 @@ export type RouteFamilyId =
   | "openapi"
   | "readiness"
   | "artifact"
-  | "deployControl-public"
+  | "deployControl-internal"
   | "metrics";
 
 export type RouteFamilyFlag =
@@ -118,7 +127,7 @@ export type RouteFamilyFlag =
   | "openApiRouteMounted"
   | "readinessRoutesMounted"
   | "artifactRoutesMounted"
-  | "deployControlPublicRoutesMounted"
+  | "deployControlInternalRoutesMounted"
   | "metricsRoutesMounted";
 
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
@@ -136,7 +145,7 @@ export const ALWAYS_MOUNTED_ENDPOINTS: readonly ApiEndpoint[] = [
     path: "/capabilities",
     summary:
       "Describes the current process role, declared capabilities, and route guards.",
-    auth: "none",
+    auth: "inventory-bearer",
     operationId: "getCapabilities",
     tag: "process",
     openapi: { okSchema: "CapabilitiesResponse" },
@@ -179,11 +188,11 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     endpoints: ARTIFACT_ENDPOINTS,
   },
   {
-    id: "deployControl-public",
-    flag: "deployControlPublicRoutesMounted",
-    openapiTags: ["deployControl-public"],
+    id: "deployControl-internal",
+    flag: "deployControlInternalRoutesMounted",
+    openapiTags: ["deployControl-internal"],
     defaultMounted: ({ role }) => role === "takosumi-api",
-    endpoints: DEPLOY_CONTROL_PUBLIC_ENDPOINTS,
+    endpoints: DEPLOY_CONTROL_INTERNAL_ENDPOINTS,
   },
   {
     id: "metrics",
@@ -207,7 +216,10 @@ export function mountedOpenApiTags(
 ): Set<string> {
   const tags = new Set<string>(ALWAYS_MOUNTED_OPENAPI_TAGS);
   for (const family of ROUTE_FAMILIES) {
-    if (flags[family.flag]) {
+    if (
+      flags[family.flag] &&
+      family.endpoints.some(isPublishedInventoryEndpoint)
+    ) {
       for (const tag of family.openapiTags) tags.add(tag);
     }
   }
@@ -222,9 +234,13 @@ export function mountedOpenApiTags(
 export function mountedEndpoints(
   flags: Partial<RouteFamilyMountedFlags>,
 ): readonly ApiEndpoint[] {
-  const endpoints: ApiEndpoint[] = [...ALWAYS_MOUNTED_ENDPOINTS];
+  const endpoints: ApiEndpoint[] = [
+    ...ALWAYS_MOUNTED_ENDPOINTS.filter(isPublishedInventoryEndpoint),
+  ];
   for (const family of ROUTE_FAMILIES) {
-    if (flags[family.flag]) endpoints.push(...family.endpoints);
+    if (flags[family.flag]) {
+      endpoints.push(...family.endpoints.filter(isPublishedInventoryEndpoint));
+    }
   }
   return endpoints;
 }
@@ -232,4 +248,8 @@ export function mountedEndpoints(
 /** The OpenAPI primary tag for an endpoint (defaults to its family `id`). */
 export function endpointTag(endpoint: ApiEndpoint, familyId: string): string {
   return endpoint.tag ?? familyId;
+}
+
+function isPublishedInventoryEndpoint(endpoint: ApiEndpoint): boolean {
+  return endpoint.discoverable !== false && !isInternalV1Path(endpoint.path);
 }

@@ -18,9 +18,7 @@
  * by this flag parser (callers that need positional arguments slice them
  * off the argv before calling `parseOptions`).
  */
-export function parseOptions(
-  args: string[],
-): Record<string, string | boolean> {
+export function parseOptions(args: string[]): Record<string, string | boolean> {
   const options: Record<string, string | boolean> = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -34,9 +32,8 @@ export function parseOptions(
     if (!arg.startsWith("--")) continue;
 
     const [rawKey, inlineValue] = arg.slice(2).split("=", 2);
-    const key = rawKey.replace(
-      /-([a-z])/g,
-      (_, letter: string) => letter.toUpperCase(),
+    const key = rawKey.replace(/-([a-z])/g, (_, letter: string) =>
+      letter.toUpperCase(),
     );
     if (inlineValue !== undefined) {
       options[key] = inlineValue;
@@ -161,7 +158,10 @@ export function commaSeparatedOption(
 ): readonly string[] {
   const value = optionalStringOption(options, key);
   if (!value) return [];
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export function installationIdempotencyKey(

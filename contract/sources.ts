@@ -17,7 +17,7 @@
  *     secret is stored hashed and returned exactly once at creation.
  */
 
-import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import { API_V1_PREFIX, INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
@@ -143,7 +143,8 @@ export type SourceSyncRunStatus = "queued" | "running" | "succeeded" | "failed";
 // ---------------------------------------------------------------------------
 
 /**
- * Git credential connection kinds. These are distinct from provider connections:
+ * Git credential connection kinds. These are distinct from Provider Connections
+ * and their internal provider resolver bindings:
  * the Vault mints them ONLY for the `source` phase and NEVER for plan/apply/
  * destroy. The `*_https_token` kind carries `{ GIT_HTTPS_TOKEN }` (optional
  * `username` in scope); the `*_ssh_key` kind carries `{ GIT_SSH_PRIVATE_KEY }`
@@ -171,7 +172,7 @@ export const GIT_SSH_PRIVATE_KEY_ENV = "GIT_SSH_PRIVATE_KEY" as const;
  * The phase a credential mint is requested for. The Vault enforces:
  *   - `source`  -> ONLY git-kind connections (env + files form).
  *   - `build`   -> ALWAYS empty (error if anything is requested).
- *   - `plan` / `apply` / `destroy` -> ONLY provider connections; git excluded.
+ *   - `plan` / `apply` / `destroy` -> ONLY provider resolver bindings; git excluded.
  */
 export type MintPhase = "source" | "build" | "plan" | "apply" | "destroy";
 
@@ -232,6 +233,10 @@ export const SOURCE_HOOK_PATH = (id: string): string =>
  * No Source row and no Runner git clone are involved.
  */
 export const SPACE_UPLOADS_PATH = (spaceId: string): string =>
+  `${API_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
+
+/** INTERNAL upload ingest seam path (`/internal/v1`, reached in-process). */
+export const INTERNAL_SPACE_UPLOADS_PATH = (spaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
 
 export interface CreateSourceRequest {

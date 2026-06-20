@@ -11,13 +11,12 @@
  */
 import { createSignal, type JSX, onMount, Show } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
-import InkBackdrop from "../../components/ui/InkBackdrop.tsx";
-import InkdropMark from "../account/components/brand/InkdropMark.tsx";
+import { installReturnContext } from "../../lib/install-return-context.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
 
-type Provider = "google" | "github";
+type Provider = "google";
 
 interface ProviderInfo {
   id: Provider;
@@ -38,23 +37,20 @@ const PROVIDERS: ProviderInfo[] = [
       </svg>
     ),
   },
-  {
-    id: "github",
-    name: "GitHub",
-    icon: () => (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.32-1.28-1.67-1.28-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.06 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.77.11 3.06.74.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.07.78 2.15v3.18c0 .31.21.68.8.56C20.21 21.38 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z" />
-      </svg>
-    ),
-  },
 ];
 
 export function SignInPanel() {
+  const [params] = useSearchParams<{ return?: string }>();
   // Start all-disabled and flip on by operator config: failing closed means we
   // never briefly render an enabled button that the backend would 503.
   const [enabled, setEnabled] = createSignal<Record<string, boolean>>({});
+  const [providersLoaded, setProvidersLoaded] = createSignal(false);
+  const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
 
-  onMount(() => {
+  const loadProviders = () => {
+    setProvidersLoaded(false);
+    setProvidersLoadFailed(false);
+    setEnabled({});
     void rpc.auth
       .listProviders()
       .then((res) => {
@@ -63,24 +59,76 @@ export function SignInPanel() {
           map[provider.id] = provider.enabled;
         }
         setEnabled(map);
+        setProvidersLoaded(true);
       })
       .catch(() => {
         // Availability unreadable → every method stays disabled with the
-        // "operator not configured" hint instead of a button that would 503.
+        // retry hint instead of a button that would 503.
+        setProvidersLoadFailed(true);
+        setProvidersLoaded(true);
       });
-  });
+  };
+
+  onMount(loadProviders);
 
   const isEnabled = (p: Provider): boolean => enabled()[p] === true;
+  const hasEnabledProvider = (): boolean =>
+    PROVIDERS.some((p) => isEnabled(p.id));
+  const providerSubText = (p: Provider): string => {
+    if (!providersLoaded()) return t("auth.providerChecking");
+    if (providersLoadFailed()) return t("auth.providerRetryNeeded");
+    return isEnabled(p) ? "OAuth 2.0" : t("auth.providerUnavailable");
+  };
 
   const select = (p: Provider) => {
     if (!isEnabled(p)) return;
     rpc.auth.startUpstreamOAuth(p);
   };
+  const pendingInstall = () => installReturnContext(params.return);
+  const pendingInstallDetails = () => {
+    const ctx = pendingInstall();
+    if (!ctx) return "";
+    return [
+      ctx.sourceLabel,
+      ctx.displayRef
+        ? t("auth.installContextRef", { ref: ctx.displayRef })
+        : t("auth.installContextDefaultRef"),
+      ctx.path || t("auth.installContextRootPath"),
+    ].join(" / ");
+  };
+  const noProvidersMessage = () =>
+    t(
+      pendingInstall()
+        ? "auth.noProvidersMessageWithInstall"
+        : "auth.noProvidersMessage",
+    );
+  const providersLoadFailedMessage = () =>
+    t(
+      pendingInstall()
+        ? "auth.providersLoadFailedMessageWithInstall"
+        : "auth.providersLoadFailedMessage",
+    );
 
   return (
     <div class="sign-in-panel">
       <h1 class="sign-in-title">{t("auth.signIn")}</h1>
       <p class="sign-in-sub">{t("auth.signInSub")}</p>
+      <Show when={pendingInstall()}>
+        <div
+          class="sign-in-return-context"
+          aria-label={t("auth.installContextAria")}
+        >
+          <span class="sign-in-return-kicker">
+            {t("auth.installContextKicker")}
+          </span>
+          <strong class="sign-in-return-title">
+            {t("auth.installContextTitle", {
+              name: pendingInstall()?.label ?? "",
+            })}
+          </strong>
+          <span class="sign-in-return-detail">{pendingInstallDetails()}</span>
+        </div>
+      </Show>
       <div class="sign-in-buttons">
         {PROVIDERS.map((p) => (
           <button
@@ -95,9 +143,7 @@ export function SignInPanel() {
               <span class="sign-in-label">
                 {t("auth.continueWith", { provider: p.name })}
               </span>
-              <span class="sign-in-sub-text">
-                {isEnabled(p.id) ? "OAuth 2.0" : t("auth.notConfigured")}
-              </span>
+              <span class="sign-in-sub-text">{providerSubText(p.id)}</span>
             </span>
             <svg
               class="sign-in-arrow"
@@ -115,13 +161,32 @@ export function SignInPanel() {
           </button>
         ))}
       </div>
+      <Show when={providersLoaded() && providersLoadFailed()}>
+        <div class="sign-in-notice sign-in-notice-warn" role="status">
+          <strong>{t("auth.providersLoadFailedTitle")}</strong>
+          <span>{providersLoadFailedMessage()}</span>
+          <button type="button" class="sign-in-retry" onClick={loadProviders}>
+            {t("auth.retryProviderCheck")}
+          </button>
+        </div>
+      </Show>
+      <Show
+        when={
+          providersLoaded() && !providersLoadFailed() && !hasEnabledProvider()
+        }
+      >
+        <div class="sign-in-notice" role="status">
+          <strong>{t("auth.noProvidersTitle")}</strong>
+          <span>{noProvidersMessage()}</span>
+          <button type="button" class="sign-in-retry" onClick={loadProviders}>
+            {t("auth.retryProviderCheck")}
+          </button>
+        </div>
+      </Show>
       <p class="sign-in-terms">
-        {/* TODO(brand): these legal documents live on the takos product docs
-            site today; takosumi has no published terms/privacy pages yet.
-            Repoint when takosumi-branded legal pages exist. */}
         {t("auth.termsPrefix")}{" "}
         <a
-          href="https://docs.takos.jp/legal/terms-of-service"
+          href="https://takosumi.com/docs/legal/terms-of-service"
           class="link"
           target="_blank"
           rel="noopener"
@@ -130,7 +195,7 @@ export function SignInPanel() {
         </a>
         {t("auth.and")}
         <a
-          href="https://docs.takos.jp/legal/privacy-policy"
+          href="https://takosumi.com/docs/legal/privacy-policy"
           class="link"
           target="_blank"
           rel="noopener"
@@ -143,14 +208,22 @@ export function SignInPanel() {
   );
 }
 
+function TemporaryBrandMark() {
+  return (
+    <span class="auth-brand-mark" aria-label={t("auth.brandDraftAria")}>
+      <span class="auth-brand-mark-core">{t("auth.brandDraftMark")}</span>
+      <span class="auth-brand-mark-draft">{t("auth.brandDraft")}</span>
+    </span>
+  );
+}
+
 /** Sign-in page wrapper (brand + panel). */
 export default function SignInView() {
   onMount(() => setDocumentTitle(t("auth.signIn")));
   return (
     <div class="auth-page">
-      <InkBackdrop density="auth" />
       <a href="/" class="auth-brand">
-        <InkdropMark size={32} />
+        <TemporaryBrandMark />
         <span class="auth-brand-text">Takosumi</span>
       </a>
       <SignInPanel />

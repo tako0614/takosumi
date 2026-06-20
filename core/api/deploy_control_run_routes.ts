@@ -1,7 +1,7 @@
 /**
  * §6.8 unified Run facade routes: read / logs / events / approve / cancel over
  * the SourceSync / Plan / Apply ledgers. Owns its handlers and its slice of the
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
+ * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
 import {
@@ -15,6 +15,7 @@ import {
 import {
   TAKOSUMI_RUN_APPROVE_ROUTE,
   TAKOSUMI_RUN_CANCEL_ROUTE,
+  TAKOSUMI_RUN_COST_ROUTE,
   TAKOSUMI_RUN_EVENTS_ROUTE,
   TAKOSUMI_RUN_LOGS_ROUTE,
   TAKOSUMI_RUN_ROUTE,
@@ -50,6 +51,16 @@ export const DEPLOY_CONTROL_RUN_ENDPOINTS: readonly DeployControlEndpoint[] = [
     auth: "deploy-control-token",
     operationId: "getRunEvents",
     openapi: { pathParams: ["runId"], okSchema: "RunEventsResponse" },
+    notImplementedMessage: "runs not wired",
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_RUN_COST_ROUTE,
+    summary:
+      "Reads a Run's public, non-secret billing cost projection for review/apply UI.",
+    auth: "deploy-control-token",
+    operationId: "getRunCost",
+    openapi: { pathParams: ["runId"], okSchema: "RunCostResponse" },
     notImplementedMessage: "runs not wired",
   },
   {
@@ -118,6 +129,19 @@ export function mountDeployControlRunRoutes(
         const run = await controller.getRun(id);
         ensureSpacePermission(principal, run.spaceId);
         return c.json(await controller.getRunEvents(id), 200);
+      },
+    }),
+  );
+
+  app.get(
+    TAKOSUMI_RUN_COST_ROUTE,
+    defineRoute({
+      ctx,
+      param: RUN_ID_PARAM,
+      handler: async ({ c, principal, id }) => {
+        const run = await controller.getRun(id);
+        ensureSpacePermission(principal, run.spaceId);
+        return c.json({ cost: await controller.getRunCost(id) }, 200);
       },
     }),
   );

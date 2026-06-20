@@ -24,7 +24,12 @@
  * per-run apply flow (manual approve + createApplyRun), not by this service.
  */
 
-import type { Run, RunGroup, RunGroupStatus } from "takosumi-contract/runs";
+import type {
+  Run,
+  RunGroup,
+  RunGroupStatus,
+  RunGroupWithRuns,
+} from "takosumi-contract/runs";
 import { GraphCycleError, topologicalLayers } from "takosumi-graph";
 import {
   OpenTofuControllerError,
@@ -47,13 +52,6 @@ export interface SpaceUpdateGraph {
   readonly order: readonly (readonly string[])[];
   /** Member installation id -> the plan Run id created for it. */
   readonly runs: Readonly<Record<string, string>>;
-}
-
-/** A RunGroup plus its member Runs (the §19 unified projection). */
-export interface RunGroupWithRuns {
-  readonly runGroup: RunGroup;
-  /** Member Runs, in the row's recorded topological order. */
-  readonly runs: readonly Run[];
 }
 
 export interface RunGroupsServiceDependencies {

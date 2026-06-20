@@ -6,8 +6,11 @@ import {
 
 const REQUIRED_CHECKS = [
   "containerSmoke",
+  "platformControlPlaneSmoke",
   "egressEnforcement",
-  "providerTemplates",
+  "restoreRehearsal",
+  "providerCatalog",
+  "costAttribution",
   "secretBoundary",
 ] as const;
 
@@ -21,13 +24,25 @@ const EVIDENCE_ENV_BY_CHECK: Record<
     ref: "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
     digest: "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
   },
+  platformControlPlaneSmoke: {
+    ref: "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF",
+    digest: "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST",
+  },
   egressEnforcement: {
     ref: "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
     digest: "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
   },
-  providerTemplates: {
+  restoreRehearsal: {
+    ref: "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
+    digest: "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
+  },
+  providerCatalog: {
     ref: "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF",
     digest: "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST",
+  },
+  costAttribution: {
+    ref: "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
+    digest: "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST",
   },
   secretBoundary: {
     ref: "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
@@ -125,14 +140,29 @@ export function verifyProductionHardeningGateResponse(
       response.checks.containerSmoke,
       manifestValidation.env,
     ),
+    platformControlPlaneSmoke: verifyGateCheck(
+      "platformControlPlaneSmoke",
+      response.checks.platformControlPlaneSmoke,
+      manifestValidation.env,
+    ),
     egressEnforcement: verifyGateCheck(
       "egressEnforcement",
       response.checks.egressEnforcement,
       manifestValidation.env,
     ),
-    providerTemplates: verifyGateCheck(
-      "providerTemplates",
-      response.checks.providerTemplates,
+    restoreRehearsal: verifyGateCheck(
+      "restoreRehearsal",
+      response.checks.restoreRehearsal,
+      manifestValidation.env,
+    ),
+    providerCatalog: verifyGateCheck(
+      "providerCatalog",
+      response.checks.providerCatalog,
+      manifestValidation.env,
+    ),
+    costAttribution: verifyGateCheck(
+      "costAttribution",
+      response.checks.costAttribution,
       manifestValidation.env,
     ),
     secretBoundary: verifyGateCheck(
@@ -161,8 +191,6 @@ export interface ProductionHardeningGatePublicSummary {
   readonly gate: "platform-hardening-gates";
   readonly validator: {
     readonly manifestDigest: string;
-    readonly checkCount: number;
-    readonly checks: readonly RequiredCheck[];
   };
   readonly privateEvidenceRefClass: string;
   readonly publicResult: string;
@@ -196,14 +224,12 @@ export function buildProductionHardeningGatePublicSummary(
     gate: "platform-hardening-gates",
     validator: {
       manifestDigest: verification.manifestDigest,
-      checkCount: REQUIRED_CHECKS.length,
-      checks: [...REQUIRED_CHECKS],
     },
     privateEvidenceRefClass: evidenceRefClassForChecks(verification.checks),
     publicResult: publicSummary.trim(),
     notes: verification.enforced
-      ? "Internal hardening gate is enforced; raw evidence remains in the private operator evidence store."
-      : "Internal hardening gate validated but is not enforced.",
+      ? "Internal hardening evidence references and digests are enforced; raw evidence remains in the private operator evidence store."
+      : "Internal hardening evidence references and digests were validated, but runtime enforcement is not enabled.",
   };
 }
 
@@ -248,11 +274,10 @@ export function validateProductionHardeningGatePublicSummaryArtifact(
     if (validator.manifestDigest !== verification.manifestDigest) {
       errors.push("validator.manifestDigest must match manifest digest");
     }
-    if (validator.checkCount !== REQUIRED_CHECKS.length) {
-      errors.push("validator.checkCount must match required check count");
-    }
-    if (!sameStringArray(validator.checks, REQUIRED_CHECKS)) {
-      errors.push("validator.checks must match required checks");
+    for (const key of Object.keys(validator)) {
+      if (key !== "manifestDigest") {
+        errors.push(`validator.${key} is not public summary material`);
+      }
     }
   }
   if (
@@ -557,18 +582,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sameStringArray(value: unknown, expected: readonly string[]): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length === expected.length &&
-    value.every((item, index) => item === expected[index])
-  );
-}
-
 function defaultProductionHardeningPublicSummary(enforced: boolean): string {
   return enforced
-    ? "Container smoke, egress enforcement, provider templates, and secret-boundary hardening checks passed the enforced platform gate."
-    : "Container smoke, egress enforcement, provider templates, and secret-boundary hardening checks passed validation but enforcement is not enabled.";
+    ? "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, provider catalog, cost attribution, and secret-boundary hardening was validated and enforced by the platform gate."
+    : "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, provider catalog, cost attribution, and secret-boundary hardening was validated, but enforcement is not enabled.";
 }
 
 function productionHardeningPublicSummaryErrors(value: string): string[] {

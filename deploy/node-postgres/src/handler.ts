@@ -5,18 +5,17 @@
  * env vars only.
  */
 import type {
-  ManagedOfferingAccessPolicy,
+  PlatformAccessPolicy,
   OidcClientRegistration,
   PasskeyHttpOptions,
   StripeBillingOptions,
   UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
-  WorkloadPlatformServiceResolverHttpOptions,
+  ServiceGraphMaterialResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
 import {
-  createOpenManagedOfferingAccessPolicy,
+  createOpenPlatformAccessPolicy,
   customOidcOAuthProvider,
-  githubOAuthProvider,
   googleOAuthProvider,
 } from "@takosjp/takosumi-accounts-service";
 
@@ -65,9 +64,9 @@ export interface NodeAccountsServerConfig {
   readonly issuer: string;
   readonly databaseUrl: string;
   readonly clients: readonly OidcClientRegistration[] | undefined;
-  readonly managedOfferingAccess: ManagedOfferingAccessPolicy;
-  readonly workloadPlatformServices:
-    | WorkloadPlatformServiceResolverHttpOptions
+  readonly platformAccess: PlatformAccessPolicy;
+  readonly serviceGraphMaterialResolver:
+    | ServiceGraphMaterialResolverHttpOptions
     | undefined;
   readonly stripeBilling: StripeBillingOptions | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
@@ -81,18 +80,20 @@ export function parseEnv(
   env: Record<string, string | undefined>,
 ): NodeAccountsServerConfig {
   const databaseUrl = required(env, "TAKOSUMI_ACCOUNTS_DATABASE_URL");
-  const issuer = optional(env, "TAKOSUMI_ACCOUNTS_ISSUER") ??
-    `http://${optional(env, "HOST") ?? "localhost"}:${
-      parseIntOr(env.PORT, 8787)
-    }`;
+  const issuer =
+    optional(env, "TAKOSUMI_ACCOUNTS_ISSUER") ??
+    `http://${optional(env, "HOST") ?? "localhost"}:${parseIntOr(
+      env.PORT,
+      8787,
+    )}`;
   return {
     bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
     issuer,
     databaseUrl,
     clients: parseClients(env),
-    managedOfferingAccess: parseManagedOfferingAccess(env),
-    workloadPlatformServices: parseWorkloadPlatformServices(env),
+    platformAccess: parsePlatformAccess(env),
+    serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     stripeBilling: parseStripeBilling(env),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -121,13 +122,15 @@ function parseClients(
       "TAKOSUMI_ACCOUNTS_CLIENT_ID and TAKOSUMI_ACCOUNTS_REDIRECT_URIS must be set together",
     );
   }
-  return [{
-    clientId,
-    redirectUris,
-    ...(optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")
-      ? { clientSecret: optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")! }
-      : {}),
-  }];
+  return [
+    {
+      clientId,
+      redirectUris,
+      ...(optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")
+        ? { clientSecret: optional(env, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET")! }
+        : {}),
+    },
+  ];
 }
 
 function parseClientRecord(value: unknown): OidcClientRegistration {
@@ -137,9 +140,9 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
   const record = value as Record<string, unknown>;
   const clientId = typeof record.clientId === "string" ? record.clientId : "";
   const redirectUris = Array.isArray(record.redirectUris)
-    ? record.redirectUris.filter((uri): uri is string =>
-      typeof uri === "string"
-    )
+    ? record.redirectUris.filter(
+        (uri): uri is string => typeof uri === "string",
+      )
     : [];
   if (!clientId || redirectUris.length === 0) {
     throw new TypeError(
@@ -155,51 +158,53 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
   };
 }
 
-function parseManagedOfferingAccess(
+function parsePlatformAccess(
   env: Record<string, string | undefined>,
-): ManagedOfferingAccessPolicy {
-  const status = optional(env, "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS") ??
-    "closed";
+): PlatformAccessPolicy {
+  const status = optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS") ?? "closed";
   if (status === "closed") return { status: "closed" };
   if (status !== "open") {
     throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS must be one of: closed, open",
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: closed, open",
     );
   }
   const evidenceDigest = required(
     env,
-    "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST",
+    "TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST",
   );
   requireProductionHardeningEvidence(env);
-  return createOpenManagedOfferingAccessPolicy({
-    ...(optional(env, "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF")
-      ? {
-        evidenceRef: optional(
-          env,
-          "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF",
-        )!,
-      }
-      : {}),
-    ...(optional(env, "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF")
-      ? {
-        approvalRef: optional(
-          env,
-          "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF",
-        )!,
-      }
-      : {}),
-    ...(optional(env, "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY")
-      ? {
-        publicSummary: optional(
-          env,
-          "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY",
-        )!,
-      }
-      : {}),
-  }, {
-    ready: true,
-    evidenceDigest,
-  });
+  return createOpenPlatformAccessPolicy(
+    {
+      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF")
+        ? {
+            evidenceRef: optional(
+              env,
+              "TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF",
+            )!,
+          }
+        : {}),
+      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF")
+        ? {
+            approvalRef: optional(
+              env,
+              "TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF",
+            )!,
+          }
+        : {}),
+      ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY")
+        ? {
+            publicSummary: optional(
+              env,
+              "TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY",
+            )!,
+          }
+        : {}),
+    },
+    {
+      ready: true,
+      evidenceDigest,
+    },
+  );
 }
 
 function requireProductionHardeningEvidence(
@@ -207,7 +212,7 @@ function requireProductionHardeningEvidence(
 ): void {
   if (optional(env, "TAKOSUMI_PRODUCTION_HARDENING_GATE") !== "enforce") {
     throw new TypeError(
-      "Open managed offering access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
+      "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
     );
   }
   const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
@@ -217,12 +222,24 @@ function requireProductionHardeningEvidence(
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
     ],
     [
+      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF",
+      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST",
+    ],
+    [
       "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
       "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
     ],
     [
+      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
+      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
+    ],
+    [
       "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF",
       "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
+      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST",
     ],
     [
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
@@ -231,7 +248,7 @@ function requireProductionHardeningEvidence(
   ] as const) {
     const ref = optional(env, refName);
     if (!ref) {
-      throw new TypeError(`Open managed offering access requires ${refName}`);
+      throw new TypeError(`Open platform readiness access requires ${refName}`);
     }
     if (!commitPinnedGitRefPattern.test(ref)) {
       throw new TypeError(`${refName} must be commit-pinned git+ ref`);
@@ -239,7 +256,7 @@ function requireProductionHardeningEvidence(
     const digest = optional(env, digestName);
     if (!digest) {
       throw new TypeError(
-        `Open managed offering access requires ${digestName}`,
+        `Open platform readiness access requires ${digestName}`,
       );
     }
     if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
@@ -248,12 +265,12 @@ function requireProductionHardeningEvidence(
   }
 }
 
-function parseWorkloadPlatformServices(
+function parseServiceGraphMaterials(
   env: Record<string, string | undefined>,
-): WorkloadPlatformServiceResolverHttpOptions | undefined {
+): ServiceGraphMaterialResolverHttpOptions | undefined {
   const token = optional(
     env,
-    "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN",
+    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
   );
   if (!token) return undefined;
   const billingPortalUrl = optional(
@@ -262,16 +279,16 @@ function parseWorkloadPlatformServices(
   );
   const internalUrl = optional(
     env,
-    "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_INTERNAL_URL",
+    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL",
   );
   return {
     token,
     ...(billingPortalUrl ? { billingPortalUrl } : {}),
     ...(internalUrl ? { internalUrl } : {}),
     ...(bool(
-        env,
-        "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_ALLOW_DIRECT_DEPLOY_CONTROL",
-      )
+      env,
+      "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_ALLOW_DIRECT_DEPLOY_CONTROL",
+    )
       ? { allowDeployControlInstallations: true }
       : {}),
   };
@@ -285,7 +302,7 @@ function parseWorkloadPlatformServices(
  * `TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` is intentionally **not** wired
  * into the returned `StripeBillingOptions`: the upstream
  * `@takosjp/takosumi-accounts-service` `StripeBillingOptions` type
- * (see `packages/accounts-service/src/mod.ts`) currently exposes only
+ * (see `accounts/service/src/mod.ts`) currently exposes only
  * `secretKey`, `webhookSecret`, `fetch`, `stripeApiBase`, and
  * `webhookToleranceSeconds`. The publishable key is surfaced to the
  * dashboard / SDKs through the operator distribution's separate
@@ -339,7 +356,8 @@ function parsePasskeys(
 ): PasskeyHttpOptions | undefined {
   const rpId = optional(env, "TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID");
   const rpName = optional(env, "TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME");
-  const origin = optional(env, "TAKOSUMI_ACCOUNTS_PASSKEY_RP_ORIGIN") ??
+  const origin =
+    optional(env, "TAKOSUMI_ACCOUNTS_PASSKEY_RP_ORIGIN") ??
     optional(env, "TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN");
   const sessionTtlMs = parsePasskeyTtlMs(env);
   if (!rpId && !rpName && !origin && sessionTtlMs === undefined) {
@@ -376,15 +394,6 @@ function parseUpstreamOAuth(
   env: Record<string, string | undefined>,
 ): UpstreamOAuthOptions | undefined {
   const providers: UpstreamOAuthClientRegistration[] = [];
-  const github = parseBuiltinUpstreamProvider(env, "GITHUB");
-  if (github) {
-    providers.push({
-      ...github,
-      provider: githubOAuthProvider(
-        parseBuiltinProviderOverrides(env, "GITHUB"),
-      ),
-    });
-  }
   const google = parseBuiltinUpstreamProvider(env, "GOOGLE");
   if (google) {
     providers.push({
@@ -404,7 +413,7 @@ function parseUpstreamOAuth(
     env,
     "TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS",
   );
-  if (!subjectSecret && providers.length === 0 && sessionTtlMs === undefined) {
+  if (providers.length === 0 && sessionTtlMs === undefined) {
     return undefined;
   }
   if (!subjectSecret || providers.length === 0) {
@@ -421,7 +430,7 @@ function parseUpstreamOAuth(
 
 function parseBuiltinUpstreamProvider(
   env: Record<string, string | undefined>,
-  provider: "GITHUB" | "GOOGLE",
+  provider: "GOOGLE",
 ): Omit<UpstreamOAuthClientRegistration, "provider"> | undefined {
   const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
   const clientId = optional(env, `${prefix}CLIENT_ID`);
@@ -431,15 +440,15 @@ function parseBuiltinUpstreamProvider(
   if (!clientId && !clientSecret && !redirectUri && scopes.length === 0) {
     return undefined;
   }
-  if (!clientId || !redirectUri) {
+  if (!clientId || !clientSecret || !redirectUri) {
     throw new TypeError(
-      `${prefix}CLIENT_ID and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
+      `${prefix}CLIENT_ID, ${prefix}CLIENT_SECRET, and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
     );
   }
   return {
     providerId: provider.toLowerCase(),
     clientId,
-    ...(clientSecret ? { clientSecret } : {}),
+    clientSecret,
     redirectUri,
     ...(scopes.length > 0 ? { scopes } : {}),
   };
@@ -447,7 +456,7 @@ function parseBuiltinUpstreamProvider(
 
 function parseBuiltinProviderOverrides(
   env: Record<string, string | undefined>,
-  provider: "GITHUB" | "GOOGLE",
+  provider: "GOOGLE",
 ): {
   issuer?: string;
   authorizationEndpoint?: string;
@@ -503,20 +512,18 @@ function parseAppleUpstreamProvider(
       "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_ID and _REDIRECT_URI are required when configuring apple upstream OAuth",
     );
   }
-  const issuer = optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_ISSUER") ??
+  const issuer =
+    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_ISSUER") ??
     "https://appleid.apple.com";
-  const authorizationEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_AUTHORIZATION_ENDPOINT",
-  ) ?? "https://appleid.apple.com/auth/authorize";
-  const tokenEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_TOKEN_ENDPOINT",
-  ) ?? "https://appleid.apple.com/auth/token";
-  const userInfoEndpoint = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_USERINFO_ENDPOINT",
-  ) ?? "https://appleid.apple.com/auth/userinfo";
+  const authorizationEndpoint =
+    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_AUTHORIZATION_ENDPOINT") ??
+    "https://appleid.apple.com/auth/authorize";
+  const tokenEndpoint =
+    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_TOKEN_ENDPOINT") ??
+    "https://appleid.apple.com/auth/token";
+  const userInfoEndpoint =
+    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_USERINFO_ENDPOINT") ??
+    "https://appleid.apple.com/auth/userinfo";
   const subjectClaim = optional(
     env,
     "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_SUBJECT_CLAIM",
@@ -559,10 +566,7 @@ function parseCustomOidcUpstreamProvider(
     env,
     "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_USERINFO_ENDPOINT",
   );
-  const clientId = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID",
-  );
+  const clientId = optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_ID");
   const clientSecret = optional(
     env,
     "TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET",
@@ -573,14 +577,25 @@ function parseCustomOidcUpstreamProvider(
   );
   const scopes = splitList(env.TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES);
   const configured = Boolean(
-    providerId || issuer || authorizationEndpoint || tokenEndpoint ||
-      userInfoEndpoint || clientId || clientSecret || redirectUri ||
-      scopes.length > 0,
+    providerId ||
+    issuer ||
+    authorizationEndpoint ||
+    tokenEndpoint ||
+    userInfoEndpoint ||
+    clientId ||
+    clientSecret ||
+    redirectUri ||
+    scopes.length > 0,
   );
   if (!configured) return undefined;
   if (
-    !providerId || !issuer || !authorizationEndpoint || !tokenEndpoint ||
-    !userInfoEndpoint || !clientId || !redirectUri
+    !providerId ||
+    !issuer ||
+    !authorizationEndpoint ||
+    !tokenEndpoint ||
+    !userInfoEndpoint ||
+    !clientId ||
+    !redirectUri
   ) {
     throw new TypeError(
       "Custom upstream OIDC requires provider id, issuer, endpoints, client id, and redirect uri",
@@ -641,10 +656,7 @@ function parseExportDownload(
   env: Record<string, string | undefined>,
 ): NodeAccountsExportDownloadConfig | undefined {
   const secret = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET");
-  const outputDirectory = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR",
-  );
+  const outputDirectory = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR");
   const baseUrl = optional(env, "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL");
   const ttlMs = optionalNonNegativeInteger(
     env,
@@ -689,10 +701,7 @@ function optional(
   return value && value.length > 0 ? value : undefined;
 }
 
-function bool(
-  env: Record<string, string | undefined>,
-  name: string,
-): boolean {
+function bool(env: Record<string, string | undefined>, name: string): boolean {
   const value = optional(env, name)?.toLowerCase();
   return value === "1" || value === "true" || value === "yes";
 }
@@ -718,5 +727,8 @@ function optionalNonNegativeInteger(
 
 function splitList(value: unknown): readonly string[] {
   if (typeof value !== "string") return [];
-  return value.split(/[,\s]+/u).map((s) => s.trim()).filter(Boolean);
+  return value
+    .split(/[,\s]+/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }

@@ -257,13 +257,9 @@ export function withDefaultProviderSupplyChainPolicy(
       { requireMirror: true },
       policy?.providerInstallation,
     ),
-    providerCredentials: mergeProviderCredentialPolicy(
-      {
-        requireTemporary: true,
-        requireTtlEnforced: true,
-      },
-      policy?.providerCredentials,
-    ),
+    ...(policy?.providerCredentials
+      ? { providerCredentials: policy.providerCredentials }
+      : {}),
   };
 }
 

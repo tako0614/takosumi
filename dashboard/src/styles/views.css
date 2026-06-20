@@ -1,5 +1,5 @@
 /*
- * views.css — the few cross-view rules that survived the app-centric rebuild:
+ * views.css — the few cross-view rules that survived the Installation-centric rebuild:
  * the decorative splat layer (SplatField / InkSplash) and the connections tab's
  * advanced disclosure. Everything else moved to the per-cluster wave-* files or
  * styles/app-views.css; colours stay on the canonical --tg-* tokens.

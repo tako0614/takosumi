@@ -8,7 +8,7 @@ terraform {
 
 variable "appName" {
   type        = string
-  description = "Worker script name (used in the workers.dev URL and route config)."
+  description = "Worker script name."
 }
 
 variable "accountId" {
@@ -28,15 +28,9 @@ variable "compatibilityDate" {
   default     = "2024-11-01"
 }
 
-variable "workersDev" {
-  type        = bool
-  description = "Whether to expose the Worker on the workers.dev subdomain."
-  default     = true
-}
-
-variable "accountSubdomain" {
+variable "publicUrl" {
   type        = string
-  description = "The account's workers.dev subdomain (the <name> in <name>.workers.dev). Used only to render the public url output."
+  description = "Optional public URL projected by a dispatcher/custom route after apply. Empty means this module only reports the Worker script name."
   default     = ""
 }
 
@@ -52,24 +46,12 @@ resource "cloudflare_workers_script" "this" {
   compatibility_date = var.compatibilityDate
 }
 
-# Optionally expose the Worker on <account>.workers.dev.
-resource "cloudflare_workers_script_subdomain" "this" {
-  count       = var.workersDev ? 1 : 0
-  account_id  = var.accountId
-  script_name = cloudflare_workers_script.this.script_name
-  enabled     = true
-}
-
 output "worker_name" {
   description = "Deployed Worker script name."
   value       = cloudflare_workers_script.this.script_name
 }
 
 output "url" {
-  description = "workers.dev URL for the Worker (empty when workers.dev is disabled or the account subdomain is unknown)."
-  value = (
-    var.workersDev && var.accountSubdomain != ""
-    ? "https://${cloudflare_workers_script.this.script_name}.${var.accountSubdomain}.workers.dev"
-    : ""
-  )
+  description = "Public URL projected outside this module, or empty when no dispatcher/custom route projection is configured."
+  value       = var.publicUrl
 }

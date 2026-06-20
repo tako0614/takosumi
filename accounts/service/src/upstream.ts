@@ -45,22 +45,19 @@ export interface UpstreamAuthorizationCodeExchangeResult {
   providerId: string;
   upstreamIssuer: string;
   upstreamSubject: string;
- takosumiSubject: TakosumiSubject;
+  takosumiSubject: TakosumiSubject;
   tokenResponse: Record<string, unknown>;
   userInfo: Record<string, unknown>;
 }
 
 /** Optional endpoint overrides. Used by local-substrate tests to point the
  *  builtin provider definitions at a mock OAuth server (avoiding outbound
- *  traffic to real google / github). Production leaves all overrides unset
+ *  traffic to real Google). Production leaves all overrides unset
  *  and gets the real endpoints. */
 export type BuiltinUpstreamProviderOverrides = Partial<
   Pick<
     UpstreamOAuthProvider,
-    | "issuer"
-    | "authorizationEndpoint"
-    | "tokenEndpoint"
-    | "userInfoEndpoint"
+    "issuer" | "authorizationEndpoint" | "tokenEndpoint" | "userInfoEndpoint"
   >
 >;
 
@@ -70,31 +67,16 @@ export function googleOAuthProvider(
   return {
     id: "google",
     issuer: overrides.issuer ?? "https://accounts.google.com",
-    authorizationEndpoint: overrides.authorizationEndpoint ??
+    authorizationEndpoint:
+      overrides.authorizationEndpoint ??
       "https://accounts.google.com/o/oauth2/v2/auth",
-    tokenEndpoint: overrides.tokenEndpoint ??
-      "https://oauth2.googleapis.com/token",
-    userInfoEndpoint: overrides.userInfoEndpoint ??
+    tokenEndpoint:
+      overrides.tokenEndpoint ?? "https://oauth2.googleapis.com/token",
+    userInfoEndpoint:
+      overrides.userInfoEndpoint ??
       "https://openidconnect.googleapis.com/v1/userinfo",
     defaultScopes: ["openid", "profile", "email"],
     subjectClaim: "sub",
-  };
-}
-
-export function githubOAuthProvider(
-  overrides: BuiltinUpstreamProviderOverrides = {},
-): UpstreamOAuthProvider {
-  return {
-    id: "github",
-    issuer: overrides.issuer ?? "https://github.com",
-    authorizationEndpoint: overrides.authorizationEndpoint ??
-      "https://github.com/login/oauth/authorize",
-    tokenEndpoint: overrides.tokenEndpoint ??
-      "https://github.com/login/oauth/access_token",
-    userInfoEndpoint: overrides.userInfoEndpoint ??
-      "https://api.github.com/user",
-    defaultScopes: ["read:user", "user:email"],
-    subjectClaim: "id",
   };
 }
 
@@ -149,7 +131,8 @@ export async function exchangeUpstreamAuthorizationCode(
   const userInfo = await fetchUserInfo(input.provider, accessToken, fetchImpl);
   const upstreamSubject = userInfo[input.provider.subjectClaim];
   if (
-    typeof upstreamSubject !== "string" && typeof upstreamSubject !== "number"
+    typeof upstreamSubject !== "string" &&
+    typeof upstreamSubject !== "number"
   ) {
     throw new TypeError(
       `upstream OAuth userinfo did not include subject claim '${input.provider.subjectClaim}'`,
@@ -166,7 +149,7 @@ export async function exchangeUpstreamAuthorizationCode(
     providerId: input.provider.id,
     upstreamIssuer: input.provider.issuer,
     upstreamSubject: normalizedSubject,
-   takosumiSubject,
+    takosumiSubject,
     tokenResponse,
     userInfo,
   };
@@ -199,9 +182,7 @@ async function postTokenRequest(
   }
   const responseBody = await response.json();
   if (!isJsonRecord(responseBody)) {
-    throw new TypeError(
-      "upstream OAuth token response was not a JSON object",
-    );
+    throw new TypeError("upstream OAuth token response was not a JSON object");
   }
   return responseBody;
 }

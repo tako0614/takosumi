@@ -6,10 +6,9 @@
  *
  * The cookie is `HttpOnly` so JavaScript cannot read or write it; we
  * therefore mirror it through fetch(`/v1/account/session/me`) which
- * returns the session subject when the cookie is valid, or `401` /
- * `{ session: null }` when it's missing / expired. Callers use the
- * cached value via `readSession()` and react to changes via
- * `onSessionChange()`.
+ * returns the session subject when the cookie is valid, or
+ * `{ session: null }` when it's missing / expired. Callers use the cached
+ * value via `readSession()` and react to changes via `onSessionChange()`.
  *
  * NOTE: account screens use THIS cookie session (account-plane issuer),
  * which is distinct from the takos product `useAuth()` session. In the
@@ -68,9 +67,7 @@ interface SessionMeResponse {
   } | null;
 }
 
-function pickResponseRecord(
-  data: SessionMeResponse,
-): SessionRecord | null {
+function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
   // The contract is the top-level shape `{ subject, expiresAt, primaryAccountId }`.
   // We also accept the existing `{ session: { subject, ... } }` envelope so the
   // SPA keeps working during a rolling deploy.
@@ -110,7 +107,7 @@ async function fetchSessionMe(): Promise<SessionRecord | null> {
     });
     if (res.status === 401 || res.status === 404) return null;
     if (!res.ok) return null;
-    const data = await res.json() as SessionMeResponse;
+    const data = (await res.json()) as SessionMeResponse;
     return pickResponseRecord(data);
   } catch {
     return null;
@@ -160,7 +157,8 @@ export function readSession(): SessionRecord | null {
     void refreshSession();
   }
   if (
-    cachedSession && cachedSession.expiresAt > 0 &&
+    cachedSession &&
+    cachedSession.expiresAt > 0 &&
     cachedSession.expiresAt < Date.now()
   ) {
     cachedSession = null;

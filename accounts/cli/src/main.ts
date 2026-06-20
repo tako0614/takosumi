@@ -19,6 +19,7 @@ import {
   runInstallationsUninstall,
 } from "./cli-installations-commands.ts";
 import {
+  runLaunchReadinessMigrateFinalModel,
   runLaunchReadinessProductionTopologyMerge,
   runLaunchReadinessProductionTopologyPreflight,
   runLaunchReadinessProductionTopologyTemplate,
@@ -39,7 +40,7 @@ export type { AccountsSeedPlan } from "./cli-accounts-commands.ts";
 
 // Keep launch-readiness audit markers in this entrypoint because the
 // root readiness check validates the public CLI surface after helper extraction:
-// root docs/quality/managed-offering-evidence-summary.md
+// root docs/quality/platform-readiness-evidence-summary.md
 // privateEvidenceRefClass must be null or a redacted scheme class
 // normalized.startsWith("topology://")
 // artifactDigestEvidenceRef
@@ -63,8 +64,9 @@ export async function main(
     return await main(args.slice(1), io);
   }
 
-  // `takosumi deploy` — the wrangler-deploy-style local-directory deploy and its
-  // read companions. These are the primary user-facing surface.
+  // `takosumi deploy` — the wrangler-deploy-style local-directory upload helper
+  // and its read companions. The standard product flow is dashboard Git URL
+  // install; CLI upload exists for local working trees before they are pushed.
   if (
     args[0] === "deploy" ||
     args[0] === "plan" ||
@@ -89,6 +91,15 @@ export async function main(
   }
 
   const [domain, command, ...rest] = args;
+  if (domain === "installations") {
+    io.stderr(
+      "`takosumi installations` is not a public command. Use dashboard Git URL install or `takosumi deploy` for local Capsules. Internal account-plane projection helpers live under `takosumi internal installations ...`.",
+    );
+    return 2;
+  }
+  if (domain === "internal" && command === "installations") {
+    return await runInternalInstallations(rest, io);
+  }
   if (domain === "accounts" && command === "seed") {
     return runAccountsSeed(rest, io);
   }
@@ -105,7 +116,8 @@ export async function main(
     return await runAccountsTokens(rest, io);
   }
   if (
-    domain === "accounts" && command === "launch-tokens" &&
+    domain === "accounts" &&
+    command === "launch-tokens" &&
     rest[0] === "cleanup"
   ) {
     return await runAccountsLaunchTokensCleanup(rest.slice(1), io);
@@ -116,24 +128,6 @@ export async function main(
   if (domain === "secrets" || domain === "platform-secrets") {
     return await runPlatformSecrets([command, ...rest].filter(Boolean), io);
   }
-  if (domain === "installations" && command === "list") {
-    return await runInstallationsList(rest, io);
-  }
-  if (domain === "installations" && command === "inspect") {
-    return await runInstallationsInspect(rest, io);
-  }
-  if (domain === "installations" && command === "uninstall") {
-    return await runInstallationsUninstall(rest, io);
-  }
-  if (domain === "installations" && command === "status") {
-    return await runInstallationsStatus(rest, io);
-  }
-  if (domain === "installations" && command === "materialize") {
-    return await runInstallationsMaterialize(rest, io);
-  }
-  if (domain === "installations" && command === "export") {
-    return await runInstallationsExport(rest, io);
-  }
   if (domain === "launch-readiness" && command === "validate") {
     return await runLaunchReadinessValidate(rest, io);
   }
@@ -143,14 +137,19 @@ export async function main(
   if (domain === "launch-readiness" && command === "template") {
     return runLaunchReadinessTemplate(rest, io);
   }
+  if (domain === "launch-readiness" && command === "migrate-final-model") {
+    return await runLaunchReadinessMigrateFinalModel(rest, io);
+  }
   if (
-    domain === "launch-readiness" && command === "production-topology" &&
+    domain === "launch-readiness" &&
+    command === "production-topology" &&
     rest[0] === "template"
   ) {
     return runLaunchReadinessProductionTopologyTemplate(rest.slice(1), io);
   }
   if (
-    domain === "launch-readiness" && command === "production-topology" &&
+    domain === "launch-readiness" &&
+    command === "production-topology" &&
     rest[0] === "preflight"
   ) {
     return await runLaunchReadinessProductionTopologyPreflight(
@@ -159,17 +158,42 @@ export async function main(
     );
   }
   if (
-    domain === "launch-readiness" && command === "production-topology" &&
+    domain === "launch-readiness" &&
+    command === "production-topology" &&
     rest[0] === "merge"
   ) {
-    return await runLaunchReadinessProductionTopologyMerge(
-      rest.slice(1),
-      io,
-    );
+    return await runLaunchReadinessProductionTopologyMerge(rest.slice(1), io);
   }
 
   io.stderr(`Unknown command: ${args.join(" ")}`);
   io.stderr(helpText());
+  return 2;
+}
+
+async function runInternalInstallations(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const [command, ...rest] = args;
+  if (command === "list") {
+    return await runInstallationsList(rest, io);
+  }
+  if (command === "inspect") {
+    return await runInstallationsInspect(rest, io);
+  }
+  if (command === "uninstall") {
+    return await runInstallationsUninstall(rest, io);
+  }
+  if (command === "status") {
+    return await runInstallationsStatus(rest, io);
+  }
+  if (command === "materialize") {
+    return await runInstallationsMaterialize(rest, io);
+  }
+  if (command === "export") {
+    return await runInstallationsExport(rest, io);
+  }
+  io.stderr(`Unknown internal installations command: ${args.join(" ")}`);
   return 2;
 }
 

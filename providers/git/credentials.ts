@@ -1,7 +1,7 @@
 /**
  * Git source credential driver (source phase).
  *
- * This is the provider-specific implementation the managed-provider registry
+ * This is the provider-specific implementation the provider runtime registry
  * (`@takosumi/providers`) refers to for the git "source" credential: it turns a
  * git source connection's ALREADY-OPENED secret values plus its connection
  * context (kind + scope hints) into the runner-facing {@link MintResponse} — an

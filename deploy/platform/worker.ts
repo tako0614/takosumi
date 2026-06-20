@@ -17,7 +17,13 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import type { ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
+import { TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY } from "@takosjp/takosumi-accounts-contract";
+import { TAKOSUMI_AI_GATEWAY_BASE_PATH } from "takosumi-contract/ai-gateway";
+import {
+  D1AccountsStore,
+  requireCurrentServiceGraphServiceAccessToken,
+  type ControlPlaneOperations,
+} from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -30,14 +36,19 @@ import {
   driftSweep,
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
-import { handleCfProxyRequest } from "../../providers/cloudflare/hosting/cf_proxy_worker.ts";
-import { cfProxySigningSecretsFromEnv } from "../../core/bootstrap.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
+import {
+  aiGatewayInsufficientScopeResponse,
+  aiGatewayUnauthorizedResponse,
+  createTakosumiAiGatewayConfigFromEnv,
+  handleTakosumiAiGatewayRequest,
+} from "../../core/domains/ai-gateway/openai_compatible.ts";
+import type { BillingSettings } from "takosumi-contract/billing";
 
 export { CoordinationObject, OpenTofuRunnerObject };
 
 // In-process deploy-control seam, one cached service per env, shared with the
-// unified Takos worker. The accounts deploy-control proxy calls the typed
+// unified Takos worker. The accounts deploy-control facade calls the typed
 // `operations` facade directly (no Bearer handshake, no JSON round-trip); the
 // HTTP `fetch` dispatch into the embedded service's Hono app is kept as a
 // transport fallback. The synthetic base host is never dialed.
@@ -62,33 +73,23 @@ function deployControlSeam(env: PlatformEnv) {
   return seam;
 }
 
-// Adapt the in-process `TakosumiOperations` facade to the dashboard's
-// `ControlPlaneOperations` shape. The two are identical EXCEPT `getSource`:
-// `TakosumiOperations.getSource` resolves the `{ source }` envelope
-// (`SourceResponse`) while the control routes consume a bare `Source` (they read
-// `source.spaceId` for the access check). Unwrap `.source` here so the routes do
-// not silently observe `undefined` for the space binding.
 async function controlPlaneOperationsFor(
   env: PlatformEnv,
 ): Promise<ControlPlaneOperations> {
-  const operations = await deployControlSeam(env).operations();
-  return {
-    ...operations,
-    getSource: async (id) => (await operations.getSource(id)).source,
-  };
+  return await deployControlSeam(env).operations();
 }
 
 const accountsWorker = createCloudflareWorker({
   deployControlOperations: (env) => deployControlSeam(env).operations(),
   // The session-authed `/api/v1/*` dashboard surface (M10) reads the SAME
-  // in-process operations facade the deploy-control proxy uses, adapted to the
+  // in-process operations facade the deploy-control facade uses, adapted to the
   // `ControlPlaneOperations` shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
 });
 
 // The platform worker owns the public fetch surface (accounts handler) AND runs
 // the OpenTofu run-queue consumer in-process. The consumer reaches the same
-// in-process deploy-control controller the fetch seam uses, so a run dispatched
+// deploy-control operations facade as the accounts surface, so a run dispatched
 // by the create path is executed here against the same store.
 const runQueueConsumer = createDeployControlQueueConsumer();
 
@@ -98,22 +99,23 @@ export default {
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
     }
-    // Managed cf-proxy: the cloudflare provider base_url for a managed run points
-    // here so a plain `cloudflare_workers_script` is redirected into the WfP
-    // dispatch namespace (the provider cannot place a script in a namespace).
-    if (url.pathname.startsWith("/internal/cf-proxy/")) {
-      // Fail closed: only forward when the control plane signed this exact
-      // (namespace, slug) scope with an accepted cf-proxy signing secret and it
-      // is unexpired. An unsigned/expired/tampered base_url is rejected before
-      // any upstream Cloudflare call (closes the unauthenticated open-relay
-      // surface). The accepted set is the dedicated signing secret + its
-      // rotation companion (+ deprecated bearer fallback), so a key rotation
-      // does not break in-flight runs.
-      return handleCfProxyRequest(request, url, {
-        signingSecrets: cfProxySigningSecretsFromEnv(
-          env as unknown as Record<string, string | undefined>,
-        ),
-      });
+    if (isOperatorBillingPath(url.pathname)) {
+      const response = await handleOperatorBillingRequest(
+        request,
+        url,
+        env,
+        await controlPlaneOperationsFor(env),
+      );
+      return response ?? Response.json({ error: "not found" }, { status: 404 });
+    }
+    // Operator-provided AI Gateway. Installed services receive this endpoint as
+    // Service Graph material and call it with a rotated `takosumi.ai.gateway`
+    // service token. The upstream provider API keys stay in operator env vars.
+    if (
+      url.pathname === TAKOSUMI_AI_GATEWAY_BASE_PATH ||
+      url.pathname.startsWith(`${TAKOSUMI_AI_GATEWAY_BASE_PATH}/`)
+    ) {
+      return await handlePlatformAiGatewayRequest(request, url, env);
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
@@ -139,6 +141,300 @@ export default {
   },
 };
 
+const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
+const INTERNAL_PLATFORM_SPACE_PREFIX = "/internal/platform/spaces/";
+const INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX = "/billing";
+const INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX =
+  "/subscription/change";
+
+function isOperatorBillingPath(pathname: string): boolean {
+  return (
+    spaceIdFromInternalPlatformPath(
+      pathname,
+      INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX,
+    ) !== undefined ||
+    spaceIdFromInternalPlatformPath(
+      pathname,
+      INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX,
+    ) !== undefined
+  );
+}
+
+export interface OperatorBillingOperations {
+  getSpaceBilling(spaceId: string): Promise<{
+    readonly billing: {
+      readonly settings: BillingSettings;
+      readonly balance?: unknown;
+    };
+  }>;
+  changeSpaceSubscription(
+    spaceId: string,
+    input: { readonly billingSettings: BillingSettings },
+  ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
+}
+
+export async function handleOperatorBillingRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  operations: OperatorBillingOperations,
+): Promise<Response | undefined> {
+  const billingSpaceId = spaceIdFromInternalPlatformPath(
+    url.pathname,
+    INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX,
+  );
+  if (billingSpaceId !== undefined) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return Response.json({ error: "method not allowed" }, { status: 405 });
+    }
+    const auth = requireDeployControlBearer(request, env);
+    if (auth) return auth;
+    const result = await operations.getSpaceBilling(billingSpaceId);
+    if (request.method === "HEAD") return new Response(null, { status: 200 });
+    return Response.json(result, { status: 200 });
+  }
+
+  const subscriptionSpaceId = spaceIdFromInternalPlatformPath(
+    url.pathname,
+    INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX,
+  );
+  if (subscriptionSpaceId === undefined) return undefined;
+  if (request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
+  const body = await readJsonRecord(request);
+  if (!body.ok) return body.response;
+  const billingSettings = parseBillingSettings(body.value.billingSettings);
+  if (!billingSettings.ok) {
+    return Response.json(
+      { error: "invalid_request", error_description: billingSettings.error },
+      { status: 400 },
+    );
+  }
+  return Response.json(
+    await operations.changeSpaceSubscription(subscriptionSpaceId, {
+      billingSettings: billingSettings.value,
+    }),
+    { status: 200 },
+  );
+}
+
+function spaceIdFromInternalPlatformPath(
+  pathname: string,
+  suffix: string,
+): string | undefined {
+  if (!pathname.startsWith(INTERNAL_PLATFORM_SPACE_PREFIX)) return undefined;
+  if (!pathname.endsWith(suffix)) return undefined;
+  const encoded = pathname.slice(
+    INTERNAL_PLATFORM_SPACE_PREFIX.length,
+    pathname.length - suffix.length,
+  );
+  if (!encoded || encoded.includes("/")) return undefined;
+  const spaceId = decodeURIComponent(encoded);
+  return SPACE_ID_PATTERN.test(spaceId) ? spaceId : undefined;
+}
+
+function requireDeployControlBearer(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Response | undefined {
+  const token =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
+  if (!token) return Response.json({ error: "not found" }, { status: 404 });
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
+  if (!bearer || !constantTimeEqualsString(bearer, token)) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  return undefined;
+}
+
+async function readJsonRecord(
+  request: Request,
+): Promise<
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly response: Response }
+> {
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    return {
+      ok: false,
+      response: Response.json(
+        { error: "invalid_request", error_description: "body must be JSON" },
+        { status: 400 },
+      ),
+    };
+  }
+  if (!isRecord(parsed)) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid_request",
+          error_description: "body must be a JSON object",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  return { ok: true, value: parsed };
+}
+
+function parseBillingSettings(
+  value: unknown,
+):
+  | { readonly ok: true; readonly value: BillingSettings }
+  | { readonly ok: false; readonly error: string } {
+  if (!isRecord(value)) {
+    return { ok: false, error: "billingSettings must be an object" };
+  }
+  if (value.mode === "disabled") {
+    return value.provider === "none"
+      ? { ok: true, value: { mode: "disabled", provider: "none" } }
+      : { ok: false, error: "disabled billing requires provider none" };
+  }
+  if (value.mode === "showback") {
+    if (!isBillingProvider(value.provider)) {
+      return {
+        ok: false,
+        error: "showback billing provider must be stripe, manual, or none",
+      };
+    }
+    if (
+      value.reservationRequired !== undefined &&
+      value.reservationRequired !== false
+    ) {
+      return {
+        ok: false,
+        error:
+          "showback billing reservationRequired must be false when provided",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        mode: "showback",
+        provider: value.provider,
+        ...(value.reservationRequired === false
+          ? { reservationRequired: false }
+          : {}),
+      },
+    };
+  }
+  if (value.mode === "enforce") {
+    if (value.provider !== "stripe" && value.provider !== "manual") {
+      return {
+        ok: false,
+        error: "enforced billing requires stripe or manual provider",
+      };
+    }
+    if (value.reservationRequired !== true) {
+      return {
+        ok: false,
+        error: "enforced billing requires reservationRequired true",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        mode: "enforce",
+        provider: value.provider,
+        reservationRequired: true,
+      },
+    };
+  }
+  return { ok: false, error: "unknown billing mode" };
+}
+
+function isBillingProvider(
+  value: unknown,
+): value is "stripe" | "manual" | "none" {
+  return value === "stripe" || value === "manual" || value === "none";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function handlePlatformAiGatewayRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  let config: ReturnType<typeof createTakosumiAiGatewayConfigFromEnv>;
+  try {
+    config = createTakosumiAiGatewayConfigFromEnv(
+      env as unknown as Record<string, unknown>,
+    );
+  } catch {
+    return Response.json(
+      {
+        error: {
+          message: "AI Gateway is not configured",
+          type: "server_error",
+          code: "ai_gateway_not_configured",
+        },
+      },
+      { status: 503 },
+    );
+  }
+  if (config.profiles.length === 0) {
+    return Response.json(
+      {
+        error: {
+          message: "AI Gateway is not configured",
+          type: "server_error",
+          code: "ai_gateway_not_configured",
+        },
+      },
+      { status: 503 },
+    );
+  }
+
+  return await handleTakosumiAiGatewayRequest(request, url, {
+    config,
+    authorize: async (authorizedRequest, auth) => {
+      if (!env.TAKOSUMI_ACCOUNTS_DB) {
+        return { ok: false, response: aiGatewayUnauthorizedResponse() };
+      }
+      const result = await requireCurrentServiceGraphServiceAccessToken({
+        request: authorizedRequest,
+        store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
+        serviceId: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+        capability: "ai.model",
+        requiredScopes: auth.requiredScopes,
+      });
+      if (result.ok) {
+        return {
+          ok: true,
+          context: {
+            subject: result.record.subject,
+            installationId: result.record.installationId,
+            spaceId: result.record.spaceId,
+            scopes: result.record.scope.split(/\s+/).filter(Boolean),
+          },
+        };
+      }
+      return {
+        ok: false,
+        response:
+          result.response.status === 403
+            ? aiGatewayInsufficientScopeResponse(
+                auth.requiredScopes[0] ?? "ai.model",
+              )
+            : aiGatewayUnauthorizedResponse(),
+      };
+    },
+  });
+}
+
 const HARDENING_GATE_REF_PREFIX = "git+";
 const HARDENING_GATE_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}#/i;
 const HARDENING_GATE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -148,8 +444,11 @@ export interface ProductionHardeningGateResult {
   readonly enforced: boolean;
   readonly checks: {
     readonly containerSmoke: ProductionHardeningCheck;
+    readonly platformControlPlaneSmoke: ProductionHardeningCheck;
     readonly egressEnforcement: ProductionHardeningCheck;
-    readonly providerTemplates: ProductionHardeningCheck;
+    readonly restoreRehearsal: ProductionHardeningCheck;
+    readonly providerCatalog: ProductionHardeningCheck;
+    readonly costAttribution: ProductionHardeningCheck;
     readonly secretBoundary: ProductionHardeningCheck;
   };
 }
@@ -170,13 +469,25 @@ export function evaluateProductionHardeningGates(
       env.TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF,
       env.TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST,
     ),
+    platformControlPlaneSmoke: evidenceCheck(
+      env.TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF,
+      env.TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST,
+    ),
     egressEnforcement: evidenceCheck(
       env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
       env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
     ),
-    providerTemplates: evidenceCheck(
+    restoreRehearsal: evidenceCheck(
+      env.TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF,
+      env.TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST,
+    ),
+    providerCatalog: evidenceCheck(
       env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF,
       env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST,
+    ),
+    costAttribution: evidenceCheck(
+      env.TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF,
+      env.TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST,
     ),
     secretBoundary: evidenceCheck(
       env.TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF,
@@ -186,8 +497,11 @@ export function evaluateProductionHardeningGates(
   return {
     ok:
       checks.containerSmoke.ok &&
+      checks.platformControlPlaneSmoke.ok &&
       checks.egressEnforcement.ok &&
-      checks.providerTemplates.ok &&
+      checks.restoreRehearsal.ok &&
+      checks.providerCatalog.ok &&
+      checks.costAttribution.ok &&
       checks.secretBoundary.ok,
     enforced,
     checks,
@@ -201,17 +515,8 @@ function handleHardeningGatesRequest(
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
-  const token =
-    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
-      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
-      : undefined;
-  if (!token) return Response.json({ error: "not found" }, { status: 404 });
-  const bearer = bearerFromAuthorization(
-    request.headers.get("authorization") ?? "",
-  );
-  if (!bearer || !constantTimeEqualsString(bearer, token)) {
-    return Response.json({ error: "unauthenticated" }, { status: 401 });
-  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
   const result = evaluateProductionHardeningGates(env);
   const status = result.enforced && !result.ok ? 503 : 200;
   if (request.method === "HEAD") return new Response(null, { status });

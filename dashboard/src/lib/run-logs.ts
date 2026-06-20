@@ -1,12 +1,23 @@
 /**
  * Best-effort extraction of human-relevant facts from Run logs / audit events.
- * Moved out of the run view so the app detail's recent-runs strip can reuse it.
+ * Moved out of the run view so the Installation detail's recent-runs strip can reuse it.
  * All of this is display-only: it reads whatever shape the backend recorded
  * and degrades to "nothing detected" rather than guessing.
  */
-import type { Run } from "./control-api.ts";
+import type { Run, RunAuditEvent } from "./control-api.ts";
 
-export type AuditEventRecord = { readonly [k: string]: unknown };
+export type AuditEventRecord = RunAuditEvent & {
+  readonly inputs?: unknown;
+  readonly injectedInputs?: unknown;
+  readonly variables?: unknown;
+  readonly resourceChanges?: unknown;
+  readonly changes?: unknown;
+  readonly planChanges?: unknown;
+  readonly changeSummary?: unknown;
+  readonly connections?: unknown;
+  readonly resolvedConnections?: unknown;
+  readonly bindings?: unknown;
+};
 
 export interface ChangeItem {
   readonly action: "create" | "update" | "delete";
@@ -29,7 +40,7 @@ export function inputNamesFromLogs(
 ): readonly string[] {
   const names = new Set<string>();
   for (const event of auditEvents) {
-    const detail = (event.detail ?? event) as Record<string, unknown>;
+    const detail = auditEventDetail(event);
     const inputs = detail.inputs ?? detail.injectedInputs ?? detail.variables;
     if (Array.isArray(inputs)) {
       for (const i of inputs) if (typeof i === "string") names.add(i);
@@ -46,7 +57,7 @@ export function changesFromLogs(
 ): readonly ChangeItem[] {
   const out: ChangeItem[] = [];
   for (const event of auditEvents) {
-    const detail = (event.detail ?? event) as Record<string, unknown>;
+    const detail = auditEventDetail(event);
     const candidates = [
       detail.resourceChanges,
       detail.changes,
@@ -120,7 +131,7 @@ export function connectionNamesFromLogs(
 ): readonly string[] {
   const names = new Set<string>();
   for (const event of auditEvents) {
-    const detail = (event.detail ?? event) as Record<string, unknown>;
+    const detail = auditEventDetail(event);
     const connections =
       detail.connections ?? detail.resolvedConnections ?? detail.bindings;
     if (Array.isArray(connections)) {
@@ -153,4 +164,15 @@ export function connectionNamesFromLogs(
     }
   }
   return [...names];
+}
+
+function auditEventDetail(event: AuditEventRecord): Record<string, unknown> {
+  if (isRecord(event.detail)) return event.detail;
+  if (isRecord(event.data)) return event.data;
+  if (isRecord(event.metadata)) return event.metadata;
+  return event as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

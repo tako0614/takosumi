@@ -10,7 +10,9 @@ interface CardProps {
 /** Surface container (border + elevated bg). `hover` adds the accent glow lift. */
 export function Card(props: CardProps): JSX.Element {
   return (
-    <div class={`tg-card ${props.hover ? "tg-card-hover" : ""} ${props.class ?? ""}`}>
+    <div
+      class={`tg-card ${props.hover ? "tg-card-hover" : ""} ${props.class ?? ""}`}
+    >
       {props.children}
     </div>
   );
@@ -41,6 +43,11 @@ export function CardHeader(props: CardHeaderProps): JSX.Element {
 }
 
 /** A divided section within a Card (gets a top rule when not first). */
-export function CardSection(props: { class?: string; children: JSX.Element }): JSX.Element {
-  return <div class={`tg-card-section ${props.class ?? ""}`}>{props.children}</div>;
+export function CardSection(props: {
+  class?: string;
+  children: JSX.Element;
+}): JSX.Element {
+  return (
+    <div class={`tg-card-section ${props.class ?? ""}`}>{props.children}</div>
+  );
 }

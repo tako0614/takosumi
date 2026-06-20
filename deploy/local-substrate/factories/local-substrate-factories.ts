@@ -1,4 +1,4 @@
-import { RuntimeHandlerRegistry } from "/workspace/src/runtime-agent/handlers.ts";
+import { RuntimeHandlerRegistry } from "/workspace/core/runtime-agent/handlers.ts";
 
 /**
  * Local-substrate empty runtime handler registry.

@@ -9,7 +9,4 @@
  * broad `installation-helpers` module. Do NOT reimplement the retry loop here
  * — it must stay a single source of truth.
  */
-export {
-  appendImportDataRestoreFailure,
-  appendLedgerEvent,
-} from "./installation-helpers.ts";
+export { appendLedgerEvent } from "./installation-helpers.ts";

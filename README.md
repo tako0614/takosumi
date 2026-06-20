@@ -1,25 +1,33 @@
 # Takosumi
 
-Takosumi is the source module that provides the OpenTofu-native deploy-control plane, the accounts plane, the dashboard,
-the OpenTofu runner boundary, and the audit ledger for two in-process build targets:
+Takosumi is one OSS OpenTofu-native control plane. It provides deploy-control, accounts, dashboard, runner boundary, and
+audit ledger code that can be composed in two contexts:
 
 - the operator-run Takosumi platform worker at `app.takosumi.com`;
-- the self-hosted Takos product worker template, where Takosumi is embedded as an optional control-plane seam.
+- the self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts, deploy-control,
+  dashboard, and runner boundaries in-process at the self-hoster's own origin.
 
-It installs plain OpenTofu modules into Spaces, records `source_sync` / `plan` / `apply` / `destroy` Runs, stores successful applies as `Deployment` records, and projects non-secret OpenTofu outputs as `OutputSnapshot`s.
+It installs plain OpenTofu modules into Spaces, records `source_sync` / `plan` / `apply` / `destroy_plan` /
+`destroy_apply` Runs, stores successful applies as `Deployment` records, and projects non-secret OpenTofu outputs as
+`OutputSnapshot`s.
 
-Takosumi is consumed **in-process** through `tsconfig` aliases. There is no separate
-retired split account/deploy-control host topology, and no npm-published service package. One operator
-runs one Cloudflare worker serving the platform under `app.takosumi.com`; `takosumi.com` is the landing/docs site only.
+Takosumi handlers are consumed **in-process** through `tsconfig` aliases by the host worker. That is a composition
+mechanism, not two different products. There is no retired split account/deploy-control host topology, and no
+npm-published service package. One hosted operator runs one Cloudflare worker serving the platform under
+`app.takosumi.com`; `takosumi.com` is the landing/docs site only.
 
 Docs: <https://takosumi.com/docs/>
 
 ## In-process entry points
 
-| Handler        | File                                                                  | Mount                                                                                   |
-| -------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker or takos worker origin root; issuer is the bare origin                  |
-| Deploy control | `worker/src/handler.ts`                                               | `/api` and `/install` on the platform worker; in-process fetch seam in the takos worker |
+| Handler        | File                                                                  | Mount                                                                               |
+| -------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker or takos worker origin root; issuer is the bare origin              |
+| Deploy control | `worker/src/handler.ts`                                               | `/api` on the platform worker; typed in-process operations seam in the takos worker |
+
+`/install?git=...&ref=...&path=...` is a dashboard SPA entrypoint, not a deploy-control handler. The SPA preserves the
+query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
+inside `/new`.
 
 `deploy/accounts-cloudflare/` stores account-plane state in D1. Installation backup/export artifacts belong to the
 deploy-control backup/export flow and its R2 buckets, not to the account-plane ownership boundary. Cloudflare Container
@@ -31,47 +39,52 @@ behind the one handler, not an alternate distribution.
 
 ## Public surface
 
-The public concepts are **Space / Source / Connection / Provider Template / Provider Env Set / ProviderEnvSet / OpenTofu Capsule / Installation / DeploymentProfile / ProviderBinding / Dependency / Run / RunGroup / Deployment / OutputSnapshot / Activity / Billing** (see [AGENTS.md](AGENTS.md) "Public Surface" and [docs/reference/model.md](docs/reference/model.md) for the canonical definitions).
+The product flow is deliberately small: choose a **Space**, register a Git **Source**, bind provider **Connections**,
+create an **Installation**, review a **Run**, then inspect the resulting **Deployment**, **OutputSnapshot**, and
+**Activity**. `RunGroup` appears when Takosumi coordinates multiple Runs across the dependency graph. See
+[AGENTS.md](AGENTS.md) "Public Surface" and [docs/reference/model.md](docs/reference/model.md) for the detailed model.
 
-| Concept             | Meaning                                                                                                                                                                                                                            |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Space`             | Owner namespace (`@handle`) holding members, sources, connections, installations, the dependency graph, policy, activity, and optional billing.                                                                                    |
-| `Source`            | A registered git origin yielding immutable `SourceSnapshot`s (ref pinned to a commit, archived to R2 with digest).                                                                                                                 |
-| `Connection`        | A Git credential or provider credential Connection. Provider credentials come from Takosumi-provided defaults or Space-owned `user_env_set`; OAuth / AssumeRole / impersonation are helper flows, not separate credential sources. |
-| `Provider Template` | Catalog of OpenTofu provider sources, credential sources, helper flows, policy, and default eligibility; hosted managed default starts Cloudflare-only.                                                                            |
-| `Provider Env Set`  | Space-owned definition for arbitrary OpenTofu providers, including provider block template, credential variable mapping, policy, and egress boundary.                                                                              |
-| `ProviderEnvSet`    | Space trust record pinning a Provider Env Set to a provider version, checksums, and platforms before execution.                                                                                                                    |
-| `OpenTofu Capsule`  | A Git-hosted OpenTofu module-compatible configuration that Takosumi normalizes and calls from a generated root.                                                                                                                    |
-| `Installation`      | The Capsule + generated root + tfstate + output/deployment unit directly under a Space (`@space/name`), configured by a service-side `InstallConfig`.                                                                              |
-| `DeploymentProfile` | Installation/environment provider bindings for provider source / optional provider alias resolution.                                                                                                                               |
-| `Dependency`        | A DAG edge from a producer Installation's outputs to a consumer Installation's inputs, pinned at plan time by a `DependencySnapshot`.                                                                                              |
-| `Run`               | One execution (`source_sync` / `plan` / `apply` / `destroy_plan` / `destroy_apply` …) with approval gate, plan digest, and policy status. `RunGroup` orders multiple Runs across the DAG.                                          |
-| `Deployment`        | A successful apply with source snapshot, dependency snapshot, state generation, and output snapshot references.                                                                                                                    |
-| `OutputSnapshot`    | The `tofu output -json` generation captured after apply; the InstallConfig output allowlist projects `spaceOutputs` and `publicOutputs`.                                                                                           |
-| `Activity`          | The Space-scoped audit trail.                                                                                                                                                                                                      |
-| `Billing`           | Space plan, managed credits, usage events, and apply-time credit reservation for hosted mode; self-hosted mode may disable billing or run showback only.                                                                           |
+| Concept          | Meaning                                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Space`          | Owner namespace (`@handle`) holding members, sources, connections, installations, the dependency graph, policy, activity, and optional billing.                       |
+| `Source`         | A registered Git origin yielding immutable `SourceSnapshot`s (ref pinned to a commit, archived to R2 with digest).                                                    |
+| `Connection`     | Sealed backing material for Git credentials, OAuth helpers, token-vending, or secret/env provider credentials. Provider execution binds through Provider Connections. |
+| `Installation`   | The OpenTofu Capsule + generated root + tfstate + output/deployment unit directly under a Space (`@space/name`).                                                      |
+| `Dependency`     | A DAG edge from a producer Installation's outputs to a consumer Installation's inputs, pinned at plan time by a `DependencySnapshot`.                                 |
+| `Run`            | One execution (`source_sync` / `plan` / `apply` / `destroy_plan` / `destroy_apply` …) with approval gate, plan digest, policy status, logs, and audit events.         |
+| `RunGroup`       | A grouped Space operation such as dependency-ordered update or drift check; not a separate deploy primitive.                                                          |
+| `Deployment`     | A successful apply with source snapshot, dependency snapshot, state generation, and output snapshot references.                                                       |
+| `OutputSnapshot` | The `tofu output -json` generation captured after apply; raw outputs stay encrypted and only allowlisted projections are shown.                                       |
+| `Activity`       | The Space-scoped audit trail.                                                                                                                                         |
+
+Provider Catalog, provider credential ownership, OpenTofu Capsule, Compatibility Report, InstallConfig, Installation
+provider connection, Service Graph, StateSnapshot, Backup, and Billing are supporting API/operator concepts. They should
+support the install/review/deploy outcome rather than become the first thing a user has to learn.
 
 Takosumi does not replace OpenTofu. OpenTofu owns resource graph, provider schema, state operation, and apply semantics. Takosumi records the reviewable and auditable control-plane layer around those operations.
 
-## CLI quickstart
+## Local control-plane quickstart
 
-The in-repo operator CLI is `server` / `migrate` / `init` only (see [docs/reference/cli.md](docs/reference/cli.md)). It starts the local service and runs migrations / scaffold; it is not the canonical install/plan/apply flow.
+Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
+The CLI is documented separately in [docs/reference/cli.md](docs/reference/cli.md): the standard product flow is still
+dashboard Git URL install, while `takosumi deploy` is the advanced local-upload helper.
 
 ```bash
 bun install
 
 export TAKOSUMI_DEV_MODE=1
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-bun src/cli/main.ts server --port 8788
+PORT=8788 bun core/index.ts
 ```
 
-`install` / `plan` / `apply` go through the dashboard and the [`/api`](docs/reference/deploy-control-api.md) control plane against a registered Source, not a CLI subcommand. Sources are plain git OpenTofu modules referenced by Git URL, commit, tag, and module path.
+Dashboard install / plan / apply go through the [`/api`](docs/reference/deploy-control-api.md) control plane against a
+registered Git Source. `takosumi deploy` uses the same Run ledger for local upload snapshots before they are pushed to
+Git.
 
 ## Workspace
 
-The current layout is `packages/*` (schema / graph / policy / rootgen / accounts-contract / accounts-service /
-platform-services / cli), `worker/`, `runner/`, `opentofu-modules/`, `dashboard/`, `src/`
-(service / runtime-agent / shared / cli), and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the
+The current layout is `contract/`, `core/`, `lib/`, `accounts/`, `providers/`, `worker/`, `runner/`,
+`opentofu-modules/`, `dashboard/`, `website/`, and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the
 annotated tree (single source of truth to avoid drift).
 
 ## Commands

@@ -14,7 +14,7 @@
  * empty runtime handler registry unless the operator wrapper supplies its own
  * registry implementation.
  */
-import { serveRuntimeAgent } from "/workspace/src/runtime-agent/server.ts";
+import { serveRuntimeAgent } from "/workspace/core/runtime-agent/server.ts";
 import { LIFECYCLE_AGENT_TOKEN_ENV } from "/workspace/contract/runtime-agent-lifecycle.ts";
 import { currentRuntime } from "/workspace/core/shared/runtime/index.ts";
 import { buildLocalSubstrateRegistry } from "/local-substrate-factories/local-substrate-factories.ts";

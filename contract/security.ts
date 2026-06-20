@@ -1,5 +1,5 @@
 /**
- * Security finding and run-scoped credential mint audit records.
+ * Security finding and credential mint audit records.
  */
 
 export interface CredentialMintEvent {
@@ -8,7 +8,8 @@ export interface CredentialMintEvent {
   readonly spaceId: string;
   readonly installationId?: string;
   readonly sourceId?: string;
-  readonly connectionId: string;
+  readonly connectionId?: string;
+  readonly providerEnvId?: string;
   readonly phase:
     | "source"
     | "normalize"
@@ -33,7 +34,8 @@ export interface CredentialMintEvent {
 }
 
 export interface ProviderCredentialMintEvidence {
-  readonly connectionId: string;
+  readonly providerEnvId: string;
+  readonly connectionId?: string;
   readonly provider: string;
   readonly delivery: "provider_env" | "generated_root_variable";
   readonly rootOnly: boolean;
@@ -45,6 +47,7 @@ export interface ProviderCredentialMintEvidence {
     | "aws_sts_assume_role"
     | "cloudflare_api_token_vending"
     | "static_secret";
+  readonly secretValueStored?: false;
 }
 
 export interface SecurityFinding {

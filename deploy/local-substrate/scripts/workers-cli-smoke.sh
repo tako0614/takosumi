@@ -3,10 +3,10 @@
 #
 # What this script verifies:
 #   1. takosumi Accounts Worker runs on workerd with D1/R2.
-#   2. takosumi service Worker runs on workerd with D1/R2, Queue, and DO
-#      either as the postgres-profile mirror at service-worker.takosumi.test or
-#      as the workers-profile service at service.takosumi.test.
-#   3. The Accounts installation PlanRun and OIDC discovery surfaces still answer.
+#   2. takosumi service Worker runs on workerd with Queue and DO
+#      through local-only worker probe ingress. app.takosumi.test remains the
+#      canonical platform host for user-facing flows.
+#   3. The Accounts installation run and OIDC discovery surfaces still answer.
 #   4. D1 binding semantics: the sqlite file underneath miniflare's D1
 #      emulator supports json_extract on the document column AND a
 #      multi-statement INSERT/SELECT round-trip — these are the two
@@ -24,8 +24,8 @@ resolve_service_worker_host() {
 	if [[ -n "${SERVICE_WORKER_HOST:-}" ]]; then
 		candidates+=("$SERVICE_WORKER_HOST")
 	else
-		# postgres profile exposes the Worker mirror beside the Bun+Postgres
-		# service. workers profile replaces service.takosumi.test with the Worker.
+		# postgres profile exposes the Worker probe beside the Bun+Postgres
+		# service. workers profile routes service.takosumi.test to the Worker.
 		candidates+=(service-worker.takosumi.test service.takosumi.test)
 	fi
 
@@ -61,29 +61,14 @@ assert d.get('provider') == 'cloudflare', f'expected provider=cloudflare, got {d
 assert d.get('persistence') == 'd1+r2', f'expected persistence=d1+r2, got {d!r}'
 " || { echo "FAIL: /healthz did not look workerd-local: $HEALTH" >&2; exit 1; }
 
-# 2. Service Worker sentinel + D1/R2 storage probe.
+# 2. Service Worker sentinel. Edge-only `/storage/healthz` was retired; the
+#    Worker intentionally keeps it outside the service app and returns 404.
 SERVICE_HEALTH=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/healthz")
 echo "$SERVICE_HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d.get('provider') == 'cloudflare-worker', f'expected provider=cloudflare-worker, got {d!r}'
 " || { echo "FAIL: $SERVICE_HOST /healthz did not look workerd-local: $SERVICE_HEALTH" >&2; exit 1; }
-
-SERVICE_STORAGE=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/storage/healthz")
-echo "$SERVICE_STORAGE" | python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
-assert d.get('ok') is True, f'expected ok=true, got {d!r}'
-assert d.get('storage') == 'cloudflare-d1-r2', f'expected storage=cloudflare-d1-r2, got {d!r}'
-" || { echo "FAIL: $SERVICE_HOST /storage/healthz did not prove D1/R2: $SERVICE_STORAGE" >&2; exit 1; }
-
-SERVICE_COORDINATION=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/coordination/healthz")
-echo "$SERVICE_COORDINATION" | python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
-assert d.get('ok') is True, f'expected ok=true, got {d!r}'
-assert d.get('role') == 'coordination', f'expected role=coordination, got {d!r}'
-" || { echo "FAIL: $SERVICE_HOST /coordination/healthz did not prove Durable Object routing: $SERVICE_COORDINATION" >&2; exit 1; }
 
 SERVICE_QUEUE=$(curl -sk --cacert "$CA" -X POST \
 	--resolve "${SERVICE_HOST}:443:127.0.0.1" \
@@ -96,14 +81,17 @@ d = json.loads(sys.stdin.read())
 assert d.get('queued') is True, f'expected queued=true, got {d!r}'
 " || { echo "FAIL: $SERVICE_HOST /queue/test did not accept Queue producer send: $SERVICE_QUEUE" >&2; exit 1; }
 
-SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" -o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/capabilities")
+DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
+
+SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" \
+	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
+	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/capabilities")
 [[ "$SERVICE_API_STATUS" == "200" ]] || {
-	echo "FAIL: $SERVICE_HOST /capabilities returned $SERVICE_API_STATUS (expected 200)" >&2
+	echo "FAIL: $SERVICE_HOST /capabilities returned $SERVICE_API_STATUS with operator inventory bearer (expected 200)" >&2
 	exit 1
 }
 
 # 3. deploy control API auth + handler init
-DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
 RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \

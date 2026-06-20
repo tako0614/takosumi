@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercises the canonical Deploy Control HTTP surface.
+# Exercises the local worker-probe Deploy Control HTTP surface.
 #
 #   1. GET  /internal/v1/runner-profiles.
 #   2. POST /internal/v1/plan-runs.

@@ -6,8 +6,8 @@
  * schema migration for every non-indexed field.
  *
  * Logical schema is the Space-direct Installation model: spaces, install_configs,
- * operator_connection_defaults, installations (UNIQUE(space_id, name,
- * environment)), deployment_profiles (keyed (installation_id, environment)),
+ * provider_envs, installations (UNIQUE(space_id, name,
+ * environment)), provider_env_binding_sets (keyed (installation_id, environment)),
  * state_snapshots (keyed (installation_id, environment, generation) UNIQUE),
  * deployments (new shape), and a SINGLE `runs` table — the internal PlanRun
  * (kind `plan`), ApplyRun (kind `apply`), SourceSyncRun (kind `source_sync`),
@@ -48,8 +48,10 @@ import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
-import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
-import type { DeploymentProfile } from "takosumi-contract/installations";
+import type {
+  InstallationProviderEnvBindingSet,
+  ProviderEnv,
+} from "takosumi-contract/provider-envs";
 import type {
   Dependency,
   DependencySnapshot,
@@ -81,7 +83,7 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderTemplate } from "takosumi-contract/providers";
+import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   InstallationPatch,
@@ -105,6 +107,7 @@ const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
 const RUN_KIND_BACKUP = "backup";
+const RUN_KIND_RESTORE = "restore";
 
 /**
  * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the given
@@ -191,16 +194,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  async putProviderTemplate(
-    entry: ProviderTemplate,
-  ): Promise<ProviderTemplate> {
-    await this.#pgUpsert(pgSchema.providerTemplates, {
+  async putProviderCatalogEntry(
+    entry: ProviderCatalogEntry,
+  ): Promise<ProviderCatalogEntry> {
+    await this.#pgUpsert(pgSchema.providerCatalog, {
       id: entry.id,
       providerSource: entry.providerSource,
-      primaryCredentialSource: entry.credentialSources.includes("takosumi_managed")
-        ? "takosumi_managed"
-        : "user_env_set",
-      defaultEligible: entry.takosumiManagedAvailable ? 1 : 0,
+      primaryMaterialization: "secret",
+      gatewayEligible: 0,
       entryJson: entry,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
@@ -208,24 +209,24 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return entry;
   }
 
-  async getProviderTemplate(
+  async getProviderCatalogEntry(
     id: string,
-  ): Promise<ProviderTemplate | undefined> {
-    return await this.#pgFirstJson<ProviderTemplate>(
-      pgSchema.providerTemplates,
-      pgSchema.providerTemplates.entryJson,
-      eq(pgSchema.providerTemplates.id, id),
+  ): Promise<ProviderCatalogEntry | undefined> {
+    return await this.#pgFirstJson<ProviderCatalogEntry>(
+      pgSchema.providerCatalog,
+      pgSchema.providerCatalog.entryJson,
+      eq(pgSchema.providerCatalog.id, id),
     );
   }
 
-  async listProviderTemplates(): Promise<readonly ProviderTemplate[]> {
-    return await this.#pgManyJson<ProviderTemplate>(
-      pgSchema.providerTemplates,
-      pgSchema.providerTemplates.entryJson,
+  async listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
+    return await this.#pgManyJson<ProviderCatalogEntry>(
+      pgSchema.providerCatalog,
+      pgSchema.providerCatalog.entryJson,
       {
         orderBy: [
-          asc(pgSchema.providerTemplates.primaryCredentialSource),
-          asc(pgSchema.providerTemplates.id),
+          asc(pgSchema.providerCatalog.primaryMaterialization),
+          asc(pgSchema.providerCatalog.id),
         ],
       },
     );
@@ -272,7 +273,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {
-    return coerceRunRowStatus(await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY));
+    return coerceRunRowStatus(
+      await this.#getRun<ApplyRun>(id, RUN_KINDS_APPLY),
+    );
   }
 
   /**
@@ -370,10 +373,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async putBackupRun(run: Run): Promise<Run> {
-    if (run.type !== "backup") {
-      throw new Error("putBackupRun only accepts backup runs");
+    if (run.type !== "backup" && run.type !== "restore") {
+      throw new Error("putBackupRun only accepts backup/restore runs");
     }
-    await this.#putRunDrizzle(RUN_KIND_BACKUP, {
+    await this.#putRunDrizzle(run.type, {
       id: run.id,
       spaceId: run.spaceId,
       installationId: run.installationId ?? null,
@@ -384,7 +387,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async getBackupRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, RUN_KIND_BACKUP);
+    return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
   }
 
   async listSourceSyncRuns(
@@ -959,9 +962,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
    * {@link SqlTransaction}, so the same column-mapped builders run inside the
    * transaction's connection. Mirrors the constructor's `#db` wiring.
    */
-  #drizzleForClient(
-    client: SqlClient,
-  ): PgRemoteDatabase<typeof pgSchema> {
+  #drizzleForClient(client: SqlClient): PgRemoteDatabase<typeof pgSchema> {
     return drizzle(
       async (query, params, method) => {
         const result = await client.query(query, params);
@@ -1184,47 +1185,46 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  // --- operator_connection_defaults (§9) ------------------------------------
+  // --- provider_envs ---------------------------------------------------------
 
-  async putOperatorConnectionDefault(
-    record: OperatorConnectionDefault,
-  ): Promise<OperatorConnectionDefault> {
-    await this.#db
-      .delete(pgSchema.operatorConnectionDefaults)
-      .where(
-        and(
-          eq(pgSchema.operatorConnectionDefaults.provider, record.provider),
-          ne(pgSchema.operatorConnectionDefaults.id, record.id),
-        ),
-      );
-    await this.#pgUpsert(pgSchema.operatorConnectionDefaults, {
-      id: record.id,
-      provider: record.provider,
-      connectionId: record.connectionId,
-      defaultJson: record,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
+  async putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
+    assertProviderEnvGlobalBoundary(env);
+    await this.#pgUpsert(pgSchema.providerEnvs, {
+      id: env.id,
+      spaceId: env.spaceId ?? null,
+      providerSource: env.providerSource,
+      materialization: env.materialization,
+      status: env.status,
+      envJson: env,
+      createdAt: env.createdAt,
+      updatedAt: env.updatedAt,
     });
-    return record;
+    return env;
   }
 
-  async getOperatorConnectionDefault(
-    provider: string,
-  ): Promise<OperatorConnectionDefault | undefined> {
-    return await this.#pgFirstJson<OperatorConnectionDefault>(
-      pgSchema.operatorConnectionDefaults,
-      pgSchema.operatorConnectionDefaults.defaultJson,
-      eq(pgSchema.operatorConnectionDefaults.provider, provider),
+  async getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
+    return await this.#pgFirstJson<ProviderEnv>(
+      pgSchema.providerEnvs,
+      pgSchema.providerEnvs.envJson,
+      eq(pgSchema.providerEnvs.id, id),
     );
   }
 
-  async listOperatorConnectionDefaults(): Promise<
-    readonly OperatorConnectionDefault[]
-  > {
-    return await this.#pgManyJson<OperatorConnectionDefault>(
-      pgSchema.operatorConnectionDefaults,
-      pgSchema.operatorConnectionDefaults.defaultJson,
-      { orderBy: [asc(pgSchema.operatorConnectionDefaults.provider)] },
+  async listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
+    return await this.#pgManyJson<ProviderEnv>(
+      pgSchema.providerEnvs,
+      pgSchema.providerEnvs.envJson,
+      {
+        where:
+          spaceId === undefined
+            ? isNull(pgSchema.providerEnvs.spaceId)
+            : eq(pgSchema.providerEnvs.spaceId, spaceId),
+        orderBy: [
+          asc(pgSchema.providerEnvs.providerSource),
+          asc(pgSchema.providerEnvs.materialization),
+          asc(pgSchema.providerEnvs.id),
+        ],
+      },
     );
   }
 
@@ -1431,26 +1431,26 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     };
   }
 
-  // --- deployment_profiles (§9, keyed (installation_id, environment)) -------
+  // --- provider env binding sets (§9, keyed (installation_id, environment)) --
 
-  async putDeploymentProfile(
-    profile: DeploymentProfile,
-  ): Promise<DeploymentProfile> {
+  async putInstallationProviderEnvBindingSet(
+    profile: InstallationProviderEnvBindingSet,
+  ): Promise<InstallationProviderEnvBindingSet> {
     // One profile per (installation, environment): delete any stale row for the
     // same pair under a different id before upserting.
     await this.#db
-      .delete(pgSchema.deploymentProfiles)
+      .delete(pgSchema.providerEnvBindingSets)
       .where(
         and(
           eq(
-            pgSchema.deploymentProfiles.installationId,
+            pgSchema.providerEnvBindingSets.installationId,
             profile.installationId,
           ),
-          eq(pgSchema.deploymentProfiles.environment, profile.environment),
-          ne(pgSchema.deploymentProfiles.id, profile.id),
+          eq(pgSchema.providerEnvBindingSets.environment, profile.environment),
+          ne(pgSchema.providerEnvBindingSets.id, profile.id),
         ),
       );
-    await this.#pgUpsert(pgSchema.deploymentProfiles, {
+    await this.#pgUpsert(pgSchema.providerEnvBindingSets, {
       id: profile.id,
       spaceId: profile.spaceId,
       installationId: profile.installationId,
@@ -1462,21 +1462,21 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return profile;
   }
 
-  async getDeploymentProfileByInstallation(
+  async getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
-  ): Promise<DeploymentProfile | undefined> {
-    const rows = await this.#pgManyJson<DeploymentProfile>(
-      pgSchema.deploymentProfiles,
-      pgSchema.deploymentProfiles.profileJson,
+  ): Promise<InstallationProviderEnvBindingSet | undefined> {
+    const rows = await this.#pgManyJson<InstallationProviderEnvBindingSet>(
+      pgSchema.providerEnvBindingSets,
+      pgSchema.providerEnvBindingSets.profileJson,
       {
         where: and(
-          eq(pgSchema.deploymentProfiles.installationId, installationId),
-          eq(pgSchema.deploymentProfiles.environment, environment),
+          eq(pgSchema.providerEnvBindingSets.installationId, installationId),
+          eq(pgSchema.providerEnvBindingSets.environment, environment),
         ),
         orderBy: [
-          desc(pgSchema.deploymentProfiles.createdAt),
-          desc(pgSchema.deploymentProfiles.id),
+          desc(pgSchema.providerEnvBindingSets.createdAt),
+          desc(pgSchema.providerEnvBindingSets.id),
         ],
         limit: 1,
       },
@@ -1860,7 +1860,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       spaceId: event.spaceId,
       installationId: event.installationId ?? null,
       sourceId: event.sourceId ?? null,
-      connectionId: event.connectionId,
+      connectionId: event.connectionId ?? event.providerEnvId ?? "",
       phase: event.phase,
       eventJson: event,
       createdAt: event.createdAt,
@@ -2194,7 +2194,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         and(
           eq(pgSchema.creditBalances.spaceId, spaceId),
           or(
-            ne(pgSchema.creditBalances.monthlyIncludedCredits, input.newMonthly),
+            ne(
+              pgSchema.creditBalances.monthlyIncludedCredits,
+              input.newMonthly,
+            ),
             lt(pgSchema.creditBalances.updatedAt, input.periodStartIso),
           ),
         ),
@@ -2341,7 +2344,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           decodeCursor(params.cursor),
         ),
       )
-      .orderBy(asc(pgSchema.usageEvents.createdAt), asc(pgSchema.usageEvents.id))
+      .orderBy(
+        asc(pgSchema.usageEvents.createdAt),
+        asc(pgSchema.usageEvents.id),
+      )
       .limit(limit + 1);
     return pageFromProbe(rows.map(usageEventFromRow), limit);
   }
@@ -2363,6 +2369,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       createdAt: record.createdAt,
     });
     return record;
+  }
+
+  async getBackupRecord(id: string): Promise<BackupRecord | undefined> {
+    return await this.#pgFirstJson<BackupRecord>(
+      pgSchema.backups,
+      pgSchema.backups.backupJson,
+      eq(pgSchema.backups.id, id),
+    );
   }
 
   async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
@@ -2721,4 +2735,12 @@ function selectedDriverColumns(query: string): readonly string[] {
     const identifiers = [...part.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)];
     return identifiers.at(-1)?.[1] ?? part.trim().replaceAll('"', "");
   });
+}
+
+function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
+  if (env.spaceId === undefined) {
+    throw new Error(
+      "global provider resolver records are not supported in OSS Takosumi",
+    );
+  }
 }

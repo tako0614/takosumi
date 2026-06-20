@@ -26,16 +26,19 @@ const REQUEST_ID_ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
  * otherwise a fresh UUID is generated.
  */
 export function requestIdFrom(request?: Request | null): string {
-  const header = request?.headers.get("x-request-id") ??
-    request?.headers.get("x-correlation-id") ?? null;
+  const header =
+    request?.headers.get("x-request-id") ??
+    request?.headers.get("x-correlation-id") ??
+    null;
   if (header && isValidRequestIdShape(header)) return header;
   return crypto.randomUUID();
 }
 
 function isValidRequestIdShape(value: string): boolean {
   if (value.length === 0 || value.length > 64) return false;
-  return REQUEST_ID_UUID_PATTERN.test(value) ||
-    REQUEST_ID_ULID_PATTERN.test(value);
+  return (
+    REQUEST_ID_UUID_PATTERN.test(value) || REQUEST_ID_ULID_PATTERN.test(value)
+  );
 }
 
 /**
@@ -57,12 +60,12 @@ export function errorJson(
   headers: Record<string, string> = {},
   details?: unknown,
 ): Response {
-  const requestId = typeof source === "string"
-    ? source
-    : requestIdFrom(source ?? undefined);
-  const error = details === undefined
-    ? { code, message, requestId }
-    : { code, message, requestId, details };
+  const requestId =
+    typeof source === "string" ? source : requestIdFrom(source ?? undefined);
+  const error =
+    details === undefined
+      ? { code, message, requestId }
+      : { code, message, requestId, details };
   return json({ error }, status, headers);
 }
 
@@ -100,7 +103,7 @@ export function takosumiSubjectValue(
   value: unknown,
 ): TakosumiSubject | undefined {
   return typeof value === "string" && value.startsWith("tsub_")
-    ? value as TakosumiSubject
+    ? (value as TakosumiSubject)
     : undefined;
 }
 
@@ -135,10 +138,10 @@ export function base64UrlBytesValue(
   value: unknown,
 ): Uint8Array<ArrayBuffer> | undefined {
   if (typeof value !== "string") return undefined;
-  const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(
-    Math.ceil(value.length / 4) * 4,
-    "=",
-  );
+  const padded = value
+    .replaceAll("-", "+")
+    .replaceAll("_", "/")
+    .padEnd(Math.ceil(value.length / 4) * 4, "=");
   try {
     const binary = atob(padded);
     const output = new Uint8Array(binary.length);
@@ -152,13 +155,13 @@ export function base64UrlBytesValue(
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function isPlainRecord(
   value: unknown,
 ): value is Record<string, unknown> {
-  return isRecord(value) && !Array.isArray(value);
+  return isRecord(value);
 }
 
 export function bearerToken(authorization: string | null): string | null {
@@ -176,10 +179,10 @@ export function appInstallationStatusValue(
   value: unknown,
 ): AppInstallationStatus | undefined {
   return value === "installing" ||
-      value === "ready" ||
-      value === "failed" ||
-      value === "suspended" ||
-      value === "exported"
+    value === "ready" ||
+    value === "failed" ||
+    value === "suspended" ||
+    value === "exported"
     ? value
     : undefined;
 }

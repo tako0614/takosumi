@@ -11,11 +11,12 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | Phase | scope                                                                                       | DoD                                                                          |
 | ----- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | 0     | Pebble (ACME staging) + CoreDNS + Caddy で `*.takosumi.test` を local TLS termination       | `curl https://hello.takosumi.test/` が 200                                   |
-| 1     | takosumi service + Accounts + cloud worker / dashboard を同 stack に統合                     | OIDC discovery 解決 + deploy control API 成功                                     |
+| 1     | takosumi service + Accounts + cloud worker / dashboard を同 stack に統合                    | OIDC discovery 解決 + deploy control API 成功                                |
 | 2     | LocalStack / k3d / fake-gcs / Azurite / miniflare を `compose.emulators.yml` 1 本で並行統合 | `scripts/smoke.sh` 全 cloud fixture が pass                                  |
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
-現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は canonical deploy control run ledger surface も含めて検証する。
+現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は `app.takosumi.test` の composed platform host と、local-only worker
+probe host 経由の run ledger surface を検証する。
 
 ## Scope — Takosumi-only
 
@@ -30,23 +31,23 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
 
-| 範疇            | 件数 | 代表 check                                                                                                |
-| --------------- | ---: | --------------------------------------------------------------------------------------------------------- |
-| ingress         |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                                |
-| prod-mirror     |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                        |
-| OAuth           |    4 | `oauth.e2e.{google,github}`, `oauth.tls-negative`, `oauth.csrf-replay`                                    |
-| tenant          |    1 | `tenant.isolation` (cross-subject installation read must fail)                                            |
-| docs            |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                               |
-| passkey         |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                |
-| deploy control API   |    1 | `deploy-control.api.e2e` (Installation, Run, Deployment, OutputSnapshot ledger path)                     |
-| workers         |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                             |
-| route-registrar |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                        |
-| object store    |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                    |
-| migrations      |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                      |
-| otel            |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                                    |
-| k6 perf         |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO)      |
-| mailpit         |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                                |
-| stripe          |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                              |
+| 範疇               | 件数 | 代表 check                                                                                          |
+| ------------------ | ---: | --------------------------------------------------------------------------------------------------- |
+| ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                         |
+| prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                  |
+| OAuth              |    4 | `oauth.e2e.{google,github}`, `oauth.tls-negative`, `oauth.csrf-replay`                              |
+| tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
+| docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
+| passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
+| deploy control API |    1 | `deploy-control.api.e2e` (Installation, Run, Deployment, OutputSnapshot ledger path)                |
+| workers            |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                      |
+| route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
+| object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |
+| migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                |
+| otel               |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                              |
+| k6 perf            |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO) |
+| mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                          |
+| stripe             |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                        |
 
 加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust regression) を CI で並列実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
@@ -68,8 +69,9 @@ bash scripts/up.sh
 # route-registrar) on top of Phase 0 ingress
 bash scripts/up.sh --profile postgres
 
-# Worker-first substrate mirror: Accounts Worker on D1/R2 plus Takosumi
-# service Worker on D1/R2/Queue/DO. Here service.takosumi.test is the Worker.
+# Worker-first substrate probe: Accounts Worker on D1/R2 plus Takosumi
+# service Worker on D1/R2/Queue/DO. app.takosumi.test remains the canonical
+# platform host; service*.takosumi.test is local-only worker probe ingress.
 bash scripts/up.sh --profile workers
 
 # one-time per host
@@ -81,8 +83,8 @@ bash scripts/smoke.sh
 bash scripts/prove-no-public-leak.sh
 curl https://hello.takosumi.test/
 curl https://app.takosumi.test/.well-known/openid-configuration
-curl https://service-worker.takosumi.test/healthz  # postgres profile mirror
-curl https://service.takosumi.test/healthz         # workers profile
+curl https://service-worker.takosumi.test/healthz  # local-only worker probe, postgres profile
+curl https://service.takosumi.test/healthz         # local-only worker probe, workers profile
 ```
 
 Dashboard browser E2E uses the static dashboard artifact served by Caddy, so
@@ -103,7 +105,7 @@ cd yurucommu
 bun run dev:web
 
 # from the repository root
-cd takosumi/packages/dashboard-ui
+cd takosumi/dashboard
 PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 bun run e2e
 ```
 
@@ -166,21 +168,21 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 
 最後に手動 verification した日付を以下に記録:
 
-| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                      |
-| -------- | ------ | -------------- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) で毎 PR 自動実行されている (smoke + dashboard-ui-playwright job)。ローカル目視は別途要_ |
+| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                   |
+| -------- | ------ | -------------- | ------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) で毎 PR 自動実行されている (smoke + dashboard-playwright job)。ローカル目視は別途要_ |
 
 CI で自動検証されるパス:
 
 - ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
   - `smoke` job: `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
-  - `dashboard-ui-playwright` job: 同 install + Playwright が **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB から validate するかを assert
-  - `dashboard-ui-vitest` job: COSE/JWK unit test
+  - `dashboard-playwright` job: 同 install + Playwright が **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB から validate するかを assert
+  - `dashboard-vitest` job: COSE/JWK unit test
 
 ローカル目視は dev iteration の中で実行し、上記 table に行追加して commit する。
 
 ## 制約
 
 - **公開面は絶対に出さない**: ACME は Pebble 固定、 DNS は CoreDNS 固定、 emulator は内部 network。 Phase 3 で多重防御 guard と `prove-no-public-leak.sh` を追加
-- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute (Fargate / Cloud Run / Container Apps / Cloudflare Container) は `.env` に credentials を入れた場合に限り real cloud を呼ぶ。 default では factory が register せず "provider not configured" で fail させる
+- **実 cloud compute は credentials で叩いてよい**: emulator 無し compute (Fargate / Cloud Run / Container Apps / Cloudflare Container) は local fixture の Provider Connection / Gateway resolver を明示した場合に限り real cloud を呼ぶ。default では未解決 Provider Connection として fail-closed にする
 - **Takosumi-owned fixture に閉じる**: endpoint override は `deploy/local-substrate/factories/` と local wrapper に閉じ、 Takos product service をこの compose topology に戻さない

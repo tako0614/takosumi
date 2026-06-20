@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { USE_CASES } from "~/content/use-cases";
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 export default function WhatYouCanHost() {
   return (
@@ -8,10 +8,11 @@ export default function WhatYouCanHost() {
       <SplatField density="section" />
       <div class="container">
         <span class="eyebrow">what you can deploy</span>
-        <h2>plain な module なら、何でも。</h2>
+        <h2>plain な module を、安全に review して。</h2>
         <p class="lede">
           Takosumi が扱うのは専用フォーマットではなく、ただの OpenTofu module。
-          web も API も DB も worker も、Git URL を渡すだけで Installation になります。
+          Git URL から Compatibility Check と provider policy を通したものだけが
+          Capsule として plan / apply できます。
         </p>
         <div class="use-cases-grid">
           <For each={USE_CASES}>

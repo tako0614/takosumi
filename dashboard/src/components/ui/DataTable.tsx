@@ -72,7 +72,11 @@ export default function DataTable<T>(props: Props<T>): JSX.Element {
               )}
             </For>
           </Show>
-          <Show when={!props.error && !props.loading && (props.rows?.length ?? 0) === 0}>
+          <Show
+            when={
+              !props.error && !props.loading && (props.rows?.length ?? 0) === 0
+            }
+          >
             <tr>
               <td class="tg-table-state" colSpan={colCount()}>
                 {props.empty ?? "データがありません"}
@@ -87,7 +91,9 @@ export default function DataTable<T>(props: Props<T>): JSX.Element {
                     {(col) => (
                       <td
                         class={col.class}
-                        style={col.align === "right" ? "text-align:right" : undefined}
+                        style={
+                          col.align === "right" ? "text-align:right" : undefined
+                        }
                       >
                         {col.cell(row, index())}
                       </td>

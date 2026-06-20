@@ -3,8 +3,8 @@
  *
  * Parity with the Cloudflare Workers Static Assets profile
  * (`deploy/accounts-cloudflare`): the same dashboard SPA build
- * (`packages/dashboard-ui/.output/public`) is served from the one composed
- * app, and non-API navigations fall back to `index.html` so SolidStart's
+ * (`dashboard/dist`) is served from the one composed app, and non-API
+ * navigations fall back to `index.html` so the SPA's
  * client router owns deep links. API namespaces are excluded so the accounts /
  * service handler keeps owning them.
  *
@@ -32,7 +32,6 @@ export const ACCOUNTS_API_PREFIXES = [
   ACCOUNTS_IDENTITY_PREFIX,
   "/oauth",
   "/.well-known",
-  "/start",
   "/internal",
 ];
 
@@ -59,7 +58,7 @@ function bunRuntime(): BunGlobal | undefined {
 /**
  * Resolve the dashboard SPA build directory. Honors
  * `TAKOSUMI_ACCOUNTS_STATIC_DIR`; otherwise falls back to the in-repo
- * dashboard-ui build output relative to this module. Returns `undefined` when
+ * dashboard build output relative to this module. Returns `undefined` when
  * the directory has no `index.html` (e.g. dev / tests with no SPA build) or
  * when not running on Bun, which disables static serving and preserves the
  * prior behavior.
@@ -70,14 +69,12 @@ export async function resolveStaticAssetsDir(
   const bun = bunRuntime();
   if (!bun) return undefined;
   const override = env.TAKOSUMI_ACCOUNTS_STATIC_DIR?.trim();
-  const dir = override && override.length > 0
-    ? stripTrailingSlash(override)
-    : stripTrailingSlash(
-      new URL(
-        "../../../packages/dashboard-ui/.output/public",
-        import.meta.url,
-      ).pathname,
-    );
+  const dir =
+    override && override.length > 0
+      ? stripTrailingSlash(override)
+      : stripTrailingSlash(
+          new URL("../../../dashboard/dist", import.meta.url).pathname,
+        );
   if (await bun.file(`${dir}/index.html`).exists()) return dir;
   return undefined;
 }

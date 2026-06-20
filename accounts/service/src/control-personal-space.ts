@@ -3,17 +3,13 @@
  * 作成する") wired on the account-session bootstrap route the dashboard hits
  * first (`GET /v1/account/session/me`).
  *
- * This closes the M9 TODO (`deploy-control-proxy.ts#DeployControlOperations
- * .ensurePersonalSpace` / `identity.ts#resolveUpstreamAccount`): the OAuth/OIDC
- * login seam never had the deploy-control operations in scope, but the
- * account-session bootstrap route DOES (the platform worker passes the
- * `controlPlaneOperations` facade), so the idempotent ensure runs here instead.
- * Fire-and-forget: a failed ensure must never fail the session read.
+ * The OAuth/OIDC login seam does not own deploy-control operations; the
+ * account-session bootstrap route does because the platform worker passes the
+ * `controlPlaneOperations` facade. The idempotent ensure runs here as
+ * fire-and-forget: a failed ensure must never fail the session read.
  */
 
-import type {
-  ControlPlaneOperations,
-} from "./control-routes.ts";
+import type { ControlPlaneOperations } from "./control-routes.ts";
 import type { AccountsStore } from "./store.ts";
 import { extractAccountSessionId } from "./account-session.ts";
 
@@ -42,21 +38,23 @@ export async function maybeEnsurePersonalSpaceForSession(input: {
       email: account?.email,
       displayName: account?.displayName,
     });
-    await operations.spaces.createSpace({
-      handle,
-      displayName: handle,
-      type: "personal",
-      ownerUserId: session.subject,
-    }).catch((error) => {
-      // A handle collision (`failed_precondition`) is the idempotent steady
-      // state once the personal Space exists — swallow it. The deploy-control
-      // facade has no accounts-side handle->space index to do a pre-check, so
-      // we lean on the unique-handle guard in `createSpace`.
-      if (!isAlreadyTakenError(error)) {
-        // Any other failure is best-effort too: log nothing here (no logger in
-        // this package) and never propagate.
-      }
-    });
+    await operations.spaces
+      .createSpace({
+        handle,
+        displayName: handle,
+        type: "personal",
+        ownerUserId: session.subject,
+      })
+      .catch((error) => {
+        // A handle collision (`failed_precondition`) is the idempotent steady
+        // state once the personal Space exists — swallow it. The deploy-control
+        // facade has no accounts-side handle->space index to do a pre-check, so
+        // we lean on the unique-handle guard in `createSpace`.
+        if (!isAlreadyTakenError(error)) {
+          // Any other failure is best-effort too: log nothing here (no logger in
+          // this package) and never propagate.
+        }
+      });
   } catch {
     // Never let the personal-Space hook fail the session bootstrap response.
   }

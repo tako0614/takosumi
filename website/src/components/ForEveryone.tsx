@@ -1,6 +1,6 @@
 import { For } from "solid-js";
 import { AUDIENCES } from "~/content/audiences";
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 export default function ForEveryone() {
   return (
@@ -16,10 +16,7 @@ export default function ForEveryone() {
         <div class="audience-rows">
           <For each={AUDIENCES}>
             {(a, i) => (
-              <article
-                class="audience-row"
-                classList={{ alt: i() % 2 === 1 }}
-              >
+              <article class="audience-row" classList={{ alt: i() % 2 === 1 }}>
                 <div class="audience-row-head">
                   <h3>{a.name}</h3>
                   <p class="audience-persona">{a.persona}</p>

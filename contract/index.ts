@@ -1,9 +1,8 @@
-export * from "./api-surface.ts";
+export { API_V1_PREFIX, isApiV1Path } from "./api-surface.ts";
 export * from "./sources.ts";
 export * from "./spaces.ts";
 export type {
   BackupConfig,
-  DeploymentProfile,
   InstallBuildConfig,
   InstallationStatus,
   NormalizationConfig,
@@ -14,10 +13,36 @@ export type {
   PublicInstallation as Installation,
   TrustLevel,
 } from "./installations.ts";
-export type { DeployRequest, DeployResponse } from "./deploy.ts";
+export type {
+  DeployRequest,
+  PublicDeployResponse as DeployResponse,
+} from "./deploy.ts";
 export { DEPLOY_PATH } from "./deploy.ts";
-export * from "./capsules.ts";
-export * from "./provider-bindings.ts";
+export type {
+  CapsuleCompatibility,
+  CapsuleCompatibilityLevel,
+  CapsuleDataSourceSummary,
+  CapsuleFindingSeverity,
+  CapsuleGateFinding,
+  CapsuleGateResult,
+  CapsuleProviderRequirement,
+  CapsuleProvisionerSummary,
+  PublicCapsuleCompatibilityReport as CapsuleCompatibilityReport,
+  PublicCapsuleCompatibilityReportResponse as CapsuleCompatibilityReportResponse,
+  CapsuleResourceSummary,
+  CreateSourceCompatibilityCheckRequest,
+} from "./capsules.ts";
+export type {
+  ProviderRequirement,
+  ProviderRequirementDiscoverySource,
+  ProviderRequirementPhase,
+  PublicBlockedProviderResolutionEvidence as BlockedProviderResolutionEvidence,
+  PublicProviderConnectionResolutionEvidence as ProviderConnectionResolutionEvidence,
+  PublicProviderResolution as ProviderResolution,
+  PublicProviderResolutionEvidence as ProviderResolutionEvidence,
+  PublicProviderResolutionStatus as ProviderResolutionStatus,
+} from "./provider-resolution.ts";
+export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
 export * from "./connections.ts";
 export * from "./dependencies.ts";
 export type {
@@ -27,21 +52,38 @@ export type {
 } from "./deploy-control-errors.ts";
 export * from "./activity.ts";
 export * from "./pagination.ts";
-export * from "./output-snapshots.ts";
-export * from "./deployments.ts";
+export type {
+  OutputShare,
+  OutputShareEntry,
+  OutputShareStatus,
+  PublicOutputSnapshot,
+  PublicOutputSnapshot as OutputSnapshot,
+} from "./output-snapshots.ts";
+export type {
+  DeploymentStatus,
+  PublicDeployment,
+  PublicDeployment as Deployment,
+  StateSnapshot,
+} from "./deployments.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export * from "./security.ts";
 export * from "./providers.ts";
+export * from "./service-graph.ts";
+export * from "./ai-gateway.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal `/v1`
 // compatibility seam owns a separate status union for its private execution
 // records. The public Run status union is reachable via the
 // `takosumi-contract/runs` subpath.
 export type {
   ArtifactRecord,
-  Run,
+  PublicRun as Run,
+  RunCostInfo,
+  RunCostResponse,
+  RunDiagnostic,
   RunEventsResponse,
   RunGroup,
+  RunGroupResponse,
   RunGroupStatus,
   RunGroupType,
   RunLogsResponse,

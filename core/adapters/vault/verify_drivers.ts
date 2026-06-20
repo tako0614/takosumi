@@ -4,7 +4,7 @@
  * Background: the vault's `mint` paths refuse any Connection that is not
  * `verified`. Historically `test()` had ONE live driver branch keyed on cloud
  * family (Cloudflare / AWS); every other kind fell through to a `pending`
- * "no verification driver" result, so a git source / Provider Env Set / GCP
+ * "no verification driver" result, so a git source / generic-env / GCP
  * Connection could NEVER reach `verified` and every mint for it failed
  * permanently. This module makes verification per-kind so those Connections can
  * reach `verified` and unblock mint.
@@ -24,17 +24,17 @@
  *                    in the vault (they predate this registry); git_https does a
  *                    smart-HTTP probe HERE when a probe URL is configured.
  *   - `structural` — verification is satisfied by the opened values' shape
- *                    (e.g. a Provider Env Set whose declared env names are all
+ *                    (e.g. a generic-env Connection whose declared env names are all
  *                    present). No network call.
- *   - `reserved`   — no driver is wired yet, but the kind is intentionally not a
- *                    hard error (git_ssh has no in-vault ls-remote seam; gcp is
- *                    reserved). Returns `verified` structurally with a clear note
- *                    so the kind is not permanently mint-blocked.
+ *   - `reserved`   — no driver is wired yet. Git SSH can be structurally verified
+ *                    with pinned known_hosts because the runner owns the live SSH
+ *                    probe. GCP remains pending until a real OAuth /
+ *                    impersonation live verifier and mint driver are wired.
  */
 import type { Connection, ConnectionKind } from "takosumi-contract/connections";
 import { GIT_HTTPS_TOKEN_ENV } from "takosumi-contract/sources";
 
-/** Injected fetch seam (mirrors the vault's `VaultFetch`). */
+/** Injected fetch implementation (mirrors the vault's `VaultFetch`). */
 export type VerifyFetch = (
   input: string,
   init?: RequestInit,
@@ -114,7 +114,10 @@ export const verifyGitHttps: VerifyDriver = async ({
   }
   if (response.status === 200) return { ok: true };
   if (response.status === 401 || response.status === 403) {
-    return { ok: false, detail: "bad credential (git host rejected the token)" };
+    return {
+      ok: false,
+      detail: "bad credential (git host rejected the token)",
+    };
   }
   return {
     ok: false,
@@ -143,18 +146,22 @@ export const verifyGitSsh: VerifyDriver = async ({ connection }) => {
 };
 
 /**
- * provider_env_set: STRUCTURAL. The Connection declares its env names in
+ * generic_env_provider: STRUCTURAL. The Connection declares its env names in
  * `connection.envNames`; verification is satisfied when every declared name is
  * present in the opened values (and there is at least one). Missing any declared
  * name ⇒ pending.
  */
-export const verifyProviderEnvSet: VerifyDriver = async ({
+export const verifyGenericEnvProvider: VerifyDriver = async ({
   connection,
   values,
+  fetch,
 }) => {
+  if (isReservedGcpConnection(connection)) {
+    return verifyGcpReserved({ connection, values, fetch });
+  }
   const declared = connection.envNames;
   if (declared.length === 0) {
-    return { ok: false, detail: "provider env set declares no env names" };
+    return { ok: false, detail: "generic-env provider declares no env names" };
   }
   const missing = declared.filter(
     (name) => typeof values[name] !== "string" || values[name].length === 0,
@@ -162,7 +169,7 @@ export const verifyProviderEnvSet: VerifyDriver = async ({
   if (missing.length > 0) {
     return {
       ok: false,
-      detail: `provider env set is missing values for: ${missing.join(", ")}`,
+      detail: `generic-env provider is missing values for: ${missing.join(", ")}`,
     };
   }
   return { ok: true };
@@ -170,12 +177,14 @@ export const verifyProviderEnvSet: VerifyDriver = async ({
 
 /**
  * gcp: RESERVED. The GCP impersonation / OAuth driver wiring is reserved, so a
- * live probe is not available. Structural-verified so a GCP Connection is not
- * permanently mint-blocked.
+ * live probe is not available. Keep these Connections pending instead of
+ * marking them verified; a reserved helper must never become runnable until a
+ * real verify + mint driver exists.
  */
 export const verifyGcpReserved: VerifyDriver = async () => ({
-  ok: true,
-  detail: "reserved structural verify (gcp live verification driver pending)",
+  ok: false,
+  detail:
+    "reserved (gcp live verification and credential mint drivers pending)",
 });
 
 /**
@@ -188,7 +197,7 @@ export const verifyGcpReserved: VerifyDriver = async () => ({
 const VERIFY_DRIVERS: Partial<Record<ConnectionKind, VerifyDriver>> = {
   source_git_https_token: verifyGitHttps,
   source_git_ssh_key: verifyGitSsh,
-  provider_env_set: verifyProviderEnvSet,
+  generic_env_provider: verifyGenericEnvProvider,
   gcp_oauth_bootstrap: verifyGcpReserved,
   gcp_service_account_impersonation: verifyGcpReserved,
 };
@@ -199,6 +208,19 @@ export function verifyDriverForKind(
 ): VerifyDriver | undefined {
   if (!kind) return undefined;
   return VERIFY_DRIVERS[kind];
+}
+
+function isReservedGcpConnection(connection: Connection): boolean {
+  const providerTail = connection.provider.toLowerCase().split("/").pop();
+  return (
+    connection.kind === "gcp_oauth_bootstrap" ||
+    connection.kind === "gcp_service_account_impersonation" ||
+    connection.credentialDriver === "gcp_oauth_bootstrap" ||
+    connection.credentialDriver === "gcp_service_account_impersonation" ||
+    providerTail === "google" ||
+    providerTail === "google-beta" ||
+    providerTail === "gcp"
+  );
 }
 
 /**

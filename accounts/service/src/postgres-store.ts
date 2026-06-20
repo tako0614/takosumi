@@ -1,7 +1,7 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppBindingRecord,
-  AppGrantRecord,
+  ServiceBindingMaterialRecord,
+  ServiceGrantMaterialRecord,
   InstallationEventRecord,
   InstallationRecord,
   LedgerAccountRecord,
@@ -73,9 +73,7 @@ export class PostgresAccountsStore implements AccountsStore {
     return accounts.findUpstreamIdentity(this.#client, input);
   }
 
-  savePasskeyCredential(
-    record: PasskeyCredentialRecord,
-  ): Promise<void> {
+  savePasskeyCredential(record: PasskeyCredentialRecord): Promise<void> {
     return passkeys.savePasskeyCredential(this.#client, record);
   }
 
@@ -161,9 +159,7 @@ export class PostgresAccountsStore implements AccountsStore {
     );
   }
 
-  saveBillingWebhookEvent(
-    record: BillingWebhookEventRecord,
-  ): Promise<void> {
+  saveBillingWebhookEvent(record: BillingWebhookEventRecord): Promise<void> {
     return billing.saveBillingWebhookEvent(this.#client, record);
   }
 
@@ -309,9 +305,7 @@ export class PostgresAccountsStore implements AccountsStore {
     return oidc.saveOidcClient(this.#client, record);
   }
 
-  findOidcClient(
-    clientId: string,
-  ): Promise<OidcClientRecord | undefined> {
+  findOidcClient(clientId: string): Promise<OidcClientRecord | undefined> {
     return oidc.findOidcClient(this.#client, clientId);
   }
 
@@ -407,9 +401,7 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.findSpace(this.#client, spaceId);
   }
 
-  listSpacesForAccount(
-    accountId: string,
-  ): Promise<readonly SpaceRecord[]> {
+  listSpacesForAccount(accountId: string): Promise<readonly SpaceRecord[]> {
     return installations.listSpacesForAccount(this.#client, accountId);
   }
 
@@ -454,39 +446,41 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.findRuntimeBinding(this.#client, runtimeBindingId);
   }
 
-  saveAppBinding(record: AppBindingRecord): Promise<void> {
-    return installations.saveAppBinding(this.#client, record);
-  }
-
-  listAppBindingsForInstallation(
-    installationId: string,
-  ): Promise<readonly AppBindingRecord[]> {
-    return installations.listAppBindingsForInstallation(
-      this.#client,
-      installationId,
-    );
-  }
-
-  saveAppGrant(record: AppGrantRecord): Promise<void> {
-    return installations.saveAppGrant(this.#client, record);
-  }
-
-  findAppGrant(grantId: string): Promise<AppGrantRecord | undefined> {
-    return installations.findAppGrant(this.#client, grantId);
-  }
-
-  listAppGrantsForInstallation(
-    installationId: string,
-  ): Promise<readonly AppGrantRecord[]> {
-    return installations.listAppGrantsForInstallation(
-      this.#client,
-      installationId,
-    );
-  }
-
-  appendInstallationEvent(
-    record: InstallationEventRecord,
+  saveServiceBindingMaterial(
+    record: ServiceBindingMaterialRecord,
   ): Promise<void> {
+    return installations.saveServiceBindingMaterial(this.#client, record);
+  }
+
+  listServiceBindingMaterialsForInstallation(
+    installationId: string,
+  ): Promise<readonly ServiceBindingMaterialRecord[]> {
+    return installations.listServiceBindingMaterialsForInstallation(
+      this.#client,
+      installationId,
+    );
+  }
+
+  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): Promise<void> {
+    return installations.saveServiceGrantMaterial(this.#client, record);
+  }
+
+  findServiceGrantMaterial(
+    grantId: string,
+  ): Promise<ServiceGrantMaterialRecord | undefined> {
+    return installations.findServiceGrantMaterial(this.#client, grantId);
+  }
+
+  listServiceGrantMaterialsForInstallation(
+    installationId: string,
+  ): Promise<readonly ServiceGrantMaterialRecord[]> {
+    return installations.listServiceGrantMaterialsForInstallation(
+      this.#client,
+      installationId,
+    );
+  }
+
+  appendInstallationEvent(record: InstallationEventRecord): Promise<void> {
     return installations.appendInstallationEvent(this.#client, record);
   }
 

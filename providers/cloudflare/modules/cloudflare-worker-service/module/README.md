@@ -18,8 +18,9 @@ through the `cloudflare_workers_script` resource:
 - `script_name`, `account_id`, and `compatibility_date` are the remaining
   required/important arguments.
 
-workers.dev exposure is a separate v5 resource,
-`cloudflare_workers_script_subdomain` (`enabled = true`).
+This module does not create a workers.dev subdomain. In the hosted Gateway path,
+namespace scripts are reached through the dispatcher; public ingress must be
+projected by dispatcher/custom-route configuration and passed as `publicUrl`.
 
 ## Build phase
 
@@ -36,11 +37,12 @@ credentials; only the OpenTofu plan/apply phases receive provider credentials.
 
 ## Inputs / outputs
 
-- Inputs: `appName` (string, required), `accountId` (string, required).
+- Inputs: `appName` (string, required), `accountId` (string, required),
+  `publicUrl` (string, optional).
 - Outputs: `worker_name`, `url`.
 
-`url` is rendered from the account's workers.dev subdomain when known; deriving
-the subdomain on-cluster is left to the dispatch/runner wiring.
+`url` returns `publicUrl`, or an empty string when no dispatcher/custom-route
+projection is configured.
 
 This directory is baked into the runner image at
 `/app/templates/cloudflare-worker-service/module`.

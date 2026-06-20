@@ -5,8 +5,8 @@
  * placeholders are interpolated by `t()`.
  *
  * Vocabulary contract (the unified verb set — do not reintroduce 公開/反映):
- *   物 = アプリ (Installation はサブラベルでのみ)
- *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → 稼働中 (active)
+ *   物 = Installation / Capsule Installation
+ *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
  */
 export const ja = {
   // --- common -------------------------------------------------------------
@@ -41,6 +41,8 @@ export const ja = {
   "nav.spaceSettings": "Space 設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
+  "nav.backToTakos": "Takos に戻る",
+  "nav.deployContext": "デプロイ / 管理",
   "shell.skipToContent": "本文へスキップ",
   "shell.userMenu": "ユーザーメニュー",
   "shell.signOut": "サインアウト",
@@ -56,13 +58,36 @@ export const ja = {
   "space.handlePlaceholder": "my-space",
   "space.handleRequired": "ハンドルを入力してください。",
   "space.select": "Space を選択してください",
-  "space.selectMessage": "右上の Space スイッチャーから Space を選ぶと表示されます。",
+  "space.selectMessage":
+    "右上の Space スイッチャーから Space を選ぶと表示されます。",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
   "auth.signInSub": "Takosumi のアカウントで続けます。",
+  "auth.brandDraft": "仮ロゴ",
+  "auth.brandDraftAria": "Takosumi の仮ロゴ",
+  "auth.brandDraftMark": "仮",
   "auth.continueWith": "{provider} で続ける",
-  "auth.notConfigured": "オペレーターが未設定です",
+  "auth.notConfigured": "現在利用できません",
+  "auth.providerChecking": "利用可否を確認中です",
+  "auth.providerUnavailable": "現在利用できません",
+  "auth.providerRetryNeeded": "確認できませんでした",
+  "auth.noProvidersTitle": "Takosumi Cloud は現在準備中です",
+  "auth.noProvidersMessage":
+    "この Takosumi Cloud 環境では、まだサインインを開始していません。アクセスが有効になるまでお待ちください。",
+  "auth.noProvidersMessageWithInstall":
+    "サインイン方法が有効になると、この追加内容からそのまま続行できます。",
+  "auth.providersLoadFailedTitle": "サインイン方法を確認できませんでした",
+  "auth.providersLoadFailedMessage": "通信状態を確認して再試行してください。",
+  "auth.providersLoadFailedMessageWithInstall":
+    "通信状態を確認して再試行してください。追加内容はこの画面に保持されています。",
+  "auth.retryProviderCheck": "もう一度確認",
+  "auth.installContextAria": "サインイン後に続行する追加内容",
+  "auth.installContextKicker": "追加内容",
+  "auth.installContextTitle": "{name} を追加します",
+  "auth.installContextRef": "固定バージョン {ref}",
+  "auth.installContextDefaultRef": "既定の ref",
+  "auth.installContextRootPath": "root module",
   "auth.termsPrefix": "続行することで",
   "auth.termsOfService": "利用規約",
   "auth.and": "と",
@@ -118,49 +143,49 @@ export const ja = {
   "op.compatibility_check": "互換性チェック",
   "op.generic": "操作",
 
-  // --- app list (home) -----------------------------------------------------
-  "apps.title": "アプリ",
-  "apps.subtitle": "この Space のアプリと状態を表示します。",
-  "apps.add": "アプリを追加",
+  // --- Installation list (home) --------------------------------------------
+  "apps.title": "Installations",
+  "apps.subtitle": "この Space の Capsule Installation と状態を表示します。",
+  "apps.add": "Installation を追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
-  "apps.empty.title": "まだアプリがありません",
+  "apps.empty.title": "まだ Installation がありません",
   "apps.empty.message":
-    "カタログから選ぶか、Git URL から OpenTofu Capsule を追加できます。",
-  "apps.empty.cta": "アプリを追加",
-  "apps.openApp": "開く",
+    "Starter Capsule から始めるか、Git URL から OpenTofu Capsule を追加できます。",
+  "apps.empty.cta": "Installation を追加",
+  "apps.openApp": "出力を開く",
   "apps.reviewChanges": "変更を確認",
   "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
   "apps.graphLink": "依存グラフ",
 
-  // --- app detail ----------------------------------------------------------
+  // --- Installation detail -------------------------------------------------
   "app.installationSub": "Installation",
   "app.tab.overview": "概要",
   "app.tab.deploys": "デプロイ",
   "app.tab.settings": "設定",
   "app.tab.danger": "危険な操作",
-  "app.notFound": "アプリが見つかりません",
+  "app.notFound": "Installation が見つかりません",
   "app.backToList": "一覧へ",
   "app.outputs.title": "公開アドレス・出力",
   "app.outputs.subtitle":
-    "アプリが公開しているアドレスや値です。秘密情報は表示されません。",
+    "この Installation が公開しているアドレスや値です。秘密情報は表示されません。",
   "app.outputs.empty":
     "まだ公開された出力はありません。デプロイすると表示されます。",
   "app.outputs.none":
-    "このアプリは公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
+    "この Installation は公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
   "app.nextSteps.title": "次にやること",
   "app.nextSteps.infraOnly":
-    "インフラの作成（D1 / KV / R2 / Queues など）は完了しました。アプリ本体の起動は別の手順（例: wrangler でのデプロイ）が必要な場合があります。手順はドキュメントを参照してください。",
+    "この Installation にはまだ公開 URL の出力がありません。最新 Run、OutputSnapshot、Capsule docs を確認し、infra-only なのか別 Capsule への依存が必要なのかを確認してください。",
   "app.nextSteps.docs": "ドキュメントを開く →",
-  "app.output.launchUrl": "アプリのアドレス",
+  "app.output.launchUrl": "公開アドレス",
   "app.output.url": "アドレス",
   "app.output.publicUrl": "公開アドレス",
   "app.output.endpoint": "エンドポイント",
   "app.output.hostname": "ホスト名",
   "app.deps.title": "依存関係",
-  "app.deps.dependsOn": "依存しているアプリ",
-  "app.deps.usedBy": "このアプリを使っているアプリ",
+  "app.deps.dependsOn": "依存している Installation",
+  "app.deps.usedBy": "この Installation を使っている Installation",
   "app.source.title": "ソース",
   "app.source.name": "名前",
   "app.source.url": "Git URL",
@@ -170,7 +195,7 @@ export const ja = {
   "app.info.title": "Installation 情報",
   "app.info.id": "ID",
   "app.info.generation": "State generation",
-  "app.info.outputSnapshot": "Output snapshot",
+  "app.info.deployment": "Current deployment",
   "app.info.installConfig": "InstallConfig",
   "app.deploys.title": "デプロイ履歴",
   "app.deploys.subtitle":
@@ -183,20 +208,18 @@ export const ja = {
   "app.recentRuns.title": "最近の実行",
   "app.recentRuns.empty": "最近の実行はありません。",
   "app.recentRuns.open": "詳細",
-  "app.bindings.title": "Provider bindings",
+  "app.bindings.title": "Provider connections",
   "app.bindings.subtitle":
-    "プロバイダごとの認証の割り当てです。通常は変更不要です。",
+    "OpenTofu provider ごとに使う provider connection を選びます。通常は変更不要です。",
   "app.bindings.add": "プロバイダを追加",
   "app.bindings.aliasPlaceholder": "alias（任意）",
-  "app.bindings.defaultUnset": "default 未設定",
-  "app.bindings.default": "default: {provider}",
-  "app.bindings.selectConnection": "接続を選択",
+  "app.bindings.selectConnection": "connection を選択",
   "app.bindings.remove": "削除",
-  "app.bindings.errorProvider": "Provider binding {index} の provider を入力してください。",
-  "app.bindings.errorConnection": "{provider} の接続を選択してください。",
-  "app.bindings.errorManualRequired": "{provider} の値を入力してください。",
-  "app.bindings.errorManualJson": "{provider} の値は JSON object にしてください。",
-  "app.danger.destroyTitle": "アプリを削除",
+  "app.bindings.errorProvider":
+    "provider connection {index} の provider を入力してください。",
+  "app.bindings.errorConnection":
+    "{provider} の ready な provider connection を選択してください。",
+  "app.danger.destroyTitle": "Installation を削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
   "app.danger.destroyCta": "削除プランを確認",
@@ -214,7 +237,8 @@ export const ja = {
   "run.summary.readyChanges": "作成 {create} / 変更 {update} / 削除 {delete}",
   "run.summary.destroyReady":
     "「{name}」を削除する準備ができました。実行すると元に戻せません。",
-  "run.summary.applied": "デプロイを開始しました。反映までしばらくお待ちください。",
+  "run.summary.applied":
+    "デプロイを開始しました。反映までしばらくお待ちください。",
   "run.summary.applying": "デプロイを実行しています…",
   "run.summary.applySucceeded": "デプロイが完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
@@ -228,7 +252,7 @@ export const ja = {
   "run.deploying": "実行中...",
   "run.deployBlocked": "残高不足のため実行できません",
   "run.retryPlan": "もう一度変更を確認",
-  "run.backToApp": "アプリへ戻る",
+  "run.backToApp": "Installation へ戻る",
   "run.destructiveWarning":
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
@@ -265,52 +289,63 @@ export const ja = {
   "run.audit.empty": "監査イベントはありません。",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "アプリを追加",
+  "new.title": "Installation を追加",
   "new.subtitle":
-    "カタログから選ぶか、Git URL の OpenTofu Capsule を指定して追加します。",
-  "new.tab.catalog": "カタログ",
+    "既知の Capsule から始めるか、任意の Git URL の OpenTofu Capsule を追加します。",
+  "new.tab.catalog": "Starter Capsules",
   "new.tab.git": "Git URL から",
   "new.catalog.intro":
-    "公式・既知の OpenTofu Capsule です。選ぶと取得元が入力された状態で追加に進みます。",
-  "new.catalog.select": "これを追加",
+    "既知の OpenTofu Capsule の取得元です。選ぶだけでは追加せず、Source 座標を入力済みにします。",
+  "new.catalog.select": "この Capsule を使う",
   "new.deeplink.summary":
     "リンクから「{capsule}」の取得元が入力されています。内容を確認してから追加してください。",
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path（モジュールパス）",
-  "new.name": "この導入の名前",
+  "new.name": "Installation 名",
   "new.managed.notice":
-    "このまま、運営のクラウド（managed）で動かせます。クラウドの接続を自分で用意する必要はありません。",
+    "運営が確認済みの provider credential を用意しています。必要な provider がすべて対応済みなら、自分の key を追加せずに進めます。",
   "new.managed.needCredential":
     "適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続がないようです。",
   "new.managed.connectFirst": "先にクラウドに接続する",
-  "new.managed.byoTitle": "自分のクラウドで動かしたい場合（任意）",
+  "new.managed.byoTitle": "自分の provider key を使いたい場合（任意）",
   "new.managed.byoBody":
-    "既定では運営のクラウド（managed）で動きますが、自分の Cloudflare や AWS に出したい場合は、Space に接続を設定できます。設定しなくても、このまま追加できます。",
-  "new.managed.byoLink": "自分のクラウドの接続を設定する",
-  "new.compat.check": "中身を確認",
-  "new.compat.checking": "確認中...",
+    "運営提供の credential は、この operator が有効にした provider だけをカバーします。AWS / GCP / GitHub / Kubernetes や自分の Cloudflare account が必要な Capsule では、確認済みの Space connection を追加してください。",
+  "new.managed.byoLink": "自分の provider 接続を設定する",
+  "new.compat.check": "取得元を登録して確認",
+  "new.compat.checking": "登録して確認中...",
   "new.compat.title": "確認結果",
   "new.compat.ready": "このまま追加できます",
   "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
   "new.proceed": "確認して追加",
-  "new.proceedHint": "先に「中身を確認」してから進めてください。",
+  "new.proceedHint": "先に「取得元を登録して確認」してから進めてください。",
+  "new.providers.title": "Provider connections",
+  "new.providers.subtitle":
+    "最初の変更確認に進む前に、provider ごとに使う provider connection を選びます。未設定の provider は fail-closed で止まり、Takosumi が別の connection を暗黙利用することはありません。",
+  "new.providers.noneRequired":
+    "この Capsule は最初の変更確認で provider credential を要求していません。",
+  "new.providers.alias": "alias: {alias}",
+  "new.providers.selectConnection": "connection を選択",
+  "new.providers.manageConnections": "provider connection を管理",
+  "new.providers.errorConnection":
+    "{provider} の ready な provider connection を選択してください。",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
-  "new.step.create": "アプリを作成",
+  "new.step.create": "Installation を作成",
   "new.step.plan": "変更を確認",
   "new.error.spaceRequired": "Space を選択してください。",
   "new.error.urlRequired": "Git URL を入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
-  "new.error.configMissing": "アプリの追加設定がまだ利用できません。",
+  "new.error.configMissing": "Installation の追加設定がまだ利用できません。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Space 設定",
-  "spaceSettings.subtitle": "この Space のメンバー・接続・お支払い・バックアップを管理します。",
+  "spaceSettings.subtitle":
+    "この Space のメンバー・接続・お支払い・バックアップを管理します。",
   "spaceSettings.tab.general": "一般",
   "spaceSettings.tab.members": "メンバー",
   "spaceSettings.tab.connections": "接続",
@@ -325,8 +360,10 @@ export const ja = {
   "spaceSettings.general.policyAdvanced": "ポリシー JSON（上級者向け）",
   "spaceSettings.general.saved": "Space 設定を保存しました。",
   "spaceSettings.general.nameRequired": "表示名を入力してください。",
-  "spaceSettings.general.policyObject": "ポリシー JSON は object にしてください。",
-  "spaceSettings.general.policyInvalid": "ポリシー JSON が正しい JSON ではありません。",
+  "spaceSettings.general.policyObject":
+    "ポリシー JSON は object にしてください。",
+  "spaceSettings.general.policyInvalid":
+    "ポリシー JSON が正しい JSON ではありません。",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "オーナー",
@@ -344,7 +381,8 @@ export const ja = {
   "members.invite.account": "ハンドル / アカウント ID",
   "members.invite.role": "役割",
   "members.invite.cta": "招待",
-  "members.invite.accountRequired": "ハンドルかアカウント ID を入力してください。",
+  "members.invite.accountRequired":
+    "ハンドルかアカウント ID を入力してください。",
   "members.col.member": "メンバー",
   "members.col.roles": "役割",
   "members.col.status": "状態",
@@ -358,25 +396,30 @@ export const ja = {
   "members.remove": "削除",
   "members.removeConfirm": "このメンバーを削除しますか？（{account}）",
   "members.empty": "この Space にはまだメンバーがいません。",
-  "members.viewerNote": "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
+  "members.viewerNote":
+    "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
     "プロバイダの認証情報を Space ごとに登録します。値は書き込み専用で、一度保存すると再表示されません。",
-  "conn.operatorDefaults.title": "オペレーター既定の接続",
-  "conn.operatorDefaults.subtitle":
-    "接続を設定しない場合に使われる、運営側の既定接続です。",
-  "conn.operatorDefaults.provider": "プロバイダ",
-  "conn.operatorDefaults.status": "状態",
-  "conn.operatorDefaults.configured": "設定済み",
-  "conn.scope.operator": "オペレーター既定",
+  "conn.providerConnections.title": "Provider connections",
+  "conn.providerConnections.subtitle":
+    "この Space で使える credential ownership です。値は書き込み専用のままです。",
+  "conn.providerConnections.provider": "プロバイダ",
+  "conn.providerConnections.name": "名前",
+  "conn.providerConnections.ownership": "所有",
+  "conn.providerConnections.status": "状態",
+  "conn.ownership.ownKey": "自分の key",
+  "conn.ownership.takosProvided": "Takosumi 提供",
+  "conn.scope.operator": "Gateway",
   "conn.scope.space": "Space",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.add.title": "接続を追加",
-  "conn.add.subtitle": "プロバイダを選び、トークンを貼り付けるか環境変数として登録します。",
+  "conn.add.subtitle":
+    "プロバイダを選び、トークンを貼り付けるか環境変数として登録します。",
   "conn.add.provider": "プロバイダ",
-  "conn.add.envSetOption": "その他のプロバイダ（Provider Env Set）",
+  "conn.add.genericEnvOption": "自分の provider key を使う",
   "conn.add.displayName": "表示名（任意）",
   "conn.add.displayNamePlaceholder": "本番 Cloudflare",
   "conn.guided.intro":
@@ -391,23 +434,24 @@ export const ja = {
   "conn.advanced.register": "値を直接登録",
   "conn.register": "接続を登録",
   "conn.registering": "登録中...",
-  "conn.envset.intro":
+  "conn.genericEnv.intro":
     "AWS / GCP / Kubernetes など任意の OpenTofu プロバイダの認証情報を、環境変数（NAME=value）として登録します。値は書き込み専用で、保存後は env 名のみ表示されます。",
-  "conn.envset.providerName": "プロバイダ名",
-  "conn.envset.envName": "環境変数名",
-  "conn.envset.value": "値",
-  "conn.envset.valuePlaceholder": "値を貼り付け",
-  "conn.envset.addRow": "環境変数を追加",
-  "conn.envset.providerRequired": "プロバイダ名を入力してください。",
-  "conn.envset.cloudflareGuided":
+  "conn.genericEnv.providerName": "プロバイダ名",
+  "conn.genericEnv.envName": "環境変数名",
+  "conn.genericEnv.value": "値",
+  "conn.genericEnv.valuePlaceholder": "値を貼り付け",
+  "conn.genericEnv.addRow": "環境変数を追加",
+  "conn.genericEnv.providerRequired": "プロバイダ名を入力してください。",
+  "conn.genericEnv.cloudflareGuided":
     "Cloudflare は上のプロバイダから登録してください（専用フローがあります）。",
-  "conn.envset.nameRequired": "値のある行には環境変数名が必要です。",
-  "conn.envset.oneRequired": "環境変数を 1 つ以上入力してください。",
+  "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
+  "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "プロバイダが不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
   "conn.list.title": "登録済みの接続",
-  "conn.list.empty": "この Space にはまだ接続がありません。上のフォームから追加できます。",
+  "conn.list.empty":
+    "この Space にはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
   "conn.testing": "確認中...",
   "conn.remove.confirmTitle": "接続を削除",
@@ -415,7 +459,8 @@ export const ja = {
     "本当に {name} を削除しますか？保存された認証情報も削除され、取り消せません。",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle": "Space の control backup と service-data archive を管理します。",
+  "backups.subtitle":
+    "Space の control/state backup を管理します。service-data archive は export を提供する Installation でのみ表示されます。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
@@ -427,7 +472,8 @@ export const ja = {
   "backups.empty.message": "この Space の最初のバックアップを作成できます。",
 
   // --- output shares -------------------------------------------------------------
-  "shares.subtitle": "Space 間で Installation の projected output を明示的に共有します。",
+  "shares.subtitle":
+    "Space 間で Installation の projected output を明示的に共有します。",
   "shares.create.title": "共有を作成",
   "shares.create.toSpace": "共有先 Space",
   "shares.create.producer": "Producer Installation",
@@ -437,8 +483,10 @@ export const ja = {
   "shares.create.removeOutput": "削除",
   "shares.create.sensitiveReason": "sensitive output を共有する理由",
   "shares.create.cta": "共有を作成",
-  "shares.error.outputsRequired": "共有する output 名を 1 つ以上入力してください。",
-  "shares.error.reasonRequired": "sensitive output を共有する理由を入力してください。",
+  "shares.error.outputsRequired":
+    "共有する output 名を 1 つ以上入力してください。",
+  "shares.error.reasonRequired":
+    "sensitive output を共有する理由を入力してください。",
   "shares.col.direction": "方向",
   "shares.col.installation": "Installation",
   "shares.col.outputs": "Outputs",
@@ -456,23 +504,24 @@ export const ja = {
   "notif.subtitle":
     "追加・実行・承認・失敗など、あなたの Space での出来事を新しい順に表示します。",
   "notif.empty.title": "まだ通知はありません",
-  "notif.empty.message": "アプリを追加したり実行したりすると、ここに出来事が並びます。",
+  "notif.empty.message":
+    "Installation を追加したり実行したりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
   "notif.viewRaw": "生の監査ログ（アクティビティ）を見る →",
-  "notif.event.installCreated": "アプリ「{name}」を追加しました",
+  "notif.event.installCreated": "Installation「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
   "notif.event.planReadyDetail": "内容を確認して承認できます",
   "notif.event.planBlockedDetail": "ポリシーにより承認が止まっています",
   "notif.event.approved": "{operation}を承認しました",
-  "notif.event.applied": "アプリの変更をデプロイしました",
+  "notif.event.applied": "Installation の変更をデプロイしました",
   "notif.event.appliedDetail": "出力 {n} 件を更新",
-  "notif.event.destroyed": "アプリを削除しました",
+  "notif.event.destroyed": "Installation を削除しました",
   "notif.event.failed": "{operation}に失敗しました",
   "notif.event.failedDetail": "エラー: {code}",
   "notif.event.failedHint": "詳細は実行ログを確認してください",
-  "notif.event.drift": "アプリの実状態が記録とズレています",
+  "notif.event.drift": "Installation の実状態が記録とズレています",
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
@@ -481,8 +530,8 @@ export const ja = {
   "notif.event.connRevoked": "接続「{provider}」が無効になりました",
   "notif.event.connRevokedGeneric": "接続が無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
-  "notif.event.depCreated": "アプリ間の連携を追加しました",
-  "notif.event.depDeleted": "アプリ間の連携を解除しました",
+  "notif.event.depCreated": "Installation 間の連携を追加しました",
+  "notif.event.depDeleted": "Installation 間の連携を解除しました",
   "notif.event.shareRequested": "出力の共有リクエストが届きました",
   "notif.event.shareApproved": "出力の共有を承認しました",
   "notif.event.shareRevoked": "出力の共有を取り消しました",
@@ -490,9 +539,11 @@ export const ja = {
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "アクティビティ",
-  "activity.subtitle": "Space の監査証跡（最近の操作）です。生のイベントを表示します。",
+  "activity.subtitle":
+    "Space の監査証跡（最近の操作）です。生のイベントを表示します。",
   "activity.empty.title": "まだアクティビティがありません",
-  "activity.empty.message": "この Space で操作が行われると、ここに記録されます。",
+  "activity.empty.message":
+    "この Space で操作が行われると、ここに記録されます。",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "まとめての更新",
@@ -506,12 +557,12 @@ export const ja = {
   // --- graph ---------------------------------------------------------------------
   "graph.title": "依存グラフ",
   "graph.subtitle":
-    "アプリ間の依存 DAG。上の層が producer、下の層が consumer です。",
+    "Installation 間の依存 DAG。上の層が producer、下の層が consumer です。",
   "graph.layer": "層 {n}",
   "graph.cycle": "循環（解決不能）",
   "graph.dependsOn": "↑ 依存: {names}",
-  "graph.empty.title": "アプリがありません",
-  "graph.empty.message": "この Space にはまだアプリがありません。",
+  "graph.empty.title": "Installation がありません",
+  "graph.empty.message": "この Space にはまだ Installation がありません。",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
@@ -564,15 +615,4 @@ export const ja = {
   "billing.reservations.title": "クレジット予約",
   "billing.reservations.empty": "予約はまだありません。",
   "billing.reservations.expires": "期限",
-
-  // --- takos start -------------------------------------------------------------------
-  "start.title": "Takos を開始",
-  "start.subtitle": "起動先と Space を確認して、Takos を開きます。",
-  "start.takosUrl": "Takos URL",
-  "start.account": "Account ID",
-  "start.space": "Space ID",
-  "start.terms": "Takosumi の利用規約に同意します。",
-  "start.launch": "Takos を開く",
-  "start.error.idsRequired": "Account ID と Space ID を入力してください。",
-  "start.error.termsRequired": "利用規約への同意が必要です。",
 } as const;

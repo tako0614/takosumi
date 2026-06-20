@@ -15,11 +15,12 @@ import {
   CONNECTIONS_GCP_IMPERSONATION_PATH,
   CONNECTIONS_GCP_OAUTH_CALLBACK_PATH,
   CONNECTIONS_GCP_OAUTH_START_PATH,
-  CONNECTIONS_PROVIDER_ENV_SET_PATH,
+  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
   CONNECTIONS_PATH,
   CONNECTIONS_SOURCE_HTTPS_TOKEN_PATH,
   CONNECTIONS_SOURCE_SSH_KEY_PATH,
   PROVIDERS_PATH,
+  PROVIDER_ENVS_PATH,
   RUNNER_PROFILES_PATH,
 } from "@takosumi/internal/deploy-control-api";
 import { SOURCES_PATH } from "takosumi-contract/sources";
@@ -54,8 +55,8 @@ export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_TOKEN_ROUTE =
   CONNECTIONS_CLOUDFLARE_TOKEN_PATH;
 export const TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE =
   CONNECTIONS_AWS_ASSUME_ROLE_PATH;
-export const TAKOSUMI_CONNECTIONS_PROVIDER_ENV_SET_ROUTE =
-  CONNECTIONS_PROVIDER_ENV_SET_PATH;
+export const TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE =
+  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH;
 export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_START_ROUTE =
   CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH;
 export const TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_ROUTE =
@@ -69,6 +70,9 @@ export const TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE =
 export const TAKOSUMI_PROVIDERS_ROUTE = PROVIDERS_PATH;
 export const TAKOSUMI_PROVIDER_ROUTE =
   `${INTERNAL_V1_PREFIX}/providers/:providerId` as const;
+export const TAKOSUMI_PROVIDER_ENVS_ROUTE = PROVIDER_ENVS_PATH;
+export const TAKOSUMI_PROVIDER_ENV_ROUTE =
+  `${INTERNAL_V1_PREFIX}/provider-envs/:providerEnvId` as const;
 export const TAKOSUMI_CONNECTION_TEST_ROUTE =
   `${INTERNAL_V1_PREFIX}/connections/:connectionId/test` as const;
 export const TAKOSUMI_CONNECTION_REVOKE_ROUTE =
@@ -85,8 +89,6 @@ export const TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE =
 export const TAKOSUMI_COMPATIBILITY_REPORT_ROUTE =
   `${INTERNAL_V1_PREFIX}/compatibility-reports/:reportId` as const;
 export const TAKOSUMI_SPACES_ROUTE = `${INTERNAL_V1_PREFIX}/spaces` as const;
-export const TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/operator-connection-defaults` as const;
 export const TAKOSUMI_SPACE_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId` as const;
 export const TAKOSUMI_SPACE_INSTALLATIONS_ROUTE =
@@ -120,6 +122,8 @@ export const TAKOSUMI_RUN_LOGS_ROUTE =
   `${INTERNAL_V1_PREFIX}/runs/:runId/logs` as const;
 export const TAKOSUMI_RUN_EVENTS_ROUTE =
   `${INTERNAL_V1_PREFIX}/runs/:runId/events` as const;
+export const TAKOSUMI_RUN_COST_ROUTE =
+  `${INTERNAL_V1_PREFIX}/runs/:runId/cost` as const;
 export const TAKOSUMI_RUN_APPROVE_ROUTE =
   `${INTERNAL_V1_PREFIX}/runs/:runId/approve` as const;
 export const TAKOSUMI_RUN_CANCEL_ROUTE =
@@ -128,6 +132,14 @@ export const TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE =
   `${INTERNAL_V1_PREFIX}/installations/:installationId/dependencies` as const;
 export const TAKOSUMI_DEPENDENCY_ROUTE =
   `${INTERNAL_V1_PREFIX}/dependencies/:dependencyId` as const;
+export const TAKOSUMI_SPACE_SERVICE_EXPORTS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/service-exports` as const;
+export const TAKOSUMI_INSTALLATION_SERVICE_BINDINGS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/installations/:installationId/service-bindings` as const;
+export const TAKOSUMI_SERVICE_BINDING_RESOLVE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/service-bindings/:serviceBindingId/resolve` as const;
+export const TAKOSUMI_SERVICE_BINDING_GRANTS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/service-bindings/:serviceBindingId/grants` as const;
 export const TAKOSUMI_OUTPUT_SHARES_ROUTE =
   `${INTERNAL_V1_PREFIX}/output-shares` as const;
 export const TAKOSUMI_OUTPUT_SHARE_APPROVE_ROUTE =
@@ -156,5 +168,7 @@ export const TAKOSUMI_SPACE_SUBSCRIPTION_CHANGE_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId/subscription/change` as const;
 export const TAKOSUMI_SPACE_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId/backups` as const;
+export const TAKOSUMI_SPACE_BACKUP_RESTORES_ROUTE =
+  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/backups/:backupId/restores` as const;
 export const TAKOSUMI_INSTALLATION_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/installations/:installationId/backups` as const;

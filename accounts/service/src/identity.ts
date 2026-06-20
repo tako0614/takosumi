@@ -65,11 +65,13 @@ export async function resolveUpstreamAccount(
     upstreamIssuer: input.upstreamIssuer,
     upstreamSubject: input.upstreamSubject,
   });
-  const subject = linked?.subject ?? await deriveTakosumiSubject({
-    secret: input.subjectSecret,
-    upstreamIssuer: input.upstreamIssuer,
-    upstreamSubject: input.upstreamSubject,
-  });
+  const subject =
+    linked?.subject ??
+    (await deriveTakosumiSubject({
+      secret: input.subjectSecret,
+      upstreamIssuer: input.upstreamIssuer,
+      upstreamSubject: input.upstreamSubject,
+    }));
   const existing = await input.store.findAccount(subject);
   // `emailVerified` is now a first-class field on `TakosumiAccountRecord` and
   // is persisted end to end (Postgres column, D1/in-memory document). We

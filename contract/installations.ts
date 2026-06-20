@@ -13,8 +13,12 @@
  * allowlist, policy). User repos carry NO Takosumi manifest.
  */
 
-import type { ProviderBindings } from "./provider-bindings.ts";
 import type { CapsuleCompatibilityLevel } from "./capsules.ts";
+export type {
+  InstallationProviderEnvBinding,
+  InstallationProviderEnvBindings,
+  InstallationProviderEnvBindingSet,
+} from "./provider-envs.ts";
 
 /**
  * Internal compatibility discriminator. `core` is the Space base Capsule
@@ -29,6 +33,22 @@ export type InstallType =
   | "app_source";
 
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
+
+/**
+ * Public discriminator for choosing an InstallConfig without exposing internal
+ * `installType` or generated-root authoring details.
+ */
+export type PublicInstallConfigSourceKind =
+  | "generic_capsule"
+  | "first_party_capsule";
+
+/**
+ * Stored sourceKind. The old `official_template` value may exist in pre-v1
+ * rows and is normalized out of every public projection.
+ */
+export type InstallConfigSourceKind =
+  | PublicInstallConfigSourceKind
+  | "official_template";
 
 export type InstallationStatus =
   | "pending"
@@ -151,6 +171,7 @@ export interface InstallConfig {
   readonly id: string;
   readonly spaceId?: string;
   readonly name: string;
+  readonly sourceKind?: InstallConfigSourceKind;
   readonly installType: InstallType;
   readonly trustLevel: TrustLevel;
   /** Path inside the SourceSnapshot that contains the OpenTofu Capsule. */
@@ -178,14 +199,18 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  "installType" | "templateBinding"
->;
+  "installType" | "templateBinding" | "sourceKind"
+> & {
+  readonly sourceKind: PublicInstallConfigSourceKind;
+};
 
 /**
  * Installation ledger record.
  * 1 Installation = Capsule + generated root + tfstate + outputs;
- * `currentStateGeneration` is the
- * generation guard cursor and `currentOutputSnapshotId` the latest projection.
+ * `currentStateGeneration` is the generation guard cursor. The latest
+ * `currentOutputSnapshotId` is an internal ledger pointer to the encrypted raw
+ * output envelope and is projected out of public Installation reads; dashboard
+ * output reads go through Deployment.outputsPublic or OutputShare instead.
  */
 export interface Installation {
   readonly id: string;
@@ -214,20 +239,7 @@ export interface Installation {
 }
 
 /** Public Installation projection returned by `/api` and dashboard session routes. */
-export type PublicInstallation = Omit<Installation, "installType">;
-
-/**
- * Internal per-Installation provider-binding record.
- *
- * The physical table is still named `deployment_profiles` for compatibility;
- * the public model is Connection + ProviderBinding resolution.
- */
-export interface DeploymentProfile {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
-  readonly environment: string;
-  readonly bindings: ProviderBindings;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+export type PublicInstallation = Omit<
+  Installation,
+  "installType" | "currentOutputSnapshotId"
+>;

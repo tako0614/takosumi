@@ -4,24 +4,25 @@ import {
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
-  type AppBindingKind,
-  type AppBindingRecord,
-  type AppGrantRecord,
+  type ServiceBindingMaterialKind,
+  type ServiceBindingMaterialRecord,
+  type ServiceGrantMaterialRecord,
   type AppInstallationMode,
   type AppInstallationStatus,
   type InstallationEventRecord,
   type InstallationRecord,
-  isAppBindingKind,
+  isServiceBindingMaterialKind,
   type RuntimeBindingRecord,
 } from "./ledger.ts";
 import type { AccountsStore, OidcClientRecord } from "./store.ts";
+import { redactPublicRecord } from "./public-redaction.ts";
 
 /**
  * Internal grant capability allowlist used by export bundle validation.
  * Mirrors the internal v0 catalog (v1 contract reset removed grants from the
  * public surface).
  */
-const APP_GRANT_CAPABILITIES = [
+const SERVICE_GRANT_MATERIAL_CAPABILITIES = [
   "app.profile.write",
   "app.memory.write",
   "deploy.intent.write",
@@ -68,8 +69,8 @@ export interface AccountsInstallationExportBundle {
   };
   readonly runtimeTarget: ExportRuntimeTarget | null;
   readonly oidcClient: ExportOidcClient | null;
-  readonly useEdges: readonly ExportUseEdgeTemplate[];
-  readonly permissionScopes: readonly ExportPermissionScope[];
+  readonly serviceBindings: readonly ExportServiceBindingTemplate[];
+  readonly serviceGrants: readonly ExportServiceGrant[];
   readonly events: readonly ExportEventRef[];
 }
 
@@ -82,7 +83,7 @@ export interface ExportRuntimeTarget {
 
 export interface ExportOidcClient {
   readonly clientId: string;
-  readonly useEdge: string;
+  readonly serviceBinding: string;
   readonly servicePath: string;
   /** Optional stored projection name used by account-plane ledgers. */
   readonly namespacePath?: string;
@@ -90,24 +91,21 @@ export interface ExportOidcClient {
   readonly redirectUris: readonly string[];
   readonly allowedScopes: readonly string[];
   readonly subjectMode: "pairwise";
-  readonly tokenEndpointAuthMethod: OidcClientRecord[
-    "tokenEndpointAuthMethod"
-  ];
+  readonly tokenEndpointAuthMethod: OidcClientRecord["tokenEndpointAuthMethod"];
 }
 
-export interface ExportUseEdgeTemplate {
-  readonly useEdgeId: string;
+export interface ExportServiceBindingTemplate {
+  readonly serviceBindingId: string;
   readonly name: string;
-  readonly kind: AppBindingKind;
+  readonly kind: ServiceBindingMaterialKind;
   readonly template: {
     readonly configRef: string;
-    readonly secretRefs: readonly string[];
   };
 }
 
-export interface ExportPermissionScope {
-  readonly permissionScopeId: string;
-  readonly capability: AppGrantRecord["capability"];
+export interface ExportServiceGrant {
+  readonly serviceGrantId: string;
+  readonly capability: ServiceGrantMaterialRecord["capability"];
   readonly scope: JsonObject;
   readonly grantedAt: string;
   readonly revokedAt: string | null;
@@ -123,8 +121,8 @@ export interface ExportEventRef {
 export interface BuildInstallationExportBundleInput {
   readonly installation: InstallationRecord;
   readonly runtimeBinding?: RuntimeBindingRecord;
-  readonly bindings?: readonly AppBindingRecord[];
-  readonly grants?: readonly AppGrantRecord[];
+  readonly bindings?: readonly ServiceBindingMaterialRecord[];
+  readonly grants?: readonly ServiceGrantMaterialRecord[];
   readonly oidcClient?: OidcClientRecord;
   readonly events?: readonly InstallationEventRecord[];
   readonly exportedAt?: string;
@@ -164,10 +162,10 @@ export async function collectInstallationExportBundle(
   const runtimeBinding = installation.runtimeBindingId
     ? await input.store.findRuntimeBinding(installation.runtimeBindingId)
     : undefined;
-  const bindings = await input.store.listAppBindingsForInstallation(
+  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
     input.installationId,
   );
-  const grants = await input.store.listAppGrantsForInstallation(
+  const grants = await input.store.listServiceGrantMaterialsForInstallation(
     input.installationId,
   );
   const oidcClient = await input.store.findOidcClientForInstallation(
@@ -210,41 +208,40 @@ export function buildInstallationExportBundle(
     },
     runtimeTarget: input.runtimeBinding
       ? {
-        runtimeTargetId: input.runtimeBinding.runtimeBindingId,
-        mode: input.runtimeBinding.mode,
-        targetType: input.runtimeBinding.targetType,
-        targetId: input.runtimeBinding.targetId,
-      }
+          runtimeTargetId: input.runtimeBinding.runtimeBindingId,
+          mode: input.runtimeBinding.mode,
+          targetType: input.runtimeBinding.targetType,
+          targetId: input.runtimeBinding.targetId,
+        }
       : null,
     oidcClient: input.oidcClient
       ? {
-        clientId: input.oidcClient.clientId,
-        useEdge: oidcUseEdgeName(input.bindings ?? []),
-        servicePath: input.oidcClient.namespacePath,
-        issuerUrl: input.oidcClient.issuerUrl,
-        redirectUris: [...input.oidcClient.redirectUris],
-        allowedScopes: [...input.oidcClient.allowedScopes],
-        subjectMode: input.oidcClient.subjectMode,
-        tokenEndpointAuthMethod: input.oidcClient.tokenEndpointAuthMethod,
-      }
+          clientId: input.oidcClient.clientId,
+          serviceBinding: oidcServiceBindingName(input.bindings ?? []),
+          servicePath: input.oidcClient.namespacePath,
+          issuerUrl: input.oidcClient.issuerUrl,
+          redirectUris: [...input.oidcClient.redirectUris],
+          allowedScopes: [...input.oidcClient.allowedScopes],
+          subjectMode: input.oidcClient.subjectMode,
+          tokenEndpointAuthMethod: input.oidcClient.tokenEndpointAuthMethod,
+        }
       : null,
-    useEdges: [...(input.bindings ?? [])]
+    serviceBindings: [...(input.bindings ?? [])]
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((binding) => ({
-        useEdgeId: binding.bindingId,
+        serviceBindingId: binding.bindingId,
         name: binding.name,
         kind: binding.kind,
         template: {
           configRef: binding.configRef,
-          secretRefs: [...binding.secretRefs],
         },
       })),
-    permissionScopes: [...(input.grants ?? [])]
+    serviceGrants: [...(input.grants ?? [])]
       .sort((a, b) => a.grantId.localeCompare(b.grantId))
       .map((grant) => ({
-        permissionScopeId: grant.grantId,
+        serviceGrantId: grant.grantId,
         capability: grant.capability,
-        scope: { ...grant.scope },
+        scope: redactPublicRecord(grant.scope),
         grantedAt: new Date(grant.grantedAt).toISOString(),
         revokedAt: grant.revokedAt
           ? new Date(grant.revokedAt).toISOString()
@@ -271,8 +268,8 @@ export function planInstallationImport(
   const sourceIssuer = input.bundle.oidcClient
     ? normalizeIssuer(input.bundle.oidcClient.issuerUrl)
     : null;
-  const targetInstallationId = input.targetInstallationId ??
-    input.bundle.installation.installationId;
+  const targetInstallationId =
+    input.targetInstallationId ?? input.bundle.installation.installationId;
   const rewrite = (value: unknown): unknown =>
     sourceIssuer ? rewriteIssuer(value, sourceIssuer, targetIssuer) : value;
   const oidcClient = input.bundle.oidcClient;
@@ -297,58 +294,63 @@ export function planInstallationImport(
       mode: input.mode ?? "self-hosted",
       status: "installing",
       createdBySubject: input.createdBySubject,
-      useEdges: input.bundle.useEdges.map((useEdge) => ({
-        useEdgeId: `bind_${targetInstallationId}_${useEdge.name}`,
-        name: useEdge.name,
-        kind: useEdge.kind,
-        configRef: importUseEdgeTemplateRef({
+      serviceBindings: input.bundle.serviceBindings.map((serviceBinding) => ({
+        serviceBindingId: `bind_${targetInstallationId}_${serviceBinding.name}`,
+        name: serviceBinding.name,
+        kind: serviceBinding.kind,
+        configRef: importServiceBindingTemplateRef({
           installationId: targetInstallationId,
-          useEdge: useEdge.name,
-          kind: useEdge.kind,
+          serviceBinding: serviceBinding.name,
+          kind: serviceBinding.kind,
         }),
-        secretRefs: [],
         declaration: {
-          exportTemplate: rewrite(useEdge.template),
-          sourceUseEdgeId: useEdge.useEdgeId,
+          exportTemplate: rewrite(serviceBinding.template),
+          sourceServiceBindingId: serviceBinding.serviceBindingId,
         },
       })),
-      permissionScopes: input.bundle.permissionScopes
-        .filter((permissionScope) => !permissionScope.revokedAt)
-        .map((permissionScope) => ({
-          permissionScopeId: permissionScope.permissionScopeId,
-          capability: permissionScope.capability,
-          scope: permissionScope.scope,
+      serviceGrants: input.bundle.serviceGrants
+        .filter((serviceGrant) => !serviceGrant.revokedAt)
+        .map((serviceGrant) => ({
+          serviceGrantId: serviceGrant.serviceGrantId,
+          capability: serviceGrant.capability,
+          scope: redactPublicRecord(serviceGrant.scope),
         })),
       ...(oidcClient
         ? {
-          oidcClients: [{
-            useEdge: oidcClient.useEdge,
-            servicePath: oidcServicePath(oidcClient),
-            issuerUrl: targetIssuer,
-            redirectUris: rewrite(oidcClient.redirectUris),
-            allowedScopes: oidcClient.allowedScopes,
-            subjectMode: oidcClient.subjectMode,
-            tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
-          }],
-        }
+            oidcClients: [
+              {
+                serviceBinding: oidcClient.serviceBinding,
+                servicePath: oidcServicePath(oidcClient),
+                issuerUrl: targetIssuer,
+                redirectUris: rewrite(oidcClient.redirectUris),
+                allowedScopes: oidcClient.allowedScopes,
+                subjectMode: oidcClient.subjectMode,
+                tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
+              },
+            ],
+          }
         : {}),
     },
   };
 }
 
-function oidcServicePath(
-  oidcClient: {
-    readonly servicePath?: string;
-    readonly namespacePath?: string;
-  },
-): string {
-  return oidcClient.servicePath ?? oidcClient.namespacePath ??
-    "identity.primary.oidc";
+function oidcServicePath(oidcClient: {
+  readonly servicePath?: string;
+  readonly namespacePath?: string;
+}): string {
+  return (
+    oidcClient.servicePath ??
+    oidcClient.namespacePath ??
+    "takosumi.identity.oidc"
+  );
 }
 
-function oidcUseEdgeName(bindings: readonly AppBindingRecord[]): string {
-  return bindings.find((binding) => binding.kind === "identity.oidc@v1")
-    ?.name ?? "auth";
+function oidcServiceBindingName(
+  bindings: readonly ServiceBindingMaterialRecord[],
+): string {
+  return (
+    bindings.find((binding) => binding.kind === "identity.oidc")?.name ?? "auth"
+  );
 }
 
 function rewriteIssuer(
@@ -361,7 +363,7 @@ function rewriteIssuer(
   }
   if (Array.isArray(value)) {
     return value.map((entry) =>
-      rewriteIssuer(entry, sourceIssuer, targetIssuer)
+      rewriteIssuer(entry, sourceIssuer, targetIssuer),
     );
   }
   if (isRecord(value)) {
@@ -398,16 +400,16 @@ function rewriteIssuerString(
   return `${targetIssuer}${value.slice(url.origin.length)}`;
 }
 
-function importUseEdgeTemplateRef(input: {
+function importServiceBindingTemplateRef(input: {
   installationId: string;
-  useEdge: string;
-  kind: AppBindingKind;
+  serviceBinding: string;
+  kind: ServiceBindingMaterialKind;
 }): string {
-  return `takosumi-import://installations/${
-    encodeURIComponent(input.installationId)
-  }/use-edges/${encodeURIComponent(input.useEdge)}/${
-    encodeURIComponent(input.kind)
-  }`;
+  return `takosumi-import://installations/${encodeURIComponent(
+    input.installationId,
+  )}/service-bindings/${encodeURIComponent(input.serviceBinding)}/${encodeURIComponent(
+    input.kind,
+  )}`;
 }
 
 function isRecord(value: unknown): value is JsonObject {
@@ -428,16 +430,11 @@ const INSTALLATION_STATUSES: readonly AppInstallationStatus[] = [
   "exported",
 ];
 
-const RUNTIME_BINDING_TARGET_TYPES: readonly RuntimeBindingRecord[
-  "targetType"
-][] = ["shared-cell", "dedicated", "self-hosted"];
+const RUNTIME_BINDING_TARGET_TYPES: readonly RuntimeBindingRecord["targetType"][] =
+  ["shared-cell", "dedicated", "self-hosted"];
 
-const TOKEN_AUTH_METHODS:
-  readonly OidcClientRecord["tokenEndpointAuthMethod"][] = [
-    "client_secret_basic",
-    "client_secret_post",
-    "none",
-  ];
+const TOKEN_AUTH_METHODS: readonly OidcClientRecord["tokenEndpointAuthMethod"][] =
+  ["client_secret_basic", "client_secret_post", "none"];
 
 /**
  * Validate an unknown value against the `AccountsInstallationExportBundle`
@@ -466,8 +463,8 @@ export function parseAccountsInstallationExportBundle(
     source: parseSourceFields(bundle.source),
     runtimeTarget: parseExportRuntimeTarget(bundle.runtimeTarget),
     oidcClient: parseExportOidcClient(bundle.oidcClient),
-    useEdges: parseExportUseEdges(bundle.useEdges),
-    permissionScopes: parseExportPermissionScopes(bundle.permissionScopes),
+    serviceBindings: parseExportServiceBindings(bundle.serviceBindings),
+    serviceGrants: parseExportServiceGrants(bundle.serviceGrants),
     events: parseExportEvents(bundle.events),
   };
 }
@@ -509,10 +506,7 @@ function parseSourceFields(
     gitUrl: requireString(record.gitUrl, "bundle.source.gitUrl"),
     ref: requireString(record.ref, "bundle.source.ref"),
     commit: requireString(record.commit, "bundle.source.commit"),
-    planDigest: requireString(
-      record.planDigest,
-      "bundle.source.planDigest",
-    ),
+    planDigest: requireString(record.planDigest, "bundle.source.planDigest"),
     artifactDigest: parseNullableString(
       record.artifactDigest,
       "bundle.source.artifactDigest",
@@ -520,9 +514,7 @@ function parseSourceFields(
   };
 }
 
-function parseExportRuntimeTarget(
-  value: unknown,
-): ExportRuntimeTarget | null {
+function parseExportRuntimeTarget(value: unknown): ExportRuntimeTarget | null {
   if (value === null) return null;
   const record = requireRecord(value, "bundle.runtimeTarget");
   return {
@@ -540,10 +532,7 @@ function parseExportRuntimeTarget(
       RUNTIME_BINDING_TARGET_TYPES,
       "bundle.runtimeTarget.targetType",
     ),
-    targetId: requireString(
-      record.targetId,
-      "bundle.runtimeTarget.targetId",
-    ),
+    targetId: requireString(record.targetId, "bundle.runtimeTarget.targetId"),
   };
 }
 
@@ -560,10 +549,13 @@ function parseExportOidcClient(value: unknown): ExportOidcClient | null {
   );
   return {
     clientId: requireString(record.clientId, "bundle.oidcClient.clientId"),
-    useEdge: requireString(record.useEdge, "bundle.oidcClient.useEdge"),
+    serviceBinding: requireString(
+      record.serviceBinding,
+      "bundle.oidcClient.serviceBinding",
+    ),
     servicePath,
     ...(typeof record.namespacePath === "string" &&
-        record.namespacePath.length > 0
+    record.namespacePath.length > 0
       ? { namespacePath: record.namespacePath }
       : {}),
     issuerUrl: requireString(record.issuerUrl, "bundle.oidcClient.issuerUrl"),
@@ -584,80 +576,76 @@ function parseExportOidcClient(value: unknown): ExportOidcClient | null {
   };
 }
 
-function parseExportUseEdges(
+function parseExportServiceBindings(
   value: unknown,
-): readonly ExportUseEdgeTemplate[] {
-  const items = requireArray(value, "bundle.useEdges");
+): readonly ExportServiceBindingTemplate[] {
+  const items = requireArray(value, "bundle.serviceBindings");
   return items.map((entry, index) => {
-    const record = requireRecord(entry, `bundle.useEdges[${index}]`);
+    const record = requireRecord(entry, `bundle.serviceBindings[${index}]`);
     const template = requireRecord(
       record.template,
-      `bundle.useEdges[${index}].template`,
+      `bundle.serviceBindings[${index}].template`,
     );
     const kind = record.kind;
-    if (!isAppBindingKind(kind)) {
+    if (!isServiceBindingMaterialKind(kind)) {
       throw new TypeError(
-        `bundle.useEdges[${index}].kind is not a recognized use edge kind`,
+        `bundle.serviceBindings[${index}].kind is not a recognized service binding kind`,
       );
     }
     return {
-      useEdgeId: requireString(
-        record.useEdgeId,
-        `bundle.useEdges[${index}].useEdgeId`,
+      serviceBindingId: requireString(
+        record.serviceBindingId,
+        `bundle.serviceBindings[${index}].serviceBindingId`,
       ),
-      name: requireString(record.name, `bundle.useEdges[${index}].name`),
+      name: requireString(record.name, `bundle.serviceBindings[${index}].name`),
       kind,
       template: {
         configRef: requireString(
           template.configRef,
-          `bundle.useEdges[${index}].template.configRef`,
-        ),
-        secretRefs: requireStringArray(
-          template.secretRefs,
-          `bundle.useEdges[${index}].template.secretRefs`,
+          `bundle.serviceBindings[${index}].template.configRef`,
         ),
       },
     };
   });
 }
 
-function parseExportPermissionScopes(
+function parseExportServiceGrants(
   value: unknown,
-): readonly ExportPermissionScope[] {
-  const items = requireArray(value, "bundle.permissionScopes");
+): readonly ExportServiceGrant[] {
+  const items = requireArray(value, "bundle.serviceGrants");
   return items.map((entry, index) => {
-    const record = requireRecord(entry, `bundle.permissionScopes[${index}]`);
+    const record = requireRecord(entry, `bundle.serviceGrants[${index}]`);
     const capability = record.capability;
     if (
       typeof capability !== "string" ||
-      !(APP_GRANT_CAPABILITIES as readonly string[]).includes(
+      !(SERVICE_GRANT_MATERIAL_CAPABILITIES as readonly string[]).includes(
         capability,
       )
     ) {
       throw new TypeError(
-        `bundle.permissionScopes[${index}].capability is not a recognized capability`,
+        `bundle.serviceGrants[${index}].capability is not a recognized capability`,
       );
     }
     const scope = record.scope;
     if (!isRecord(scope)) {
       throw new TypeError(
-        `bundle.permissionScopes[${index}].scope must be an object`,
+        `bundle.serviceGrants[${index}].scope must be an object`,
       );
     }
     return {
-      permissionScopeId: requireString(
-        record.permissionScopeId,
-        `bundle.permissionScopes[${index}].permissionScopeId`,
+      serviceGrantId: requireString(
+        record.serviceGrantId,
+        `bundle.serviceGrants[${index}].serviceGrantId`,
       ),
-      capability: capability as ExportPermissionScope["capability"],
-      scope: { ...scope },
+      capability: capability as ExportServiceGrant["capability"],
+      scope: redactPublicRecord(scope),
       grantedAt: requireString(
         record.grantedAt,
-        `bundle.permissionScopes[${index}].grantedAt`,
+        `bundle.serviceGrants[${index}].grantedAt`,
       ),
       revokedAt: parseNullableString(
         record.revokedAt,
-        `bundle.permissionScopes[${index}].revokedAt`,
+        `bundle.serviceGrants[${index}].revokedAt`,
       ),
     };
   });
@@ -668,10 +656,7 @@ function parseExportEvents(value: unknown): readonly ExportEventRef[] {
   return items.map((entry, index) => {
     const record = requireRecord(entry, `bundle.events[${index}]`);
     return {
-      eventId: requireString(
-        record.eventId,
-        `bundle.events[${index}].eventId`,
-      ),
+      eventId: requireString(record.eventId, `bundle.events[${index}].eventId`),
       type: requireString(record.type, `bundle.events[${index}].type`),
       eventHash: requireString(
         record.eventHash,
@@ -706,10 +691,7 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function requireStringArray(
-  value: unknown,
-  label: string,
-): readonly string[] {
+function requireStringArray(value: unknown, label: string): readonly string[] {
   const items = requireArray(value, label);
   return items.map((entry, index) => {
     if (typeof entry !== "string" || entry.length === 0) {
@@ -725,7 +707,8 @@ function requireEnum<T extends string>(
   label: string,
 ): T {
   if (
-    typeof value !== "string" || !(allowed as readonly string[]).includes(value)
+    typeof value !== "string" ||
+    !(allowed as readonly string[]).includes(value)
   ) {
     throw new TypeError(`${label} must be one of: ${allowed.join(", ")}`);
   }

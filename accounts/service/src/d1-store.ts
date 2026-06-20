@@ -8,8 +8,8 @@ import {
   text,
 } from "drizzle-orm/sqlite-core";
 import type {
-  AppBindingRecord,
-  AppGrantRecord,
+  ServiceBindingMaterialRecord,
+  ServiceGrantMaterialRecord,
   InstallationEventRecord,
   InstallationRecord,
   LedgerAccountRecord,
@@ -17,8 +17,8 @@ import type {
   SpaceRecord,
 } from "./ledger.ts";
 import {
-  assertValidAppBindingRecord,
-  assertValidAppGrantRecord,
+  assertValidServiceBindingMaterialRecord,
+  assertValidServiceGrantMaterialRecord,
 } from "./ledger.ts";
 import { hashSessionId } from "./session-hash-salt.ts";
 // hashSecret is the canonical sha256:<base64url> hasher shared across the
@@ -75,9 +75,8 @@ export type D1Value = string | number | null | ArrayBuffer | Uint8Array;
 
 // LedgerAccountOwnershipConflictError is the shared ownership-conflict error
 // thrown by every store's saveLedgerAccount (in-memory / Postgres / D1). It
-// lives in store.ts so all three implementations share one contract; it is
-// re-exported here for backward compatibility with existing importers (the
-// value import below is the one this module uses to throw it).
+// lives in store.ts so all three implementations share one contract; D1 callers
+// import it through this store entrypoint.
 export { LedgerAccountOwnershipConflictError };
 
 // D1's `db.exec()` treats each line as a separate statement, so every
@@ -1417,43 +1416,48 @@ export class D1AccountsStore implements AccountsStore {
     return Promise.resolve(undefined);
   }
 
-  saveAppBinding(record: AppBindingRecord): Promise<void> {
-    // Wave 6 dropped app_bindings; Phase I no-op shim precedent applies.
-    // Validation invariants are preserved (callers depend on TypeError-as-
-    // rejection for malformed records); only persistence is removed.
-    try {
-      assertValidAppBindingRecord(record);
-    } catch (error) {
-      return Promise.reject(error);
-    }
-    return Promise.resolve();
+  saveServiceBindingMaterial(
+    record: ServiceBindingMaterialRecord,
+  ): Promise<void> {
+    assertValidServiceBindingMaterialRecord(record);
+    return this.#put("service_binding_materials", record.bindingId, record, [
+      {
+        name: "service_binding_materials_by_installation",
+        key: record.installationId,
+        sortKey: record.createdAt,
+      },
+    ]);
   }
 
-  listAppBindingsForInstallation(
+  listServiceBindingMaterialsForInstallation(
     installationId: string,
-  ): Promise<readonly AppBindingRecord[]> {
-    void installationId;
-    return Promise.resolve([]);
+  ): Promise<readonly ServiceBindingMaterialRecord[]> {
+    return this.#listByIndex(
+      "service_binding_materials_by_installation",
+      installationId,
+    );
   }
 
-  saveAppGrant(record: AppGrantRecord): Promise<void> {
+  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): Promise<void> {
     // Wave 6 dropped app_grants; Phase I no-op shim precedent applies.
     try {
-      assertValidAppGrantRecord(record);
+      assertValidServiceGrantMaterialRecord(record);
     } catch (error) {
       return Promise.reject(error);
     }
     return Promise.resolve();
   }
 
-  findAppGrant(grantId: string): Promise<AppGrantRecord | undefined> {
+  findServiceGrantMaterial(
+    grantId: string,
+  ): Promise<ServiceGrantMaterialRecord | undefined> {
     void grantId;
     return Promise.resolve(undefined);
   }
 
-  listAppGrantsForInstallation(
+  listServiceGrantMaterialsForInstallation(
     installationId: string,
-  ): Promise<readonly AppGrantRecord[]> {
+  ): Promise<readonly ServiceGrantMaterialRecord[]> {
     void installationId;
     return Promise.resolve([]);
   }

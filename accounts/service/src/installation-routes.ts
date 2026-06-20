@@ -1,5 +1,5 @@
 import {
- takosumiAccountsInstallationEventsPath,
+  takosumiAccountsInstallationEventsPath,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
@@ -14,13 +14,12 @@ import {
   serializeInstallationEvent,
 } from "./installation-helpers.ts";
 import { errorJson, json } from "./http-helpers.ts";
+import { requireAccountsBearer } from "./account-session.ts";
 import {
-  requireAccountsBearer,
-} from "./account-session.ts";
-import {
-  requireSameSpaceWorkloadControlForInstallation,
-  requireSameSpaceWorkloadControlToken,
-} from "./workload-service-tokens.ts";
+  requireSameSpaceServiceGraphControlForInstallation,
+  requireSameSpaceServiceGraphControlToken,
+  serviceGraphServiceTokenScopeIncludes,
+} from "./service-graph-service-tokens.ts";
 
 /**
  * Pagination guard constants for the list endpoints in this file and the
@@ -46,10 +45,10 @@ export function encodePageCursor(lastId: string): string {
   const bytes = new TextEncoder().encode(json);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
-    "=",
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
 }
 
 export function decodePageCursor(
@@ -65,7 +64,8 @@ export function decodePageCursor(
     const decoded = new TextDecoder().decode(bytes);
     const parsed: unknown = JSON.parse(decoded);
     if (
-      typeof parsed === "object" && parsed !== null &&
+      typeof parsed === "object" &&
+      parsed !== null &&
       typeof (parsed as { lastId?: unknown }).lastId === "string" &&
       (parsed as { lastId: string }).lastId.length > 0
     ) {
@@ -105,9 +105,8 @@ export function paginateById<T>(
   const slice = rows.slice(startIndex, startIndex + options.limit);
   const last = slice[slice.length - 1];
   const hasMore = startIndex + slice.length < rows.length;
-  const nextCursor = hasMore && last
-    ? encodePageCursor(options.getId(last))
-    : null;
+  const nextCursor =
+    hasMore && last ? encodePageCursor(options.getId(last)) : null;
   return { items: slice, nextCursor };
 }
 
@@ -135,28 +134,34 @@ export async function handleListAppInstallations(input: {
     store: input.store,
     scope: "read",
   });
-  const spaceId = input.url.searchParams.get("space_id") ??
+  const spaceId =
+    input.url.searchParams.get("space_id") ??
     input.url.searchParams.get("spaceId");
   if (!spaceId) {
     if (!bearer.ok) return bearer.response;
     return errorJson("invalid_request", "space_id is required", 400);
   }
   if (!bearer.ok) {
-    const workloadControl = await requireSameSpaceWorkloadControlToken({
+    const serviceGraphControl = await requireSameSpaceServiceGraphControlToken({
       request: input.request,
       store: input.store,
       targetSpaceId: spaceId,
+      requiredPermissions: ["installations.list.same-space"],
     });
-    if (!workloadControl.ok) {
+    if (!serviceGraphControl.ok) {
       return preferredCompositeAuthResponse(
         bearer.response,
-        workloadControl.response,
+        serviceGraphControl.response,
       );
     }
   }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return errorJson("invalid_request", "limit must be a positive integer", 400);
+    return errorJson(
+      "invalid_request",
+      "limit must be a positive integer",
+      400,
+    );
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
@@ -166,11 +171,11 @@ export async function handleListAppInstallations(input: {
   if (!space) return errorJson("space_not_found", "space not found", 404);
   if (
     bearer.ok &&
-    !await subjectCanAccessAccount(
+    !(await subjectCanAccessAccount(
       input.store,
       bearer.auth.subject,
       space.accountId,
-    )
+    ))
   ) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
@@ -196,57 +201,74 @@ export async function handleGetAppInstallation(input: {
     store: input.store,
     scope: "read",
   });
-  let workloadControl:
-    | Awaited<ReturnType<typeof requireSameSpaceWorkloadControlForInstallation>>
+  let serviceGraphControl:
+    | Awaited<
+        ReturnType<typeof requireSameSpaceServiceGraphControlForInstallation>
+      >
     | undefined;
   let bearerFailure: Response | undefined;
   if (!bearer.ok) {
     bearerFailure = bearer.response;
-    workloadControl = await requireSameSpaceWorkloadControlForInstallation({
-      request: input.request,
-      store: input.store,
-      targetInstallationId: input.installationId,
-    });
-    if (!workloadControl.ok) {
+    serviceGraphControl =
+      await requireSameSpaceServiceGraphControlForInstallation({
+        request: input.request,
+        store: input.store,
+        targetInstallationId: input.installationId,
+        requiredPermissions: ["installations.read.same-space"],
+      });
+    if (!serviceGraphControl.ok) {
       return preferredCompositeAuthResponse(
         bearerFailure,
-        workloadControl.response,
+        serviceGraphControl.response,
       );
     }
   }
-  const installation = workloadControl?.ok
-    ? workloadControl.installation
+  const installation = serviceGraphControl?.ok
+    ? serviceGraphControl.installation
     : await input.store.findAppInstallation(input.installationId);
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
+  if (!installation)
+    return errorJson("installation_not_found", "installation not found", 404);
   if (bearer.ok) {
     if (
-      !await subjectCanAccessInstallation(
+      !(await subjectCanAccessInstallation(
         input.store,
         bearer.auth.subject,
         installation,
-      )
+      ))
     ) {
       return errorJson("installation_not_found", "installation not found", 404);
     }
   }
-  // Wave 6 removed `AppBinding` / `AppGrant` / `RuntimeBinding` from the
+  // Wave 6 removed `ServiceBindingMaterial` / `ServiceGrantMaterial` / `RuntimeBinding` from the
   // public API surface, so we do not surface them in this account-facing
   // envelope. They are NOT, however, removed from storage: the entities
   // remain `@internal` ledger records, the store interface still defines
   // their accessors, and the export path (`collectInstallationExportBundle`)
-  // still reads them via `listAppBindingsForInstallation` /
-  // `listAppGrantsForInstallation`. Here we deliberately load only the OIDC
+  // still reads them via `listServiceBindingMaterialsForInstallation` /
+  // `listServiceGrantMaterialsForInstallation`. Here we deliberately load only the OIDC
   // client, which is the sole binding-like entity surfaced on this route.
   const oidcClient = await input.store.findOidcClientForInstallation(
     input.installationId,
   );
-  const events = await input.store.listInstallationEvents(input.installationId);
-  return json(installationEnvelope({
-    installation,
-    oidcClient,
-    activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
-    eventsUrl: takosumiAccountsInstallationEventsPath(input.installationId),
-  }));
+  const includeOutputProjection =
+    !serviceGraphControl?.ok ||
+    serviceGraphServiceTokenScopeIncludes(
+      serviceGraphControl.record.scope,
+      "installations.outputs.read.same-space",
+    );
+  const events = includeOutputProjection
+    ? await input.store.listInstallationEvents(input.installationId)
+    : [];
+  return json(
+    installationEnvelope({
+      installation,
+      oidcClient,
+      activatedHttpDomain: includeOutputProjection
+        ? activatedHttpDomainProjectionFromEvents(events)
+        : undefined,
+      eventsUrl: takosumiAccountsInstallationEventsPath(input.installationId),
+    }),
+  );
 }
 
 /**
@@ -309,43 +331,52 @@ export async function handleListInstallationEvents(input: {
     store: input.store,
     scope: "read",
   });
-  let workloadControl:
-    | Awaited<ReturnType<typeof requireSameSpaceWorkloadControlForInstallation>>
+  let serviceGraphControl:
+    | Awaited<
+        ReturnType<typeof requireSameSpaceServiceGraphControlForInstallation>
+      >
     | undefined;
   let bearerFailure: Response | undefined;
   if (!bearer.ok) {
     bearerFailure = bearer.response;
-    workloadControl = await requireSameSpaceWorkloadControlForInstallation({
-      request: input.request,
-      store: input.store,
-      targetInstallationId: input.installationId,
-    });
-    if (!workloadControl.ok) {
+    serviceGraphControl =
+      await requireSameSpaceServiceGraphControlForInstallation({
+        request: input.request,
+        store: input.store,
+        targetInstallationId: input.installationId,
+        requiredPermissions: ["installations.events.read.same-space"],
+      });
+    if (!serviceGraphControl.ok) {
       return preferredCompositeAuthResponse(
         bearerFailure,
-        workloadControl.response,
+        serviceGraphControl.response,
       );
     }
   }
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return errorJson("invalid_request", "limit must be a positive integer", 400);
+    return errorJson(
+      "invalid_request",
+      "limit must be a positive integer",
+      400,
+    );
   }
   const afterId = decodePageCursor(input.url.searchParams.get("cursor"));
   if (afterId === "invalid") {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
-  const installation = workloadControl?.ok
-    ? workloadControl.installation
+  const installation = serviceGraphControl?.ok
+    ? serviceGraphControl.installation
     : await input.store.findAppInstallation(input.installationId);
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
+  if (!installation)
+    return errorJson("installation_not_found", "installation not found", 404);
   if (bearer.ok) {
     if (
-      !await subjectCanAccessAccount(
+      !(await subjectCanAccessAccount(
         input.store,
         bearer.auth.subject,
         installation.accountId,
-      )
+      ))
     ) {
       return errorJson("installation_not_found", "installation not found", 404);
     }
@@ -375,16 +406,19 @@ export function installationEventTypeFilter(
   value: string | null,
 ): ReadonlySet<string> | undefined {
   if (!value) return undefined;
-  const types = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  const types = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
   return types.length > 0 ? new Set(types) : undefined;
 }
 
 function preferredCompositeAuthResponse(
   accountResponse: Response,
-  workloadResponse: Response,
+  serviceGraphResponse: Response,
 ): Response {
-  if (accountResponse.status === 401 && workloadResponse.status !== 401) {
-    return workloadResponse;
+  if (accountResponse.status === 401 && serviceGraphResponse.status !== 401) {
+    return serviceGraphResponse;
   }
   return accountResponse;
 }

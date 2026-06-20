@@ -14,7 +14,7 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
   name: "Cloudflare Worker Service",
   version: "1.0.0",
   description:
-    "Builds a Bun project and deploys the bundled module to a Cloudflare Worker, optionally on workers.dev.",
+    "Builds a Bun project and deploys the bundled module to a Cloudflare Worker script.",
   source: {
     localModulePath: "/app/templates/cloudflare-worker-service/module",
   },
@@ -28,13 +28,20 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
       type: "string",
       title: "Worker name",
       required: true,
-      description: "Script name; also the workers.dev subdomain label.",
+      description: "Script name.",
     },
     accountId: {
       type: "string",
       title: "Cloudflare account id",
       required: true,
       description: "Account that will own the Worker.",
+    },
+    publicUrl: {
+      type: "string",
+      title: "Public URL",
+      required: false,
+      description:
+        "Optional URL projected by dispatcher/custom-route configuration after apply.",
     },
   },
   outputs: {
@@ -45,10 +52,7 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
   },
   policy: {
     allowedProviders: ["cloudflare/cloudflare"],
-    allowedResourceTypes: [
-      "cloudflare_workers_script",
-      "cloudflare_workers_script_subdomain",
-    ],
+    allowedResourceTypes: ["cloudflare_workers_script"],
     destructiveChanges: { requireExplicitConfirmation: true },
   },
 };

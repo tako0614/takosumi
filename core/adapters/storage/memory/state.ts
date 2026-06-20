@@ -36,11 +36,16 @@ import type {
 import type {
   ServiceEndpoint,
   ServiceEndpointId,
-  ServiceGrant,
-  ServiceGrantId,
+  EndpointServiceGrant,
+  EndpointServiceGrantId,
   ServiceTrustRecord,
   ServiceTrustRecordId,
 } from "../../../domains/service-endpoints/types.ts";
+import type {
+  ServiceBinding,
+  ServiceExport,
+  ServiceGrant as GraphServiceGrant,
+} from "takosumi-contract/service-graph";
 import type {
   RuntimeAgentId,
   RuntimeAgentRecord,
@@ -66,7 +71,10 @@ export interface MemoryStorageSnapshot {
   readonly auditEvents: readonly AuditEvent[];
   readonly serviceEndpoints: readonly ServiceEndpoint[];
   readonly serviceTrustRecords: readonly ServiceTrustRecord[];
-  readonly serviceGrants: readonly ServiceGrant[];
+  readonly serviceGrants: readonly EndpointServiceGrant[];
+  readonly serviceGraphExports?: readonly ServiceExport[];
+  readonly serviceGraphBindings?: readonly ServiceBinding[];
+  readonly serviceGraphGrants?: readonly GraphServiceGrant[];
   readonly runtimeAgents: readonly RuntimeAgentRecord[];
   readonly runtimeAgentWorkItems: readonly RuntimeAgentWorkItem[];
 }
@@ -104,7 +112,12 @@ export interface MemoryStorageState {
   readonly serviceEndpoints: {
     readonly endpoints: Map<ServiceEndpointId, ServiceEndpoint>;
     readonly trustRecords: Map<ServiceTrustRecordId, ServiceTrustRecord>;
-    readonly grants: Map<ServiceGrantId, ServiceGrant>;
+    readonly grants: Map<EndpointServiceGrantId, EndpointServiceGrant>;
+  };
+  readonly serviceGraph: {
+    readonly exports: Map<string, ServiceExport>;
+    readonly bindings: Map<string, ServiceBinding>;
+    readonly grants: Map<string, GraphServiceGrant>;
   };
   readonly runtimeAgent: {
     readonly agents: Map<RuntimeAgentId, RuntimeAgentRecord>;
@@ -147,6 +160,11 @@ export function createEmptyState(
       trustRecords: new Map(),
       grants: new Map(),
     },
+    serviceGraph: {
+      exports: new Map(),
+      bindings: new Map(),
+      grants: new Map(),
+    },
     runtimeAgent: {
       agents: new Map(),
       works: new Map(),
@@ -168,10 +186,7 @@ export function stateFromSnapshot(
       ),
     },
     runtime: {
-      desiredStates: mapBy(
-        snapshot.runtimeDesiredStates,
-        (state) => state.id,
-      ),
+      desiredStates: mapBy(snapshot.runtimeDesiredStates, (state) => state.id),
       observedStates: mapBy(
         snapshot.runtimeObservedStates,
         (state) => state.id,
@@ -210,11 +225,16 @@ export function stateFromSnapshot(
     },
     serviceEndpoints: {
       endpoints: mapBy(snapshot.serviceEndpoints, (endpoint) => endpoint.id),
-      trustRecords: mapBy(
-        snapshot.serviceTrustRecords,
+      trustRecords: mapBy(snapshot.serviceTrustRecords, (record) => record.id),
+      grants: mapBy(snapshot.serviceGrants, (grant) => grant.id),
+    },
+    serviceGraph: {
+      exports: mapBy(snapshot.serviceGraphExports ?? [], (record) => record.id),
+      bindings: mapBy(
+        snapshot.serviceGraphBindings ?? [],
         (record) => record.id,
       ),
-      grants: mapBy(snapshot.serviceGrants, (grant) => grant.id),
+      grants: mapBy(snapshot.serviceGraphGrants ?? [], (record) => record.id),
     },
     runtimeAgent: {
       agents: mapBy(snapshot.runtimeAgents, (agent) => agent.id),
@@ -256,6 +276,11 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
       trustRecords: cloneMap(state.serviceEndpoints.trustRecords),
       grants: cloneMap(state.serviceEndpoints.grants),
     },
+    serviceGraph: {
+      exports: cloneMap(state.serviceGraph.exports),
+      bindings: cloneMap(state.serviceGraph.bindings),
+      grants: cloneMap(state.serviceGraph.grants),
+    },
     runtimeAgent: {
       agents: cloneMap(state.runtimeAgent.agents),
       works: cloneMap(state.runtimeAgent.works),
@@ -263,10 +288,7 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
   };
 }
 
-function mapBy<T, K>(
-  values: readonly T[],
-  key: (value: T) => K,
-): Map<K, T> {
+function mapBy<T, K>(values: readonly T[], key: (value: T) => K): Map<K, T> {
   const map = new Map<K, T>();
   for (const value of values) map.set(key(value), immutable(value));
   return map;
@@ -301,6 +323,9 @@ export function snapshotState(
     serviceEndpoints: [...state.serviceEndpoints.endpoints.values()],
     serviceTrustRecords: [...state.serviceEndpoints.trustRecords.values()],
     serviceGrants: [...state.serviceEndpoints.grants.values()],
+    serviceGraphExports: [...state.serviceGraph.exports.values()],
+    serviceGraphBindings: [...state.serviceGraph.bindings.values()],
+    serviceGraphGrants: [...state.serviceGraph.grants.values()],
     runtimeAgents: [...state.runtimeAgent.agents.values()],
     runtimeAgentWorkItems: [...state.runtimeAgent.works.values()],
   });

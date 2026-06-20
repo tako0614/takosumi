@@ -4,7 +4,7 @@ export type { SpaceId };
 export type ServiceEndpointId = string;
 export type ServiceId = string;
 export type ServiceTrustRecordId = string;
-export type ServiceGrantId = string;
+export type EndpointServiceGrantId = string;
 export type GroupId = string;
 export type IsoTimestamp = string;
 
@@ -21,7 +21,7 @@ export type ServiceTrustLevel =
   | "public"
   | "external";
 export type ServiceTrustStatus = "active" | "revoked";
-export type ServiceGrantEffect = "allow" | "deny";
+export type EndpointServiceGrantEffect = "allow" | "deny";
 
 export interface ServiceEndpointHealth {
   readonly status: ServiceEndpointHealthStatus;
@@ -63,21 +63,21 @@ export interface ServiceTrustRecord {
   readonly revokeReason?: string;
 }
 
-export interface ServiceGrantCondition {
+export interface EndpointServiceGrantCondition {
   readonly key: string;
   readonly operator: "equals" | "in" | "prefix";
   readonly value: string | readonly string[];
 }
 
-export interface ServiceGrant {
-  readonly id: ServiceGrantId;
+export interface EndpointServiceGrant {
+  readonly id: EndpointServiceGrantId;
   readonly trustRecordId: ServiceTrustRecordId;
   readonly endpointId: ServiceEndpointId;
   readonly subject: string;
   readonly action: string;
   readonly resource: string;
-  readonly effect: ServiceGrantEffect;
-  readonly conditions: readonly ServiceGrantCondition[];
+  readonly effect: EndpointServiceGrantEffect;
+  readonly conditions: readonly EndpointServiceGrantCondition[];
   readonly createdAt: IsoTimestamp;
   readonly expiresAt?: IsoTimestamp;
 }
