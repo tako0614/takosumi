@@ -29,11 +29,7 @@ export default function Wordmark(props: Props): JSX.Element {
   return props.href === undefined ? (
     <span class={`wordmark ${props.class ?? ""}`}>{inner}</span>
   ) : (
-    <a
-      href={props.href}
-      class={`wordmark ${props.class ?? ""}`}
-      aria-label="Takosumi home"
-    >
+    <a href={props.href} class={`wordmark ${props.class ?? ""}`}>
       {inner}
     </a>
   );
