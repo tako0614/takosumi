@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { InstallationsService } from "../../../../core/domains/installations/mod.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/installations/official_seed.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   OpenTofuDeploymentStore,
@@ -360,10 +361,36 @@ test("getInstallConfig / listInstallConfigs passthroughs work", async () => {
   const { store, service } = build();
   await seedConfig(store);
   expect((await service.getInstallConfig("cfg_1")).name).toBe("config");
-  expect((await service.listInstallConfigs()).length).toBe(1);
+  expect((await service.listInstallConfigs()).map((c) => c.id)).toContain(
+    "cfg_1",
+  );
   await expect(service.getInstallConfig("cfg_missing")).rejects.toMatchObject({
     code: "not_found",
   });
+});
+
+test("official generic Capsule InstallConfig is available even before DB seed", async () => {
+  const { store, service } = build();
+  const configs = await service.listInstallConfigs();
+  expect(configs.map((config) => config.id)).toContain(
+    DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  );
+  const fallback = await service.getInstallConfig(
+    DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  );
+  expect(fallback.sourceKind).toBe("generic_capsule");
+
+  await seedSpace(store);
+  await seedSource(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "takos",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  });
+  expect(installation.installType).toBe("opentofu_module");
+  expect(installation.installConfigId).toBe(DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
 });
 
 test("putInstallationProviderEnvBindingSet validates the installation + matching space", async () => {
