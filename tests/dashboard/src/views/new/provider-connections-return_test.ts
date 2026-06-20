@@ -88,6 +88,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "candidates.some((connection) => connection.id === row.connectionId)",
     );
+    expect(newAppViewSource).toContain('selected={!row.connectionId}');
+    expect(newAppViewSource).toContain("connection.id === row.connectionId");
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
   });
 

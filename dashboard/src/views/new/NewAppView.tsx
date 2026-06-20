@@ -1126,12 +1126,17 @@ function Inner() {
                                     })
                                   }
                                 >
-                                  <option value="">
+                                  <option value="" selected={!row.connectionId}>
                                     {t("new.providers.selectConnection")}
                                   </option>
                                   <For each={options()}>
                                     {(connection) => (
-                                      <option value={connection.id}>
+                                      <option
+                                        value={connection.id}
+                                        selected={
+                                          connection.id === row.connectionId
+                                        }
+                                      >
                                         {providerConnectionLabel(connection)}
                                       </option>
                                     )}
