@@ -45,6 +45,12 @@ export type RunStatus =
 
 export type RunPolicyStatus = "pass" | "warn" | "deny";
 
+export interface RunChangeSummary {
+  readonly add?: number;
+  readonly change?: number;
+  readonly destroy?: number;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -62,6 +68,8 @@ export interface Run {
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
+  /** Non-secret OpenTofu plan counts. Resource addresses and values stay in logs/artifacts. */
+  readonly summary?: RunChangeSummary;
   readonly policyStatus?: RunPolicyStatus;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;

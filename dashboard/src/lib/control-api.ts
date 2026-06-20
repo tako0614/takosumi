@@ -429,6 +429,12 @@ export type RunStatus =
 
 export type RunPolicyStatus = "pass" | "warn" | "deny";
 
+export interface RunChangeSummary {
+  readonly add?: number;
+  readonly change?: number;
+  readonly destroy?: number;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -442,6 +448,7 @@ export interface Run {
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
+  readonly summary?: RunChangeSummary;
   readonly policyStatus?: RunPolicyStatus;
   readonly requiresApproval?: boolean;
   readonly errorCode?: string;

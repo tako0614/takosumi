@@ -2752,6 +2752,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         baseStateGeneration: { type: "integer" },
         planDigest: { type: "string" },
         planArtifactKey: { type: "string" },
+        summary: { $ref: "#/components/schemas/RunChangeSummary" },
         policyStatus: { enum: ["pass", "warn", "deny"] },
         providerResolutions: {
           type: "array",
@@ -2768,6 +2769,15 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         createdAt: { type: "string", format: "date-time" },
         startedAt: { type: "string", format: "date-time" },
         finishedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    RunChangeSummary: {
+      type: "object",
+      properties: {
+        add: { type: "integer", minimum: 0 },
+        change: { type: "integer", minimum: 0 },
+        destroy: { type: "integer", minimum: 0 },
       },
       additionalProperties: false,
     },

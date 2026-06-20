@@ -124,6 +124,7 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
         ref: "key/plan.bin",
         digest: "d",
       },
+      summary: { add: 2, change: 1, destroy: 0 },
       baseStateGeneration: 3,
       compatibilityReportId: "caprep_1",
     }),
@@ -137,6 +138,7 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.baseStateGeneration).toBe(3);
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
+  expect(run.summary).toEqual({ add: 2, change: 1, destroy: 0 });
   expect(run.compatibilityReportId).toBe("caprep_1");
   expect(run.policyStatus).toBe("pass");
   expect(run.installationId).toBe("inst_1");
