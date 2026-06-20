@@ -53,6 +53,31 @@ describe("parseInstallPrefill", () => {
     });
   });
 
+  test("parses a safe optional Capsule name prefill", () => {
+    expect(
+      parseInstallPrefill(
+        "?git=https://github.com/acme/repo.git&ref=main&path=deploy&name=Customer%20API",
+      ),
+    ).toEqual({
+      git: "https://github.com/acme/repo.git",
+      ref: "main",
+      path: "deploy",
+      name: "Customer API",
+    });
+  });
+
+  test("ignores unsafe optional Capsule name prefill", () => {
+    expect(
+      parseInstallPrefill(
+        "?git=https://github.com/acme/repo.git&name=Customer%0AAPI",
+      ),
+    ).toEqual({
+      git: "https://github.com/acme/repo.git",
+      ref: "",
+      path: "",
+    });
+  });
+
   test("ignores unsupported variable prefill keys", () => {
     expect(
       parseInstallPrefill(

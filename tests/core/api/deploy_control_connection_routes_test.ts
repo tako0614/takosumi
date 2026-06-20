@@ -15,6 +15,7 @@ function makeApp(
   options: {
     fetch?: typeof fetch;
     connectionOAuthHelpers?: DeployControlInternalRouteDependencies["connectionOAuthHelpers"];
+    allowOperatorBackedProviderEnvs?: boolean;
   } = {},
 ) {
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -36,8 +37,15 @@ function makeApp(
     store,
     now: () => "2026-06-04T00:00:00.000Z",
     newId: (prefix) => `${prefix}_route_default`,
+    allowOperatorBackedProviderEnvs:
+      options.allowOperatorBackedProviderEnvs === true,
   });
-  const controller = new OpenTofuDeploymentController({ store, vault });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    vault,
+    allowOperatorBackedProviderEnvs:
+      options.allowOperatorBackedProviderEnvs === true,
+  });
   return createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
@@ -690,6 +698,106 @@ test("internal provider resolver records reject global OSS records and allow sco
   expect(JSON.stringify(await listedSpaceEnv.json())).not.toContain(
     "secretRef",
   );
+});
+
+test("operator-backed provider resolver records are Cloud-only and operator-gated", async () => {
+  const app = await makeApp();
+  const operatorConnectionResponse = await app.request(CF_PATH, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer operator-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      scope: "operator",
+      values: { CLOUDFLARE_API_TOKEN: "operator-secret-token" },
+    }),
+  });
+  expect(operatorConnectionResponse.status).toBe(201);
+  const operatorConnection = (await operatorConnectionResponse.json())
+    .connection;
+
+  const scopedDenied = await app.request(
+    "/internal/v1/provider-envs/penv_operatorbacked1",
+    {
+      method: "PUT",
+      headers: HEADERS,
+      body: JSON.stringify({
+        spaceId: SPACE_ID,
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        displayName: "Takosumi provided Cloudflare",
+        materialization: "secret",
+        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+        secretRef: operatorConnection.id,
+      }),
+    },
+  );
+  expect(scopedDenied.status).toBe(403);
+  expect((await scopedDenied.json()).error.code).toBe("permission_denied");
+
+  const ossDenied = await app.request(
+    "/internal/v1/provider-envs/penv_operatorbacked1",
+    {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer operator-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: SPACE_ID,
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        displayName: "Takosumi provided Cloudflare",
+        materialization: "secret",
+        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+        secretRef: operatorConnection.id,
+      }),
+    },
+  );
+  expect(ossDenied.status).toBe(403);
+  expect((await ossDenied.json()).error.message).toContain("operator-scoped");
+
+  const cloudApp = await makeApp({ allowOperatorBackedProviderEnvs: true });
+  const cloudOperatorConnectionResponse = await cloudApp.request(CF_PATH, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer operator-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      scope: "operator",
+      values: { CLOUDFLARE_API_TOKEN: "operator-secret-token" },
+    }),
+  });
+  expect(cloudOperatorConnectionResponse.status).toBe(201);
+  const cloudOperatorConnection = (await cloudOperatorConnectionResponse.json())
+    .connection;
+  const cloudCreated = await cloudApp.request(
+    "/internal/v1/provider-envs/penv_operatorbacked1",
+    {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer operator-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: SPACE_ID,
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        displayName: "Takosumi provided Cloudflare",
+        materialization: "secret",
+        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+        secretRef: cloudOperatorConnection.id,
+      }),
+    },
+  );
+  expect(cloudCreated.status).toBe(200);
+  expect(await cloudCreated.json()).toMatchObject({
+    providerEnv: {
+      id: "penv_operatorbacked1",
+      spaceId: SPACE_ID,
+      materialization: "secret",
+      status: "needs_setup",
+    },
+  });
 });
 
 test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 verified)", async () => {

@@ -10,6 +10,9 @@
  * sections. All mutations route through the same control-plane actions as
  * before (plan / destroy plan / rollback plan / backup / put profile).
  */
+import "../../styles/wave-a.css";
+import "../../styles/wave-b.css";
+import "../../styles/app-views.css";
 import {
   createEffect,
   createMemo,

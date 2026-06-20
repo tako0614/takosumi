@@ -668,6 +668,11 @@ export interface OpenTofuDeploymentControllerDependencies {
   readonly store?: OpenTofuDeploymentStore;
   readonly runner?: OpenTofuRunner;
   readonly ownKeyProviderRunner?: OpenTofuRunner;
+  /**
+   * Cloud-only compatibility seam: permits Space-scoped ProviderEnv rows to be
+   * backed by operator-scoped Connections. Defaults off for OSS/self-host.
+   */
+  readonly allowOperatorBackedProviderEnvs?: boolean;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
   readonly newId?: (prefix: string) => string;
@@ -916,6 +921,7 @@ export class OpenTofuDeploymentController {
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #defaultBillingSettings: BillingSettings;
+  readonly #allowOperatorBackedProviderEnvs: boolean;
   readonly #seededProfiles: Promise<void>;
   readonly #seededProviderCatalogEntries: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
@@ -956,6 +962,8 @@ export class OpenTofuDeploymentController {
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
+    this.#allowOperatorBackedProviderEnvs =
+      dependencies.allowOperatorBackedProviderEnvs === true;
     this.#defaultRunnerProfileId =
       dependencies.defaultRunnerProfileId ?? "cloudflare-default";
     this.#newId = dependencies.newId ?? newId;
@@ -1797,7 +1805,10 @@ export class OpenTofuDeploymentController {
     readonly hasOwnKeyProviderRunner?: boolean;
   }): Promise<{ readonly reasons: readonly string[] }> {
     if (!input.installation) return { reasons: [] };
-    this.#connectionsService ??= new ConnectionsService({ store: this.#store });
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+    });
     const resolved = await this.#connectionsService.resolveProviderEnvBindings(
       input.installation,
     );
@@ -2163,7 +2174,10 @@ export class OpenTofuDeploymentController {
     installation: Installation,
     requiredProviders: readonly string[],
   ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
-    this.#connectionsService ??= new ConnectionsService({ store: this.#store });
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+    });
     return this.#connectionsService.resolveProviderEnvBindingsForRun(
       installation,
       requiredProviders,
@@ -3112,6 +3126,7 @@ export class OpenTofuDeploymentController {
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
     });
     // Run-scoped: explicit Installation provider env bindings only. The same
     // resolution feeds rootgen, so the minted TF_VAR credentials line up with the

@@ -11,6 +11,7 @@ import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { InstallationsService } from "../../../core/domains/installations/mod.ts";
+import { officialInstallConfigs } from "../../../core/domains/installations/official_seed.ts";
 import type { Connection } from "takosumi-contract/connections";
 import type {
   Installation,
@@ -207,9 +208,16 @@ test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and
 });
 
 test("GET /internal/v1/install-configs caps the official+scoped union at 100 and pages the rest", async () => {
-  // 80 official (spaceId-less) + 170 space-scoped = 250 in the union.
+  // 80 stored official (spaceId-less) + built-in official fallback configs +
+  // 170 space-scoped configs are merged into one sorted, paginated union.
   const official = 80;
   const scoped = 170;
+  const fallbackOfficialIds = officialInstallConfigs({
+    now: () => new Date("2026-06-20T00:00:00.000Z"),
+  })
+    .map((config) => config.id)
+    .sort();
+  const total = official + scoped + fallbackOfficialIds.length;
   const app = await makeApp(async (store) => {
     for (let i = 0; i < official; i += 1) {
       await store.putInstallConfig(installConfigFixture(i));
@@ -242,15 +250,16 @@ test("GET /internal/v1/install-configs caps the official+scoped union at 100 and
     if (pages > 10) throw new Error("cursor never terminated");
   }
 
-  expect(pages).toBe(3); // 100 + 100 + 50
-  expect(seen).toHaveLength(official + scoped);
-  expect(new Set(seen).size).toBe(official + scoped); // no dupes
-  // Merge-sorted by (createdAt, id) across the union, in id order here.
-  const expected = Array.from(
+  expect(pages).toBe(Math.ceil(total / DEFAULT_PAGE_LIMIT));
+  expect(seen).toHaveLength(total);
+  expect(new Set(seen).size).toBe(total); // no dupes
+  // Merge-sorted by (createdAt, id) across the union: fixture rows first, then
+  // the built-in official fallback configs created by InstallationsService.
+  const fixtureIds = Array.from(
     { length: official + scoped },
     (_, i) => `cfg_${String(i).padStart(4, "0")}`,
   );
-  expect(seen).toEqual(expected);
+  expect(seen).toEqual([...fixtureIds, ...fallbackOfficialIds]);
 });
 
 test("GET /internal/v1/install-configs rejects a malformed ?cursor= (400)", async () => {
