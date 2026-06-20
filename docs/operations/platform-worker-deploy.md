@@ -117,7 +117,8 @@ staging / production の vault を先に作るだけなら `--local-only` を併
   platform build enables bearer-gated internal control routes
 - upstream OAuth provider secrets, after provider registration
 - Stripe / payment processor secrets, only when hosted billing `enforce` is enabled
-- AI Gateway upstream provider API keys, only for providers listed in
+- Cloud-only AI Gateway upstream provider API keys, only when the closed
+  Takosumi Cloud/operator extension is enabled and only for providers listed in
   `TAKOSUMI_AI_GATEWAY_PROFILES`. These are operator platform secrets; installed
   services receive only a rotated `takosumi.ai.gateway` Service Graph token.
 - Workspace-owned Provider Connection secrets for policy-bound own-key providers (AWS /
@@ -183,8 +184,9 @@ takosumi secrets apply \
   --regenerate TAKOSUMI_DEPLOY_CONTROL_TOKEN
 ```
 
-`status` は local operator vault と remote Worker secret 名だけを比較し、値は表示しない。`TAKOSUMI_AI_GATEWAY_PROFILES`
-が env または wrangler config `[vars]` にある場合は、その profile の `apiKeyEnv` が指す upstream provider secret 名も
+`status` は local operator vault と remote Worker secret 名だけを比較し、値は表示しない。
+Cloud-only AI Gateway extension 用の `TAKOSUMI_AI_GATEWAY_PROFILES` が env または
+wrangler config `[vars]` にある場合は、その profile の `apiKeyEnv` が指す upstream provider secret 名も
 required manual secret として不足検出する。Stripe は Cloudflare platform worker では
 `TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET`、node-postgres profile では
 `TAKOSUMI_ACCOUNTS_STRIPE_API_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET` を読む。
@@ -197,8 +199,10 @@ Google OAuth app は application type `Web application` で作成し、authorize
 だけを登録する。`/v1/auth/upstream/callback` は SPA が同一 origin で呼ぶ backend completion endpoint
 で、外部 OAuth provider の redirect target にはしない。
 Stripe、passkey。
-AI Gateway は `TAKOSUMI_AI_GATEWAY_PROFILES` と、その profile の `apiKeyEnv` が指す upstream provider secret を
-realized config / operator vault に入れるまで `/gateway/ai/v1/*` が `503 ai_gateway_not_configured` で fail-closed する。
+Cloud-only AI Gateway extension は `TAKOSUMI_AI_GATEWAY_PROFILES` と、その profile の
+`apiKeyEnv` が指す upstream provider secret を realized config / operator vault に入れるまで
+`/gateway/ai/v1/*` が `503 ai_gateway_not_configured` で fail-closed する。OSS Takosumi の public
+control-plane feature としては扱わない。
 
 Google OAuth の非 secret 値は operator-private realized config の `[vars]` にだけ入れる:
 

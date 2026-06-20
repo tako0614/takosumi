@@ -69,7 +69,8 @@ takosumi secrets status \
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` は現行実装の env 名です。operations docs では
 これを public API concept ではなく、platform worker 内の accounts/control-plane
 bearer secret class として扱います。値は operator vault にだけ置きます。
-`TAKOSUMI_AI_GATEWAY_PROFILES` が env または wrangler config `[vars]` にある場合、
+Cloud-only AI Gateway extension 用の `TAKOSUMI_AI_GATEWAY_PROFILES` が env または wrangler config `[vars]`
+にある場合、
 `takosumi secrets status` は profile の `apiKeyEnv` が指す upstream provider
 secret 名も不足検出します。
 
