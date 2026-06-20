@@ -11,16 +11,17 @@
 import type { JsonValue } from "./types.ts";
 import type { PublicInstallation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
+import type { ProviderResolution } from "./provider-resolution.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
-  ListProviderTemplatesResponse,
-  ProviderTemplateResponse,
-  ProviderTemplate,
+  ListProviderCatalogEntriesResponse,
+  ProviderCatalogEntryResponse,
+  ProviderCatalogEntry,
 } from "./providers.ts";
 
 // ---------------------------------------------------------------------------
 // INTERNAL deploy-control seam paths. These `/internal/v1/*` routes are the
-// in-process fetch seam the accounts plane + CLI consume (PlanRun / ApplyRun /
+// internal compatibility seam the accounts plane + CLI consume (PlanRun / ApplyRun /
 // internal-execution-profile ledgers and the Installation read + its
 // deployments / deployment-outputs reads). They live under the unified
 // `/internal/v1` internal-seam prefix and are never edge-public.
@@ -39,9 +40,9 @@ export const INSTALLATION_PATH = (id: string): string =>
 export const INSTALLATION_DEPLOYMENTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(id)}/deployments`;
 export const INSTALLATION_DEPLOYMENT_OUTPUTS_PATH = (id: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${
-    encodeURIComponent(id)
-  }/deployment-outputs`;
+  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
+    id,
+  )}/deployment-outputs`;
 
 export type OpenTofuModuleSourceKind = "git" | "local" | "prepared";
 
@@ -128,39 +129,6 @@ export interface CloudflareContainerExecution {
   readonly workDir?: string;
 }
 
-export interface CloudflareWorkersForPlatformsExecution {
-  readonly dispatchNamespace: string;
-  readonly dispatchWorkerBinding?: string;
-  readonly outboundWorker?: CloudflareOutboundWorkerPolicy;
-  readonly userWorkerBindings?: CloudflareUserWorkerBindingPolicy;
-  /**
-   * Managed cf-proxy: when present, a managed (operator-default credential)
-   * cloudflare run gets its provider `base_url` redirected to
-   * `<origin><route>/<dispatchNamespace>/<installSlug>/client/v4`. The proxy
-   * rewrites worker-script API paths into the dispatch namespace (the provider
-   * cannot place a script in a namespace) and passes other calls through. Absent
-   * => no redirect (the worker-count-limit-free hosting is unavailable).
-   */
-  readonly apiProxy?: CloudflareApiProxyConfig;
-}
-
-export interface CloudflareApiProxyConfig {
-  /** Public origin of the platform worker hosting the cf-proxy route. */
-  readonly origin: string;
-  /** Path prefix the cf-proxy is mounted at (e.g. `/internal/cf-proxy`). */
-  readonly route: string;
-}
-
-export interface CloudflareOutboundWorkerPolicy {
-  readonly serviceBinding?: string;
-  readonly enforceNetworkPolicy?: boolean;
-}
-
-export interface CloudflareUserWorkerBindingPolicy {
-  readonly mode: "none" | "tenant-scoped-only" | "operator-managed" | string;
-  readonly allowedBindingKinds?: readonly string[];
-}
-
 export interface RunnerSecretExposurePolicy {
   readonly providerCredentials: "runner-only" | "operator-managed" | string;
   readonly tenantWorkerOperatorSecrets:
@@ -188,7 +156,6 @@ export interface RunnerProfile {
   readonly resourceLimits?: RunnerResourceLimits;
   readonly networkPolicy?: RunnerNetworkPolicy;
   readonly cloudflareContainer?: CloudflareContainerExecution;
-  readonly cloudflareWorkersForPlatforms?: CloudflareWorkersForPlatformsExecution;
   readonly secretExposurePolicy?: RunnerSecretExposurePolicy;
   readonly concurrency?: number;
   readonly labels?: Readonly<Record<string, string>>;
@@ -245,6 +212,9 @@ export interface PlanRun {
   readonly policyDecisionDigest: string;
   readonly planDigest?: string;
   readonly planArtifact?: OpenTofuPlanArtifact;
+  readonly providerResolutions?: readonly ProviderResolution[];
+  readonly runEnvironmentEvidenceDigest?: string;
+  readonly redactionProfileId?: string;
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
   /**
@@ -308,15 +278,15 @@ export interface PlanRun {
    */
   readonly approval?: RunApproval;
   /**
-   * Digest of the RESOLVED provider bindings this plan was reviewed against
-   * (plan→apply TOCTOU pin). Hashes each binding's `provider` / optional `alias`
-   * / `mode` / resolved `connectionId` (never `manual` value literals). Pinned at
-   * plan completion for installation-context runs; the apply mint re-resolves the
-   * live bindings and asserts this digest still matches, failing closed when a
-   * Connection / binding mode / operator default changed between plan and apply.
-   * Absent for runs with no installation context (no bindings to resolve).
+   * Digest of the resolved Provider Env bindings this plan was reviewed against
+   * (plan→apply TOCTOU pin). Hashes each provider, optional alias, selected
+   * Env id, materialization, and required env names. Pinned at plan completion
+   * for installation-context runs; the apply mint re-resolves the live bindings
+   * and asserts this digest still matches, failing closed when an Env binding
+   * changed between plan and apply.
+   * Absent for runs with no installation context.
    */
-  readonly resolvedBindingsDigest?: string;
+  readonly resolvedProviderEnvBindingsDigest?: string;
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Installation plan/destroy-plan path. The apply consumer
@@ -437,6 +407,9 @@ export interface ApplyRun {
   readonly stateBackend: RunnerStateBackend;
   readonly stateLock: RunnerStateLockEvidence;
   readonly outputs?: readonly DeploymentOutput[];
+  readonly providerResolutions?: readonly ProviderResolution[];
+  readonly runEnvironmentEvidenceDigest?: string;
+  readonly redactionProfileId?: string;
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
@@ -478,20 +451,19 @@ export interface ApplyExpectedGuard {
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
   /**
-   * Digest of the resolved provider bindings the plan was reviewed against
-   * (plan→apply TOCTOU pin; see {@link PlanRun.resolvedBindingsDigest}). Carried
-   * on the guard so the structural plan/apply guard compare also covers a
-   * binding/connection swap. Absent for runs with no installation context.
+   * Digest of the resolved Provider Env bindings the plan was reviewed against
+   * (plan→apply TOCTOU pin; see {@link PlanRun.resolvedProviderEnvBindingsDigest}).
+   * Carried on the guard so the structural plan/apply guard compare also covers
+   * an Env binding swap. Absent for runs with no installation context.
    */
-  readonly resolvedBindingsDigest?: string;
+  readonly resolvedProviderEnvBindingsDigest?: string;
 }
 
 // Installation / InstallConfig live in ./installations.ts and
-// Deployment / StateSnapshot in ./deployments.ts; both are re-exported below so
-// existing imports through this module keep resolving. DeploymentProfile is an
-// internal compatibility name for the Installation ProviderBinding record.
+// Deployment / StateSnapshot in ./deployments.ts; this internal seam exports the
+// DTO set consumed by accounts-plane and operator helper paths.
 export type {
-  DeploymentProfile,
+  InstallationProviderEnvBindingSet,
   InstallBuildConfig,
   InstallConfig,
   Installation,
@@ -801,7 +773,5 @@ export interface ListDeploymentOutputsResponse {
 
 export * from "./connections.ts";
 export * from "./deploy-control-errors.ts";
-export {
-  PROVIDER_PATH,
-  PROVIDERS_PATH,
-} from "./providers.ts";
+export * from "./provider-envs.ts";
+export { PROVIDER_PATH, PROVIDERS_PATH } from "./providers.ts";

@@ -54,23 +54,12 @@
 
   /* Typography */
   --tg-font-body:
-    "Bricolage Grotesque Variable",
-    "Bricolage Grotesque",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Hiragino Kaku Gothic ProN",
-    "Yu Gothic UI",
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+    "Bricolage Grotesque Variable", "Bricolage Grotesque", -apple-system,
+    BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Segoe UI",
+    Roboto, sans-serif;
   --tg-font-mono:
-    "JetBrains Mono Variable",
-    "JetBrains Mono",
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Consolas,
-    monospace;
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
   --tg-font-display: var(--tg-font-body);
 
   --tg-fs-xs: 0.78rem;

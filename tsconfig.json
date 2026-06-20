@@ -12,29 +12,29 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@takosjp/takosumi-accounts-contract": [
-        "./accounts/contract/src/mod.ts"
-      ],
-      "@takosjp/takosumi-accounts-service": [
-        "./accounts/service/src/mod.ts"
-      ],
+      "@takosjp/takosumi-accounts-contract": ["./accounts/contract/src/mod.ts"],
+      "@takosjp/takosumi-accounts-service": ["./accounts/service/src/mod.ts"],
       "@takosjp/takosumi-accounts-cli": ["./accounts/cli/src/main.ts"],
       "@takosjp/takosumi-platform-services": [
         "./accounts/platform-services/src/mod.ts"
       ],
       "takosumi-contract": ["./contract/index.ts"],
       "takosumi-contract/api-surface": ["./contract/api-surface.ts"],
-      "takosumi-contract/deploy-control-api": ["./contract/deploy-control-api.ts"],
+      "takosumi-contract/deploy-control-api": [
+        "./contract/deploy-control-api.ts"
+      ],
       "@takosumi/internal/deploy-control-api": [
         "./contract/internal-deploy-control-api.ts"
       ],
       "takosumi-contract/sources": ["./contract/sources.ts"],
-      "takosumi-contract/provider-env-rules": ["./contract/provider-env-rules.ts"],
-      "takosumi-contract/reference/compat": [
-        "./contract/reference-compat.ts"
+      "takosumi-contract/provider-env-rules": [
+        "./contract/provider-env-rules.ts"
       ],
+      "takosumi-contract/reference/compat": ["./contract/reference-compat.ts"],
       "takosumi-contract/reference/catalog": ["./contract/catalog.ts"],
-      "takosumi-contract/reference/implementation": ["./contract/implementation.ts"],
+      "takosumi-contract/reference/implementation": [
+        "./contract/implementation.ts"
+      ],
       "takosumi-contract/reference/runtime-agent": [
         "./contract/runtime-agent.ts"
       ],
@@ -64,7 +64,10 @@
       "takosumi-contract/installations": ["./contract/installations.ts"],
       "takosumi-contract/deploy": ["./contract/deploy.ts"],
       "takosumi-contract/capsules": ["./contract/capsules.ts"],
-      "takosumi-contract/provider-bindings": ["./contract/provider-bindings.ts"],
+      "takosumi-contract/provider-envs": ["./contract/provider-envs.ts"],
+      "takosumi-contract/provider-resolution": [
+        "./contract/provider-resolution.ts"
+      ],
       "takosumi-contract/connections": ["./contract/connections.ts"],
       "takosumi-contract/dependencies": ["./contract/dependencies.ts"],
       "takosumi-contract/deploy-control-errors": [
@@ -80,6 +83,8 @@
       "takosumi-contract/billing": ["./contract/billing.ts"],
       "takosumi-contract/security": ["./contract/security.ts"],
       "takosumi-contract/providers": ["./contract/providers.ts"],
+      "takosumi-contract/service-graph": ["./contract/service-graph.ts"],
+      "takosumi-contract/ai-gateway": ["./contract/ai-gateway.ts"],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],
@@ -93,7 +98,6 @@
     }
   },
   "include": [
-    "cli",
     "core",
     "providers",
     "opentofu-modules",
@@ -110,8 +114,14 @@
   ],
   "exclude": [
     "**/*_test.ts",
-    "cli/tests",
-    "core/scripts",
-    "providers/cloudflare/hosting"
+    "**/*_test.tsx",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/__tests__/**",
+    "test/**",
+    "tests/**",
+    "core/scripts"
   ]
 }

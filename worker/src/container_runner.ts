@@ -13,6 +13,8 @@ import type {
   OpenTofuDestroyResult,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
+  OpenTofuRestoreJob,
+  OpenTofuRestoreResult,
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
@@ -30,7 +32,8 @@ import { redactString } from "../../core/domains/observability/redaction.ts";
  * shape. Credential values and run bodies are never logged.
  */
 export class CloudflareContainerOpenTofuRunner
-  implements OpenTofuRunner, ServiceDataBackupRunner {
+  implements OpenTofuRunner, ServiceDataBackupRunner
+{
   constructor(private readonly env: CloudflareWorkerEnv) {}
 
   async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
@@ -134,6 +137,26 @@ export class CloudflareContainerOpenTofuRunner
               providerInstallationFromContainerResult(result),
           }
         : {}),
+      diagnostics: diagnosticsFromContainerResult(result),
+    };
+  }
+
+  async restore(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult> {
+    const result = await this.#runContainer("restore", job.runId, {
+      stateScope: job.stateScope,
+      restoreState: job.sourceState,
+    });
+    const state = recordFromRecord(result, "state");
+    const generation = state?.generation;
+    const objectKey = state ? stringFromRecord(state, "objectKey") : undefined;
+    const digest = state ? stringFromRecord(state, "digest") : undefined;
+    if (typeof generation !== "number" || !objectKey || !digest) {
+      throw new Error(
+        `OpenTofu runner restore ${job.runId} returned an incomplete state result`,
+      );
+    }
+    return {
+      state: { generation, objectKey, digest },
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -246,7 +269,8 @@ export class CloudflareContainerOpenTofuRunner
         reason: "backup runner did not return an artifact pointer",
       };
     }
-    const reason = stringFromRecord(result, "reason") ??
+    const reason =
+      stringFromRecord(result, "reason") ??
       stringFromRecord(result, "stderr") ??
       "backup runner did not export service-data pointer";
     return {
@@ -281,10 +305,11 @@ export class CloudflareContainerOpenTofuRunner
         },
       ),
     );
-    const payload = await readResponseJsonObject(response);
+    const { payload, redactedText } = await readResponseJsonObject(response);
     if (!response.ok) {
+      const detail = runnerFailureDetail(payload, redactedText);
       throw new Error(
-        `OpenTofu runner rejected ${action} run ${runId}: ${response.status}`,
+        `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
       );
     }
     return payload;
@@ -322,14 +347,37 @@ function artifactPointerFromContainerResult(
 
 async function readResponseJsonObject(
   response: Response,
-): Promise<Record<string, unknown>> {
+): Promise<{
+  readonly payload: Record<string, unknown>;
+  readonly redactedText: string;
+}> {
   const text = await response.text();
-  if (text.length === 0) return {};
-  const value = JSON.parse(text) as unknown;
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
+  if (text.length === 0) return { payload: {}, redactedText: "" };
+  const redactedText = redactRunnerDiagnosticText(text);
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch (error) {
+    if (!response.ok) return { payload: {}, redactedText };
+    throw error;
   }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return { payload: value as Record<string, unknown>, redactedText };
+  }
+  if (!response.ok) return { payload: {}, redactedText };
   throw new Error("OpenTofu runner response must be a JSON object");
+}
+
+function runnerFailureDetail(
+  payload: Record<string, unknown>,
+  redactedText: string,
+): string | undefined {
+  const detail = stringFromRecord(payload, "detail");
+  if (detail) return redactRunnerDiagnosticText(detail);
+  const error = stringFromRecord(payload, "error");
+  if (error) return redactRunnerDiagnosticText(error);
+  const trimmed = redactedText.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
 }
 
 function diagnosticsFromContainerResult(

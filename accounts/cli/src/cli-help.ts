@@ -1,15 +1,14 @@
 import process from "node:process";
 
-const managedOfferingReadinessKind =
-  "takosumi.managed-offering-readiness@v1";
-const managedOfferingProductionTopologyKind =
+const platformReadinessKind = "takosumi.platform-readiness@v1";
+const platformReadinessProductionTopologyKind =
   "takosumi.production-topology@v1";
 
 export function isJapaneseCli(): boolean {
   const explicit = process.env.TAKOSUMI_LANG ?? process.env.TAKOSUMI_LOCALE;
   if (explicit) return explicit.toLowerCase().startsWith("ja");
-  const locale = process.env.LC_ALL ?? process.env.LC_MESSAGES ??
-    process.env.LANG ?? "";
+  const locale =
+    process.env.LC_ALL ?? process.env.LC_MESSAGES ?? process.env.LANG ?? "";
   return locale.toLowerCase().startsWith("ja");
 }
 
@@ -18,20 +17,20 @@ export function helpText(): string {
     return [
       "takosumi",
       "",
-      "Deploy (ローカル Capsule を自分の Space へ):",
+      "Local upload helper (Git URL install は dashboard / /install?git=... が標準):",
       "  deploy [dir]            ローカル OpenTofu Capsule を upload→plan→apply",
       "  plan   [dir]            upload→plan のみ (apply しない)",
       "  status <run-id>         Run の状態を表示",
       "  logs   <run-id>         Run のログを表示",
       "",
       "Operator:",
-      "  run connections         Takosumi 提供 provider default を管理",
-      "  run secrets             Worker secret の確認と適用",
+      "  connections             operator connection と internal resolver を管理",
+      "  secrets                 Worker secret の確認と適用",
       "",
       "deploy の例:",
       "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
       "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
-      "  takosumi deploy ./my-capsule --space @me --name my-app --var region=apac",
+      "  takosumi deploy ./my-capsule --space @me --name my-app --provider cloudflare=conn_cf --var region=apac",
       "",
       "内部/開発用コマンドは help には表示しません。",
       "日本語表示は TAKOSUMI_LANG=ja または LANG=ja_* で有効になります。",
@@ -40,20 +39,20 @@ export function helpText(): string {
   return [
     "takosumi",
     "",
-    "Deploy (a local Capsule into your Space):",
+    "Local upload helper (Git URL install is the standard dashboard flow):",
     "  deploy [dir]            upload a local OpenTofu Capsule, then plan/apply",
     "  plan   [dir]            upload + plan only (no apply)",
     "  status <run-id>         show a Run's status",
     "  logs   <run-id>         show a Run's logs",
     "",
     "Operator:",
-    "  run connections         Manage Takosumi-provided provider defaults",
-    "  run secrets             Check and apply Worker secrets",
+    "  connections             Manage operator connections and internal resolvers",
+    "  secrets                 Check and apply Worker secrets",
     "",
     "Deploy example:",
     "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com",
     "  export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>",
-    "  takosumi deploy ./my-capsule --space @me --name my-app --var region=apac",
+    "  takosumi deploy ./my-capsule --space @me --name my-app --provider cloudflare=conn_cf --var region=apac",
     "",
     "Internal/development commands are intentionally hidden from this help.",
   ].join("\n");
@@ -70,8 +69,8 @@ export function platformSecretsHelpText(): string {
       "",
       "operator vault の状態を確認し、生成可能 secret を作成して Worker に push します。",
       "表示するのは secret 名と件数だけで、値は表示しません。",
-      "provider credential は Takosumi 提供 default なら `takosumi run connections ...`、",
-      "user-owned credential は dashboard/API flow で扱います。",
+      "Provider Connection は dashboard/API flow で扱います。",
+      "内部 resolver record は通常 CLI surface では操作しません。",
     ].join("\n");
   }
   return [
@@ -82,9 +81,9 @@ export function platformSecretsHelpText(): string {
     "  apply",
     "",
     "Checks the operator vault, creates generatable secrets, and pushes Worker",
-    "secrets. It only prints secret names and counts, never values. Operator",
-    "provider credentials use `takosumi run connections ...`; user-owned",
-    "credentials are dashboard/API flows, not CLI flows.",
+    "secrets. It only prints secret names and counts, never values. Provider",
+    "Connection setup is a dashboard/API flow. Internal",
+    "resolver records are not part of the normal CLI surface.",
   ].join("\n");
 }
 
@@ -98,6 +97,10 @@ export function platformSecretsStatusHelpText(): string {
       "  --secrets-dir <path>",
       "  --json",
       "",
+      "AI Gateway の `TAKOSUMI_AI_GATEWAY_PROFILES` は env または wrangler config の",
+      "`[vars]` から読み、profile の `apiKeyEnv` が指す Worker secret 名の不足も",
+      "検出します。",
+      "",
       "環境変数:",
       "  TAKOSUMI_WRANGLER_CONFIG",
       "  TAKOSUMI_SECRETS",
@@ -110,6 +113,10 @@ export function platformSecretsStatusHelpText(): string {
     "  --config <wrangler.toml>",
     "  --secrets-dir <path>",
     "  --json",
+    "",
+    "Reads `TAKOSUMI_AI_GATEWAY_PROFILES` from the environment or the",
+    "wrangler config `[vars]` block and reports missing Worker secrets named by",
+    "profile `apiKeyEnv` fields.",
     "",
     "Environment:",
     "  TAKOSUMI_WRANGLER_CONFIG",
@@ -129,6 +136,8 @@ export function platformSecretsApplyHelpText(): string {
       "  --config <wrangler.toml>",
       "  --secrets-dir <path>",
       "  --regenerate <secret-name|rotate-safe>",
+      "  --init-protected",
+      "  --local-only",
       "  --dry-run",
       "  --json",
     ].join("\n");
@@ -143,6 +152,8 @@ export function platformSecretsApplyHelpText(): string {
     "  --config <wrangler.toml>",
     "  --secrets-dir <path>",
     "  --regenerate <secret-name|rotate-safe>",
+    "  --init-protected",
+    "  --local-only",
     "  --dry-run",
     "  --json",
   ].join("\n");
@@ -158,13 +169,11 @@ export function connectionsHelpText(): string {
       "  set-cloudflare-token",
       "  test <connection-id>",
       "  revoke <connection-id>",
-      "  defaults list",
-      "  defaults set <provider> <connection-id>",
       "",
       "`--url` に Takosumi platform origin、`--token` に deploy-control bearer を渡します。",
       "credential 値は file からだけ読み、CLI には表示しません。",
-      "この CLI は operator-only です。Takosumi 提供 default と platform secret だけを扱います。",
-      "Space/user-owned provider env set は dashboard/API flow で作成します。",
+      "この CLI は operator-only です。operator-scope Provider Connection backing material を扱います。",
+      "Space 用 Provider Connection helper は dashboard/API flow で作成します。",
     ].join("\n");
   }
   return [
@@ -175,14 +184,12 @@ export function connectionsHelpText(): string {
     "  set-cloudflare-token",
     "  test <connection-id>",
     "  revoke <connection-id>",
-    "  defaults list",
-    "  defaults set <provider> <connection-id>",
     "",
     "Use --url with the Takosumi platform origin and --token with the",
     "deploy-control bearer. Credential values are accepted only through files",
     "and are never printed by the CLI. This CLI is operator-only: it manages",
-    "Takosumi-provided defaults and platform secrets. Space/user-owned provider",
-    "env sets are created through dashboard/API flows.",
+    "operator-scope Provider Connection backing material. Space Provider Connection",
+    "helpers are created through dashboard/API flows.",
   ].join("\n");
 }
 
@@ -222,12 +229,11 @@ export function connectionsCreateCloudflareHelpText(): string {
       "",
       "オプション:",
       "  --api-token-file <path>  Cloudflare API token を含む file",
-      "  --values-file <path>     JSON object。例: {\"CLOUDFLARE_API_TOKEN\":\"...\"}",
+      '  --values-file <path>     JSON object。例: {"CLOUDFLARE_API_TOKEN":"..."}',
       "  --display-name <name>",
       "  --account-id <id>",
       "  --zone-id <id>",
       "  --expires-at <iso8601>",
-      "  --default <provider,...>  operator default も同時に設定。例: cloudflare",
       "  --url <deploy-control-url>",
       "  --token <deploy-control-bearer>",
       "  --json",
@@ -238,12 +244,11 @@ export function connectionsCreateCloudflareHelpText(): string {
     "",
     "Options:",
     "  --api-token-file <path>  file containing the Cloudflare API token",
-    "  --values-file <path>     JSON object, e.g. {\"CLOUDFLARE_API_TOKEN\":\"...\"}",
+    '  --values-file <path>     JSON object, e.g. {"CLOUDFLARE_API_TOKEN":"..."}',
     "  --display-name <name>",
     "  --account-id <id>",
     "  --zone-id <id>",
     "  --expires-at <iso8601>",
-  "  --default <provider,...>  also set operator defaults, e.g. cloudflare",
     "  --url <deploy-control-url>",
     "  --token <deploy-control-bearer>",
     "  --json",
@@ -292,52 +297,6 @@ export function connectionsRevokeHelpText(): string {
   ].join("\n");
 }
 
-export function connectionsDefaultsHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi connections defaults <command>",
-      "",
-      "コマンド:",
-      "  list",
-      "  set <provider> <connection-id>",
-    ].join("\n");
-  }
-  return [
-    "takosumi connections defaults <command>",
-    "",
-    "Commands:",
-    "  list",
-    "  set <provider> <connection-id>",
-  ].join("\n");
-}
-
-export function connectionsDefaultsSetHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi connections defaults set <provider> <connection-id>",
-      "",
-      "Provider:",
-      "  cloudflare のような短縮名、または OpenTofu provider source",
-      "",
-      "オプション:",
-      "  --url <deploy-control-url>",
-      "  --token <deploy-control-bearer>",
-      "  --json",
-    ].join("\n");
-  }
-  return [
-    "takosumi connections defaults set <provider> <connection-id>",
-    "",
-    "Provider:",
-    "  short name such as cloudflare or an OpenTofu provider source",
-    "",
-    "Options:",
-    "  --url <deploy-control-url>",
-    "  --token <deploy-control-bearer>",
-    "  --json",
-  ].join("\n");
-}
-
 export function accountsSeedHelpText(): string {
   return [
     "takosumi accounts seed",
@@ -368,12 +327,12 @@ export function accountsMigrateD1HelpText(): string {
     "takosumi accounts migrate-d1",
     "",
     "Apply Takosumi Accounts D1 (Cloudflare Workers) migrations via wrangler.",
-    "Calls `npx wrangler d1 execute <database-id> --command ...` once per",
+    "Calls `npx wrangler d1 execute <database-name-or-binding> --command ...` once per",
     "pending migration and records each applied version in",
     "takosumi_accounts_schema_migrations.",
     "",
     "Options:",
-    "  --database-id <uuid>   D1 database UUID (from `wrangler d1 create`)",
+    "  --database-id <name>   D1 database name or binding (Wrangler d1 execute positional)",
     "  --account-id <id>      Cloudflare account ID (optional; required when",
     "                         the operator's default account differs from",
     "                         the deploy target)",
@@ -421,7 +380,8 @@ export function launchReadinessValidateHelpText(): string {
     "  --file <path>  JSON evidence document",
     "  --json",
     "",
-    `Document kind: ${managedOfferingReadinessKind}`,
+    `Document kind: ${platformReadinessKind}`,
+    "JSON output includes gapDetails for missing or incomplete evidence.",
   ].join("\n");
 }
 
@@ -433,7 +393,7 @@ export function launchReadinessPublicSummaryHelpText(): string {
     "  --file <path>  JSON evidence document",
     "  --evidence-ref <ref>  Private evidence store ref; required when ready",
     "  --public-summary <text>  Sanitized operator-reviewed public summary",
-    "  --markdown-row  Print one row for docs/quality/managed-offering-evidence-summary.md",
+    "  --markdown-row  Print one row for docs/quality/platform-readiness-evidence-summary.md",
     "",
     "Prints a public-safe JSON summary with validator status, canonical",
     "evidenceDigest, opaque rehearsal id, and evidence ref class only.",
@@ -458,13 +418,31 @@ export function launchReadinessTemplateHelpText(): string {
   return [
     "takosumi launch-readiness template",
     "",
-    "Print a fail-closed JSON skeleton for managed offering evidence.",
+    "Print a fail-closed JSON skeleton for platform readiness evidence.",
     "Each required evidence type is expanded with its structured field shape,",
     "private=true, and a required publicSummary placeholder.",
     "Fill every row, change status to passed only after live evidence exists,",
     "and use structured evidence refs with type, ref, and summary fields;",
-    "collection guidance: root docs/quality/managed-offering-evidence-summary.md",
+    "collection guidance: root docs/quality/platform-readiness-evidence-summary.md",
     "then validate it with launch-readiness validate --file <path>.",
+  ].join("\n");
+}
+
+export function launchReadinessMigrateFinalModelHelpText(): string {
+  return [
+    "takosumi launch-readiness migrate-final-model",
+    "",
+    "Options:",
+    "  --file <path>  Existing private readiness JSON",
+    "  --out <path>   Write migrated JSON here",
+    "  --dry-run      Report changes without writing output",
+    "  --check        Exit 1 when legacy names are still present",
+    "  --json         Print migration report JSON",
+    "",
+    "Migrates pre-final-plan readiness evidence names such as",
+    "installation-created, installationId, and spaceId to the final",
+    "Workspace/Capsule/Run/StateVersion evidence schema. Raw evidence is",
+    "not printed; pass --out to write the migrated document.",
   ].join("\n");
 }
 
@@ -475,7 +453,7 @@ export function launchReadinessProductionTopologyTemplateHelpText(): string {
     "Options:",
     "  --environment <staging|production>",
     "",
-    `Document kind: ${managedOfferingProductionTopologyKind}`,
+    `Document kind: ${platformReadinessProductionTopologyKind}`,
     "",
     "Prints the input shape expected by production-topology preflight.",
   ].join("\n");
@@ -489,7 +467,7 @@ export function launchReadinessProductionTopologyPreflightHelpText(): string {
     "  --file <path>  JSON topology document",
     "  --json",
     "",
-    `Document kind: ${managedOfferingProductionTopologyKind}`,
+    `Document kind: ${platformReadinessProductionTopologyKind}`,
   ].join("\n");
 }
 
@@ -524,9 +502,6 @@ export function accountsServeHelpText(): string {
     "  --stripe-api-base <url>",
     "  --stripe-webhook-tolerance-seconds <seconds>",
     "  --subject-secret <secret>",
-    "  --github-client-id <id>",
-    "  --github-client-secret <secret>",
-    "  --github-redirect-uri <uri>",
     "  --google-client-id <id>",
     "  --google-client-secret <secret>",
     "  --google-redirect-uri <uri>",
@@ -547,43 +522,41 @@ export function accountsServeHelpText(): string {
     "  --passkey-session-ttl-ms <milliseconds>",
     "  --deploy-control-url <url>",
     "  --deploy-control-token <token>",
-    "  --use-edge-materials-file <path>",
+    "  --service-binding-materials-file <path>",
     "  --shared-cell-slots <cell-id:capacity[,cell-id:capacity...]>",
     "  --shared-cell-scale-out-policy <json>",
     "  --materialize-worker-url <url>",
     "  --materialize-worker-token <token>",
-    "  --workload-platform-service-resolver-token <token>",
+    "  --service-graph-material-resolver-token <token>",
     "  --billing-portal-url <url>",
     "  --export-output-dir <path>",
     "  --export-download-base-url <url>",
     "  --export-data-dir <path>",
     "  --export-download-ttl-ms <milliseconds>",
-    "  --import-data-restore-dir <path>",
-    "  --managed-offering-access <closed|open>",
-    "  --managed-offering-readiness-file <path>",
-    "  --managed-offering-readiness-digest <sha256:digest>",
-    "  --managed-offering-evidence-ref <ref>",
-    "  --managed-offering-approval-ref <ref>",
-    "  --managed-offering-public-summary <text>",
+    "  --platform-access <closed|open>",
+    "  --platform-readiness-file <path>",
+    "  --platform-readiness-digest <sha256:digest>",
+    "  --platform-evidence-ref <ref>",
+    "  --platform-approval-ref <ref>",
+    "  --platform-public-summary <text>",
     "  --database-url <postgres-url>",
     "  --dev-session-id <sess_...>  seed one in-memory dev Accounts session",
     "  --dry-run",
     "",
     "Environment:",
     "  TAKOSUMI_ACCOUNTS_DATABASE_URL",
-    "  TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL",
+    "  TAKOSUMI_DEPLOY_CONTROL_URL",
     "  TAKOSUMI_DEPLOY_CONTROL_TOKEN",
-    "  TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS",
+    "  TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS",
     "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SLOTS",
     "  TAKOSUMI_ACCOUNTS_SHARED_CELL_SCALE_OUT_POLICY",
     "  TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_URL",
     "  TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_TOKEN",
-    "  TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN",
+    "  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
     "  TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL",
     "  TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR",
     "  TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
     "  TAKOSUMI_ACCOUNTS_EXPORT_DATA_DIR",
-    "  TAKOSUMI_ACCOUNTS_IMPORT_DATA_RESTORE_DIR",
   ].join("\n");
 }
 
@@ -638,7 +611,7 @@ export function accountsTokensRevokeHelpText(): string {
 
 export function installationsListHelpText(): string {
   return [
-    "takosumi installations list",
+    "takosumi internal installations list",
     "",
     "Options:",
     "  --space <id>",
@@ -650,7 +623,7 @@ export function installationsListHelpText(): string {
 
 export function installationsInspectHelpText(): string {
   return [
-    "takosumi installations inspect <installation-id>",
+    "takosumi internal installations inspect <installation-id>",
     "",
     "Options:",
     "  --accounts-url <url>",
@@ -661,7 +634,7 @@ export function installationsInspectHelpText(): string {
 
 export function installationsUninstallHelpText(): string {
   return [
-    "takosumi installations uninstall <installation-id>",
+    "takosumi internal installations uninstall <installation-id>",
     "",
     "Options:",
     "  --reason <text>",
@@ -673,7 +646,7 @@ export function installationsUninstallHelpText(): string {
 
 export function installationsStatusHelpText(): string {
   return [
-    "takosumi installations status <installation-id>",
+    "takosumi internal installations status <installation-id>",
     "",
     "Options:",
     "  --status <installing|ready|suspended|exported|failed>",
@@ -695,7 +668,7 @@ export function installationsStatusHelpText(): string {
 
 export function installationsMaterializeHelpText(): string {
   return [
-    "takosumi installations materialize <installation-id>",
+    "takosumi internal installations materialize <installation-id>",
     "",
     "Options:",
     "  --mode dedicated",
@@ -716,7 +689,7 @@ export function installationsMaterializeHelpText(): string {
 
 export function installationsExportHelpText(): string {
   return [
-    "takosumi installations export <installation-id>",
+    "takosumi internal installations export <installation-id>",
     "",
     "Options:",
     "  --include-data",

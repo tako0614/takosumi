@@ -1,4 +1,4 @@
-import { Hono, type Hono as HonoApp } from "hono";
+import { Hono, type Context, type Hono as HonoApp } from "hono";
 import type { AppContext } from "../app_context.ts";
 import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import type { TakosumiProcessRole } from "../process/mod.ts";
@@ -9,6 +9,8 @@ import {
   createTakosumiOpenApiDocument,
   type OpenApiDocument,
 } from "./openapi.ts";
+import { apiError, requestIdFromContext } from "./errors.ts";
+import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import {
   type ReadinessRouteProbes,
   registerReadinessRoutes,
@@ -22,9 +24,9 @@ import {
   type RegisterArtifactRoutesOptions,
 } from "./artifact_routes.ts";
 import {
-  type DeployControlPublicRouteDependencies,
-  mountDeployControlPublicRoutes,
-} from "./deploy_control_public_routes.ts";
+  type DeployControlInternalRouteDependencies,
+  mountDeployControlInternalRoutes,
+} from "./deploy_control_internal_routes.ts";
 import {
   registerMetricsRoutes,
   type RegisterMetricsRoutesOptions,
@@ -49,13 +51,14 @@ export interface CreateApiAppOptions {
   readonly createOpenApiDocument?: () =>
     | OpenApiDocument
     | Promise<OpenApiDocument>;
+  readonly getOpenApiBearerToken?: () => string | undefined;
   readonly registerRuntimeAgentRoutes?: boolean;
   readonly runtimeAgentRouteOptions?: RegisterRuntimeAgentRoutesOptions;
   readonly registerArtifactRoutes?: boolean;
   readonly artifactRouteOptions?: RegisterArtifactRoutesOptions;
-  /** When set, mounts the v1 OpenTofu plan/apply/destroy public surface. */
-  readonly registerDeployControlPublicRoutes?: boolean;
-  readonly deployControlPublicRouteOptions?: DeployControlPublicRouteDependencies;
+  /** When set, mounts the v1 OpenTofu plan/apply/destroy internal seam. */
+  readonly registerDeployControlInternalRoutes?: boolean;
+  readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
   /**
@@ -82,11 +85,13 @@ export async function createApiApp(
   const openApiRouteMounted = mounted.openApiRouteMounted;
   const readinessRoutesMounted = mounted.readinessRoutesMounted;
   const artifactRoutesMounted = mounted.artifactRoutesMounted;
-  const deployControlPublicRoutesMounted =
-    mounted.deployControlPublicRoutesMounted;
+  const deployControlInternalRoutesMounted =
+    mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
 
   app.get("/capabilities", (c) => {
+    const guard = authorizeInventoryRoute(c, options, "capabilities");
+    if (guard) return guard;
     return c.json(createApiCapabilitiesDescription(role, mounted));
   });
 
@@ -104,10 +109,10 @@ export async function createApiApp(
     registerArtifactRoutes(app, options.artifactRouteOptions);
   }
 
-  if (deployControlPublicRoutesMounted) {
-    mountDeployControlPublicRoutes(
+  if (deployControlInternalRoutesMounted) {
+    mountDeployControlInternalRoutes(
       app,
-      options.deployControlPublicRouteOptions ?? {},
+      options.deployControlInternalRouteOptions ?? {},
     );
   }
 
@@ -128,15 +133,51 @@ export async function createApiApp(
   }
 
   if (openApiRouteMounted) {
-    const createOpenApiDocument = options.createOpenApiDocument ??
+    const createOpenApiDocument =
+      options.createOpenApiDocument ??
       (() => createTakosumiOpenApiDocument(mounted));
-    app.get(
-      "/openapi.json",
-      async (c) => c.json(await createOpenApiDocument()),
-    );
+    app.get("/openapi.json", async (c) => {
+      const guard = authorizeInventoryRoute(c, options, "openapi");
+      if (guard) return guard;
+      return c.json(await createOpenApiDocument());
+    });
   }
 
   return app;
+}
+
+function authorizeInventoryRoute(
+  c: Context,
+  options: CreateApiAppOptions,
+  surface: "capabilities" | "openapi",
+): Response | undefined {
+  const expected = options.getOpenApiBearerToken?.();
+  if (!expected) {
+    return c.json(
+      apiError(
+        "not_found",
+        `${surface} inventory disabled`,
+        undefined,
+        requestIdFromContext(c),
+      ),
+      404,
+    );
+  }
+  const presented = bearerTokenFromAuthorization(
+    c.req.header("authorization") ?? "",
+  );
+  if (!presented || !constantTimeEqualsString(presented, expected)) {
+    return c.json(
+      apiError(
+        "unauthenticated",
+        `invalid ${surface} bearer`,
+        undefined,
+        requestIdFromContext(c),
+      ),
+      401,
+    );
+  }
+  return undefined;
 }
 
 /**
@@ -167,9 +208,9 @@ function routeFamilyMountInputs(
       override: options.registerArtifactRoutes,
       hasOptions: options.artifactRouteOptions !== undefined,
     },
-    deployControlPublicRoutesMounted: {
-      override: options.registerDeployControlPublicRoutes,
-      hasOptions: options.deployControlPublicRouteOptions !== undefined,
+    deployControlInternalRoutesMounted: {
+      override: options.registerDeployControlInternalRoutes,
+      hasOptions: options.deployControlInternalRouteOptions !== undefined,
     },
     metricsRoutesMounted: {
       override: options.registerMetricsRoutes,
@@ -191,8 +232,8 @@ function resolveMountedRouteFamilies(
   const flags = {} as Record<RouteFamilyFlag, boolean>;
   for (const family of ROUTE_FAMILIES) {
     const { override, hasOptions } = inputs[family.flag];
-    flags[family.flag] = override ??
-      family.defaultMounted({ role, hasOptions });
+    flags[family.flag] =
+      override ?? family.defaultMounted({ role, hasOptions });
   }
   return flags;
 }
@@ -202,21 +243,29 @@ function createRuntimeAgentRouteOptions(
 ): RegisterRuntimeAgentRoutesOptions {
   if (options.runtimeAgentRouteOptions) {
     return {
-      getInternalServiceSecret: options.getInternalServiceSecret ??
-        defaultInternalServiceSecret,
+      getInternalServiceSecret:
+        options.getInternalServiceSecret ?? defaultInternalServiceSecret,
       ...options.runtimeAgentRouteOptions,
     };
   }
   return {
-    registry: options.context?.adapters.runtimeAgent ??
+    registry:
+      options.context?.adapters.runtimeAgent ??
       new InMemoryRuntimeAgentRegistry(),
-    getInternalServiceSecret: options.getInternalServiceSecret ??
-      defaultInternalServiceSecret,
+    getInternalServiceSecret:
+      options.getInternalServiceSecret ?? defaultInternalServiceSecret,
   };
 }
 
 function defaultInternalServiceSecret(): string | undefined {
   return currentRuntime().env.get("TAKOSUMI_INTERNAL_API_SECRET");
+}
+
+function bearerTokenFromAuthorization(header: string): string | undefined {
+  const [scheme, ...rest] = header.trim().split(/\s+/);
+  if (!scheme || scheme.toLowerCase() !== "bearer") return undefined;
+  const token = rest.join(" ").trim();
+  return token.length > 0 ? token : undefined;
 }
 
 function createDefaultReadinessProbes(): ReadinessRouteProbes {

@@ -1,5 +1,5 @@
 /**
- * Deploy contract (`POST /api/deploy`).
+ * Deploy contract (`POST /api/v1/deploy`).
  *
  * The `takosumi deploy` (`wrangler deploy`-style) entry point. Given an
  * already-ingested upload {@link SourceSnapshot} (see `SPACE_UPLOADS_PATH`), the
@@ -16,11 +16,16 @@
  */
 
 import type { PublicInstallation } from "./installations.ts";
-import type { Run } from "./runs.ts";
-import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import type { InstallationProviderConnectionBindings } from "./connections.ts";
+import type { InstallationProviderEnvBindings } from "./provider-envs.ts";
+import type { PublicRun, Run } from "./runs.ts";
+import { API_V1_PREFIX, INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
+/** Edge-public deploy path used by dashboard/API clients and the CLI. */
+export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
 
 /** INTERNAL deploy-control seam path (`/internal/v1`, reached in-process). */
-export const DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
+export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 /**
  * Body of `POST {@link DEPLOY_PATH}`.
@@ -28,8 +33,11 @@ export const DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
  * `snapshotId` is an upload-origin {@link SourceSnapshot} previously created via
  * `SPACE_UPLOADS_PATH`. `vars` becomes the InstallConfig variable mapping
  * (string values only; secret material never travels here — providers are bound
- * through Connections). `planOnly` stops after the plan Run; `autoApprove`
- * approves and applies the plan without a manual approval gate.
+ * through Provider Connections). `providerConnections` binds required OpenTofu
+ * providers to public Provider Connection identifiers before planning; it never
+ * carries credential values.
+ * `planOnly` stops after the plan Run; `autoApprove` approves and applies the
+ * plan without a manual approval gate.
  */
 export interface DeployRequest {
   readonly spaceId: string;
@@ -38,8 +46,21 @@ export interface DeployRequest {
   readonly environment?: string;
   readonly snapshotId: string;
   readonly vars?: Readonly<Record<string, string>>;
+  readonly providerConnections?: InstallationProviderConnectionBindings;
   readonly planOnly?: boolean;
   readonly autoApprove?: boolean;
+}
+
+/**
+ * Internal in-process deploy-control request. The account-plane `/api/v1/deploy`
+ * facade converts public Provider Connection ids to these internal resolver ids
+ * after Space authorization. Public callers must not send this shape.
+ */
+export interface InternalDeployRequest extends Omit<
+  DeployRequest,
+  "providerConnections"
+> {
+  readonly providerEnvBindings?: InstallationProviderEnvBindings;
 }
 
 /**
@@ -50,9 +71,27 @@ export interface DeployRequest {
 export interface DeployResponse {
   readonly installation: PublicInstallation;
   readonly installConfigId: string;
+  /** Plan Run started by this deploy. Kept as `run` for older callers. */
   readonly run: Run;
+  readonly planRun?: Run;
+  readonly applyRun?: Run;
+  readonly status?:
+    | "planned"
+    | "applying"
+    | "applied"
+    | "waiting_approval"
+    | "failed";
   /** Set when the deploy was issued as an ordered RunGroup. */
   readonly runGroupId?: string;
   /** `true` when this `deploy` call created the Installation. */
   readonly created: boolean;
 }
+
+export type PublicDeployResponse = Omit<
+  DeployResponse,
+  "run" | "planRun" | "applyRun"
+> & {
+  readonly run: PublicRun;
+  readonly planRun?: PublicRun;
+  readonly applyRun?: PublicRun;
+};

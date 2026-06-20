@@ -110,11 +110,11 @@ export default function SharesTab(props: { readonly spaceId: string }) {
       outputs: entries,
       ...(hasSensitive
         ? {
-          sensitivePolicy: {
-            allow: true,
-            reason: sensitiveReason().trim(),
-          },
-        }
+            sensitivePolicy: {
+              allow: true,
+              reason: sensitiveReason().trim(),
+            },
+          }
         : {}),
     });
     setOutputs([emptyOutputDraft()]);
@@ -137,7 +137,7 @@ export default function SharesTab(props: { readonly spaceId: string }) {
     patch: Partial<Omit<OutputDraft, "id">>,
   ) => {
     setOutputs((rows) =>
-      rows.map((row) => row.id === id ? { ...row, ...patch } : row)
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
     );
   };
 
@@ -145,12 +145,12 @@ export default function SharesTab(props: { readonly spaceId: string }) {
     setOutputs((rows) =>
       rows.length > 1
         ? rows.filter((row) => row.id !== id)
-        : [emptyOutputDraft()]
+        : [emptyOutputDraft()],
     );
   };
 
   const sensitiveSelected = createMemo(() =>
-    outputs().some((output) => output.sensitive)
+    outputs().some((output) => output.sensitive),
   );
 
   const columns: readonly Column<OutputShare>[] = [
@@ -182,7 +182,9 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                   {(alias) => <span class="muted"> as {alias()}</span>}
                 </Show>
                 <Show when={output.sensitive}>
-                  <Badge tone="warn" class="wb-you-tag">sensitive</Badge>
+                  <Badge tone="warn" class="wb-you-tag">
+                    sensitive
+                  </Badge>
                 </Show>
               </li>
             )}
@@ -253,7 +255,9 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                   value={toSpaceId()}
                   onChange={(e) => setToSpaceId(e.currentTarget.value)}
                 >
-                  <option value="">{t("shares.create.selectPlaceholder")}</option>
+                  <option value="">
+                    {t("shares.create.selectPlaceholder")}
+                  </option>
                   <For
                     each={(spaces() ?? []).filter((s) => s.id !== spaceId())}
                   >
@@ -269,9 +273,12 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                 <Select
                   value={producerInstallationId()}
                   onChange={(e) =>
-                    setProducerInstallationId(e.currentTarget.value)}
+                    setProducerInstallationId(e.currentTarget.value)
+                  }
                 >
-                  <option value="">{t("shares.create.selectPlaceholder")}</option>
+                  <option value="">
+                    {t("shares.create.selectPlaceholder")}
+                  </option>
                   <For each={installations() ?? []}>
                     {(inst) => (
                       <option value={inst.id}>
@@ -294,7 +301,8 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                         onInput={(e) =>
                           updateOutput(output.id, {
                             name: e.currentTarget.value,
-                          })}
+                          })
+                        }
                         placeholder="base_domain"
                         autocomplete="off"
                         spellcheck={false}
@@ -306,7 +314,8 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                         onInput={(e) =>
                           updateOutput(output.id, {
                             alias: e.currentTarget.value,
-                          })}
+                          })
+                        }
                         placeholder="alias"
                         autocomplete="off"
                         spellcheck={false}
@@ -318,7 +327,8 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                         onChange={(e) =>
                           updateOutput(output.id, {
                             sensitive: e.currentTarget.checked,
-                          })}
+                          })
+                        }
                       />
                       <Button
                         variant="secondary"
@@ -337,7 +347,8 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                 size="sm"
                 type="button"
                 onClick={() =>
-                  setOutputs((rows) => [...rows, emptyOutputDraft()])}
+                  setOutputs((rows) => [...rows, emptyOutputDraft()])
+                }
               >
                 {t("shares.create.addOutput")}
               </Button>
@@ -366,16 +377,32 @@ export default function SharesTab(props: { readonly spaceId: string }) {
               </Button>
             </div>
             <Show when={formError()}>
-              {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wb-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
             <Show when={create.error()}>
-              {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wb-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
             <Show when={approve.error()}>
-              {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wb-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
             <Show when={revoke.error()}>
-              {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wb-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
           </form>
         </CardSection>
@@ -422,18 +449,17 @@ export default function SharesTab(props: { readonly spaceId: string }) {
 
 function emptyOutputDraft(): OutputDraft {
   return {
-    id: typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `out_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `out_${Date.now()}_${Math.random().toString(36).slice(2)}`,
     name: "",
     alias: "",
     sensitive: false,
   };
 }
 
-function normalizeOutputDrafts(
-  rows: readonly OutputDraft[],
-): readonly {
+function normalizeOutputDrafts(rows: readonly OutputDraft[]): readonly {
   readonly name: string;
   readonly alias?: string;
   readonly sensitive?: boolean;

@@ -71,6 +71,7 @@ function findModulePathMarker(value: string): number {
 function isSafeHttpsGitUrl(raw: string): boolean {
   const value = raw.trim();
   if (!value) return false;
+  if (/[\r\n\0]/.test(value)) return false;
   let url: URL;
   try {
     url = new URL(value);

@@ -21,20 +21,18 @@ import {
   Switch,
 } from "solid-js";
 import { Link, Plug, Plus, Trash } from "lucide-solid";
-import {
-  PROVIDERS,
-  providerDescriptor,
-} from "../../account/lib/api.ts";
+import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import { connectionStatusLabel, connectionTone } from "../../../lib/labels.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import {
   type Connection,
   type ControlApiError,
+  type ProviderConnection,
   createConnection,
   isOAuthUnavailable,
   listConnections,
-  listOperatorConnectionDefaults,
+  listProviderConnections,
   revokeConnection,
   startCloudflareOAuth,
   testConnection,
@@ -56,8 +54,8 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 
-/** Sentinel `<select>` value for the generic Provider Env Set path. */
-const PROVIDER_ENV_SET_OPTION = "__provider_env_set__";
+/** Sentinel `<select>` value for the generic own-key provider path. */
+const GENERIC_ENV_PROVIDER_OPTION = "__generic_env_provider__";
 
 interface EnvPair {
   readonly name: string;
@@ -80,8 +78,9 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const spaceId = () => props.spaceId;
 
   const [connections, { refetch }] = createResource(spaceId, listConnections);
-  const [operatorDefaults] = createResource(spaceId, async (id) =>
-    id ? await listOperatorConnectionDefaults(id) : [],
+  const [providerConnections] = createResource(
+    spaceId,
+    listProviderConnections,
   );
 
   // ----- register form state -----------------------------------------------
@@ -91,14 +90,14 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const [values, setValues] = createSignal<Record<string, string>>({});
   const [helperToken, setHelperToken] = createSignal("");
 
-  const [envSetProvider, setEnvSetProvider] = createSignal("");
+  const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
   const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
     { name: "", value: "" },
   ]);
-  const isEnvSet = () => provider() === PROVIDER_ENV_SET_OPTION;
+  const isGenericEnvProvider = () => provider() === GENERIC_ENV_PROVIDER_OPTION;
 
   const descriptor = createMemo(() =>
-    isEnvSet() ? undefined : providerDescriptor(provider()),
+    isGenericEnvProvider() ? undefined : providerDescriptor(provider()),
   );
   const fields = createMemo(() => descriptor()?.fields ?? []);
   const tokenHelper = createMemo(() => descriptor()?.tokenHelper);
@@ -123,7 +122,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     setValues({});
     setHelperToken("");
     setDisplayName("");
-    setEnvSetProvider("");
+    setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
   };
 
@@ -189,12 +188,12 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     await refetch();
   });
 
-  // Generic Provider Env Set submit.
-  const createEnvSet = createAction(async () => {
-    const name = envSetProvider().trim();
-    if (!name) throw new Error(t("conn.envset.providerRequired"));
+  // Generic own-key Provider Connection submit.
+  const createGenericEnvProvider = createAction(async () => {
+    const name = genericEnvProvider().trim();
+    if (!name) throw new Error(t("conn.genericEnv.providerRequired"));
     if (name === "cloudflare") {
-      throw new Error(t("conn.envset.cloudflareGuided"));
+      throw new Error(t("conn.genericEnv.cloudflareGuided"));
     }
     const submitValues: Record<string, string> = {};
     for (const pair of envPairs()) {
@@ -202,12 +201,12 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       const value = pair.value.trim();
       if (envName.length === 0 && value.length === 0) continue;
       if (envName.length === 0) {
-        throw new Error(t("conn.envset.nameRequired"));
+        throw new Error(t("conn.genericEnv.nameRequired"));
       }
       submitValues[envName] = value;
     }
     if (Object.keys(submitValues).length === 0) {
-      throw new Error(t("conn.envset.oneRequired"));
+      throw new Error(t("conn.genericEnv.oneRequired"));
     }
     await createConnection({
       spaceId: spaceId(),
@@ -253,9 +252,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       await testConnection(id);
       await refetch();
     } catch (e) {
-      setTestError(
-        e instanceof Error ? e.message : String(e),
-      );
+      setTestError(e instanceof Error ? e.message : String(e));
     } finally {
       setTestBusyId(null);
     }
@@ -277,14 +274,26 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     void remove.run(c.id);
   };
 
-  const operatorColumns: readonly Column<{ provider: string }>[] = [
+  const providerConnectionColumns: readonly Column<ProviderConnection>[] = [
     {
-      header: t("conn.operatorDefaults.provider"),
-      cell: (d) => <code class="wc-code">{d.provider}</code>,
+      header: t("conn.providerConnections.provider"),
+      cell: (d) => <code class="wc-code">{d.providerSource}</code>,
     },
     {
-      header: t("conn.operatorDefaults.status"),
-      cell: () => <Badge tone="ok">{t("conn.operatorDefaults.configured")}</Badge>,
+      header: t("conn.providerConnections.name"),
+      cell: (d) => d.displayName,
+    },
+    {
+      header: t("conn.providerConnections.ownership"),
+      cell: (d) => (
+        <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>
+      ),
+    },
+    {
+      header: t("conn.providerConnections.status"),
+      cell: (d) => (
+        <Badge tone={d.status === "ready" ? "ok" : "warn"}>{d.status}</Badge>
+      ),
     },
   ];
 
@@ -304,23 +313,23 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         )}
       </Show>
 
-      <Show when={(operatorDefaults() ?? []).length > 0}>
+      <Show when={(providerConnections() ?? []).length > 0}>
         <Card>
           <CardHeader
-            title={t("conn.operatorDefaults.title")}
-            subtitle={t("conn.operatorDefaults.subtitle")}
+            title={t("conn.providerConnections.title")}
+            subtitle={t("conn.providerConnections.subtitle")}
           />
           <DataTable
-            columns={operatorColumns}
-            rows={operatorDefaults() ?? []}
-            rowKey={(d) => d.provider}
+            columns={providerConnectionColumns}
+            rows={providerConnections() ?? []}
+            rowKey={(d) => d.id}
           />
         </Card>
       </Show>
-      <Show when={operatorDefaults.error}>
+      <Show when={providerConnections.error}>
         <Toast tone="error">
           {t("common.fetchFailed", {
-            message: (operatorDefaults.error as ControlApiError).message,
+            message: (providerConnections.error as ControlApiError).message,
           })}
         </Toast>
       </Show>
@@ -340,15 +349,15 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 // Switching provider drops any half-entered secret values.
                 setValues({});
                 setHelperToken("");
-                setEnvSetProvider("");
+                setGenericEnvProvider("");
                 setEnvPairs([{ name: "", value: "" }]);
               }}
             >
               <For each={PROVIDERS}>
                 {(p) => <option value={p.provider}>{p.label}</option>}
               </For>
-              <option value={PROVIDER_ENV_SET_OPTION}>
-                {t("conn.add.envSetOption")}
+              <option value={GENERIC_ENV_PROVIDER_OPTION}>
+                {t("conn.add.genericEnvOption")}
               </option>
             </Select>
           </FormField>
@@ -364,7 +373,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
           </FormField>
 
           <Show
-            when={isEnvSet()}
+            when={isGenericEnvProvider()}
             fallback={
               <Show
                 when={tokenHelper()}
@@ -537,22 +546,24 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               </Show>
             }
           >
-            {/* Generic Provider Env Set editor. */}
+            {/* Generic own-key Provider Connection editor. */}
             <div class="wc-guided">
-              <p class="muted">{t("conn.envset.intro")}</p>
+              <p class="muted">{t("conn.genericEnv.intro")}</p>
 
               <form
                 class="wc-form"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void createEnvSet.run();
+                  void createGenericEnvProvider.run();
                 }}
               >
-                <FormField label={t("conn.envset.providerName")} required>
+                <FormField label={t("conn.genericEnv.providerName")} required>
                   <Input
                     type="text"
-                    value={envSetProvider()}
-                    onInput={(e) => setEnvSetProvider(e.currentTarget.value)}
+                    value={genericEnvProvider()}
+                    onInput={(e) =>
+                      setGenericEnvProvider(e.currentTarget.value)
+                    }
                     placeholder="aws / google / kubernetes / …"
                     autocomplete="off"
                     spellcheck={false}
@@ -562,7 +573,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 <Index each={envPairs()}>
                   {(pair, index) => (
                     <div class="wc-env-pair">
-                      <FormField label={t("conn.envset.envName")}>
+                      <FormField label={t("conn.genericEnv.envName")}>
                         <Input
                           type="text"
                           value={pair().name}
@@ -574,14 +585,14 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                           spellcheck={false}
                         />
                       </FormField>
-                      <FormField label={t("conn.envset.value")}>
+                      <FormField label={t("conn.genericEnv.value")}>
                         <Input
                           type="password"
                           value={pair().value}
                           onInput={(e) =>
                             setEnvPair(index, { value: e.currentTarget.value })
                           }
-                          placeholder={t("conn.envset.valuePlaceholder")}
+                          placeholder={t("conn.genericEnv.valuePlaceholder")}
                           autocomplete="off"
                           spellcheck={false}
                         />
@@ -607,19 +618,19 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                     onClick={() => addEnvPair()}
                     icon={<Plus size={16} />}
                   >
-                    {t("conn.envset.addRow")}
+                    {t("conn.genericEnv.addRow")}
                   </Button>
                   <Button
                     variant="primary"
                     type="submit"
-                    busy={createEnvSet.busy()}
+                    busy={createGenericEnvProvider.busy()}
                   >
-                    {createEnvSet.busy()
+                    {createGenericEnvProvider.busy()
                       ? t("conn.registering")
                       : t("conn.register")}
                   </Button>
                 </div>
-                <ActionError error={createEnvSet.error} />
+                <ActionError error={createGenericEnvProvider.error} />
               </form>
             </div>
           </Show>

@@ -1,4 +1,7 @@
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
+  type TakosumiSubject,
+} from "@takosjp/takosumi-accounts-contract";
 import {
   type AccountsHandler,
   type AccountsJsonWebKey,
@@ -6,34 +9,37 @@ import {
   createAccountsHandler,
   createEphemeralAccountsHandler,
   type ControlPlaneOperations,
-  createOpenManagedOfferingAccessPolicy,
+  createOpenPlatformAccessPolicy,
   customOidcOAuthProvider,
   D1AccountsStore,
   type D1Database,
   type DeployControlOperations,
-  githubOAuthProvider,
+  exportDownloadUrl,
   googleOAuthProvider,
+  handleAuthProvidersRequest,
   type JsonWebKeySet,
-  type ManagedOfferingAccessPolicy,
+  type PlatformAccessPolicy,
   type OidcClientAuthMethod,
   type OidcClientRegistration,
   parseBillingPlans,
+  registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
   signEs256Jwt,
   type StripeBillingOptions,
   type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
-  type WorkloadPlatformServiceResolverHttpOptions,
+  type ServiceGraphMaterialResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
+import { createTakosumiAiGatewayConfigFromEnv } from "../../../core/domains/ai-gateway/openai_compatible.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
   readonly TAKOSUMI_ACCOUNTS_DB: D1Database;
   // Cloudflare Static Assets binding for the bundled dashboard SPA
-  // (packages/dashboard-ui → .output/public). Present when the wrangler
-  // `[assets]` block is configured; absent in API-only deploys/tests.
+  // (dashboard → dist). Present when the wrangler `[assets]` block is
+  // configured; absent in API-only deploys/tests.
   readonly ASSETS?: { fetch(request: Request): Promise<Response> };
   readonly TAKOSUMI_ACCOUNTS_EXPORTS?: R2Bucket;
   readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET?: string;
@@ -49,6 +55,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
+  readonly TAKOSUMI_ACCOUNT_SESSION_HASH_SALT?: string;
   readonly TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
@@ -67,14 +74,6 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_ID?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_REDIRECT_URI?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_SCOPES?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_ISSUER?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_AUTHORIZATION_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_TOKEN_ENDPOINT?: string;
-  readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_USERINFO_ENDPOINT?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI?: string;
@@ -93,27 +92,34 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_REDIRECT_URI?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_SCOPES?: string;
-  readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS?: string;
-  readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST?: string;
-  readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF?: string;
-  readonly TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF?: string;
+  readonly TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY?: string;
   readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF?: string;
   readonly TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL?: string;
   // Shared deploy-control bearer for the in-process transport; must match the
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_INTERNAL_URL?: string;
+  readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
+  readonly TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL?: string;
+  readonly TAKOSUMI_AI_GATEWAY_PROFILES?: string;
   readonly LOCAL_SUBSTRATE_TEST_BED?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID?: string;
@@ -127,14 +133,7 @@ export interface CloudflareWorkerHandler {
 
 export interface CreateCloudflareWorkerOptions {
   /**
-   * @deprecated Inert. The deploy-control proxy is now in-process only and
-   * dispatches through {@link deployControlOperations}; the synthetic-Request
-   * `fetch` transport was removed (it was dead once `operations` is injected).
-   * Still accepted for source compatibility with hosts that pass it, but ignored.
-   */
-  readonly deployControlFetch?: (env: CloudflareWorkerEnv) => typeof fetch;
-  /**
-   * In-process deploy-control typed operations. The proxy calls these contract-DTO
+   * In-process deploy-control typed operations. The facade calls these contract-DTO
    * operations directly instead of building a synthetic Request and dialing it
    * back through the embedded router in the same worker: no self-issued Bearer
    * handshake, no JSON serialize/parse round-trip. The unified Takos worker passes
@@ -241,6 +240,18 @@ export function createCloudflareWorker(
       ) {
         return await env.ASSETS.fetch(request);
       }
+      if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
+        if (request.method !== "GET") {
+          return Response.json(
+            { error: "method_not_allowed" },
+            { status: 405, headers: { allow: "GET" } },
+          );
+        }
+        return handleAuthProvidersRequest({
+          upstreamOAuth: parseUpstreamOAuthForProviderList(env),
+          passkeys: parsePasskeysForProviderList(env),
+        });
+      }
       try {
         const handler = await cachedAccountsHandler(env, options);
         return await handler(request);
@@ -256,6 +267,46 @@ export function createCloudflareWorker(
       }
     },
   };
+}
+
+function parseUpstreamOAuthForProviderList(
+  env: CloudflareWorkerEnv,
+): UpstreamOAuthOptions | undefined {
+  return parseUpstreamOAuthFailClosed(env);
+}
+
+function parseUpstreamOAuthFailClosed(
+  env: CloudflareWorkerEnv,
+): UpstreamOAuthOptions | undefined {
+  try {
+    return parseUpstreamOAuth(env);
+  } catch (error) {
+    console.warn(
+      "auth_providers_upstream_oauth_disabled",
+      error instanceof Error ? error.message : String(error),
+    );
+    return undefined;
+  }
+}
+
+function parsePasskeysForProviderList(
+  env: CloudflareWorkerEnv,
+): PasskeyHttpOptions | undefined {
+  return parsePasskeysFailClosed(env);
+}
+
+function parsePasskeysFailClosed(
+  env: CloudflareWorkerEnv,
+): PasskeyHttpOptions | undefined {
+  try {
+    return parsePasskeys(env);
+  } catch (error) {
+    console.warn(
+      "auth_providers_passkeys_disabled",
+      error instanceof Error ? error.message : String(error),
+    );
+    return undefined;
+  }
 }
 
 async function cachedAccountsHandler(
@@ -288,6 +339,7 @@ async function buildAccountsHandler(
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
+  configureSessionHashSalt(env);
   const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
   await store.initialize();
   await ensureD1SchemaVersion(env.TAKOSUMI_ACCOUNTS_DB);
@@ -313,9 +365,9 @@ async function buildAccountsHandler(
     clients,
     store,
     stripeBilling: parseStripeBilling(env),
-    upstreamOAuth: parseUpstreamOAuth(env),
-    passkeys: parsePasskeys(env),
-    managedOfferingAccess: parseManagedOfferingAccess(env),
+    upstreamOAuth: parseUpstreamOAuthFailClosed(env),
+    passkeys: parsePasskeysFailClosed(env),
+    platformAccess: parsePlatformAccess(env),
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     ...(controlPlaneOperations
@@ -331,14 +383,15 @@ async function buildAccountsHandler(
             }),
         }
       : {}),
-    workloadPlatformServices: parseWorkloadPlatformServices(env),
+    serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
+    serviceGraphRuntimeAvailability: {
+      aiGatewayConfigured: isAiGatewayConfigured(env),
+    },
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
     ),
-    billingPlans: parseBillingPlans(
-      optionalString(env.TAKOSUMI_BILLING_PLANS),
-    ),
+    billingPlans: parseBillingPlans(optionalString(env.TAKOSUMI_BILLING_PLANS)),
   };
   const stableOidc = await parseStableOidcFlow(env);
   if (stableOidc) {
@@ -353,6 +406,21 @@ async function buildAccountsHandler(
     ...commonOptions,
     subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
   });
+}
+
+function configureSessionHashSalt(env: CloudflareWorkerEnv): void {
+  const salt = optionalString(env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT);
+  if (salt) {
+    registerSessionHashSaltConfig({ salt });
+    return;
+  }
+  if (optionalString(env.LOCAL_SUBSTRATE_TEST_BED) === "1") {
+    registerSessionHashSaltConfig({ allowDevFallback: true });
+    return;
+  }
+  throw new TypeError(
+    "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT must be set for the Cloudflare Worker account session store",
+  );
 }
 
 interface SchemaMigrationRow {
@@ -371,7 +439,7 @@ interface SchemaMigrationRow {
 //
 // The table name + column shape MUST match the runner's
 // `takosumi_accounts_schema_migrations` ledger (see
-// `packages/cli/src/cli-accounts-db.ts`'s `D1_SCHEMA_MIGRATIONS_TABLE_SQL`).
+// `accounts/cli/src/cli-accounts-db.ts`'s `D1_SCHEMA_MIGRATIONS_TABLE_SQL`).
 // The runner records `(version, name, applied_at)` rows; this Worker reads
 // only `version` from that same table so a `migrate-d1` run is visible to
 // the version gate. Keeping the names in lockstep is what makes the
@@ -663,15 +731,6 @@ function parseUpstreamOAuth(
   env: CloudflareWorkerEnv,
 ): UpstreamOAuthOptions | undefined {
   const providers: UpstreamOAuthClientRegistration[] = [];
-  const github = parseBuiltinUpstreamProvider(env, "GITHUB");
-  if (github) {
-    providers.push({
-      ...github,
-      provider: githubOAuthProvider(
-        parseBuiltinProviderOverrides(env, "GITHUB"),
-      ),
-    });
-  }
   const google = parseBuiltinUpstreamProvider(env, "GOOGLE");
   if (google) {
     providers.push({
@@ -688,7 +747,7 @@ function parseUpstreamOAuth(
   const sessionTtlMs = optionalInteger(
     env.TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS,
   );
-  if (!subjectSecret && providers.length === 0 && sessionTtlMs === undefined) {
+  if (providers.length === 0 && sessionTtlMs === undefined) {
     return undefined;
   }
   if (!subjectSecret || providers.length === 0) {
@@ -701,7 +760,7 @@ function parseUpstreamOAuth(
 
 function parseBuiltinProviderOverrides(
   env: CloudflareWorkerEnv,
-  provider: "GITHUB" | "GOOGLE",
+  provider: "GOOGLE",
 ): {
   issuer?: string;
   authorizationEndpoint?: string;
@@ -721,7 +780,7 @@ function parseBuiltinProviderOverrides(
 
 function parseBuiltinUpstreamProvider(
   env: CloudflareWorkerEnv,
-  provider: "GITHUB" | "GOOGLE",
+  provider: "GOOGLE",
 ): Omit<UpstreamOAuthClientRegistration, "provider"> | undefined {
   const prefix = `TAKOSUMI_ACCOUNTS_UPSTREAM_${provider}_`;
   const clientId = optionalString(env[`${prefix}CLIENT_ID`]);
@@ -731,9 +790,9 @@ function parseBuiltinUpstreamProvider(
   if (!clientId && !clientSecret && !redirectUri && scopes.length === 0) {
     return undefined;
   }
-  if (!clientId || !redirectUri) {
+  if (!clientId || !clientSecret || !redirectUri) {
     throw new TypeError(
-      `${prefix}CLIENT_ID and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
+      `${prefix}CLIENT_ID, ${prefix}CLIENT_SECRET, and ${prefix}REDIRECT_URI are required when configuring ${provider.toLowerCase()} upstream OAuth`,
     );
   }
   return {
@@ -816,40 +875,52 @@ function parseCustomOidcUpstreamProvider(
   };
 }
 
-// Synthetic absolute base for the in-process deploy-control transport. The proxy
-// only uses this to build `new URL(path, url)`; the actual transport is the
-// injected `fetch`, so the host part is never dialed.
+// Synthetic absolute base for the in-process deploy-control transport. The
+// in-process facade only uses this to build `new URL(path, url)`; the actual
+// transport is the injected `fetch`, so the host part is never dialed.
 function parseDeployControl(
   _env: CloudflareWorkerEnv,
   deployControlOperations?: DeployControlOperations,
 ): { operations: DeployControlOperations } | undefined {
   // In-process transport (unified single-worker deployment): the deploy-control
   // plane runs in this same worker, so the host injects the typed `operations`
-  // facade and the proxy calls the controller directly (no Bearer handshake, no
+  // facade and calls the controller directly (no Bearer handshake, no
   // JSON round-trip through an embedded router). Per AGENTS.md there is no remote
-  // deploy-control origin / standalone-worker split; the proxy is in-process only.
+  // deploy-control origin / standalone-worker split; this seam is in-process only.
   if (!deployControlOperations) return undefined;
   return { operations: deployControlOperations };
 }
 
-function parseWorkloadPlatformServices(
+function parseServiceGraphMaterials(
   env: CloudflareWorkerEnv,
-): WorkloadPlatformServiceResolverHttpOptions | undefined {
+): ServiceGraphMaterialResolverHttpOptions | undefined {
   const token = optionalString(
-    env.TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN,
+    env.TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN,
   );
   if (!token) return undefined;
   const billingPortalUrl = optionalString(
     env.TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL,
   );
   const internalUrl = optionalString(
-    env.TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICES_INTERNAL_URL,
+    env.TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL,
   );
   return {
     token,
     ...(billingPortalUrl ? { billingPortalUrl } : {}),
     ...(internalUrl ? { internalUrl } : {}),
   };
+}
+
+function isAiGatewayConfigured(env: CloudflareWorkerEnv): boolean {
+  try {
+    return (
+      createTakosumiAiGatewayConfigFromEnv(
+        env as unknown as Record<string, unknown>,
+      ).profiles.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function parseR2ExportWorker(
@@ -887,7 +958,7 @@ function parseR2ExportWorker(
   }
   return createR2InstallationExportWorker({
     bucket,
-    downloadBaseUrl: validateHttpUrl(
+    downloadBaseUrl: validateExportDownloadBaseUrl(
       baseUrl,
       "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
     ),
@@ -904,6 +975,10 @@ export function createR2InstallationExportWorker(options: {
   readonly now?: () => Date;
 }): AppInstallationExportWorker {
   const ttlMs = options.ttlMs ?? defaultExportDownloadTtlMs;
+  const downloadBaseUrl = exportDownloadUrl(
+    options.downloadBaseUrl,
+    "downloadBaseUrl",
+  ).toString();
   return async (input) => {
     if (input.request.includeData) {
       throw new Error(
@@ -948,7 +1023,7 @@ export function createR2InstallationExportWorker(options: {
     );
     return {
       downloadUrl: await signedR2ExportDownloadUrl({
-        baseUrl: options.downloadBaseUrl,
+        baseUrl: downloadBaseUrl,
         objectKey,
         expiresAtMs: new Date(downloadExpiresAt).getTime(),
         secret: options.downloadSecret,
@@ -1149,43 +1224,41 @@ function validateHttpUrl(value: string, label: string): string {
   return url.toString();
 }
 
-function parseManagedOfferingAccess(
-  env: CloudflareWorkerEnv,
-): ManagedOfferingAccessPolicy {
+function validateExportDownloadBaseUrl(value: string, label: string): string {
+  return exportDownloadUrl(value, label).toString();
+}
+
+function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
   const status =
-    optionalString(env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS) ?? "closed";
+    optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS) ?? "closed";
   if (status === "closed") return { status: "closed" };
   if (status !== "open") {
     throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS must be one of: closed, open",
+      "TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS must be one of: closed, open",
     );
   }
   const issuerRaw = optionalString(env.TAKOSUMI_ACCOUNTS_ISSUER);
   if (!issuerRaw) {
     throw new TypeError(
-      "Open managed offering access requires TAKOSUMI_ACCOUNTS_ISSUER",
+      "Open platform readiness access requires TAKOSUMI_ACCOUNTS_ISSUER",
     );
   }
   validateHttpUrl(issuerRaw, "TAKOSUMI_ACCOUNTS_ISSUER");
   const evidenceDigest = optionalString(
-    env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST,
+    env.TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST,
   );
   if (!evidenceDigest) {
     throw new TypeError(
-      "Open managed offering access requires TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_READINESS_DIGEST",
+      "Open platform readiness access requires TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST",
     );
   }
   requireProductionHardeningEvidence(env);
-  return createOpenManagedOfferingAccessPolicy(
+  return createOpenPlatformAccessPolicy(
     {
-      evidenceRef: optionalString(
-        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_EVIDENCE_REF,
-      ),
-      approvalRef: optionalString(
-        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF,
-      ),
+      evidenceRef: optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF),
+      approvalRef: optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF),
       publicSummary: optionalString(
-        env.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_PUBLIC_SUMMARY,
+        env.TAKOSUMI_ACCOUNTS_PLATFORM_PUBLIC_SUMMARY,
       ),
     },
     {
@@ -1198,7 +1271,7 @@ function parseManagedOfferingAccess(
 function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
   if (optionalString(env.TAKOSUMI_PRODUCTION_HARDENING_GATE) !== "enforce") {
     throw new TypeError(
-      "Open managed offering access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
+      "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
     );
   }
   const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
@@ -1208,12 +1281,24 @@ function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
     ],
     [
+      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF",
+      "TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST",
+    ],
+    [
       "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF",
       "TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST",
     ],
     [
+      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
+      "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
+    ],
+    [
       "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF",
       "TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
+      "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST",
     ],
     [
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
@@ -1222,7 +1307,7 @@ function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
   ] as const) {
     const ref = optionalString(env[refName]);
     if (!ref) {
-      throw new TypeError(`Open managed offering access requires ${refName}`);
+      throw new TypeError(`Open platform readiness access requires ${refName}`);
     }
     if (!commitPinnedGitRefPattern.test(ref)) {
       throw new TypeError(`${refName} must be commit-pinned git+ ref`);
@@ -1230,7 +1315,7 @@ function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
     const digest = optionalString(env[digestName]);
     if (!digest) {
       throw new TypeError(
-        `Open managed offering access requires ${digestName}`,
+        `Open platform readiness access requires ${digestName}`,
       );
     }
     if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {

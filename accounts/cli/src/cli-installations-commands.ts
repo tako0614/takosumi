@@ -1,10 +1,10 @@
 import process from "node:process";
 import {
- TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
- takosumiAccountsInstallationExportPath,
- takosumiAccountsInstallationMaterializePath,
- takosumiAccountsInstallationPath,
- takosumiAccountsInstallationStatusPath,
+  TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  takosumiAccountsInstallationExportPath,
+  takosumiAccountsInstallationMaterializePath,
+  takosumiAccountsInstallationPath,
+  takosumiAccountsInstallationStatusPath,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   installationsExportHelpText,
@@ -23,7 +23,7 @@ import {
   parseOptions,
 } from "./cli-options.ts";
 import { materializeApprovalDigest } from "./cli-util.ts";
-import { isSha256Digest } from "./cli-managed-offering.ts";
+import { isSha256Digest } from "./cli-platform-readiness.ts";
 import {
   formatInstallationInspect,
   formatInstallationOperation,
@@ -54,17 +54,17 @@ export async function runInstallationsList(
     io.stdout(installationsListHelpText());
     return 0;
   }
-  const spaceId = optionalStringOption(options, "space") ??
-    process.env.TAKOS_SPACE_ID;
+  const spaceId =
+    optionalStringOption(options, "space") ?? process.env.TAKOS_SPACE_ID;
   if (!spaceId) {
     io.stderr("--space or TAKOS_SPACE_ID is required");
     return 2;
   }
   try {
     const response = await requestAccountsApi({
-      path: `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}?space_id=${
-        encodeURIComponent(spaceId)
-      }`,
+      path: `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}?space_id=${encodeURIComponent(
+        spaceId,
+      )}`,
       options,
     });
     io.stdout(
@@ -221,8 +221,8 @@ export async function runInstallationsMaterialize(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
   }
-  const cutoverStrategy = optionalStringOption(options, "cutoverStrategy") ??
-    "blue-green";
+  const cutoverStrategy =
+    optionalStringOption(options, "cutoverStrategy") ?? "blue-green";
   if (cutoverStrategy !== "blue-green" && cutoverStrategy !== "cutover-now") {
     io.stderr("--cutover-strategy must be blue-green or cutover-now");
     return 2;
@@ -250,14 +250,15 @@ export async function runInstallationsMaterialize(
     io.stderr("--permission-digest must be sha256:<64-hex>");
     return 2;
   }
-  const permissionDigest = explicitPermissionDigest ??
-    await materializeApprovalDigest({
+  const permissionDigest =
+    explicitPermissionDigest ??
+    (await materializeApprovalDigest({
       installationId,
       mode,
       region,
       plan,
       cutover,
-    });
+    }));
   const body = {
     mode,
     region,
@@ -309,8 +310,8 @@ export async function runInstallationsExport(
     io.stderr("--format must be bundle");
     return 2;
   }
-  const encryptionMethod = optionalStringOption(options, "encryptionMethod") ??
-    "none";
+  const encryptionMethod =
+    optionalStringOption(options, "encryptionMethod") ?? "none";
   if (encryptionMethod !== "none" && encryptionMethod !== "age") {
     io.stderr("--encryption-method must be none or age");
     return 2;
@@ -323,7 +324,8 @@ export async function runInstallationsExport(
   const data = commaSeparatedOption(options, "data");
   const secrets = optionalStringOption(options, "secrets");
   if (
-    secrets !== undefined && secrets !== "templates-only" &&
+    secrets !== undefined &&
+    secrets !== "templates-only" &&
     secrets !== "with-references"
   ) {
     io.stderr("--secrets must be templates-only or with-references");
@@ -365,8 +367,8 @@ export async function runInstallationsExport(
 
 function isInstallationStatus(
   value: string,
-): value is typeof installationStatuses[number] {
+): value is (typeof installationStatuses)[number] {
   return installationStatuses.includes(
-    value as typeof installationStatuses[number],
+    value as (typeof installationStatuses)[number],
   );
 }

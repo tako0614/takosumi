@@ -5,8 +5,8 @@
  * wording in the active locale. Unknown values render as their raw string so
  * a new backend status stays truthful instead of disappearing.
  *
- * Vocabulary contract: アプリ / 追加 / 変更を確認 / デプロイ / 稼働中
- * (App / Add / Review changes / Deploy / Running) — see i18n/ja.ts.
+ * Vocabulary contract: Installation / 追加 / 変更を確認 / デプロイ / デプロイ済み
+ * (Installation / Add / Review changes / Deploy / Deployed) — see i18n/ja.ts.
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { Tone } from "../components/ui/Badge.tsx";

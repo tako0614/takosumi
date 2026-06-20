@@ -6,8 +6,8 @@ import type {
   ServiceEndpointHealth,
   ServiceEndpointHealthStatus,
   ServiceEndpointId,
-  ServiceGrant,
-  ServiceGrantId,
+  EndpointServiceGrant,
+  EndpointServiceGrantId,
   ServiceId,
   ServiceTrustRecord,
   ServiceTrustRecordId,
@@ -57,13 +57,13 @@ export interface ServiceTrustRecordStore {
   ): Promise<ServiceTrustRecord | undefined>;
 }
 
-export interface ServiceGrantStore {
-  put(grant: ServiceGrant): Promise<ServiceGrant>;
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined>;
+export interface EndpointServiceGrantStore {
+  put(grant: EndpointServiceGrant): Promise<EndpointServiceGrant>;
+  get(id: EndpointServiceGrantId): Promise<EndpointServiceGrant | undefined>;
   listByTrustRecord(
     trustRecordId: ServiceTrustRecordId,
-  ): Promise<readonly ServiceGrant[]>;
-  listBySubject(subject: string): Promise<readonly ServiceGrant[]>;
+  ): Promise<readonly EndpointServiceGrant[]>;
+  listBySubject(subject: string): Promise<readonly EndpointServiceGrant[]>;
 }
 
 export class InMemoryServiceEndpointStore implements ServiceEndpointStore {
@@ -81,8 +81,8 @@ export class InMemoryServiceEndpointStore implements ServiceEndpointStore {
 
   listByService(serviceId: ServiceId): Promise<readonly ServiceEndpoint[]> {
     return Promise.resolve(
-      [...this.#endpoints.values()].filter((endpoint) =>
-        endpoint.serviceId === serviceId
+      [...this.#endpoints.values()].filter(
+        (endpoint) => endpoint.serviceId === serviceId,
       ),
     );
   }
@@ -92,8 +92,9 @@ export class InMemoryServiceEndpointStore implements ServiceEndpointStore {
     groupId: GroupId,
   ): Promise<readonly ServiceEndpoint[]> {
     return Promise.resolve(
-      [...this.#endpoints.values()].filter((endpoint) =>
-        endpoint.spaceId === spaceId && endpoint.groupId === groupId
+      [...this.#endpoints.values()].filter(
+        (endpoint) =>
+          endpoint.spaceId === spaceId && endpoint.groupId === groupId,
       ),
     );
   }
@@ -120,8 +121,7 @@ export class InMemoryServiceEndpointStore implements ServiceEndpointStore {
   }
 }
 
-export class InMemoryServiceTrustRecordStore
-  implements ServiceTrustRecordStore {
+export class InMemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
   readonly #records = new Map<ServiceTrustRecordId, ServiceTrustRecord>();
 
   put(record: ServiceTrustRecord): Promise<ServiceTrustRecord> {
@@ -138,8 +138,8 @@ export class InMemoryServiceTrustRecordStore
     endpointId: ServiceEndpointId,
   ): Promise<readonly ServiceTrustRecord[]> {
     return Promise.resolve(
-      [...this.#records.values()].filter((record) =>
-        record.endpointId === endpointId
+      [...this.#records.values()].filter(
+        (record) => record.endpointId === endpointId,
       ),
     );
   }
@@ -149,10 +149,13 @@ export class InMemoryServiceTrustRecordStore
     now?: IsoTimestamp,
   ): Promise<readonly ServiceTrustRecord[]> {
     return Promise.resolve(
-      [...this.#records.values()].filter((record) =>
-        record.endpointId === endpointId && record.status === "active" &&
-        (now === undefined || record.expiresAt === undefined ||
-          record.expiresAt > now)
+      [...this.#records.values()].filter(
+        (record) =>
+          record.endpointId === endpointId &&
+          record.status === "active" &&
+          (now === undefined ||
+            record.expiresAt === undefined ||
+            record.expiresAt > now),
       ),
     );
   }
@@ -178,30 +181,30 @@ export class InMemoryServiceTrustRecordStore
   }
 }
 
-export class InMemoryServiceGrantStore implements ServiceGrantStore {
-  readonly #grants = new Map<ServiceGrantId, ServiceGrant>();
+export class InMemoryEndpointServiceGrantStore implements EndpointServiceGrantStore {
+  readonly #grants = new Map<EndpointServiceGrantId, EndpointServiceGrant>();
 
-  put(grant: ServiceGrant): Promise<ServiceGrant> {
+  put(grant: EndpointServiceGrant): Promise<EndpointServiceGrant> {
     const frozen = freezeClone(grant);
     this.#grants.set(frozen.id, frozen);
     return Promise.resolve(frozen);
   }
 
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined> {
+  get(id: EndpointServiceGrantId): Promise<EndpointServiceGrant | undefined> {
     return Promise.resolve(this.#grants.get(id));
   }
 
   listByTrustRecord(
     trustRecordId: ServiceTrustRecordId,
-  ): Promise<readonly ServiceGrant[]> {
+  ): Promise<readonly EndpointServiceGrant[]> {
     return Promise.resolve(
-      [...this.#grants.values()].filter((grant) =>
-        grant.trustRecordId === trustRecordId
+      [...this.#grants.values()].filter(
+        (grant) => grant.trustRecordId === trustRecordId,
       ),
     );
   }
 
-  listBySubject(subject: string): Promise<readonly ServiceGrant[]> {
+  listBySubject(subject: string): Promise<readonly EndpointServiceGrant[]> {
     return Promise.resolve(
       [...this.#grants.values()].filter((grant) => grant.subject === subject),
     );

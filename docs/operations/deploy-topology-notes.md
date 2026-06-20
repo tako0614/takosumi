@@ -13,24 +13,27 @@ production hosting しません。
 platform worker が in-process で束ねる surface:
 
 - accounts plane: account / billing / bare-origin OIDC issuer / dashboard contract
-- control plane: `/api/v1` と `/install`
+- control plane: `/api/v1` と `/hooks/*`
+- dashboard-owned external prefill entrypoint: `/install?git=...`
 - dashboard SPA: `ASSETS`
 - queue consumer / scheduled handlers
 - `CoordinationObject`
 - `OpenTofuRunnerObject` + Runner Container
 
-`/internal/*` HTTP routes are reserved for opentofu-runner / executor container
-callbacks. They are not public API and are not a split service boundary.
+`/internal/*` HTTP routes are reserved for opentofu-runner / executor container callbacks, host-internal control seams,
+and operator hardening gates. OSS Takosumi does not expose provider-compatible Gateway bridges, provider `base_url`
+routes, or Gateway run-key exchange endpoints. Runner callbacks are not public API and are not a split service
+boundary.
 
 ## OpenTofu Capsule Boundary
 
-Takosumi installs Git URLs as OpenTofu Capsules under a Space. User repos stay
+Takosumi registers Git URLs as OpenTofu/Terraform Capsules under a Workspace and Project. User repos stay
 plain Git repos containing OpenTofu module-compatible configuration. The repo
 does not need a Takosumi-specific manifest. The D1 control ledger is the source of truth for
-Space / Source / Connection / Provider Template / Provider Env Set /
-provider env set policy / OpenTofu Capsule / Compatibility Report / Installation / InstallConfig / DeploymentProfile /
-ProviderBinding / Dependency / SourceSnapshot / DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment /
-OutputSnapshot / Backup / UsageEvent / Billing / Activity. R2 paths are storage layout only.
+Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
+StateVersion / Output / Runner / AuditEvent / UsageEvent / Billing. Legacy Space / Installation / StateSnapshot /
+OutputSnapshot / Deployment rows, if present, are migration state rather than the target public model. R2 paths are
+storage layout only.
 
 ## Bindings
 
@@ -55,7 +58,7 @@ Do not reintroduce:
 - GitHub-specific core identifiers such as `githubInstallationId`
 - source metadata files required in user repos
 - public HTTP service boundaries for runner internals
-- old workload names such as `control-web`, `control-dispatch`,
+- old runtime names such as `control-web`, `control-dispatch`,
   `runtime-host`, `executor-host`, or `deployment-paas`
 
 Local-substrate mirrors the same single platform worker topology under

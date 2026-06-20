@@ -1,19 +1,13 @@
 /**
- * Home (`/`) — the per-Space app list, the dashboard's primary surface.
+ * Home (`/`) — the per-Space Installation list, the dashboard's primary surface.
  *
  * Card grid over the control-plane Installation list: status, a direct "開く"
  * launch link resolved from the current Deployment's public outputs, the
  * dependency line from the Space graph, and a needs-attention strip derived
- * from app statuses (error / stale). Click-through goes to `/apps/:id`.
+ * from Installation statuses (error / stale). Click-through goes to
+ * `/installations/:id`.
  */
-import {
-  createMemo,
-  createResource,
-  For,
-  Match,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { Boxes, Network, Plus } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -96,8 +90,9 @@ function Inner() {
     const map = new Map<string, string>();
     await Promise.all(
       list
-        .filter((inst): inst is Installation & { currentDeploymentId: string } =>
-          Boolean(inst.currentDeploymentId)
+        .filter(
+          (inst): inst is Installation & { currentDeploymentId: string } =>
+            Boolean(inst.currentDeploymentId),
         )
         .map(async (inst) => {
           try {
@@ -113,13 +108,13 @@ function Inner() {
     return map;
   });
 
-  /** Apps currently needing attention (error / stale under either model). */
+  /** Installations currently needing attention (error / stale under either model). */
   const attentionCount = createMemo(
     () => (installations() ?? []).filter(needsAttention).length,
   );
 
   const openDetail = (inst: Installation) =>
-    navigate(`/apps/${encodeURIComponent(inst.id)}`);
+    navigate(`/installations/${encodeURIComponent(inst.id)}`);
 
   return (
     <AppShell>
@@ -131,11 +126,7 @@ function Inner() {
             <Button variant="primary" href="/new" icon={<Plus size={16} />}>
               {t("apps.add")}
             </Button>
-            <Button
-              variant="ghost"
-              href="/graph"
-              icon={<Network size={16} />}
-            >
+            <Button variant="ghost" href="/graph" icon={<Network size={16} />}>
               {t("apps.graphLink")}
             </Button>
           </div>
@@ -237,7 +228,7 @@ function Inner() {
                               </p>
                             )}
                           </Show>
-                          <Show when={inst.currentOutputSnapshotId}>
+                          <Show when={inst.currentDeploymentId}>
                             <p class="av-card-meta">
                               <Badge tone="info">outputs</Badge>
                             </p>

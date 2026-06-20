@@ -11,7 +11,11 @@ interface Props {
 /** Spinning loader icon (lucide Loader2 + CSS rotation via `.tg-spinner`). */
 export default function Spinner(props: Props): JSX.Element {
   return (
-    <span class={`tg-spinner ${props.class ?? ""}`} role="status" aria-label={props.label ?? "読み込み中"}>
+    <span
+      class={`tg-spinner ${props.class ?? ""}`}
+      role="status"
+      aria-label={props.label ?? "読み込み中"}
+    >
       <Loader2 size={props.size ?? 18} />
     </span>
   );

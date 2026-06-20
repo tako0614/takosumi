@@ -1,33 +1,35 @@
 import type {
-  TakosumiAppInstallationMode,
-  TakosumiAppInstallationStatus,
+  TakosumiInstallationProjectionMode,
+  TakosumiInstallationProjectionStatus,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 
 /**
- * Internal binding kind catalog. The v1 contract reset (Wave 6) removed
- * AppBinding from the public surface. These kinds remain only as internal
- * implementation details of the AppInstallation ledger so existing import
- * data and stored records continue to load; new public APIs use
- * RunnerProfile decisions, PlanRun/ApplyRun evidence, and DeploymentOutput projections.
+ * Internal binding kind catalog. The v1 contract reset removed ServiceBindingMaterial from
+ * the public surface. These kinds remain only as internal implementation
+ * details of the account-plane service binding material ledger so existing
+ * import/export/OIDC helper flows keep their continuity; new public APIs use
+ * ServiceExport, ServiceBinding, ServiceGrant, and OutputSnapshot.
  */
-const APP_BINDING_KINDS = [
-  "identity.oidc@v1",
-  "database.postgres@v1",
-  "object-store.s3-compatible@v1",
-  "domain.http@v1",
-  "install-launch-token@v1",
+const SERVICE_BINDING_MATERIAL_KINDS = [
+  "identity.oidc",
+  "storage.sql",
+  "storage.object",
+  "protocol.http.api",
+  "auth.bootstrap_token",
 ] as const;
 
 /** Internal-only union of account-plane binding kinds; not part of the v1 contract. */
-export type AppBindingKind = typeof APP_BINDING_KINDS[number];
+export type ServiceBindingMaterialKind =
+  (typeof SERVICE_BINDING_MATERIAL_KINDS)[number];
 
 /**
- * Internal grant capability catalog. The v1 contract reset (Wave 6) removed
- * AppGrant from the public surface. Retained here for backward
- * compatibility of stored grant rows and access-token scope checks.
+ * Internal grant capability catalog. The v1 contract reset removed ServiceGrantMaterial
+ * from the public surface. Retained only to validate compatibility request
+ * metadata and access-token scope checks; durable stores must not treat it as
+ * the runtime service authority model.
  */
-const APP_GRANT_CAPABILITIES = [
+const SERVICE_GRANT_MATERIAL_CAPABILITIES = [
   "app.profile.write",
   "app.memory.write",
   "deploy.intent.write",
@@ -51,10 +53,11 @@ const APP_GRANT_CAPABILITIES = [
 ] as const;
 
 /** Internal-only union of account-plane grant capabilities; not part of the v1 contract. */
-export type AppGrantCapability = typeof APP_GRANT_CAPABILITIES[number];
+export type ServiceGrantMaterialCapability =
+  (typeof SERVICE_GRANT_MATERIAL_CAPABILITIES)[number];
 
-export type AppInstallationStatus = TakosumiAppInstallationStatus;
-export type AppInstallationMode = TakosumiAppInstallationMode;
+export type AppInstallationStatus = TakosumiInstallationProjectionStatus;
+export type AppInstallationMode = TakosumiInstallationProjectionMode;
 export type SpaceKind = "personal" | "team" | "org";
 
 export interface LedgerAccountRecord {
@@ -75,8 +78,10 @@ export interface SpaceRecord {
 }
 
 /**
- * Installation record for the account-plane projection of the Takosumi v1
- * Installation / Deployment vocabulary.
+ * Internal account-plane installation projection record. It is keyed by the same
+ * installation id so identity, billing, export, and service-token material can
+ * follow a deploy-control Installation, but it is not the public Installation
+ * model.
  */
 export interface InstallationRecord {
   installationId: string;
@@ -98,10 +103,10 @@ export interface InstallationRecord {
 }
 
 /**
- * @internal v1 contract reset (Wave 6): RuntimeBinding is no longer a public
- * concept. Retained for internal ledger storage so existing AppInstallation
- * rows continue to materialize. New code must not introduce this type to
- * the public Installation / Deployment surface.
+ * @internal v1 contract reset: RuntimeBinding is no longer a public concept.
+ * Retained for internal ledger storage so existing service projection rows
+ * continue to materialize. New code must not introduce this type to the public
+ * Installation / Deployment surface.
  */
 export interface RuntimeBindingRecord {
   runtimeBindingId: string;
@@ -114,15 +119,15 @@ export interface RuntimeBindingRecord {
 }
 
 /**
- * @internal v1 contract reset (Wave 6): AppBinding is no longer a public
- * concept. Workload platform service binding selections replace it. Retained for
+ * @internal v1 contract reset: ServiceBindingMaterial is no longer a public concept.
+ * Service Graph service binding selections replace it. Retained for
  * internal storage.
  */
-export interface AppBindingRecord {
+export interface ServiceBindingMaterialRecord {
   bindingId: string;
   installationId: string;
   name: string;
-  kind: AppBindingKind;
+  kind: ServiceBindingMaterialKind;
   configRef: string;
   secretRefs: readonly string[];
   createdAt: number;
@@ -130,22 +135,23 @@ export interface AppBindingRecord {
 }
 
 /**
- * @internal v1 contract reset (Wave 6): AppGrant is no longer a public
- * concept. Retained for internal storage and scope-check helpers.
+ * @internal v1 contract reset: ServiceGrantMaterial is no longer a public concept.
+ * Retained for compatibility validation and scope-check helpers. Service Graph
+ * ServiceGrant is the runtime authority record.
  */
-export interface AppGrantRecord {
+export interface ServiceGrantMaterialRecord {
   grantId: string;
   installationId: string;
-  capability: AppGrantCapability;
+  capability: ServiceGrantMaterialCapability;
   scope: Record<string, unknown>;
   grantedAt: number;
   revokedAt?: number;
 }
 
 /**
- * @internal v1 contract reset (Wave 6): event records are an internal
- * ledger detail; the public surface exposes events via the
- * `/v1/app-installations/{id}/events` view envelope, not this row shape.
+ * @internal v1 contract reset: event records are an internal ledger detail;
+ * the account-plane projection surface exposes events via the
+ * `/v1/installation-projections/{id}/events` view envelope, not this row shape.
  */
 export interface InstallationEventRecord {
   eventId: string;
@@ -161,10 +167,7 @@ export interface AppInstallationLedgerStore {
   saveLedgerAccount(record: LedgerAccountRecord): void | Promise<void>;
   findLedgerAccount(
     accountId: string,
-  ):
-    | LedgerAccountRecord
-    | undefined
-    | Promise<LedgerAccountRecord | undefined>;
+  ): LedgerAccountRecord | undefined | Promise<LedgerAccountRecord | undefined>;
   saveSpace(record: SpaceRecord): void | Promise<void>;
   findSpace(
     spaceId: string,
@@ -181,25 +184,16 @@ export interface AppInstallationLedgerStore {
   listSpacesForOwner(
     subject: TakosumiSubject,
   ): readonly SpaceRecord[] | Promise<readonly SpaceRecord[]>;
-  saveAppInstallation(
-    record: InstallationRecord,
-  ): void | Promise<void>;
+  saveAppInstallation(record: InstallationRecord): void | Promise<void>;
   findAppInstallation(
     installationId: string,
-  ):
-    | InstallationRecord
-    | undefined
-    | Promise<InstallationRecord | undefined>;
+  ): InstallationRecord | undefined | Promise<InstallationRecord | undefined>;
   listAppInstallationsForSpace(
     spaceId: string,
-  ):
-    | readonly InstallationRecord[]
-    | Promise<readonly InstallationRecord[]>;
+  ): readonly InstallationRecord[] | Promise<readonly InstallationRecord[]>;
   listAppInstallationsForBillingAccount(
     billingAccountId: string,
-  ):
-    | readonly InstallationRecord[]
-    | Promise<readonly InstallationRecord[]>;
+  ): readonly InstallationRecord[] | Promise<readonly InstallationRecord[]>;
   saveRuntimeBinding(record: RuntimeBindingRecord): void | Promise<void>;
   findRuntimeBinding(
     runtimeBindingId: string,
@@ -207,17 +201,28 @@ export interface AppInstallationLedgerStore {
     | RuntimeBindingRecord
     | undefined
     | Promise<RuntimeBindingRecord | undefined>;
-  saveAppBinding(record: AppBindingRecord): void | Promise<void>;
-  listAppBindingsForInstallation(
+  saveServiceBindingMaterial(
+    record: ServiceBindingMaterialRecord,
+  ): void | Promise<void>;
+  listServiceBindingMaterialsForInstallation(
     installationId: string,
-  ): readonly AppBindingRecord[] | Promise<readonly AppBindingRecord[]>;
-  saveAppGrant(record: AppGrantRecord): void | Promise<void>;
-  findAppGrant(
+  ):
+    | readonly ServiceBindingMaterialRecord[]
+    | Promise<readonly ServiceBindingMaterialRecord[]>;
+  saveServiceGrantMaterial(
+    record: ServiceGrantMaterialRecord,
+  ): void | Promise<void>;
+  findServiceGrantMaterial(
     grantId: string,
-  ): AppGrantRecord | undefined | Promise<AppGrantRecord | undefined>;
-  listAppGrantsForInstallation(
+  ):
+    | ServiceGrantMaterialRecord
+    | undefined
+    | Promise<ServiceGrantMaterialRecord | undefined>;
+  listServiceGrantMaterialsForInstallation(
     installationId: string,
-  ): readonly AppGrantRecord[] | Promise<readonly AppGrantRecord[]>;
+  ):
+    | readonly ServiceGrantMaterialRecord[]
+    | Promise<readonly ServiceGrantMaterialRecord[]>;
   appendInstallationEvent(
     record: InstallationEventRecord,
   ): void | Promise<void>;
@@ -263,24 +268,30 @@ const oidcAuthMethods = new Set([
   "private_key_jwt",
 ]);
 
-export function isAppBindingKind(value: unknown): value is AppBindingKind {
-  return typeof value === "string" &&
-    (APP_BINDING_KINDS as readonly string[]).includes(value);
+export function isServiceBindingMaterialKind(
+  value: unknown,
+): value is ServiceBindingMaterialKind {
+  return (
+    typeof value === "string" &&
+    (SERVICE_BINDING_MATERIAL_KINDS as readonly string[]).includes(value)
+  );
 }
 
-export function isAppGrantCapability(
+export function isServiceGrantMaterialCapability(
   value: unknown,
-): value is AppGrantCapability {
-  return typeof value === "string" &&
-    (APP_GRANT_CAPABILITIES as readonly string[]).includes(value);
+): value is ServiceGrantMaterialCapability {
+  return (
+    typeof value === "string" &&
+    (SERVICE_GRANT_MATERIAL_CAPABILITIES as readonly string[]).includes(value)
+  );
 }
 
 export function isValidBindingName(value: string): boolean {
   return bindingNamePattern.test(value);
 }
 
-export function validateAppBindingRecord(
-  record: AppBindingRecord,
+export function validateServiceBindingMaterialRecord(
+  record: ServiceBindingMaterialRecord,
 ): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!isValidBindingName(record.name)) {
@@ -289,7 +300,7 @@ export function validateAppBindingRecord(
       message: "binding name must match ^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$",
     });
   }
-  if (!isAppBindingKind(record.kind)) {
+  if (!isServiceBindingMaterialKind(record.kind)) {
     issues.push({ path: "kind", message: "binding kind is not in catalog v1" });
   }
   if (!record.configRef) {
@@ -298,8 +309,8 @@ export function validateAppBindingRecord(
   if (!Array.isArray(record.secretRefs)) {
     issues.push({ path: "secretRefs", message: "secretRefs must be an array" });
   } else if (
-    record.secretRefs.some((secretRef) =>
-      typeof secretRef !== "string" || secretRef.length === 0
+    record.secretRefs.some(
+      (secretRef) => typeof secretRef !== "string" || secretRef.length === 0,
     )
   ) {
     issues.push({
@@ -307,9 +318,7 @@ export function validateAppBindingRecord(
       message: "secretRefs must contain non-empty string references",
     });
   }
-  if (
-    record.kind === "install-launch-token@v1" && record.secretRefs.length > 0
-  ) {
+  if (record.kind === "auth.bootstrap_token" && record.secretRefs.length > 0) {
     issues.push({
       path: "secretRefs",
       message: `${record.kind} must not store secret references`,
@@ -318,25 +327,30 @@ export function validateAppBindingRecord(
   return issues;
 }
 
-export function assertValidAppBindingRecord(record: AppBindingRecord): void {
-  const issues = validateAppBindingRecord(record);
+export function assertValidServiceBindingMaterialRecord(
+  record: ServiceBindingMaterialRecord,
+): void {
+  const issues = validateServiceBindingMaterialRecord(record);
   if (issues.length > 0) {
-    throw new TypeError(validationMessage("invalid AppBinding", issues));
+    throw new TypeError(
+      validationMessage("invalid ServiceBindingMaterial", issues),
+    );
   }
 }
 
-export function validateAppGrantRecord(
-  record: AppGrantRecord,
+export function validateServiceGrantMaterialRecord(
+  record: ServiceGrantMaterialRecord,
 ): readonly ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  if (!isAppGrantCapability(record.capability)) {
+  if (!isServiceGrantMaterialCapability(record.capability)) {
     issues.push({
       path: "capability",
       message: "grant capability is not in catalog v1",
     });
   }
   if (
-    !record.scope || typeof record.scope !== "object" ||
+    !record.scope ||
+    typeof record.scope !== "object" ||
     Array.isArray(record.scope)
   ) {
     issues.push({ path: "scope", message: "scope must be an object" });
@@ -344,14 +358,18 @@ export function validateAppGrantRecord(
   return issues;
 }
 
-export function assertValidAppGrantRecord(record: AppGrantRecord): void {
-  const issues = validateAppGrantRecord(record);
+export function assertValidServiceGrantMaterialRecord(
+  record: ServiceGrantMaterialRecord,
+): void {
+  const issues = validateServiceGrantMaterialRecord(record);
   if (issues.length > 0) {
-    throw new TypeError(validationMessage("invalid AppGrant", issues));
+    throw new TypeError(
+      validationMessage("invalid ServiceGrantMaterial", issues),
+    );
   }
 }
 
-export function validateAppBindingDeclaration(
+export function validateServiceBindingMaterialDeclaration(
   name: string,
   declaration: Record<string, unknown>,
 ): readonly ValidationIssue[] {
@@ -363,7 +381,7 @@ export function validateAppBindingDeclaration(
     });
   }
   const type = declaration.type;
-  if (!isAppBindingKind(type)) {
+  if (!isServiceBindingMaterialKind(type)) {
     issues.push({
       path: `bindings.${name}.type`,
       message: "binding type must be one of the v1 catalog identifiers",
@@ -377,26 +395,26 @@ export function validateAppBindingDeclaration(
     });
   }
 
-  if (type === "identity.oidc@v1") {
+  if (type === "identity.oidc") {
     validateOidcBinding(name, declaration, issues);
-  } else if (type === "database.postgres@v1") {
+  } else if (type === "storage.sql") {
     validatePostgresBinding(name, declaration, issues);
-  } else if (type === "object-store.s3-compatible@v1") {
+  } else if (type === "storage.object") {
     validateObjectStoreBinding(name, declaration, issues);
-  } else if (type === "domain.http@v1") {
+  } else if (type === "protocol.http.api") {
     validateDomainBinding(name, declaration, issues);
-  } else if (type === "install-launch-token@v1") {
+  } else if (type === "auth.bootstrap_token") {
     validateLaunchTokenBinding(name, declaration, issues);
   }
 
   return issues;
 }
 
-export function assertValidAppBindingDeclaration(
+export function assertValidServiceBindingMaterialDeclaration(
   name: string,
   declaration: Record<string, unknown>,
 ): void {
-  const issues = validateAppBindingDeclaration(name, declaration);
+  const issues = validateServiceBindingMaterialDeclaration(name, declaration);
   if (issues.length > 0) {
     throw new TypeError(
       validationMessage("invalid binding declaration", issues),
@@ -418,7 +436,7 @@ export function transitionAppInstallationStatus(
 ): InstallationRecord {
   if (!canTransitionAppInstallationStatus(installation.status, status)) {
     throw new TypeError(
-      `invalid AppInstallation status transition: ${installation.status} -> ${status}`,
+      `invalid Installation projection status transition: ${installation.status} -> ${status}`,
     );
   }
   if (installation.status === status) return installation;
@@ -481,9 +499,8 @@ function validateOidcBinding(
     !Array.isArray(redirectPaths) ||
     redirectPaths.length < 1 ||
     redirectPaths.length > 10 ||
-    redirectPaths.some((path) =>
-      typeof path !== "string" ||
-      !pathPattern.test(path)
+    redirectPaths.some(
+      (path) => typeof path !== "string" || !pathPattern.test(path),
     )
   ) {
     issues.push({
@@ -540,8 +557,8 @@ function validatePostgresBinding(
   if (
     extensions !== undefined &&
     (!Array.isArray(extensions) ||
-      extensions.some((extension) =>
-        !postgresExtensions.has(String(extension))
+      extensions.some(
+        (extension) => !postgresExtensions.has(String(extension)),
       ))
   ) {
     issues.push({
@@ -581,9 +598,7 @@ function validateObjectStoreBinding(
         path: `bindings.${name}.encryption`,
         message: "encryption must be an object",
       });
-    } else if (
-      encryption.mode !== "sse-s3" && encryption.mode !== "sse-kms"
-    ) {
+    } else if (encryption.mode !== "sse-s3" && encryption.mode !== "sse-kms") {
       issues.push({
         path: `bindings.${name}.encryption.mode`,
         message: "encryption.mode must be sse-s3 or sse-kms",
@@ -618,8 +633,11 @@ function validateDomainBinding(
   const hostname = declaration.hostname;
   if (
     hostname !== "auto" &&
-    !(isRecord(hostname) && typeof hostname.custom === "string" &&
-      hostname.custom.length > 0)
+    !(
+      isRecord(hostname) &&
+      typeof hostname.custom === "string" &&
+      hostname.custom.length > 0
+    )
   ) {
     issues.push({
       path: `bindings.${name}.hostname`,
@@ -648,9 +666,8 @@ function validateLaunchTokenBinding(
 ): void {
   const consumePath = declaration.consumePath;
   if (
-    consumePath !== undefined && (
-      typeof consumePath !== "string" || !pathPattern.test(consumePath)
-    )
+    consumePath !== undefined &&
+    (typeof consumePath !== "string" || !pathPattern.test(consumePath))
   ) {
     issues.push({
       path: `bindings.${name}.consumePath`,
@@ -691,11 +708,10 @@ function stableJson(value: unknown): string {
     return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
   }
   if (isRecord(value)) {
-    return `{${
-      Object.keys(value).sort().map((key) =>
-        `${JSON.stringify(key)}:${stableJson(value[key])}`
-      ).join(",")
-    }}`;
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -708,9 +724,9 @@ function validationMessage(
   prefix: string,
   issues: readonly ValidationIssue[],
 ): string {
-  return `${prefix}: ${
-    issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-  }`;
+  return `${prefix}: ${issues
+    .map((issue) => `${issue.path} ${issue.message}`)
+    .join("; ")}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

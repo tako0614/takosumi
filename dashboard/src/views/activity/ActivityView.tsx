@@ -30,8 +30,8 @@ export default function ActivityView() {
 
 function MetadataChips(props: { metadata: Record<string, unknown> }) {
   const entries = () =>
-    Object.entries(props.metadata).filter(([, v]) =>
-      v !== null && v !== undefined && typeof v !== "object"
+    Object.entries(props.metadata).filter(
+      ([, v]) => v !== null && v !== undefined && typeof v !== "object",
     );
   return (
     <Show when={entries().length > 0}>
@@ -73,9 +73,8 @@ function ActivityRow(props: { event: ActivityEvent }) {
 
 function Inner() {
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [events] = createResource(
-    spaceId,
-    (id) => listActivity(id, ACTIVITY_LIMIT),
+  const [events] = createResource(spaceId, (id) =>
+    listActivity(id, ACTIVITY_LIMIT),
   );
 
   return (

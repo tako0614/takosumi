@@ -31,7 +31,8 @@ export default function UserMenu() {
   const initial = () => {
     const s = session();
     if (!s) return "?";
-    return (s.displayName ?? s.email ?? s.subject ?? "?").charAt(0)
+    return (s.displayName ?? s.email ?? s.subject ?? "?")
+      .charAt(0)
       .toUpperCase();
   };
   const label = () => {
@@ -71,7 +72,11 @@ export default function UserMenu() {
           >
             <UserCircle2 size={16} /> {t("nav.account")}
           </a>
-          <div class="user-menu-lang" role="group" aria-label={t("shell.language")}>
+          <div
+            class="user-menu-lang"
+            role="group"
+            aria-label={t("shell.language")}
+          >
             <span class="user-menu-lang-label">{t("shell.language")}</span>
             <button
               type="button"

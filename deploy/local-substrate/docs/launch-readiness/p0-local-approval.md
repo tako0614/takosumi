@@ -1,12 +1,12 @@
 # P0 local-substrate approval record (FIXTURE)
 
-**This is NOT a real approval record.** It is a deterministic file the local-substrate uses to satisfy the `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_APPROVAL_REF` requirement of the worker's managed-offering gate. The gate insists the approval ref must differ from the evidence ref (`p0-local-evidence.md`); this file exists solely to be a distinct second pointer.
+**This is NOT a real approval record.** It is a deterministic file the local-substrate uses to satisfy the `TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF` requirement of the hosted Takosumi access gate. The gate insists the approval ref must differ from the evidence ref (`p0-local-evidence.md`); this file exists solely to be a distinct second pointer.
 
 Real launches used approval records that were tracked under `docs/launch-readiness/` in the now-archived `takos-private` repository (preserved in that repo's Git history), with a human reviewer's signature, audit trail, and an immutable commit SHA. This fixture satisfies only the local-substrate gate, never production.
 
 ## Why the gate requires distinct refs
 
-Conflating "evidence I reviewed" and "approval I granted" defeats the purpose of the managed-offering gate — a reviewer could approve their own evidence without a second human in the loop. Even in this fixture file, the lesson is preserved: the two paths point at different files so the gate code can be exercised end-to-end.
+Conflating "evidence I reviewed" and "approval I granted" defeats the purpose of the hosted Takosumi access gate — a reviewer could approve their own evidence without a second human in the loop. Even in this fixture file, the lesson is preserved: the two paths point at different files so the gate code can be exercised end-to-end.
 
 ## Local-substrate scope
 

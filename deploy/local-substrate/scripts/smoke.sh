@@ -31,7 +31,7 @@ run_script() {
 
 # Bundle freshness gate — refuse to run smoke against a stale worker /
 # SPA bundle. Without this an editor could edit accounts-service/src/*.ts
-# OR dashboard-ui/src/**/*.tsx and get smoke green against the *old*
+# OR dashboard/src/**/*.tsx and get smoke green against the *old*
 # bundle, then push and have CI / production fail.
 #
 # Pattern: if any source file is newer than the build output, automatically
@@ -90,9 +90,9 @@ bundle_freshness_gate() {
 			echo "==> [bundle-gate] service worker rebuilt + restarted"
 		fi
 	fi
-	# SPA bundle: .output/public/index.html is the entrypoint vinxi emits.
-	local spa_bundle="$repo_root/takosumi/packages/dashboard-ui/.output/public/index.html"
-	local spa_sources="$repo_root/takosumi/packages/dashboard-ui/src"
+	# SPA bundle: dashboard/dist/index.html is the Vite build entrypoint.
+	local spa_bundle="$repo_root/takosumi/dashboard/dist/index.html"
+	local spa_sources="$repo_root/takosumi/dashboard/src"
 	if [[ -f "$spa_bundle" ]]; then
 		local newer
 		newer=$(find "$spa_sources" -type f -newer "$spa_bundle" \
@@ -225,23 +225,19 @@ check_json "prod-mirror.cloud.oidc-discovery" "app.takosumi.test" "/.well-known/
 check "prod-mirror.cloud.dashboard-index" "app.takosumi.test" "/" "200"
 check "prod-mirror.cloud.dashboard-signin" "app.takosumi.test" "/sign-in" "200"
 check "prod-mirror.cloud.dashboard-deeplink" "app.takosumi.test" "/apps/abc" "200"
-check "prod-mirror.cloud.takos-start-entry" "app.takosumi.test" "/takos/start?takos_url=https%3A%2F%2Ftakos.test" "200"
-check "prod-mirror.cloud.use-takos-start-validation" "app.takosumi.test" "/start?takos_url=https%3A%2F%2Ftakos.test" "400"
 
 echo
-echo "==> OAuth flow — upstream mock (accounts.google.com / github.com)"
+echo "==> OAuth flow — upstream mock (accounts.google.com)"
 # These walk the full 3-step upstream OAuth dance against oauth-mock and
 # assert a session is created. The dedicated script handles the redirect
-# chain; here we just gate it as one PASS/FAIL per provider.
-for provider in google github; do
-	if bash "$SCRIPT_DIR/oauth-e2e.sh" "$provider"  >/dev/null 2>&1; then
-		echo "    PASS [oauth.e2e.$provider] full authorize → callback dance returned session"
-		PASS=$((PASS + 1))
-	else
-		echo "    FAIL [oauth.e2e.$provider] see scripts/oauth-e2e.sh $provider for the failure"
-		FAIL=$((FAIL + 1))
-	fi
-done
+# chain.
+if bash "$SCRIPT_DIR/oauth-e2e.sh" google >/dev/null 2>&1; then
+	echo "    PASS [oauth.e2e.google] full authorize → callback dance returned session"
+	PASS=$((PASS + 1))
+else
+	echo "    FAIL [oauth.e2e.google] see scripts/oauth-e2e.sh google for the failure"
+	FAIL=$((FAIL + 1))
+fi
 
 # Negative path: with upstream /token returning 5xx the worker must
 # surface 502 upstream_oauth_failed (NOT crash). Provider 'tls-fail' is a

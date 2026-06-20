@@ -43,7 +43,7 @@ database_id = "replace-with-accounts-d1-database-id"
 
 # OpenTofu Capsule ledger (Runs / Deployments / OutputSnapshots).
 [[d1_databases]]
-binding = "TAKOS_D1"
+binding = "TAKOSUMI_CONTROL_DB"
 database_name = "takosumi-deploy"
 database_id = "replace-with-deploy-d1-database-id"
 
@@ -139,29 +139,47 @@ crons = ["*/5 * * * *"]
 [vars]
 TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"
 TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
-TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS = "closed"
+TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
 # Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
 TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
-# Production hardening evidence gate. Keep unset/observe-only in local templates;
-# set to "enforce" in the realized operator config only after these evidence refs
-# point at immutable, reviewed operator-private proof files:
+# AI Gateway is disabled until the realized operator config provides profiles
+# and the referenced upstream API keys as Worker secrets. The profile JSON is
+# non-secret config; it must contain apiKeyEnv names, never raw apiKey values.
+# Model metadata is returned by /gateway/ai/v1/models and must stay public.
+# TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL = "deepseek/chat"
+# TAKOSUMI_AI_GATEWAY_PROFILES = '[{"id":"deepseek","provider":"deepseek","baseUrl":"https://provider.example/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY","models":[{"publicModel":"deepseek/chat","upstreamModel":"deepseek-chat","endpoints":["chat.completions"],"default":true}]}]'
+# Production hardening evidence gate. In observe mode the internal gate reports
+# missing/drifted evidence but does not return 503. Platform readiness access must
+# stay closed in observe mode: TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="open"
+# is accepted only when this gate is "enforce" and all seven evidence refs point
+# at immutable, reviewed operator-private proof files:
 #   TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF / _DIGEST
 # The internal `/internal/platform/hardening-gates` route is operator-bearer
-# gated and returns 503 while enforce mode is missing any required proof.
+# gated and returns 503 only in enforce mode while any required proof is missing.
 TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 
 # Required secrets (pushed via `wrangler secret put`, NEVER committed):
 #   TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK            stable OIDC signing key (JWK JSON)
 #   TAKOSUMI_ACCOUNTS_ES256_KEY_ID                 signing key id (kid)
+#   TAKOSUMI_SECRET_STORE_PASSPHRASE               sealed SecretBlob/vault passphrase
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
+#   TAKOSUMI_ACCOUNT_SESSION_HASH_SALT             account session hash-at-rest salt
+#   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET               upstream OAuth subject mapping secret
 #   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
 #   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
-# Optional (upstream OAuth providers; set the full group per provider):
-#   TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI
-#   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI
+# Optional (AI Gateway; set one secret per profile apiKeyEnv):
+#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  upstream model provider key
+# Optional (billing; set both when hosted billing is enabled):
+#   TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY / _WEBHOOK_SECRET
+# Optional (upstream OAuth provider):
+#   [vars] TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID / _REDIRECT_URI
+#   [secret] TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET
 #   TAKOSUMI_ACCOUNTS_UPSTREAM_OIDC_*             custom OIDC upstream provider

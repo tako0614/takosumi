@@ -59,7 +59,8 @@
 .tg-btn:hover:not(:disabled) {
   transform: translateY(-1px);
 }
-.tg-btn:disabled,.tg-btn[aria-disabled="true"] {
+.tg-btn:disabled,
+.tg-btn[aria-disabled="true"] {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -116,7 +117,7 @@
   animation: tg-spin 0.7s linear infinite;
 }
 @keyframes tg-spin {
-to {
+  to {
     transform: rotate(360deg);
   }
 }
@@ -251,7 +252,9 @@ to {
   font-size: var(--tg-fs-xs);
   color: var(--tg-danger);
 }
-.tg-input,.tg-select,.tg-textarea {
+.tg-input,
+.tg-select,
+.tg-textarea {
   padding: 0.55em 0.75em;
   background: var(--tg-bg-subtle);
   border: 1px solid var(--tg-line-strong);
@@ -262,14 +265,19 @@ to {
   width: 100%;
   transition: border-color 120ms ease;
 }
-.tg-input::placeholder,.tg-textarea::placeholder {
+.tg-input::placeholder,
+.tg-textarea::placeholder {
   color: var(--tg-fg-subtle);
 }
-.tg-input:focus,.tg-select:focus,.tg-textarea:focus {
+.tg-input:focus,
+.tg-select:focus,
+.tg-textarea:focus {
   outline: none;
   border-color: var(--tg-accent);
 }
-.tg-input-invalid,.tg-select-invalid,.tg-textarea-invalid {
+.tg-input-invalid,
+.tg-select-invalid,
+.tg-textarea-invalid {
   border-color: var(--tg-danger);
 }
 .tg-textarea {
@@ -446,7 +454,8 @@ to {
   border-collapse: collapse;
   font-size: var(--tg-fs-sm);
 }
-.tg-table th,.tg-table td {
+.tg-table th,
+.tg-table td {
   text-align: left;
   padding: var(--tg-s-3) var(--tg-s-4);
   border-bottom: 1px solid var(--tg-line);

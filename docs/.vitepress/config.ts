@@ -2,7 +2,10 @@ import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
+  { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/getting-started/quickstart" },
+  { text: "Service Graph", link: "/service-graph-spec" },
+  { text: "AI Gateway", link: "/reference/ai-gateway" },
   { text: "Model", link: "/reference/model" },
   { text: "API", link: "/reference/deploy-control-api" },
   { text: "Operator", link: "/reference/operator" },
@@ -10,7 +13,10 @@ const jaNav: DefaultTheme.NavItem[] = [
 
 const enNav: DefaultTheme.NavItem[] = [
   { text: "Overview", link: "/en/" },
+  { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
+  { text: "Service Graph", link: "/service-graph-spec" },
+  { text: "AI Gateway", link: "/reference/ai-gateway" },
   { text: "Model", link: "/en/reference/model" },
   { text: "API", link: "/en/reference/deploy-control-api" },
   { text: "Operator", link: "/en/reference/operator" },
@@ -22,6 +28,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "概要", link: "/" },
+        { text: "Final Plan", link: "/final-plan" },
         { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
@@ -29,11 +36,24 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Core specification", link: "/core-spec" },
+        { text: "Service Graph", link: "/service-graph-spec" },
+        { text: "AI Gateway", link: "/reference/ai-gateway" },
         { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/reference/model" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
+        {
+          text: "Gateway OpenTofu",
+          link: "/reference/gateway-opentofu-architecture",
+        },
+        {
+          text: "Execution boundaries",
+          link: "/reference/operator-execution-boundaries",
+        },
         { text: "Operator", link: "/reference/operator" },
         { text: "CLI", link: "/reference/cli" },
+        { text: "Terms", link: "/legal/terms-of-service" },
+        { text: "Privacy", link: "/legal/privacy-policy" },
+        { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
   ],
@@ -45,6 +65,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "Overview", link: "/en/" },
+        { text: "Final Plan", link: "/final-plan" },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
       ],
     },
@@ -52,11 +73,21 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Core specification", link: "/core-spec" },
+        { text: "Service Graph", link: "/service-graph-spec" },
+        { text: "AI Gateway", link: "/reference/ai-gateway" },
         { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/en/reference/model" },
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
+        },
+        {
+          text: "Gateway OpenTofu",
+          link: "/reference/gateway-opentofu-architecture",
+        },
+        {
+          text: "Execution boundaries",
+          link: "/en/reference/operator-execution-boundaries",
         },
         { text: "Operator", link: "/en/reference/operator" },
         { text: "CLI", link: "/en/reference/cli" },
@@ -67,13 +98,16 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 
 export default defineConfig({
   title: "Takosumi",
-  description:
-    "OpenTofu-native deploy control plane, UI, and audit ledger",
+  description: "OpenTofu-native deploy control plane, UI, and audit ledger",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   cleanUrls: true,
   lastUpdated: true,
   vite: {
+    build: {
+      target: "esnext",
+      chunkSizeWarningLimit: 700,
+    },
     server: {
       allowedHosts: [
         ".takosumi.test",
@@ -91,8 +125,7 @@ export default defineConfig({
       label: "日本語",
       lang: "ja",
       title: "Takosumi",
-      description:
-        "OpenTofu-native deploy control plane, UI, and audit ledger",
+      description: "OpenTofu-native deploy control plane, UI, and audit ledger",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -117,8 +150,7 @@ export default defineConfig({
       link: "/en/",
       lang: "en-US",
       title: "Takosumi",
-      description:
-        "OpenTofu-native deploy control plane, UI, and audit ledger",
+      description: "OpenTofu-native deploy control plane, UI, and audit ledger",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,

@@ -110,7 +110,11 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
           }
         />
         <Show when={create.error()}>
-          {(m) => <p class="wb-error" role="alert">{m()}</p>}
+          {(m) => (
+            <p class="wb-error" role="alert">
+              {m()}
+            </p>
+          )}
         </Show>
         <Switch>
           <Match when={backups.error}>

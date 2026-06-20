@@ -8,7 +8,7 @@ export interface StableSubjectInput {
 
 export interface PairwiseSubjectInput {
   secret: string | Uint8Array | CryptoKey;
- takosumiSubject: TakosumiSubject;
+  takosumiSubject: TakosumiSubject;
   clientId: string;
 }
 
@@ -40,15 +40,16 @@ async function hmacSha256(
   secret: string | Uint8Array | CryptoKey,
   parts: readonly string[],
 ): Promise<string> {
-  const key = secret instanceof CryptoKey
-    ? secret
-    : await crypto.subtle.importKey(
-      "raw",
-      rawSecretBytes(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
+  const key =
+    secret instanceof CryptoKey
+      ? secret
+      : await crypto.subtle.importKey(
+          "raw",
+          rawSecretBytes(secret),
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["sign"],
+        );
   const signature = await crypto.subtle.sign(
     "HMAC",
     key,
@@ -73,8 +74,8 @@ function normalizeSubjectPart(value: string): string {
 function base64UrlEncodeBytes(value: Uint8Array): string {
   let binary = "";
   for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }

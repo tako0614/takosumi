@@ -11,17 +11,17 @@ patch gate はそれぞれの product docs が所有します。
 
 ## Scope
 
-| Area | Owner | Patch path |
-| --- | --- | --- |
-| Platform worker source | `takosumi/worker` / `takosumi/src/service` | Takosumi service checks + platform deploy |
-| Dashboard SPA | `takosumi/dashboard` | dashboard typecheck / build |
-| Runner image | `takosumi/runner/Dockerfile` | image rebuild + Cloudflare Container smoke |
-| Provider Template / policy packs | `takosumi/docs/core-spec.md`, schema/store/policy packages | provider template route/schema tests + custom provider policy evidence |
-| Custom runner policy | `takosumi/runner`, operator boundary policy | custom runner smoke + egress policy evidence |
-| Provider mirror/cache policy | runner tofu CLI config / provider mirror | provider install attestation tests |
-| OpenTofu modules | `takosumi/opentofu-modules` | module tests / fixture plan where available |
-| Bun/npm dependencies | each Takosumi package root | `bun outdated`, `bun update`, checks |
-| Operator realized config | `takosumi-private/platform/wrangler.toml` | private repo review; no secrets committed |
+| Area                            | Owner                                                      | Patch path                                                            |
+| ------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
+| Platform worker source          | `takosumi/worker` / `takosumi/core`                        | Takosumi service checks + platform deploy                             |
+| Dashboard SPA                   | `takosumi/dashboard`                                       | dashboard typecheck / build                                           |
+| Runner image                    | `takosumi/runner/Dockerfile`                               | image rebuild + Cloudflare Container smoke                            |
+| Provider Catalog / policy packs | `takosumi/docs/core-spec.md`, schema/store/policy packages | Provider Catalog route/schema tests + custom provider policy evidence |
+| Custom runner policy            | `takosumi/runner`, operator boundary policy                | custom runner smoke + egress policy evidence                          |
+| Provider mirror/cache policy    | runner tofu CLI config / provider mirror                   | provider install attestation tests                                    |
+| OpenTofu modules                | `takosumi/opentofu-modules`                                | module tests / fixture plan where available                           |
+| Bun/npm dependencies            | each Takosumi package root                                 | `bun outdated`, `bun update`, checks                                  |
+| Operator realized config        | `takosumi-private/platform/wrangler.toml`                  | private repo review; no secrets committed                             |
 
 private deploy credentials and rotation evidence live outside public repos in
 the operator vault / approved run log. Public docs may mention secret classes
@@ -57,10 +57,14 @@ Before staging promotion:
 
 ```bash
 cd takosumi
-bunx tsc --noEmit
+bun run check
 bun test
-cd dashboard && bunx tsc --noEmit && bun run build
+cd dashboard && bun run build
 ```
+
+`bun run check` is the package-level gate: it includes the root typecheck,
+worker typecheck, and Cloudflare worker build checks. Do not replace it with a
+raw `tsc --noEmit`-only check for release or patch promotion.
 
 When docs or public contract changed:
 
@@ -79,13 +83,13 @@ the deployed `OpenTofuRunnerObject`, not only local Docker.
 
 ## Severity SLA
 
-| Severity | Target | Required action |
-| --- | --- | --- |
-| Critical exploited / internet-facing RCE | 24h | emergency patch, staging proof, production promotion |
-| Critical not known exploited | 72h | patch PR, rebuild affected artifact, production promotion |
-| High | 7 days | normal patch window |
-| Medium | 30 days | next dependency refresh |
-| Low | best effort | batch with routine updates |
+| Severity                                 | Target      | Required action                                           |
+| ---------------------------------------- | ----------- | --------------------------------------------------------- |
+| Critical exploited / internet-facing RCE | 24h         | emergency patch, staging proof, production promotion      |
+| Critical not known exploited             | 72h         | patch PR, rebuild affected artifact, production promotion |
+| High                                     | 7 days      | normal patch window                                       |
+| Medium                                   | 30 days     | next dependency refresh                                   |
+| Low                                      | best effort | batch with routine updates                                |
 
 If the affected package is not present in the runtime path or is unreachable,
 record a time-boxed exception with owner and expiry.

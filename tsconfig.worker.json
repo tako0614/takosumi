@@ -15,6 +15,16 @@
   // are resolved at the call sites with the repo's existing `toArrayBuffer`
   // pattern, not by widening the global lib.
   "extends": "./tsconfig.json",
-  "include": ["worker/src", "deploy/platform", "providers/cloudflare/hosting"],
-  "exclude": ["**/*_test.ts"]
+  "include": ["worker/src", "deploy/platform"],
+  "exclude": [
+    "**/*_test.ts",
+    "**/*_test.tsx",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/__tests__/**",
+    "test/**",
+    "tests/**"
+  ]
 }

@@ -1,4 +1,4 @@
-import type { SpaceMembershipStore } from "../../domains/membership/mod.ts";
+import type { SpaceMembershipStore } from "../membership/mod.ts";
 import { permissionDenied } from "../../shared/errors.ts";
 import { ALL_CAPABILITIES } from "./types.ts";
 import type {
@@ -18,10 +18,59 @@ export interface EntitlementPolicyServiceOptions {
   readonly policy?: LocalEntitlementPolicyConfigDto;
 }
 
-export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze(
-  {
-    defaults: {
-      capabilities: ["deploy.read", "resource.read", "runtime.read"],
+export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze({
+  defaults: {
+    capabilities: ["deploy.read", "resource.read", "runtime.read"],
+    limits: {
+      deploysPerDay: 0,
+      resourceInstances: 0,
+      runtimeServices: 0,
+      runtimeAgentConcurrentLeases: 0,
+    },
+  },
+  roles: {
+    owner: {
+      capabilities: ALL_CAPABILITIES,
+      limits: {
+        deploysPerDay: 1000,
+        resourceInstances: 1000,
+        runtimeServices: 500,
+        runtimeAgentConcurrentLeases: 100,
+      },
+    },
+    admin: {
+      capabilities: ALL_CAPABILITIES.filter(
+        (capability) => capability !== "runtime-agent.revoke",
+      ),
+      limits: {
+        deploysPerDay: 250,
+        resourceInstances: 250,
+        runtimeServices: 100,
+        runtimeAgentConcurrentLeases: 50,
+      },
+    },
+    member: {
+      capabilities: [
+        "deploy.read",
+        "deploy.plan",
+        "resource.read",
+        "runtime.read",
+        "runtime-agent.read",
+      ],
+      limits: {
+        deploysPerDay: 25,
+        resourceInstances: 25,
+        runtimeServices: 10,
+        runtimeAgentConcurrentLeases: 5,
+      },
+    },
+    viewer: {
+      capabilities: [
+        "deploy.read",
+        "resource.read",
+        "runtime.read",
+        "runtime-agent.read",
+      ],
       limits: {
         deploysPerDay: 0,
         resourceInstances: 0,
@@ -29,66 +78,15 @@ export const DEFAULT_LOCAL_ENTITLEMENT_POLICY = Object.freeze(
         runtimeAgentConcurrentLeases: 0,
       },
     },
-    roles: {
-      owner: {
-        capabilities: ALL_CAPABILITIES,
-        limits: {
-          deploysPerDay: 1000,
-          resourceInstances: 1000,
-          runtimeServices: 500,
-          runtimeAgentConcurrentLeases: 100,
-        },
-      },
-      admin: {
-        capabilities: ALL_CAPABILITIES.filter((capability) =>
-          capability !== "runtime-agent.revoke"
-        ),
-        limits: {
-          deploysPerDay: 250,
-          resourceInstances: 250,
-          runtimeServices: 100,
-          runtimeAgentConcurrentLeases: 50,
-        },
-      },
-      member: {
-        capabilities: [
-          "deploy.read",
-          "deploy.plan",
-          "resource.read",
-          "runtime.read",
-          "runtime-agent.read",
-        ],
-        limits: {
-          deploysPerDay: 25,
-          resourceInstances: 25,
-          runtimeServices: 10,
-          runtimeAgentConcurrentLeases: 5,
-        },
-      },
-      viewer: {
-        capabilities: [
-          "deploy.read",
-          "resource.read",
-          "runtime.read",
-          "runtime-agent.read",
-        ],
-        limits: {
-          deploysPerDay: 0,
-          resourceInstances: 0,
-          runtimeServices: 0,
-          runtimeAgentConcurrentLeases: 0,
-        },
-      },
-    },
-  } satisfies LocalEntitlementPolicyConfigDto,
-);
+  },
+} satisfies LocalEntitlementPolicyConfigDto);
 
 /**
  * The entitlement-policy surface the service consumes (the internal-mutation
  * boundary gate in `api/runtime_agent_routes.ts`). The local membership-RBAC
  * `EntitlementPolicyService` is the service default; operator distributions
  * (takosumi) may inject a tier/billing-aware implementation via
- * `createTakosumiService({ managedHosting: { entitlements } })`.
+ * `createTakosumiService({ platformServices: { entitlements } })`.
  */
 export interface EntitlementPolicyPort {
   getEffectiveEntitlements(

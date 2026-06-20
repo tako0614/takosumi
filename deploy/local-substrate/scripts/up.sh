@@ -171,11 +171,9 @@ Verify (Phase 0):
 Verify (profile=postgres):
    curl https://app.takosumi.test/.well-known/openid-configuration
    curl https://app.takosumi.test/healthz
-   curl https://cloud-worker.takosumi.test/.well-known/openid-configuration
-   curl https://service-worker.takosumi.test/healthz
+   curl https://service-worker.takosumi.test/healthz  # local-only worker probe
 
 Verify (profile=workers):
    curl https://app.takosumi.test/.well-known/openid-configuration
-   curl https://service.takosumi.test/healthz
-   curl https://service.takosumi.test/storage/healthz
+   curl https://service.takosumi.test/healthz         # local-only worker probe
 EOF

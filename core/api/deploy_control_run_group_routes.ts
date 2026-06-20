@@ -2,7 +2,7 @@
  * §19 / §24 RunGroup routes: the Space `plan-update` (creates a space_update
  * RunGroup re-planning every stale Installation in topological order) plus the
  * RunGroup read / approve handlers. Owns its handlers and its slice of the
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
+ * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";

@@ -30,9 +30,30 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 
+type RunEnvironmentEvidenceProjection = Pick<
+  Run,
+  "providerResolutions" | "runEnvironmentEvidenceDigest" | "redactionProfileId"
+>;
+
 /** ISO timestamp from an epoch-millis field, or undefined when absent. */
 function iso(at: number | undefined): string | undefined {
   return at === undefined ? undefined : new Date(at).toISOString();
+}
+
+function runEnvironmentEvidence(
+  run: PlanRun | ApplyRun,
+): Partial<RunEnvironmentEvidenceProjection> {
+  return {
+    ...(run.providerResolutions
+      ? { providerResolutions: run.providerResolutions }
+      : {}),
+    ...(run.runEnvironmentEvidenceDigest
+      ? { runEnvironmentEvidenceDigest: run.runEnvironmentEvidenceDigest }
+      : {}),
+    ...(run.redactionProfileId
+      ? { redactionProfileId: run.redactionProfileId }
+      : {}),
+  };
 }
 
 /**
@@ -184,7 +205,11 @@ export function projectPlanRun(
     ...(planRun.planArtifact?.ref
       ? { planArtifactKey: planRun.planArtifact.ref }
       : {}),
+    ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
+    ...(planRun.requiresApproval === true || type === "destroy_plan"
+      ? { requiresApproval: true }
+      : {}),
     ...(errorCode ? { errorCode } : {}),
     createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(planRun.createdAt).toISOString(),
@@ -232,6 +257,7 @@ export function projectApplyRun(
     ...(applyRun.expected.planDigest
       ? { planDigest: applyRun.expected.planDigest }
       : {}),
+    ...runEnvironmentEvidence(applyRun),
     ...(errorCode ? { errorCode } : {}),
     createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(applyRun.createdAt).toISOString(),
@@ -299,7 +325,9 @@ function planBillingAudit(
 }
 
 function numberOrUndefined(value: JsonValue | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 /**
@@ -322,7 +350,9 @@ export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   const billing = planBillingAudit(planRun);
   const modeValue = billing?.mode;
   const billingMode: RunCostInfo["billingMode"] =
-    modeValue === "enforce" || modeValue === "showback" ? modeValue : "disabled";
+    modeValue === "enforce" || modeValue === "showback"
+      ? modeValue
+      : "disabled";
   const estimatedCredits = numberOrUndefined(billing?.estimatedCredits) ?? 0;
   const availableCredits = numberOrUndefined(billing?.availableCredits);
   const reservationValue = billing?.reservationStatus;

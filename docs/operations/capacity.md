@@ -4,8 +4,9 @@
 > OpenTofu runner capacity、D1/R2/Queue headroom、capacity review cadence。
 
 この baseline は Takosumi platform worker (`app.takosumi.com`) の capacity
-planning 正本です。Takos product worker、Takos Git service、Takos agent
-runtime の capacity は Takos product docs が所有します。
+planning 正本です。Takosumi を embedded compose する host/distribution
+product worker、Git service、agent runtime の capacity は各 host product docs
+が所有します。
 
 ## Current Traffic Baseline
 
@@ -13,15 +14,15 @@ runtime の capacity は Takos product docs が所有します。
 baseline は 0 customer RPS。capacity planning は staging signal と launch
 floor を使います。
 
-| Surface | Current measured production traffic | Planning floor for launch | Notes |
-| --- | ---: | ---: | --- |
-| Dashboard / account read traffic | 0 customer RPS | 50 RPS peak | platform worker Web/API |
-| Control-plane write traffic | 0 customer RPS | 10 RPS peak | Space / Source / Connection / Provider Template read / Provider Env Set / Installation / InstallConfig writes |
-| Source sync / compatibility checks | 0 customer runs/min | 30 runs/min peak | git/provider-bound |
-| Plan runs | 0 customer plans/min | 30 plans/min peak | OpenTofu init/plan and policy-bound |
-| Apply / destroy runs | 0 customer applies/min | 10 applies/min peak | provider RPC-bound |
-| Runner queue depth | 0 customer queued | 500 queued / 50 active | Cloudflare Queue + runner container |
-| Artifact / state writes | 0 customer writes/min | 100 writes/min peak | R2 source/artifact/state/backup buckets |
+| Surface                            | Current measured production traffic | Planning floor for launch | Notes                                                                                                                   |
+| ---------------------------------- | ----------------------------------: | ------------------------: | ----------------------------------------------------------------------------------------------------------------------- |
+| Dashboard / account read traffic   |                      0 customer RPS |               50 RPS peak | platform worker Web/API                                                                                                 |
+| Control-plane write traffic        |                      0 customer RPS |               10 RPS peak | Workspace / Project / Capsule / Source / ProviderConnection / ProviderBinding / Run writes                     |
+| Source sync / compatibility checks |                 0 customer runs/min |          30 runs/min peak | git/provider-bound                                                                                                      |
+| Plan runs                          |                0 customer plans/min |         30 plans/min peak | OpenTofu init/plan and policy-bound                                                                                     |
+| Apply / destroy runs               |              0 customer applies/min |       10 applies/min peak | provider RPC-bound                                                                                                      |
+| Runner queue depth                 |                   0 customer queued |    500 queued / 50 active | Cloudflare Queue + runner container                                                                                     |
+| Artifact / state writes            |               0 customer writes/min |       100 writes/min peak | R2 source/artifact/state/backup buckets                                                                                 |
 
 launch floor は current traffic より高めに設定し、最初の hosted environment で
 即時 resizing が不要な水準にします。
@@ -44,25 +45,25 @@ required_capacity = forecast_peak * 2.0 headroom
 
 ## Sizing Baseline
 
-| Component | Initial floor | Scale trigger | Headroom rule |
-| --- | --- | --- | --- |
-| Takosumi platform worker | Cloudflare-managed Worker capacity | p95 latency > target for 30 min or 5xx > 1 % | isolate slow runner dispatch from request handling |
-| Queue consumer | 2 logical consumers / env | queue age above target or DLQ growth | keep one consumer failure domain spare |
-| Runner container pool | 50 active launch cap | active runs > 60 % of cap for 15 min | throttle apply below provider limits |
-| CoordinationObject | per-Installation lease namespace | lease takeover or alarm lag | no single DO hot spot for all Spaces |
-| D1 control ledger | managed D1 tier | lock wait / storage threshold | 90 days storage runway |
-| R2 source/artifact/state/backup | provider managed | growth > forecast for 7 days | lifecycle policy reviewed monthly |
+| Component                       | Initial floor                      | Scale trigger                                | Headroom rule                                      |
+| ------------------------------- | ---------------------------------- | -------------------------------------------- | -------------------------------------------------- |
+| Takosumi platform worker        | Cloudflare-managed Worker capacity | p95 latency > target for 30 min or 5xx > 1 % | isolate slow runner dispatch from request handling |
+| Queue consumer                  | 2 logical consumers / env          | queue age above target or DLQ growth         | keep one consumer failure domain spare             |
+| Runner container pool           | 50 active launch cap               | active runs > 60 % of cap for 15 min         | throttle apply below provider limits               |
+| CoordinationObject              | per-Installation lease namespace   | lease takeover or alarm lag                  | no single DO hot spot for all Spaces               |
+| D1 control ledger               | managed D1 tier                    | lock wait / storage threshold                | 90 days storage runway                             |
+| R2 source/artifact/state/backup | provider managed                   | growth > forecast for 7 days                 | lifecycle policy reviewed monthly                  |
 
 planning に使う conservative capacity:
 
-| Surface | Safe capacity used for planning |
-| --- | ---: |
-| control-plane read API | 500 RPS / environment |
-| control-plane writes | 100 RPS / environment |
-| source sync / compatibility checks | 30 active runs |
-| plan runs | 30 active runs |
-| apply / destroy runs | 10 active runs |
-| R2 artifact/state writes | 100 writes/min |
+| Surface                            | Safe capacity used for planning |
+| ---------------------------------- | ------------------------------: |
+| control-plane read API             |           500 RPS / environment |
+| control-plane writes               |           100 RPS / environment |
+| source sync / compatibility checks |                  30 active runs |
+| plan runs                          |                  30 active runs |
+| apply / destroy runs               |                  10 active runs |
+| R2 artifact/state writes           |                  100 writes/min |
 
 ## Headroom Checks
 
@@ -70,7 +71,7 @@ capacity review で見る signal:
 
 - platform worker 5xx / latency
 - `/api/v1` read/write RPS
-- Provider Template read RPS and Provider Env Set create/update/rotate write rate
+- Provider Catalog read RPS and Provider Connection create/update/rotate write rate
 - source sync / compatibility / plan / apply run counts
 - queue depth, queue age, DLQ count
 - CoordinationObject lease waits and takeover count

@@ -1,6 +1,6 @@
 /**
  * §6 Source routes: create / list / read / patch / sync / snapshots. Owns its
- * handlers and its slice of the {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS}
+ * handlers and its slice of the {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS}
  * descriptor inventory.
  */
 

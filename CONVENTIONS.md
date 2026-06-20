@@ -10,14 +10,19 @@ metadata file, component graph, provider selector, or repository metadata field.
   Installations, the dependency DAG, policy, activity, and billing.
 - `Source`: Git URL / default ref / module path record that yields immutable
   SourceSnapshots.
-- `Connection`: operator default or Space-owned external connection used through
-  ProviderBinding.
-- `Provider Template`: provider source / credential source / helper / policy
-  catalog. Hosted managed default starts Cloudflare-only.
-- `Provider Env Set`: Space-owned provider definition for arbitrary
-  OpenTofu providers.
-- `ProviderEnvSet`: Space-scoped trust record for a Provider Env Set provider
-  version and checksums.
+- `Connection`: sealed backing material for Git credentials, OAuth helpers,
+  token-vending, or secret/env provider credentials.
+- `Provider Connection`: public provider ownership selection. Each required
+  provider source and optional alias resolves to `own_key` or `takos_provided`.
+- `Provider Env`: internal provider resolver record used by vault/runner. It may
+  materialize through `gateway`, `oauth`, or `secret`, but its `envId` is not
+  public `/api/v1` vocabulary.
+- `Provider Catalog`: provider source / helper / coverage / policy catalog.
+  Hosted Gateway-backed (`takos_provided`) default starts
+  Cloudflare-only.
+- `Installation provider connection`: Installation/environment scoped provider
+  binding, resolving each provider source and optional alias to a concrete
+  public Provider Connection.
 - `Installation`: Space-scoped OpenTofu Capsule execution unit.
 - `Dependency`: output-to-input edge between Installations.
 - `Run`: persisted source_sync / compatibility_check / plan / apply /
@@ -52,3 +57,21 @@ SourceSnapshot, module path, variables, dependencies, and resolved internal
 execution policy. Apply uses the saved plan and verifies plan digest, source
 snapshot, dependency snapshot, compatibility report, and state generation to
 prevent drift between review and execution.
+
+## Test / Source Boundary
+
+Test code is test-only even when it is physically close to the source it
+exercises. Takosumi keeps that boundary with these rules:
+
+- Test entry files live under the top-level `tests/` tree and use
+  `*_test.ts` / `*_test.tsx`.
+- Test paths mirror the source path they exercise, for example
+  `tests/core/domains/deploy-control/mod_test.ts` tests
+  `core/domains/deploy-control/mod.ts`.
+- Shared test helpers live under `tests/helpers/`. If product code needs the
+  helper, promote it to a normal source module with a clear owning domain.
+- Production source must not import `bun:test`, `*_test.ts`, `*.test.ts`,
+  `*.spec.ts`, `__tests__/`, `test/`, or `tests/`.
+- Production `tsconfig` profiles exclude test-only files and directories.
+- `bun run check:test-source-boundary` is the guard that enforces this
+  separation before the normal type/build gates run.

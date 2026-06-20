@@ -25,7 +25,9 @@ interface Props {
 export default function AppShell(props: Props) {
   return (
     <div class="app-shell">
-      <a href="#main" class="skip-link">{t("shell.skipToContent")}</a>
+      <a href="#main" class="skip-link">
+        {t("shell.skipToContent")}
+      </a>
       <Sidebar />
       <div class="app-shell-main">
         <TopBar />

@@ -6,20 +6,19 @@
 
 この runbook は **Takosumi operated environment** の DB migration 正本です。
 対象は platform worker が所有する accounts plane と control-plane ledger
-(Space / Source / Connection / Provider Template / Provider Env Set /
-provider env set policy / OpenTofu Capsule / CapsuleCompatibilityReport / Installation / InstallConfig / DeploymentProfile /
-ProviderBinding / Dependency / SourceSnapshot / DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment /
-OutputSnapshot / Backup / UsageEvent / CreditReservation / Billing / Activity) です。Takos product の
-app-local DB migration は Takos product docs の領域であり、この runbook では
-扱いません。
+(Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
+StateVersion / Output / Runner / AuditEvent / Operator settings / UsageEvent / CreditReservation / Billing) です。
+既存 ledgers に Space / Installation / StateSnapshot / OutputSnapshot / Deployment などの旧行が残る場合は、Final Plan
+model への migration 対象として扱います。host/distribution product の app-local DB migration は各 product docs の領域であり、
+この runbook では扱いません。
 
 ## Scope
 
-| Store               | Contains                                                                                                                                                                                                                                                                                 | Migration owner                                   |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                                                 | Takosumi accounts plane                           |
-| Control-plane D1    | Space, Source, Connection, Provider Template rows, Provider Env Set connections/policy, capsule_compatibility_reports, Installation, DeploymentProfile, Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, Artifact, UsageEvent, CreditReservation, Billing, Audit | Takosumi control plane                            |
-| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                                                     | schema change only when D1 metadata shape changes |
+| Store               | Contains                                                                                                                                                                                                                                                                                | Migration owner                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Accounts D1         | users, sessions, account / billing / OIDC issuer records                                                                                                                                                                                                                                | Takosumi accounts plane                           |
+| Control-plane D1    | Workspace, Project, Capsule, Source, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, UsageEvent, CreditReservation, Billing, Audit, plus legacy rows while migrations are in flight | Takosumi control plane                            |
+| R2 object manifests | source archives, artifacts, state snapshots, backups                                                                                                                                                                                                                                    | schema change only when D1 metadata shape changes |
 
 realized config では accounts と control-plane を別 D1 binding にしてもよいが、
 正本 model は single Takosumi platform worker が所有する ledger です。
@@ -27,6 +26,9 @@ realized config では accounts と control-plane を別 D1 binding にしても
 Migration は customer-facing command surface ではありません。operator は
 platform worker deploy と同じ change window で migration を扱い、production /
 staging の database id や backup id は private run log にだけ記録します。
+Wrangler 4.x の `d1 execute` は positional に D1 database name / binding を受け取るため、
+runbook の `--database-id` には UUID ではなく realized config の database name または binding
+名を渡す。UUID は private evidence として記録してもよいが、CLI 実行引数の正本にしない。
 
 ## Gate
 
@@ -34,17 +36,21 @@ staging の database id や backup id は private run log にだけ記録しま�
 
 ```bash
 cd takosumi
-bunx tsc --noEmit
-bun test src/service/adapters/storage/migrations_test.ts
-bun test src/service/adapters/storage/drizzle/schema/schema_mirror_test.ts
+bun run check
+bun test core/adapters/storage/migrations_test.ts
+bun test core/adapters/storage/drizzle/schema/schema_mirror_test.ts
 ```
+
+`bun run check` is required here because it includes the root typecheck, worker
+typecheck, and Cloudflare worker build checks that raw `tsc --noEmit` does not
+cover.
 
 変更が API contract / dashboard に影響する場合は追加で:
 
 ```bash
 cd takosumi
-bun test src/service/api/route_inventory_test.ts
-cd dashboard && bunx tsc --noEmit && bun run build
+bun test core/api/route_inventory_test.ts
+cd dashboard && bun run build
 ```
 
 ## Safety Classes
@@ -119,6 +125,14 @@ production 前:
 - backup restore path が判明している
 - platform worker rollback version / commit が判明している
 - queue consumer / scheduled handler を freeze する必要があるか判断済み
+
+実行例:
+
+```bash
+cd takosumi
+bun run cli -- accounts migrate-d1 --database-id takosumi-accounts-staging --remote
+bun run cli -- accounts migrate-d1 --database-id takosumi-accounts --remote
+```
 
 production 後:
 

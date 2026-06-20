@@ -1,22 +1,54 @@
 /**
  * Public Takosumi deploy-control contract facade.
  *
- * Takosumi v1 public vocabulary is Space / Source / Connection / Provider
- * Template / Provider Env Set / OpenTofu Capsule / Capsule
- * Normalizer / Compatibility Report / Capsule Gate / Installation /
- * InstallConfig / DeploymentProfile / ProviderBinding / Dependency /
- * SourceSnapshot / DependencySnapshot / StateSnapshot / Run / RunGroup /
- * Deployment / OutputSnapshot / Backup / Billing / Activity / Security records.
+ * Takosumi v1 customer-facing vocabulary is Space / Source / Connection /
+ * Installation / Dependency / Run / Deployment / OutputSnapshot / Activity.
+ * Supporting API DTOs for Provider Catalog, Capsule compatibility evidence,
+ * InstallConfig, snapshots, RunGroup, Backup, Billing, and security records are
+ * exported here because the dashboard and operator tooling need them, but they
+ * should not be introduced as first-screen product nouns.
  *
- * Internal in-process compatibility DTOs for the legacy `/v1` seam live in
+ * Internal in-process compatibility DTOs for the account-plane workload seam live in
  * `internal-deploy-control-api.ts` and are intentionally not re-exported here.
  */
 
 export * from "./activity.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
-export * from "./provider-bindings.ts";
-export * from "./capsules.ts";
+export type {
+  InstallationProviderConnectionBinding,
+  InstallationProviderConnectionBindings,
+  InstallationProviderConnectionSet,
+  ListProviderConnectionsResponse,
+  ProviderConnection,
+  ProviderConnectionStatus,
+  ProviderCredentialOwnership,
+} from "./connections.ts";
+export type {
+  ProviderRequirement,
+  ProviderRequirementDiscoverySource,
+  ProviderRequirementPhase,
+  PublicBlockedProviderResolutionEvidence as BlockedProviderResolutionEvidence,
+  PublicProviderConnectionResolutionEvidence as ProviderConnectionResolutionEvidence,
+  PublicProviderResolution as ProviderResolution,
+  PublicProviderResolutionEvidence as ProviderResolutionEvidence,
+  PublicProviderResolutionStatus as ProviderResolutionStatus,
+} from "./provider-resolution.ts";
+export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
+export type {
+  CapsuleCompatibility,
+  CapsuleCompatibilityLevel,
+  CapsuleDataSourceSummary,
+  CapsuleFindingSeverity,
+  CapsuleGateFinding,
+  CapsuleGateResult,
+  CapsuleProviderRequirement,
+  CapsuleProvisionerSummary,
+  PublicCapsuleCompatibilityReport as CapsuleCompatibilityReport,
+  PublicCapsuleCompatibilityReportResponse as CapsuleCompatibilityReportResponse,
+  CapsuleResourceSummary,
+  CreateSourceCompatibilityCheckRequest,
+} from "./capsules.ts";
 export * from "./connections.ts";
 export * from "./dependencies.ts";
 export type {
@@ -24,10 +56,15 @@ export type {
   TakosumiApiErrorEnvelope,
   TakosumiApiErrorHttpStatus,
 } from "./deploy-control-errors.ts";
-export * from "./deployments.ts";
+export type {
+  DeploymentStatus,
+  PublicDeployment,
+  PublicDeployment as Deployment,
+  StateSnapshot,
+} from "./deployments.ts";
 export type {
   BackupConfig,
-  DeploymentProfile,
+  InstallConfigSourceKind,
   InstallBuildConfig,
   InstallationStatus,
   NormalizationConfig,
@@ -38,9 +75,30 @@ export type {
   PublicInstallation as Installation,
   TrustLevel,
 } from "./installations.ts";
-export * from "./output-snapshots.ts";
+export type {
+  OutputShare,
+  OutputShareEntry,
+  OutputShareStatus,
+  PublicOutputSnapshot,
+  PublicOutputSnapshot as OutputSnapshot,
+} from "./output-snapshots.ts";
 export * from "./providers.ts";
-export * from "./runs.ts";
+export type {
+  ArtifactRecord,
+  PublicRun as Run,
+  RunCostInfo,
+  RunCostResponse,
+  RunDiagnostic,
+  RunEventsResponse,
+  RunGroup,
+  RunGroupResponse,
+  RunGroupStatus,
+  RunGroupType,
+  RunLogsResponse,
+  RunPolicyStatus,
+  RunStatus,
+  RunType,
+} from "./runs.ts";
 export * from "./security.ts";
 export * from "./sources.ts";
 export * from "./spaces.ts";

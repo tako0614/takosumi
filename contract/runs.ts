@@ -12,6 +12,10 @@
  * update after stale propagation); `graphJson` records the planned order.
  */
 
+import type {
+  ProviderResolution,
+  PublicProviderResolution,
+} from "./provider-resolution.ts";
 import type { JsonValue } from "./types.ts";
 
 export type RunType =
@@ -23,14 +27,11 @@ export type RunType =
   | "destroy_apply"
   | "drift_check"
   | "backup"
-  // `restore` is RESERVED but NOT YET IMPLEMENTED. It has an OpenAPI enum
-  // entry, but no producer, no store accessors, no queue
-  // action, no controller handler, and no API route. Restore overwrites tfstate
-  // from a Backup (a destructive operation) and is intentionally deferred until
-  // a safe design (approval gate, state-generation rollback, stale propagation,
-  // runner restore action) exists. The run queue consumer fail-closes against a
-  // `restore` queue action. See docs/core-conformance.md (Backup / Export model
-  // and Future Extensions). Do not create `restore` Runs until implemented.
+  // `restore` is a destructive Backup-backed state restore. It is created in
+  // `waiting_approval`; approval dispatches it to write a new StateSnapshot
+  // generation and mark downstream consumers stale. Service-data restore remains
+  // explicitly not_implemented until a provider/container restore contract is
+  // shipped.
   | "restore";
 
 export type RunStatus =
@@ -62,12 +63,25 @@ export interface Run {
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
   readonly policyStatus?: RunPolicyStatus;
+  readonly providerResolutions?: readonly ProviderResolution[];
+  readonly runEnvironmentEvidenceDigest?: string;
+  readonly redactionProfileId?: string;
+  /** True when the reviewed plan carried a human approval/destructive gate. */
+  readonly requiresApproval?: boolean;
+  readonly backupId?: string;
+  readonly restoreStateGeneration?: number;
+  readonly restoredStateSnapshotId?: string;
+  readonly restoredFromStateSnapshotId?: string;
   readonly errorCode?: string;
   readonly createdBy: string;
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly finishedAt?: string;
 }
+
+export type PublicRun = Omit<Run, "providerResolutions"> & {
+  readonly providerResolutions?: readonly PublicProviderResolution[];
+};
 
 export interface RunDiagnostic {
   readonly severity: "info" | "warning" | "error";
@@ -151,8 +165,7 @@ export type RunGroupType =
   | "space_drift_check"
   | "installation_install"
   | "installation_update"
-  | "installation_destroy"
-  | "migration";
+  | "installation_destroy";
 
 export type RunGroupStatus =
   | "queued"
@@ -171,6 +184,20 @@ export interface RunGroup {
   readonly graphJson: string;
   readonly createdAt: string;
   readonly finishedAt?: string;
+}
+
+/** Internal deploy-control seam response: RunGroup plus member Runs. */
+export interface RunGroupWithRuns {
+  readonly runGroup: RunGroup;
+  /** Member Runs, in the row's recorded topological order. */
+  readonly runs: readonly Run[];
+}
+
+/** Public control surface response: RunGroup plus public-safe member Runs. */
+export interface RunGroupResponse {
+  readonly runGroup: RunGroup;
+  /** Member Runs, in the row's recorded topological order. */
+  readonly runs: readonly PublicRun[];
 }
 
 /**

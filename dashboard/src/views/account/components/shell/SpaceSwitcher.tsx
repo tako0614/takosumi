@@ -68,7 +68,11 @@ export default function SpaceSwitcher() {
       <Show
         when={!spaces.loading && (spaces() ?? []).length > 0}
         fallback={
-          <Select class="topbar-space-select" disabled aria-label={t("space.label")}>
+          <Select
+            class="topbar-space-select"
+            disabled
+            aria-label={t("space.label")}
+          >
             <option>
               {spaces.loading ? t("common.loading") : t("space.none")}
             </option>
@@ -125,7 +129,11 @@ export default function SpaceSwitcher() {
             </Button>
           </div>
           <Show when={error()}>
-            {(m) => <p class="topbar-space-pop-error" role="alert">{m()}</p>}
+            {(m) => (
+              <p class="topbar-space-pop-error" role="alert">
+                {m()}
+              </p>
+            )}
           </Show>
         </form>
       </Show>

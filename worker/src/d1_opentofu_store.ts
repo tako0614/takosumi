@@ -5,8 +5,8 @@
  * This is the Cloudflare D1 backend of {@link OpenTofuDeploymentStore}. It
  * materializes the §27 logical schema as real per-entity tables (`spaces`,
  * `sources`, `source_snapshots`, `connections`, `secret_blobs`,
- * `operator_connection_defaults`, `install_configs`, `installations`,
- * `deployment_profiles`, `runs`, `state_snapshots`, `deployments`,
+ * `provider_envs`, `install_configs`, `installations`,
+ * `provider_env_binding_sets`, `runs`, `state_snapshots`, `deployments`,
  * `artifacts`) created lazily with `CREATE TABLE IF NOT EXISTS` on first use
  * (the schema-init promise is memoized per store instance).
  *
@@ -20,7 +20,7 @@
  * material, kept off every list path.
  *
  * worker/ is outside the tsc include scope; this file is exercised by
- * `src/service/domains/deploy-control/store_{sources,connections}_test.ts`
+ * `core/domains/deploy-control/store_{sources,connections}_test.ts`
  * through the shared {@link OpenTofuDeploymentStore} contract and bundled by the
  * worker build.
  */
@@ -58,8 +58,10 @@ import type {
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
-import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
-import type { DeploymentProfile } from "takosumi-contract/installations";
+import type {
+  InstallationProviderEnvBindingSet,
+  ProviderEnv,
+} from "takosumi-contract/provider-envs";
 import type {
   Dependency,
   DependencySnapshot,
@@ -91,7 +93,7 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderTemplate } from "takosumi-contract/providers";
+import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   InstallationPatch,
@@ -121,6 +123,7 @@ const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
+const RUN_KIND_RESTORE = "restore" as const;
 
 /**
  * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the
@@ -196,18 +199,16 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- Provider Templates ----------------------------------------------------
+  // -- Provider Catalog ------------------------------------------------------
 
-  async putProviderTemplate(
-    entry: ProviderTemplate,
-  ): Promise<ProviderTemplate> {
-    await this.#drizzleUpsert(schema.providerTemplates, {
+  async putProviderCatalogEntry(
+    entry: ProviderCatalogEntry,
+  ): Promise<ProviderCatalogEntry> {
+    await this.#drizzleUpsert(schema.providerCatalog, {
       id: entry.id,
       providerSource: entry.providerSource,
-      primaryCredentialSource: entry.credentialSources.includes("takosumi_managed")
-        ? "takosumi_managed"
-        : "user_env_set",
-      defaultEligible: entry.takosumiManagedAvailable ? 1 : 0,
+      primaryMaterialization: "secret",
+      gatewayEligible: 0,
       recordJson: entry,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
@@ -215,24 +216,24 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return entry;
   }
 
-  async getProviderTemplate(
+  async getProviderCatalogEntry(
     id: string,
-  ): Promise<ProviderTemplate | undefined> {
-    return await this.#drizzleFirstJson<ProviderTemplate>(
-      schema.providerTemplates,
-      schema.providerTemplates.recordJson,
-      eq(schema.providerTemplates.id, id),
+  ): Promise<ProviderCatalogEntry | undefined> {
+    return await this.#drizzleFirstJson<ProviderCatalogEntry>(
+      schema.providerCatalog,
+      schema.providerCatalog.recordJson,
+      eq(schema.providerCatalog.id, id),
     );
   }
 
-  async listProviderTemplates(): Promise<readonly ProviderTemplate[]> {
-    return await this.#drizzleManyJson<ProviderTemplate>(
-      schema.providerTemplates,
-      schema.providerTemplates.recordJson,
+  async listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
+    return await this.#drizzleManyJson<ProviderCatalogEntry>(
+      schema.providerCatalog,
+      schema.providerCatalog.recordJson,
       {
         orderBy: [
-          asc(schema.providerTemplates.primaryCredentialSource),
-          asc(schema.providerTemplates.id),
+          asc(schema.providerCatalog.primaryMaterialization),
+          asc(schema.providerCatalog.id),
         ],
       },
     );
@@ -387,8 +388,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async putBackupRun(run: Run): Promise<Run> {
-    if (run.type !== RUN_KIND_BACKUP) {
-      throw new Error("putBackupRun only accepts backup runs");
+    if (run.type !== RUN_KIND_BACKUP && run.type !== "restore") {
+      throw new Error("putBackupRun only accepts backup/restore runs");
     }
     await this.#putRun({
       id: run.id,
@@ -397,7 +398,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       sourceId: run.sourceId ?? null,
       installationId: run.installationId ?? null,
       environment: run.environment ?? null,
-      type: RUN_KIND_BACKUP,
+      type: run.type,
       status: run.status,
       runJson: JSON.stringify(run),
     });
@@ -405,7 +406,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async getBackupRun(id: string): Promise<Run | undefined> {
-    return await this.#getRun<Run>(id, [RUN_KIND_BACKUP]);
+    return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
   }
 
   async listSourceSyncRuns(
@@ -1060,52 +1061,47 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- OperatorConnectionDefault ----------------------------------------------
+  // -- ProviderEnv -------------------------------------------------------------
 
-  async putOperatorConnectionDefault(
-    record: OperatorConnectionDefault,
-  ): Promise<OperatorConnectionDefault> {
+  async putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
+    assertProviderEnvGlobalBoundary(env);
     await this.#ensureSchema();
-    await this.#orm
-      .delete(schema.operatorConnectionDefaults)
-      .where(
-        // Clear any other row holding this provider (the unique-index
-        // capability cleanup) without deleting the row we re-upsert by id.
-        and(
-          eq(schema.operatorConnectionDefaults.provider, record.provider),
-          ne(schema.operatorConnectionDefaults.id, record.id),
-        ),
-      )
-      .run()
-      .catch(() => undefined);
-    await this.#drizzleUpsert(schema.operatorConnectionDefaults, {
-      id: record.id,
-      provider: record.provider,
-      connectionId: record.connectionId,
-      recordJson: record,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
+    await this.#drizzleUpsert(schema.providerEnvs, {
+      id: env.id,
+      spaceId: env.spaceId ?? null,
+      providerSource: env.providerSource,
+      materialization: env.materialization,
+      status: env.status,
+      recordJson: env,
+      createdAt: env.createdAt,
+      updatedAt: env.updatedAt,
     });
-    return record;
+    return env;
   }
 
-  async getOperatorConnectionDefault(
-    provider: string,
-  ): Promise<OperatorConnectionDefault | undefined> {
-    return await this.#drizzleFirstJson<OperatorConnectionDefault>(
-      schema.operatorConnectionDefaults,
-      schema.operatorConnectionDefaults.recordJson,
-      eq(schema.operatorConnectionDefaults.provider, provider),
+  async getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
+    return await this.#drizzleFirstJson<ProviderEnv>(
+      schema.providerEnvs,
+      schema.providerEnvs.recordJson,
+      eq(schema.providerEnvs.id, id),
     );
   }
 
-  async listOperatorConnectionDefaults(): Promise<
-    readonly OperatorConnectionDefault[]
-  > {
-    return await this.#drizzleManyJson<OperatorConnectionDefault>(
-      schema.operatorConnectionDefaults,
-      schema.operatorConnectionDefaults.recordJson,
-      { orderBy: [asc(schema.operatorConnectionDefaults.provider)] },
+  async listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
+    return await this.#drizzleManyJson<ProviderEnv>(
+      schema.providerEnvs,
+      schema.providerEnvs.recordJson,
+      {
+        where:
+          spaceId === undefined
+            ? isNull(schema.providerEnvs.spaceId)
+            : eq(schema.providerEnvs.spaceId, spaceId),
+        orderBy: [
+          asc(schema.providerEnvs.providerSource),
+          asc(schema.providerEnvs.materialization),
+          asc(schema.providerEnvs.id),
+        ],
+      },
     );
   }
 
@@ -1305,24 +1301,27 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     };
   }
 
-  // -- DeploymentProfile ------------------------------------------------------
+  // -- InstallationProviderEnvBindingSet ------------------------------------------------------
 
-  async putDeploymentProfile(
-    profile: DeploymentProfile,
-  ): Promise<DeploymentProfile> {
+  async putInstallationProviderEnvBindingSet(
+    profile: InstallationProviderEnvBindingSet,
+  ): Promise<InstallationProviderEnvBindingSet> {
     // One profile per (installation, environment): drop any stale row for the
     // same pair under a different id before upserting.
     await this.#ensureSchema();
     await this.#orm
-      .delete(schema.deploymentProfiles)
+      .delete(schema.providerEnvBindingSets)
       .where(
         and(
-          eq(schema.deploymentProfiles.installationId, profile.installationId),
-          eq(schema.deploymentProfiles.environment, profile.environment),
+          eq(
+            schema.providerEnvBindingSets.installationId,
+            profile.installationId,
+          ),
+          eq(schema.providerEnvBindingSets.environment, profile.environment),
         ),
       )
       .run();
-    await this.#drizzleUpsert(schema.deploymentProfiles, {
+    await this.#drizzleUpsert(schema.providerEnvBindingSets, {
       id: profile.id,
       spaceId: profile.spaceId,
       installationId: profile.installationId,
@@ -1334,21 +1333,21 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return profile;
   }
 
-  async getDeploymentProfileByInstallation(
+  async getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
-  ): Promise<DeploymentProfile | undefined> {
-    const rows = await this.#drizzleManyJson<DeploymentProfile>(
-      schema.deploymentProfiles,
-      schema.deploymentProfiles.recordJson,
+  ): Promise<InstallationProviderEnvBindingSet | undefined> {
+    const rows = await this.#drizzleManyJson<InstallationProviderEnvBindingSet>(
+      schema.providerEnvBindingSets,
+      schema.providerEnvBindingSets.recordJson,
       {
         where: and(
-          eq(schema.deploymentProfiles.installationId, installationId),
-          eq(schema.deploymentProfiles.environment, environment),
+          eq(schema.providerEnvBindingSets.installationId, installationId),
+          eq(schema.providerEnvBindingSets.environment, environment),
         ),
         orderBy: [
-          desc(schema.deploymentProfiles.createdAt),
-          desc(schema.deploymentProfiles.id),
+          desc(schema.providerEnvBindingSets.createdAt),
+          desc(schema.providerEnvBindingSets.id),
         ],
         limit: 1,
       },
@@ -1759,7 +1758,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       spaceId: event.spaceId,
       installationId: event.installationId,
       sourceId: event.sourceId,
-      connectionId: event.connectionId,
+      connectionId: event.connectionId ?? event.providerEnvId ?? "",
       phase: event.phase,
       recordJson: event,
       createdAt: event.createdAt,
@@ -2187,6 +2186,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       createdAt: record.createdAt,
     });
     return record;
+  }
+
+  async getBackupRecord(id: string): Promise<BackupRecord | undefined> {
+    return await this.#drizzleFirstJson<BackupRecord>(
+      schema.backups,
+      schema.backups.recordJson,
+      eq(schema.backups.id, id),
+    );
   }
 
   async listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
@@ -2641,7 +2648,7 @@ function artifactRecordFromRow(row: {
  * Lazily create the §27 control-plane tables. Idempotent (`IF NOT EXISTS`);
  * called once per store instance via the memoized init promise. Rich internal
  * records (runner profiles, runs, install configs, connections, sources,
- * snapshots, deployment profiles, spaces, operator defaults) keep a `record_json`
+ * snapshots, internal provider resolver binding sets, spaces, provider resolver records) keep a `record_json`
  * / `run_json` TEXT column carrying the full contract shape alongside the §27
  * indexed columns; the columnar `deployments` / `state_snapshots` tables carry
  * every field in §27 columns directly. `runs_inputs` is the internal PlanRun
@@ -2653,11 +2660,13 @@ export async function ensureD1OpenTofuLedgerSchema(
   const statements = [
     `create table if not exists spaces (
       id text primary key,
-      handle text not null unique,
+      handle text not null,
       record_json text not null,
       created_at text not null,
       updated_at text not null
     )`,
+    `create unique index if not exists spaces_handle_unique
+      on spaces (handle)`,
     `create table if not exists sources (
       id text primary key,
       space_id text not null,
@@ -2667,7 +2676,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       updated_at text not null
     )`,
     `create index if not exists sources_space_idx
-      on sources (space_id, created_at)`,
+      on sources (space_id)`,
+    `create index if not exists sources_status_idx
+      on sources (status)`,
     `create table if not exists source_snapshots (
       id text primary key,
       source_id text,
@@ -2675,7 +2686,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       fetched_at text not null
     )`,
     `create index if not exists source_snapshots_source_idx
-      on source_snapshots (source_id, fetched_at)`,
+      on source_snapshots (source_id)`,
     `create table if not exists connections (
       id text primary key,
       space_id text,
@@ -2686,9 +2697,11 @@ export async function ensureD1OpenTofuLedgerSchema(
       updated_at text not null
     )`,
     `create index if not exists connections_space_idx
-      on connections (space_id, created_at)`,
+      on connections (space_id)`,
     `create index if not exists connections_provider_idx
       on connections (provider)`,
+    `create index if not exists connections_status_idx
+      on connections (status)`,
     `create table if not exists secret_blobs (
       id text primary key,
       connection_id text not null,
@@ -2705,16 +2718,24 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create unique index if not exists secret_blobs_connection_idx
       on secret_blobs (connection_id)`,
-    `create table if not exists operator_connection_defaults (
+    `create table if not exists provider_envs (
       id text primary key,
-      provider text not null,
-      connection_id text not null,
+      space_id text not null,
+      provider_source text not null,
+      materialization text not null check (materialization in ('oauth','secret')),
+      status text not null,
       record_json text not null,
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists operator_connection_defaults_provider_idx
-      on operator_connection_defaults (provider)`,
+    `create index if not exists provider_envs_space_idx
+      on provider_envs (space_id)`,
+    `create index if not exists provider_envs_provider_source_idx
+      on provider_envs (provider_source)`,
+    `create index if not exists provider_envs_materialization_idx
+      on provider_envs (materialization)`,
+    `create index if not exists provider_envs_status_idx
+      on provider_envs (status)`,
     `create table if not exists install_configs (
       id text primary key,
       space_id text,
@@ -2725,7 +2746,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       updated_at text not null
     )`,
     `create index if not exists install_configs_space_idx
-      on install_configs (space_id, created_at)`,
+      on install_configs (space_id)`,
+    `create index if not exists install_configs_install_type_idx
+      on install_configs (install_type)`,
     `create table if not exists installations (
       id text primary key,
       space_id text not null,
@@ -2741,11 +2764,14 @@ export async function ensureD1OpenTofuLedgerSchema(
       status text not null,
       record_json text not null,
       created_at text not null,
-      updated_at text not null,
-      unique (space_id, name, environment)
+      updated_at text not null
     )`,
+    `create unique index if not exists installations_space_name_environment_unique
+      on installations (space_id, name, environment)`,
     `create index if not exists installations_space_idx
-      on installations (space_id, created_at)`,
+      on installations (space_id)`,
+    `create index if not exists installations_current_deployment_idx
+      on installations (current_deployment_id)`,
     `create table if not exists capsule_compatibility_reports (
       id text primary key,
       source_id text,
@@ -2769,22 +2795,40 @@ export async function ensureD1OpenTofuLedgerSchema(
       on capsule_compatibility_reports (installation_id)`,
     `create index if not exists capsule_compatibility_reports_level_idx
       on capsule_compatibility_reports (level)`,
-    `create table if not exists provider_templates (
+    `create table if not exists provider_catalog (
       id text primary key,
       provider_source text not null,
-      primary_credential_source text not null,
-      default_eligible integer not null,
+      primary_materialization text not null check (primary_materialization in ('oauth','secret')),
+      gateway_eligible integer not null check (gateway_eligible in (0,1)),
       record_json text not null,
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists provider_templates_source_unique
-      on provider_templates (provider_source)`,
-    `create index if not exists provider_templates_primary_credential_source_idx
-      on provider_templates (primary_credential_source)`,
-    `create index if not exists provider_templates_default_eligible_idx
-      on provider_templates (default_eligible)`,
-    `create table if not exists deployment_profiles (
+    `create unique index if not exists provider_catalog_source_unique
+      on provider_catalog (provider_source)`,
+    `create index if not exists provider_catalog_primary_materialization_idx
+      on provider_catalog (primary_materialization)`,
+    `create index if not exists provider_catalog_gateway_eligible_idx
+      on provider_catalog (gateway_eligible)`,
+    `create table if not exists provider_envs (
+      id text primary key,
+      space_id text not null,
+      provider_source text not null,
+      materialization text not null check (materialization in ('oauth','secret')),
+      status text not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create index if not exists provider_envs_space_idx
+      on provider_envs (space_id)`,
+    `create index if not exists provider_envs_provider_source_idx
+      on provider_envs (provider_source)`,
+    `create index if not exists provider_envs_materialization_idx
+      on provider_envs (materialization)`,
+    `create index if not exists provider_envs_status_idx
+      on provider_envs (status)`,
+    `create table if not exists provider_env_binding_sets (
       id text primary key,
       space_id text not null,
       installation_id text not null,
@@ -2793,8 +2837,10 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists deployment_profiles_installation_env_idx
-      on deployment_profiles (installation_id, environment)`,
+    `create unique index if not exists provider_env_binding_sets_installation_environment_unique
+      on provider_env_binding_sets (installation_id, environment)`,
+    `create index if not exists provider_env_binding_sets_installation_idx
+      on provider_env_binding_sets (installation_id)`,
     `create table if not exists runs (
       id text primary key,
       run_group_id text,
@@ -2809,10 +2855,16 @@ export async function ensureD1OpenTofuLedgerSchema(
       run_json text not null,
       created_at text not null default ""
     )`,
+    `create index if not exists runs_space_idx
+      on runs (space_id)`,
     `create index if not exists runs_source_idx
-      on runs (type, source_id, created_at)`,
+      on runs (source_id)`,
     `create index if not exists runs_installation_idx
-      on runs (type, installation_id, created_at)`,
+      on runs (installation_id)`,
+    `create index if not exists runs_type_idx
+      on runs (type)`,
+    `create index if not exists runs_created_at_idx
+      on runs (created_at)`,
     `create table if not exists runs_inputs (
       plan_run_id text primary key,
       inputs_json text not null
@@ -2826,9 +2878,12 @@ export async function ensureD1OpenTofuLedgerSchema(
       object_key text not null,
       digest text not null,
       created_by_run_id text not null,
-      created_at text not null,
-      unique (installation_id, environment, generation)
+      created_at text not null
     )`,
+    `create unique index if not exists state_snapshots_installation_environment_generation_unique
+      on state_snapshots (installation_id, environment, generation)`,
+    `create index if not exists state_snapshots_installation_idx
+      on state_snapshots (installation_id)`,
     `create table if not exists deployments (
       id text primary key,
       space_id text not null,
@@ -2843,8 +2898,12 @@ export async function ensureD1OpenTofuLedgerSchema(
       status text not null,
       created_at text not null
     )`,
+    `create index if not exists deployments_space_idx
+      on deployments (space_id)`,
     `create index if not exists deployments_installation_idx
-      on deployments (installation_id, created_at)`,
+      on deployments (installation_id)`,
+    `create index if not exists deployments_apply_idx
+      on deployments (apply_run_id)`,
     `create table if not exists artifacts (
       id text primary key,
       run_id text not null,
@@ -2870,11 +2929,11 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists installation_dependencies_space_idx
-      on installation_dependencies (space_id, created_at)`,
+      on installation_dependencies (space_id)`,
     `create index if not exists installation_dependencies_consumer_idx
-      on installation_dependencies (consumer_installation_id, created_at)`,
+      on installation_dependencies (consumer_installation_id)`,
     `create index if not exists installation_dependencies_producer_idx
-      on installation_dependencies (producer_installation_id, created_at)`,
+      on installation_dependencies (producer_installation_id)`,
     `create table if not exists dependency_snapshots (
       id text primary key,
       run_id text not null,
@@ -2892,7 +2951,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists output_snapshots_installation_idx
-      on output_snapshots (installation_id, state_generation, created_at)`,
+      on output_snapshots (installation_id)`,
     `create table if not exists output_shares (
       id text primary key,
       from_space_id text not null,
@@ -2903,9 +2962,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists output_shares_from_space_idx
-      on output_shares (from_space_id, created_at)`,
+      on output_shares (from_space_id)`,
     `create index if not exists output_shares_to_space_idx
-      on output_shares (to_space_id, created_at)`,
+      on output_shares (to_space_id)`,
     `create index if not exists output_shares_producer_idx
       on output_shares (producer_installation_id)`,
     `create table if not exists run_groups (
@@ -2916,7 +2975,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists run_groups_space_idx
-      on run_groups (space_id, created_at)`,
+      on run_groups (space_id)`,
     `create table if not exists audit_events (
       id text primary key,
       space_id text not null,
@@ -2929,7 +2988,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       record_json text not null
     )`,
     `create index if not exists audit_events_space_idx
-      on audit_events (space_id, created_at)`,
+      on audit_events (space_id)`,
     `create table if not exists credential_mint_events (
       id text primary key,
       run_id text not null,
@@ -2958,7 +3017,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists security_findings_space_idx
-      on security_findings (space_id, created_at)`,
+      on security_findings (space_id)`,
     `create index if not exists security_findings_run_idx
       on security_findings (run_id)`,
     `create index if not exists security_findings_severity_idx
@@ -3054,16 +3113,12 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null
     )`,
     `create index if not exists backups_space_idx
-      on backups (space_id, created_at)`,
+      on backups (space_id)`,
     `create index if not exists backups_installation_idx
       on backups (installation_id)`,
   ];
-  const tableStatements = statements.filter(
-    (sql) => !sql.trimStart().toLowerCase().startsWith("create index"),
-  );
-  const indexStatements = statements.filter((sql) =>
-    sql.trimStart().toLowerCase().startsWith("create index")
-  );
+  const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
+  const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
   for (const sql of tableStatements) {
     await db.prepare(sql).run();
   }
@@ -3074,41 +3129,529 @@ export async function ensureD1OpenTofuLedgerSchema(
 }
 
 async function migrateD1OpenTofuLedgerSchema(db: D1Database): Promise<void> {
-  await ensureD1Column(db, "connections", "space_id", "text");
-  await rebuildConnectionsTableIfNeeded(db);
-  await migrateD1ConnectionsJsonShape(db);
-  await migrateD1SecretBlobsShape(db);
-  await ensureD1Column(
-    db,
-    "installations",
-    "current_output_snapshot_id",
-    "text",
+  await ensureD1SchemaMigrationLedger(db);
+  for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
+    await applyD1OpenTofuSchemaMigration(db, migration);
+  }
+}
+
+function isD1IndexStatement(sql: string): boolean {
+  const normalized = sql.trimStart().toLowerCase();
+  return (
+    normalized.startsWith("create index") ||
+    normalized.startsWith("create unique index")
   );
-  await ensureD1Column(db, "runs", "source_id", "text");
-  await ensureD1Column(db, "runs", "installation_id", "text");
-  await ensureD1Column(db, "runs", "environment", "text");
-  await ensureD1Column(db, "runs", "lease_token", "text");
-  await ensureD1Column(db, "runs", "heartbeat_at", "integer");
-  await rebuildRunsTableIfNeeded(db);
-  await backfillD1SourceScopedRuns(db);
-  await ensureD1Column(db, "credential_mint_events", "source_id", "text");
-  await ensureD1Column(
-    db,
-    "credit_reservations",
-    "mode",
-    "text not null default 'disabled'",
+}
+
+type D1OpenTofuSchemaMigration = {
+  readonly version: number;
+  readonly name: string;
+  readonly checksumSource: string | (() => string);
+  readonly apply: (db: D1Database) => Promise<void>;
+};
+
+const D1_OPEN_TOFU_SCHEMA_MIGRATIONS = [
+  {
+    version: 1,
+    name: "d1_opentofu_connections_and_secret_blobs_shape",
+    checksumSource: `
+connections.space_id nullable
+connections record_json -> provider + connection_json
+secret_blobs blob_json compatibility shape -> canonical secret_blobs columns
+`,
+    async apply(db) {
+      await ensureD1Column(db, "connections", "space_id", "text");
+      await rebuildConnectionsTableIfNeeded(db);
+      await migrateD1ConnectionsJsonShape(db);
+      await migrateD1SecretBlobsShape(db);
+    },
+  },
+  {
+    version: 2,
+    name: "d1_opentofu_installations_output_snapshot_pointer",
+    checksumSource: `
+installations.current_output_snapshot_id nullable output snapshot pointer
+`,
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "installations",
+        "current_output_snapshot_id",
+        "text",
+      );
+    },
+  },
+  {
+    version: 3,
+    name: "d1_opentofu_runs_projection_columns",
+    checksumSource: `
+runs.source_id nullable
+runs.installation_id nullable
+runs.environment nullable
+runs.lease_token nullable
+runs.heartbeat_at integer nullable
+legacy source_sync rows backfill source_id from run_json.sourceId or installation_id and clear installation_id
+`,
+    async apply(db) {
+      await ensureD1Column(db, "runs", "source_id", "text");
+      await ensureD1Column(db, "runs", "installation_id", "text");
+      await ensureD1Column(db, "runs", "environment", "text");
+      await ensureD1Column(db, "runs", "lease_token", "text");
+      await ensureD1Column(db, "runs", "heartbeat_at", "integer");
+      await rebuildRunsTableIfNeeded(db);
+      await backfillD1SourceScopedRuns(db);
+    },
+  },
+  {
+    version: 4,
+    name: "d1_opentofu_credential_mint_source_scope",
+    checksumSource: `
+credential_mint_events.source_id nullable source-scoped git mint audit pointer
+`,
+    async apply(db) {
+      await ensureD1Column(db, "credential_mint_events", "source_id", "text");
+    },
+  },
+  {
+    version: 5,
+    name: "d1_opentofu_credit_reservation_mode",
+    checksumSource: `
+credit_reservations.mode text not null default disabled
+`,
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "credit_reservations",
+        "mode",
+        "text not null default 'disabled'",
+      );
+    },
+  },
+  {
+    version: 6,
+    name: "d1_opentofu_backups_installation_run_projection",
+    checksumSource: `
+backups.installation_id nullable
+backups.environment nullable
+backups.created_by_run_id nullable Run pointer
+`,
+    async apply(db) {
+      await ensureD1Column(db, "backups", "installation_id", "text");
+      await ensureD1Column(db, "backups", "environment", "text");
+      await ensureD1Column(db, "backups", "created_by_run_id", "text");
+    },
+  },
+  {
+    version: 7,
+    name: "d1_opentofu_provider_catalog_table",
+    checksumSource: `
+provider_templates renamed to provider_catalog
+provider catalog indexes renamed to provider_catalog_*
+`,
+    async apply(db) {
+      await ensureD1ProviderCatalogTable(db);
+    },
+  },
+  {
+    version: 8,
+    name: "d1_opentofu_provider_materialization_values",
+    checksumSource: () => `
+	provider_catalog.primary_materialization uses oauth/secret only
+	provider_envs.materialization uses oauth/secret only
+	global provider_envs rows are removed in OSS
+${D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS.join("\n---\n")}
+`,
+    async apply(db) {
+      for (const statement of D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS) {
+        await db.prepare(statement).run();
+      }
+    },
+  },
+  {
+    version: 9,
+    name: "d1_opentofu_drizzle_index_parity",
+    checksumSource: () => `
+canonical named indexes match the Drizzle D1 schema
+old composite bootstrap indexes are dropped and recreated with canonical columns
+provider_env_binding_sets unique index uses the public Drizzle name
+${D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS.join("\n---\n")}
+`,
+    async apply(db) {
+      await ensureD1OpenTofuCanonicalIndexes(db);
+    },
+  },
+  {
+    version: 10,
+    name: "d1_opentofu_provider_materialization_constraints",
+    checksumSource: () => `
+	provider_catalog.primary_materialization CHECK oauth/secret
+	provider_envs.materialization CHECK oauth/secret
+	provider_envs rows require a Space in OSS
+${D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS.join("\n---\n")}
+`,
+    async apply(db) {
+      for (const statement of D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS) {
+        await db.prepare(statement).run();
+      }
+      await rebuildD1ProviderCatalogWithConstraints(db);
+      await rebuildD1ProviderEnvsWithConstraints(db);
+      await ensureD1OpenTofuCanonicalIndexes(db);
+    },
+  },
+  {
+    version: 11,
+    name: "d1_opentofu_provider_catalog_ownership_repair",
+    checksumSource: () => `
+provider_catalog rows copied from legacy provider_templates repair old ownership/gateway eligibility flags
+${D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS.join("\n---\n")}
+`,
+    async apply(db) {
+      for (const statement of D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS) {
+        await db.prepare(statement).run();
+      }
+    },
+  },
+  {
+    version: 12,
+    name: "d1_opentofu_upload_origin_nullable_source_repair",
+    checksumSource: `
+source_snapshots.source_id nullable for upload-origin snapshots
+installations.source_id nullable for upload-origin installations
+`,
+    async apply(db) {
+      await rebuildSourceSnapshotsTableIfNeeded(db);
+      await rebuildInstallationsTableIfNeeded(db);
+    },
+  },
+] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `create table if not exists schema_migrations (
+      version integer primary key,
+      name text not null,
+      checksum text not null,
+      applied_at text not null
+    )`,
+    )
+    .run();
+  const info = new Map(
+    (await d1ColumnInfo(db, "schema_migrations")).map((row) => [row.name, row]),
   );
-  await ensureD1Column(db, "backups", "installation_id", "text");
-  await ensureD1Column(db, "backups", "environment", "text");
-  await ensureD1Column(db, "backups", "created_by_run_id", "text");
+  const version = info.get("version");
+  const name = info.get("name");
+  const checksum = info.get("checksum");
+  const appliedAt = info.get("applied_at");
+  if (
+    !version ||
+    version.pk !== 1 ||
+    d1ColumnType(version) !== "integer" ||
+    !name ||
+    name.notnull !== 1 ||
+    d1ColumnType(name) !== "text" ||
+    !checksum ||
+    checksum.notnull !== 1 ||
+    d1ColumnType(checksum) !== "text" ||
+    !appliedAt ||
+    appliedAt.notnull !== 1 ||
+    d1ColumnType(appliedAt) !== "text"
+  ) {
+    throw new Error(
+      "D1 OpenTofu schema_migrations table does not match the canonical ledger shape",
+    );
+  }
+  await validateD1SchemaMigrationLedgerRows(db);
+}
+
+type D1SchemaMigrationRow = {
+  readonly version: number;
+  readonly name: string;
+  readonly checksum: string;
+  readonly applied_at: string;
+};
+
+async function validateD1SchemaMigrationLedgerRows(
+  db: D1Database,
+): Promise<void> {
+  const rows = await db
+    .prepare(
+      `select version, name, checksum, applied_at
+      from schema_migrations
+      order by version`,
+    )
+    .all<D1SchemaMigrationRow>();
+  const knownMigrations: ReadonlyMap<number, D1OpenTofuSchemaMigration> =
+    new Map(
+      D1_OPEN_TOFU_SCHEMA_MIGRATIONS.map((migration) => [
+        migration.version,
+        migration,
+      ]),
+    );
+  for (const row of rows.results ?? []) {
+    const migration = knownMigrations.get(row.version);
+    if (!migration) {
+      throw new Error(
+        `D1 OpenTofu schema migration ${row.version} is not present in the current migration catalog`,
+      );
+    }
+    if (row.name !== migration.name) {
+      throw new Error(
+        `D1 OpenTofu schema migration ${row.version} name mismatch: ledger has ${row.name}, code has ${migration.name}`,
+      );
+    }
+  }
+}
+
+async function applyD1OpenTofuSchemaMigration(
+  db: D1Database,
+  migration: D1OpenTofuSchemaMigration,
+): Promise<void> {
+  const checksum = await d1OpenTofuSchemaMigrationChecksum(migration);
+  const existing = await db
+    .prepare(
+      `select version, name, checksum, applied_at
+      from schema_migrations
+      where version = ?`,
+    )
+    .bind(migration.version)
+    .first<D1SchemaMigrationRow>();
+  if (existing) {
+    if (existing.name !== migration.name) {
+      throw new Error(
+        `D1 OpenTofu schema migration ${migration.version} name mismatch: ledger has ${existing.name}, code has ${migration.name}`,
+      );
+    }
+    if (existing.checksum !== checksum) {
+      throw new Error(
+        `D1 OpenTofu schema migration ${migration.version} checksum mismatch: ledger has ${existing.checksum}, code has ${checksum}`,
+      );
+    }
+    return;
+  }
+
+  await migration.apply(db);
+  await db
+    .prepare(
+      `insert into schema_migrations (version, name, checksum, applied_at)
+      values (?, ?, ?, ?)`,
+    )
+    .bind(migration.version, migration.name, checksum, new Date().toISOString())
+    .run();
+}
+
+async function d1OpenTofuSchemaMigrationChecksum(
+  migration: D1OpenTofuSchemaMigration,
+): Promise<string> {
+  const checksumSource =
+    typeof migration.checksumSource === "function"
+      ? migration.checksumSource()
+      : migration.checksumSource;
+  return await sha256Digest(
+    `${migration.version}\n${migration.name}\n${checksumSource.trim()}\n`,
+  );
+}
+
+const D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS = [
+  `update provider_catalog
+          set primary_materialization = case
+            when primary_materialization in ('takosumi_managed','gateway') then 'secret'
+            when primary_materialization = 'user_env_set' then 'secret'
+            when primary_materialization in ('oauth','secret') then primary_materialization
+            else 'secret'
+          end
+          where primary_materialization not in ('oauth','secret')
+             or primary_materialization = 'gateway'`,
+  `delete from provider_envs
+          where space_id is null`,
+  `update provider_envs
+          set materialization = case
+            when materialization in ('takosumi_managed','user_env_set','gateway') then 'secret'
+            when materialization in ('oauth','secret') then materialization
+            else 'secret'
+          end
+          where materialization not in ('oauth','secret')
+             or materialization = 'gateway'`,
+] as const;
+
+const D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS = [
+  `update provider_catalog
+          set primary_materialization = 'secret',
+              gateway_eligible = 0
+          where primary_materialization <> 'secret'
+             or gateway_eligible <> 0`,
+] as const;
+
+const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
+  `create unique index if not exists spaces_handle_unique
+      on spaces (handle)`,
+  `create index if not exists sources_space_idx
+      on sources (space_id)`,
+  `create index if not exists sources_status_idx
+      on sources (status)`,
+  `create index if not exists source_snapshots_source_idx
+      on source_snapshots (source_id)`,
+  `create index if not exists connections_space_idx
+      on connections (space_id)`,
+  `create index if not exists connections_provider_idx
+      on connections (provider)`,
+  `create index if not exists connections_status_idx
+      on connections (status)`,
+  `create unique index if not exists secret_blobs_connection_idx
+      on secret_blobs (connection_id)`,
+  `create index if not exists provider_envs_space_idx
+      on provider_envs (space_id)`,
+  `create index if not exists provider_envs_provider_source_idx
+      on provider_envs (provider_source)`,
+  `create index if not exists provider_envs_materialization_idx
+      on provider_envs (materialization)`,
+  `create index if not exists provider_envs_status_idx
+      on provider_envs (status)`,
+  `create unique index if not exists provider_catalog_source_unique
+      on provider_catalog (provider_source)`,
+  `create index if not exists provider_catalog_primary_materialization_idx
+      on provider_catalog (primary_materialization)`,
+  `create index if not exists provider_catalog_gateway_eligible_idx
+      on provider_catalog (gateway_eligible)`,
+  `create index if not exists install_configs_space_idx
+      on install_configs (space_id)`,
+  `create index if not exists install_configs_install_type_idx
+      on install_configs (install_type)`,
+  `create unique index if not exists installations_space_name_environment_unique
+      on installations (space_id, name, environment)`,
+  `create index if not exists installations_space_idx
+      on installations (space_id)`,
+  `create index if not exists installations_current_deployment_idx
+      on installations (current_deployment_id)`,
+  `create index if not exists capsule_compatibility_reports_source_snapshot_idx
+      on capsule_compatibility_reports (source_snapshot_id)`,
+  `create index if not exists capsule_compatibility_reports_source_idx
+      on capsule_compatibility_reports (source_id)`,
+  `create index if not exists capsule_compatibility_reports_installation_idx
+      on capsule_compatibility_reports (installation_id)`,
+  `create index if not exists capsule_compatibility_reports_level_idx
+      on capsule_compatibility_reports (level)`,
+  `create unique index if not exists provider_env_binding_sets_installation_environment_unique
+      on provider_env_binding_sets (installation_id, environment)`,
+  `create index if not exists provider_env_binding_sets_installation_idx
+      on provider_env_binding_sets (installation_id)`,
+  `create index if not exists runs_space_idx
+      on runs (space_id)`,
+  `create index if not exists runs_source_idx
+      on runs (source_id)`,
+  `create index if not exists runs_installation_idx
+      on runs (installation_id)`,
+  `create index if not exists runs_type_idx
+      on runs (type)`,
+  `create index if not exists runs_created_at_idx
+      on runs (created_at)`,
+  `create unique index if not exists state_snapshots_installation_environment_generation_unique
+      on state_snapshots (installation_id, environment, generation)`,
+  `create index if not exists state_snapshots_installation_idx
+      on state_snapshots (installation_id)`,
+  `create index if not exists deployments_space_idx
+      on deployments (space_id)`,
+  `create index if not exists deployments_installation_idx
+      on deployments (installation_id)`,
+  `create index if not exists deployments_apply_idx
+      on deployments (apply_run_id)`,
+  `create index if not exists artifacts_run_idx
+      on artifacts (run_id)`,
+  `create index if not exists installation_dependencies_space_idx
+      on installation_dependencies (space_id)`,
+  `create index if not exists installation_dependencies_consumer_idx
+      on installation_dependencies (consumer_installation_id)`,
+  `create index if not exists installation_dependencies_producer_idx
+      on installation_dependencies (producer_installation_id)`,
+  `create index if not exists dependency_snapshots_run_idx
+      on dependency_snapshots (run_id)`,
+  `create index if not exists output_snapshots_installation_idx
+      on output_snapshots (installation_id)`,
+  `create index if not exists output_shares_from_space_idx
+      on output_shares (from_space_id)`,
+  `create index if not exists output_shares_to_space_idx
+      on output_shares (to_space_id)`,
+  `create index if not exists output_shares_producer_idx
+      on output_shares (producer_installation_id)`,
+  `create index if not exists run_groups_space_idx
+      on run_groups (space_id)`,
+  `create index if not exists audit_events_space_idx
+      on audit_events (space_id)`,
+  `create index if not exists credential_mint_events_run_idx
+      on credential_mint_events (run_id)`,
+  `create index if not exists credential_mint_events_space_idx
+      on credential_mint_events (space_id)`,
+  `create index if not exists credential_mint_events_source_idx
+      on credential_mint_events (source_id)`,
+  `create index if not exists security_findings_space_idx
+      on security_findings (space_id)`,
+  `create index if not exists security_findings_run_idx
+      on security_findings (run_id)`,
+  `create index if not exists security_findings_severity_idx
+      on security_findings (severity)`,
+  `create index if not exists billing_accounts_owner_idx
+      on billing_accounts (owner_type, owner_id)`,
+  `create index if not exists billing_accounts_status_idx
+      on billing_accounts (status)`,
+  `create index if not exists space_subscriptions_space_idx
+      on space_subscriptions (space_id)`,
+  `create index if not exists space_subscriptions_billing_account_idx
+      on space_subscriptions (billing_account_id)`,
+  `create index if not exists usage_events_space_idx
+      on usage_events (space_id)`,
+  `create index if not exists usage_events_run_idx
+      on usage_events (run_id)`,
+  `create unique index if not exists usage_events_idempotency_key_unique
+      on usage_events (idempotency_key)`,
+  `create index if not exists credit_reservations_space_idx
+      on credit_reservations (space_id)`,
+  `create index if not exists credit_reservations_run_idx
+      on credit_reservations (run_id)`,
+  `create index if not exists credit_reservations_status_idx
+      on credit_reservations (status)`,
+  `create index if not exists backups_space_idx
+      on backups (space_id)`,
+  `create index if not exists backups_installation_idx
+      on backups (installation_id)`,
+] as const;
+
+async function ensureD1OpenTofuCanonicalIndexes(db: D1Database): Promise<void> {
+  for (const statement of D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS) {
+    const indexName = parseD1CreateIndexName(statement);
+    await db.prepare(`drop index if exists ${indexName}`).run();
+    await db.prepare(statement).run();
+  }
+}
+
+function parseD1CreateIndexName(statement: string): string {
+  const match = /\bindex\s+if\s+not\s+exists\s+([a-z_][a-z0-9_]*)\b/i.exec(
+    statement,
+  );
+  if (!match) {
+    throw new Error(`Unable to parse D1 index name from: ${statement}`);
+  }
+  return match[1];
+}
+
+async function sha256Digest(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 async function migrateD1SecretBlobsShape(db: D1Database): Promise<void> {
   const columns = await d1ColumnNames(db, "secret_blobs");
   if (columns.has("id")) return;
-  await db.prepare(`alter table secret_blobs rename to secret_blobs_legacy`)
+  await db
+    .prepare(`alter table secret_blobs rename to secret_blobs_legacy`)
     .run();
-  await db.prepare(`create table secret_blobs (
+  await db
+    .prepare(
+      `create table secret_blobs (
       id text primary key,
       connection_id text not null,
       space_id text,
@@ -3121,8 +3664,12 @@ async function migrateD1SecretBlobsShape(db: D1Database): Promise<void> {
       created_at text not null,
       rotated_at text,
       blob_json text not null
-    )`).run();
-  await db.prepare(`insert into secret_blobs (
+    )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into secret_blobs (
       id,
       connection_id,
       space_id,
@@ -3152,10 +3699,14 @@ async function migrateD1SecretBlobsShape(db: D1Database): Promise<void> {
       coalesce(json_extract(blob_json, '$.createdAt'), '1970-01-01T00:00:00.000Z'),
       json_extract(blob_json, '$.rotatedAt'),
       blob_json
-    from secret_blobs_legacy`).run();
-  await db.prepare(
-    `create unique index if not exists secret_blobs_connection_idx on secret_blobs (connection_id)`,
-  ).run();
+    from secret_blobs_legacy`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create unique index if not exists secret_blobs_connection_idx on secret_blobs (connection_id)`,
+    )
+    .run();
   await db.prepare(`drop table secret_blobs_legacy`).run();
 }
 
@@ -3167,8 +3718,188 @@ async function ensureD1Column(
 ): Promise<void> {
   const names = await d1ColumnNames(db, table);
   if (names.has(column)) return;
-  await db.prepare(`alter table ${table} add column ${column} ${definition}`)
+  await db
+    .prepare(`alter table ${table} add column ${column} ${definition}`)
     .run();
+}
+
+async function ensureD1ProviderCatalogTable(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `create table if not exists provider_catalog (
+        id text primary key,
+        provider_source text not null,
+        primary_materialization text not null check (primary_materialization in ('oauth','secret')),
+        gateway_eligible integer not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  if (await d1TableExists(db, "provider_templates")) {
+    await db
+      .prepare(
+        `insert or ignore into provider_catalog
+          (id, provider_source, primary_materialization, gateway_eligible, record_json, created_at, updated_at)
+          select
+            id,
+            provider_source,
+            case
+              when primary_credential_source in ('takosumi_managed','gateway') then 'secret'
+              when primary_credential_source = 'user_env_set' then 'secret'
+              when primary_credential_source in ('oauth','secret') then primary_credential_source
+              else 'secret'
+            end,
+            0,
+            record_json,
+            created_at,
+            updated_at
+            from provider_templates`,
+      )
+      .run();
+    await db
+      .prepare(`drop index if exists provider_templates_source_unique`)
+      .run();
+    await db
+      .prepare(
+        `drop index if exists provider_templates_primary_credential_source_idx`,
+      )
+      .run();
+    await db
+      .prepare(`drop index if exists provider_templates_default_eligible_idx`)
+      .run();
+    await db.prepare(`drop table if exists provider_templates`).run();
+  }
+  await db
+    .prepare(
+      `create unique index if not exists provider_catalog_source_unique
+        on provider_catalog (provider_source)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists provider_catalog_primary_materialization_idx
+        on provider_catalog (primary_materialization)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists provider_catalog_gateway_eligible_idx
+        on provider_catalog (gateway_eligible)`,
+    )
+    .run();
+}
+
+async function rebuildD1ProviderCatalogWithConstraints(
+  db: D1Database,
+): Promise<void> {
+  await db.prepare(`drop index if exists provider_catalog_source_unique`).run();
+  await db
+    .prepare(
+      `drop index if exists provider_catalog_primary_materialization_idx`,
+    )
+    .run();
+  await db
+    .prepare(`drop index if exists provider_catalog_gateway_eligible_idx`)
+    .run();
+  await db
+    .prepare(`alter table provider_catalog rename to provider_catalog_v9`)
+    .run();
+  await db
+    .prepare(
+      `create table provider_catalog (
+        id text primary key,
+        provider_source text not null,
+        primary_materialization text not null check (primary_materialization in ('oauth','secret')),
+        gateway_eligible integer not null check (gateway_eligible in (0,1)),
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into provider_catalog
+        (id, provider_source, primary_materialization, gateway_eligible, record_json, created_at, updated_at)
+      select
+        id,
+        provider_source,
+        case
+          when primary_materialization in ('takosumi_managed','gateway') then 'secret'
+          when primary_materialization = 'user_env_set' then 'secret'
+          when primary_materialization in ('oauth','secret') then primary_materialization
+          else 'secret'
+        end,
+        0,
+        record_json,
+        created_at,
+        updated_at
+      from provider_catalog_v9`,
+    )
+    .run();
+  await db.prepare(`drop table provider_catalog_v9`).run();
+}
+
+async function rebuildD1ProviderEnvsWithConstraints(
+  db: D1Database,
+): Promise<void> {
+  await db.prepare(`drop index if exists provider_envs_space_idx`).run();
+  await db
+    .prepare(`drop index if exists provider_envs_provider_source_idx`)
+    .run();
+  await db
+    .prepare(`drop index if exists provider_envs_materialization_idx`)
+    .run();
+  await db.prepare(`drop index if exists provider_envs_status_idx`).run();
+  await db
+    .prepare(`alter table provider_envs rename to provider_envs_v9`)
+    .run();
+  await db
+    .prepare(
+      `create table provider_envs (
+        id text primary key,
+        space_id text not null,
+        provider_source text not null,
+        materialization text not null check (materialization in ('oauth','secret')),
+        status text not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into provider_envs
+        (id, space_id, provider_source, materialization, status, record_json, created_at, updated_at)
+      select
+        id,
+        space_id,
+        provider_source,
+        case
+          when materialization in ('takosumi_managed','user_env_set','gateway') then 'secret'
+          when materialization in ('oauth','secret') then materialization
+          else 'secret'
+        end,
+        status,
+        record_json,
+        created_at,
+        updated_at
+      from provider_envs_v9
+      where space_id is not null`,
+    )
+    .run();
+  await db.prepare(`drop table provider_envs_v9`).run();
+}
+
+async function d1TableExists(db: D1Database, table: string): Promise<boolean> {
+  const result = await db
+    .prepare(`select name from sqlite_master where type = 'table' and name = ?`)
+    .bind(table)
+    .first<{ name?: string }>();
+  return result?.name === table;
 }
 
 async function d1ColumnNames(
@@ -3185,16 +3916,22 @@ async function d1ColumnNames(
 
 type D1TableInfoRow = {
   readonly name?: string;
+  readonly type?: string;
   readonly notnull?: number;
+  readonly pk?: number;
 };
+
+function d1ColumnType(row: D1TableInfoRow): string {
+  return (row.type ?? "").toLowerCase();
+}
 
 async function d1ColumnInfo(
   db: D1Database,
   table: string,
 ): Promise<readonly D1TableInfoRow[]> {
-  const result = await db.prepare(`pragma table_info(${table})`).all<
-    D1TableInfoRow
-  >();
+  const result = await db
+    .prepare(`pragma table_info(${table})`)
+    .all<D1TableInfoRow>();
   return result.results ?? [];
 }
 
@@ -3202,8 +3939,9 @@ async function rebuildConnectionsTableIfNeeded(db: D1Database): Promise<void> {
   const info = await d1ColumnInfo(db, "connections");
   const spaceId = info.find((row) => row.name === "space_id");
   if (!spaceId || spaceId.notnull !== 1) return;
-  await db.prepare(
-	    `create table connections__takosumi_migrate (
+  await db
+    .prepare(
+      `create table connections__takosumi_migrate (
 	      id text primary key,
 	      space_id text,
 	      provider text not null,
@@ -3212,9 +3950,11 @@ async function rebuildConnectionsTableIfNeeded(db: D1Database): Promise<void> {
 	      created_at text not null,
 	      updated_at text not null
 	    )`,
-	  ).run();
-	  await db.prepare(
-	    `insert into connections__takosumi_migrate
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into connections__takosumi_migrate
 	      (id, space_id, provider, status, connection_json, created_at, updated_at)
 	      select id,
 	             space_id,
@@ -3224,18 +3964,20 @@ async function rebuildConnectionsTableIfNeeded(db: D1Database): Promise<void> {
 	             created_at,
 	             updated_at
 	      from connections`,
-	  ).run();
+    )
+    .run();
   await db.prepare(`drop table connections`).run();
-  await db.prepare(
-    `alter table connections__takosumi_migrate rename to connections`,
-	  ).run();
-	}
+  await db
+    .prepare(`alter table connections__takosumi_migrate rename to connections`)
+    .run();
+}
 
 async function migrateD1ConnectionsJsonShape(db: D1Database): Promise<void> {
   const columns = await d1ColumnNames(db, "connections");
   if (columns.has("connection_json") && columns.has("provider")) return;
-  await db.prepare(
-    `create table connections__takosumi_json_migrate (
+  await db
+    .prepare(
+      `create table connections__takosumi_json_migrate (
       id text primary key,
       space_id text,
       provider text not null,
@@ -3244,15 +3986,17 @@ async function migrateD1ConnectionsJsonShape(db: D1Database): Promise<void> {
       created_at text not null,
       updated_at text not null
     )`,
-  ).run();
+    )
+    .run();
   const jsonColumn = columns.has("connection_json")
     ? "connection_json"
     : "record_json";
   const providerExpression = columns.has("provider")
     ? "provider"
     : `coalesce(json_extract(${jsonColumn}, '$.provider'), '')`;
-  await db.prepare(
-    `insert into connections__takosumi_json_migrate
+  await db
+    .prepare(
+      `insert into connections__takosumi_json_migrate
       (id, space_id, provider, status, connection_json, created_at, updated_at)
       select id,
              space_id,
@@ -3262,11 +4006,14 @@ async function migrateD1ConnectionsJsonShape(db: D1Database): Promise<void> {
              created_at,
              updated_at
       from connections`,
-  ).run();
+    )
+    .run();
   await db.prepare(`drop table connections`).run();
-  await db.prepare(
-    `alter table connections__takosumi_json_migrate rename to connections`,
-  ).run();
+  await db
+    .prepare(
+      `alter table connections__takosumi_json_migrate rename to connections`,
+    )
+    .run();
 }
 
 async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
@@ -3281,8 +4028,9 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
   const hasSourceId = byName.has("source_id");
   const hasLeaseToken = byName.has("lease_token");
   const hasHeartbeatAt = byName.has("heartbeat_at");
-  await db.prepare(
-    `create table runs__takosumi_migrate (
+  await db
+    .prepare(
+      `create table runs__takosumi_migrate (
       id text primary key,
       run_group_id text,
       space_id text not null,
@@ -3296,15 +4044,139 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
       run_json text not null,
       created_at text not null default ""
     )`,
-  ).run();
-  await db.prepare(
-    `insert into runs__takosumi_migrate
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into runs__takosumi_migrate
       (id, run_group_id, space_id, source_id, installation_id, environment, type, status, lease_token, heartbeat_at, run_json, created_at)
       select id, run_group_id, space_id, ${hasSourceId ? "source_id" : "null"}, installation_id, environment, type, status, ${hasLeaseToken ? "lease_token" : "null"}, ${hasHeartbeatAt ? "heartbeat_at" : "null"}, run_json, created_at
       from runs`,
-  ).run();
+    )
+    .run();
   await db.prepare(`drop table runs`).run();
   await db.prepare(`alter table runs__takosumi_migrate rename to runs`).run();
+}
+
+async function rebuildSourceSnapshotsTableIfNeeded(
+  db: D1Database,
+): Promise<void> {
+  const info = await d1ColumnInfo(db, "source_snapshots");
+  const sourceId = info.find((row) => row.name === "source_id");
+  if (!sourceId || sourceId.notnull !== 1) return;
+  await db
+    .prepare(`drop table if exists source_snapshots__takosumi_migrate`)
+    .run();
+  await db
+    .prepare(
+      `create table source_snapshots__takosumi_migrate (
+      id text primary key,
+      source_id text,
+      record_json text not null,
+      fetched_at text not null
+    )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into source_snapshots__takosumi_migrate
+      (id, source_id, record_json, fetched_at)
+      select id, source_id, record_json, fetched_at
+      from source_snapshots`,
+    )
+    .run();
+  await db.prepare(`drop table source_snapshots`).run();
+  await db
+    .prepare(
+      `alter table source_snapshots__takosumi_migrate rename to source_snapshots`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists source_snapshots_source_idx
+      on source_snapshots (source_id)`,
+    )
+    .run();
+}
+
+async function rebuildInstallationsTableIfNeeded(
+  db: D1Database,
+): Promise<void> {
+  const info = await d1ColumnInfo(db, "installations");
+  const sourceId = info.find((row) => row.name === "source_id");
+  if (!sourceId || sourceId.notnull !== 1) return;
+  const columns = await d1ColumnNames(db, "installations");
+  const hasCurrentOutputSnapshotId = columns.has("current_output_snapshot_id");
+  await db
+    .prepare(`drop table if exists installations__takosumi_migrate`)
+    .run();
+  await db
+    .prepare(
+      `create table installations__takosumi_migrate (
+      id text primary key,
+      space_id text not null,
+      name text not null,
+      slug text not null,
+      source_id text,
+      install_type text not null,
+      install_config_id text not null,
+      environment text not null,
+      current_deployment_id text,
+      current_state_generation integer not null default 0,
+      current_output_snapshot_id text,
+      status text not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into installations__takosumi_migrate
+      (id, space_id, name, slug, source_id, install_type, install_config_id, environment, current_deployment_id, current_state_generation, current_output_snapshot_id, status, record_json, created_at, updated_at)
+      select id,
+             space_id,
+             name,
+             slug,
+             source_id,
+             install_type,
+             install_config_id,
+             environment,
+             current_deployment_id,
+             current_state_generation,
+             ${hasCurrentOutputSnapshotId ? "current_output_snapshot_id" : "null"},
+             status,
+             record_json,
+             created_at,
+             updated_at
+      from installations`,
+    )
+    .run();
+  await db.prepare(`drop table installations`).run();
+  await db
+    .prepare(
+      `alter table installations__takosumi_migrate rename to installations`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create unique index if not exists installations_space_name_environment_unique
+      on installations (space_id, name, environment)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists installations_space_idx
+      on installations (space_id)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists installations_current_deployment_idx
+      on installations (current_deployment_id)`,
+    )
+    .run();
 }
 
 /**
@@ -3329,11 +4201,22 @@ async function rebuildRunsTableIfNeeded(db: D1Database): Promise<void> {
  * semantics with the SQLite `json_extract(run_json, '$.sourceId')` accessor.
  */
 async function backfillD1SourceScopedRuns(db: D1Database): Promise<void> {
-  await db.prepare(
-    `update runs
+  await db
+    .prepare(
+      `update runs
       set source_id = coalesce(json_extract(run_json, '$.sourceId'), installation_id),
           installation_id = null
       where type = ?
         and source_id is null`,
-  ).bind(RUN_KIND_SOURCE_SYNC).run();
+    )
+    .bind(RUN_KIND_SOURCE_SYNC)
+    .run();
+}
+
+function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
+  if (env.spaceId === undefined) {
+    throw new Error(
+      "global provider resolver records are not supported in OSS Takosumi",
+    );
+  }
 }

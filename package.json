@@ -15,16 +15,19 @@
     "deploy/node-postgres"
   ],
   "scripts": {
-    "check": "tsc --noEmit && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
+    "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
-    "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers worker/src/index.ts --outfile /tmp/takosumi-cf-worker-check.mjs && bun build --target browser --format esm providers/cloudflare/hosting/wfp_dispatch_worker.ts --outfile /tmp/takosumi-wfp-dispatch-worker-check.mjs",
-    "test": "bun test ./cli ./core ./providers ./contract ./lib/rootgen/src ./accounts/contract/src ./accounts/service ./accounts/cli/src ./accounts/platform-services/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src ./worker/src ./deploy/platform ./scripts/",
-    "test:service": "bun test ./cli ./core",
-    "test:accounts": "bun test ./accounts/contract/src ./accounts/service ./accounts/cli/src ./deploy/node-postgres/src ./deploy/accounts-cloudflare/src",
-    "test:scripts": "bun test ./scripts/",
-    "opentofu:output-snapshot-proof": "bun scripts/prove-opentofu-output-snapshot.ts",
-    "opentofu:live-local-proof": "bun scripts/prove-live-opentofu-plan-apply.ts",
+    "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers worker/src/index.ts --outfile /tmp/takosumi-cf-worker-check.mjs",
+    "test": "bun test ./tests",
+    "test:service": "bun test ./tests/core",
+    "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
+    "test:scripts": "bun test ./tests/scripts",
+    "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
+    "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
+    "smoke:platform-control-plane": "bun scripts/smoke-platform-control-plane.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
     "db:migrate": "bun core/scripts/db-migrate.ts",
@@ -45,7 +48,7 @@
     "@cloudflare/containers": "^0.3.6",
     "commander": "^12.1.0",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.9",
+    "hono": "^4.12.25",
     "pg": "^8.11.0",
     "yaml": "^2.8.2"
   },
@@ -56,6 +59,10 @@
     "@types/pg": "^8.11.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.7.0",
-    "wrangler": "^4.61.0"
+    "wrangler": "^4.101.0"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "ws": "8.21.0"
   }
 }

@@ -14,8 +14,8 @@ export const CONNECTIONS_CLOUDFLARE_TOKEN_PATH =
   `${INTERNAL_V1_PREFIX}/connections/cloudflare/token` as const;
 export const CONNECTIONS_AWS_ASSUME_ROLE_PATH =
   `${INTERNAL_V1_PREFIX}/connections/aws/assume-role` as const;
-export const CONNECTIONS_PROVIDER_ENV_SET_PATH =
-  `${INTERNAL_V1_PREFIX}/connections/provider-env-set` as const;
+export const CONNECTIONS_GENERIC_ENV_PROVIDER_PATH =
+  `${INTERNAL_V1_PREFIX}/connections/generic-env-provider` as const;
 export const CONNECTIONS_CLOUDFLARE_OAUTH_START_PATH =
   `${INTERNAL_V1_PREFIX}/connections/cloudflare/oauth/start` as const;
 export const CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_PATH =
@@ -51,6 +51,56 @@ export type ConnectionStatus =
   | "revoked"
   | "expired"
   | "error";
+
+export const PROVIDER_CREDENTIAL_OWNERSHIPS = [
+  "own_key",
+] as const;
+
+export type ProviderCredentialOwnership =
+  (typeof PROVIDER_CREDENTIAL_OWNERSHIPS)[number];
+
+export type ProviderConnectionStatus =
+  | "ready"
+  | "needs_setup"
+  | "expired"
+  | "blocked";
+
+export interface ProviderConnection {
+  readonly id: string;
+  readonly spaceId?: string;
+  readonly providerSource: string;
+  readonly displayName: string;
+  readonly ownership: ProviderCredentialOwnership;
+  readonly status: ProviderConnectionStatus;
+  readonly requiredEnvNames: readonly string[];
+  readonly expiresAt?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ListProviderConnectionsResponse {
+  readonly providerConnections: readonly ProviderConnection[];
+}
+
+export interface InstallationProviderConnectionBinding {
+  readonly provider: string;
+  readonly alias?: string;
+  readonly connectionId: string;
+  readonly region?: string;
+}
+
+export type InstallationProviderConnectionBindings =
+  readonly InstallationProviderConnectionBinding[];
+
+export interface InstallationProviderConnectionSet {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly connections: InstallationProviderConnectionBindings;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
 
 export interface ConnectionScopeHints {
   readonly accountId?: string;
@@ -91,6 +141,7 @@ export interface Connection {
   readonly spaceId?: string;
   readonly provider: string;
   readonly kind?: ConnectionKind;
+  readonly credentialDriver?: ConnectionCredentialDriver;
   readonly scope: ConnectionScopeKind;
   readonly authMethod: ConnectionAuthMethod;
   readonly displayName?: string;
@@ -112,13 +163,24 @@ export type ConnectionKind =
   | "gcp_oauth_bootstrap"
   | "gcp_service_account_impersonation"
   | "static_secret"
-  | "provider_env_set"
+  | "generic_env_provider"
+  | "manual";
+
+export type ConnectionCredentialDriver =
+  | "cloudflare_oauth"
+  | "cloudflare_api_token"
+  | "aws_assume_role"
+  | "gcp_oauth_bootstrap"
+  | "gcp_service_account_impersonation"
+  | "generic_env"
+  | "static_secret"
   | "manual";
 
 export interface CreateConnectionRequest {
   readonly spaceId?: string;
   readonly provider: string;
   readonly kind?: ConnectionKind;
+  readonly credentialDriver?: ConnectionCredentialDriver;
   readonly authMethod: ConnectionAuthMethod;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;

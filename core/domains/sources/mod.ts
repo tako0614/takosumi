@@ -52,7 +52,7 @@ import { canonicalProviderAddress } from "@takosumi/providers";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
-const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takosumi-artifacts";
+const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takos-artifacts";
 
 /**
  * Out-of-process source-sync dispatch seam. Mirrors the deploy-control
@@ -431,7 +431,7 @@ export class SourcesService {
         sourceSnapshotId: snapshot.id,
         level: analysis.level,
         findings: analysis.findings,
-        providers: await this.#enrichProviderCredentialSources(
+        providers: await this.#enrichProviderOwnershipOptions(
           spaceId,
           analysis.providers,
         ),
@@ -598,24 +598,22 @@ export class SourcesService {
     return mergePolicyConfigs(space?.policy, config.policy);
   }
 
-  async #enrichProviderCredentialSources(
+  async #enrichProviderOwnershipOptions(
     spaceId: string,
     providers: readonly CapsuleProviderRequirement[],
   ): Promise<readonly CapsuleProviderRequirement[]> {
     void spaceId;
-    const catalogEntries = await this.#store.listProviderTemplates();
+    const catalogEntries = await this.#store.listProviderCatalogEntries();
     const catalogBySource = new Map(
       catalogEntries.map((entry) => [
         canonicalProviderAddress(entry.providerSource),
-        entry.credentialSources,
+        entry.ownershipOptions,
       ]),
     );
     return providers.map((provider) => {
       const source = canonicalProviderAddress(provider.source);
-      const credentialSources = catalogBySource.get(source);
-      return credentialSources
-        ? { ...provider, credentialSources }
-        : provider;
+      const ownershipOptions = catalogBySource.get(source);
+      return ownershipOptions ? { ...provider, ownershipOptions } : provider;
     });
   }
 

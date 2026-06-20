@@ -1,0 +1,322 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum(increase(takosumi_cloud_spend_cents_total{space_id=~\"$space_id\",provider=~\"$provider\"}[30d])) / 100",
+          "legendFormat": "cloud spend",
+          "refId": "A"
+        }
+      ],
+      "title": "Cloud Spend 30d",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum(increase(takosumi_usage_credits_total{space_id=~\"$space_id\"}[30d]))",
+          "legendFormat": "credits",
+          "refId": "A"
+        }
+      ],
+      "title": "Credit Usage 30d",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "1 - (sum(increase(takosumi_cloud_spend_cents_total{space_id=~\"$space_id\",provider=~\"$provider\"}[30d])) / 100) / clamp_min(sum(increase(takosumi_usage_credits_total{space_id=~\"$space_id\"}[30d])), 1)",
+          "legendFormat": "gross margin",
+          "refId": "A"
+        }
+      ],
+      "title": "Gross Margin 30d",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 7
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "1 - (sum(increase(takosumi_cloud_spend_cents_total{space_id=\"\",provider=~\"$provider\"}[24h])) / clamp_min(sum(increase(takosumi_cloud_spend_cents_total{provider=~\"$provider\"}[24h])), 1))",
+          "legendFormat": "attributed",
+          "refId": "A"
+        }
+      ],
+      "title": "Attribution Coverage 24h",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 7
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "topk(10, sum by (installation_id) (increase(takosumi_installation_usage_units_total{space_id=~\"$space_id\",kind=\"gateway_compute\"}[30d])))",
+          "legendFormat": "{{installation_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top Installation Usage",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum by (provider, service) (increase(takosumi_cloud_spend_cents_total{space_id=~\"$space_id\",provider=~\"$provider\"}[30d])) / 100",
+          "legendFormat": "{{provider}} / {{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cloud Spend By Provider Service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 15
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum by (kind) (increase(takosumi_usage_credits_total{space_id=~\"$space_id\"}[30d]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Billed Usage By Meter",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 15
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (cost_center) (increase(takosumi_cloud_spend_cents_total{space_id=~\"$space_id\",provider=~\"$provider\"}[30d])) / 100",
+          "legendFormat": "{{cost_center}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cloud Spend By Cost Center",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum by (provider, service, region) (increase(takosumi_cloud_spend_cents_total{space_id=\"\",provider=~\"$provider\"}[24h])) / 100",
+          "legendFormat": "{{provider}} / {{service}} / {{region}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Unattributed Cloud Spend 24h",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["takosumi", "cost", "billing"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus",
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Space",
+        "name": "space_id",
+        "query": "label_values(takosumi_usage_credits_total, space_id)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Provider",
+        "name": "provider",
+        "query": "label_values(takosumi_cloud_spend_cents_total, provider)",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Takosumi Cost Attribution",
+  "uid": "takosumi-cost-attribution",
+  "version": 1,
+  "weekStart": ""
+}

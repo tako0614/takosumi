@@ -26,6 +26,7 @@
  */
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import type { Run } from "./runs.ts";
 
 /** Object-key prefix for a Space's control backups in R2_BACKUPS. */
 export const BACKUPS_KEY_PREFIX = (spaceId: string): string =>
@@ -59,7 +60,8 @@ export const ARTIFACTS_MANIFEST_OBJECT_KEY = (
 export const SERVICE_DATA_BACKUP_OBJECT_KEY = (
   spaceId: string,
   backupId: string,
-): string => `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/service-data.tar.zst.enc`;
+): string =>
+  `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/service-data.tar.zst.enc`;
 
 /** Content type of the sealed control-backup object as stored in R2. */
 export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
@@ -68,11 +70,18 @@ export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
 export const SPACE_BACKUPS_PATH = (spaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/backups`;
 
+/** Path of the Space-scoped destructive restore trigger REST surface. */
+export const SPACE_BACKUP_RESTORES_PATH = (
+  spaceId: string,
+  backupId: string,
+): string =>
+  `${SPACE_BACKUPS_PATH(spaceId)}/${encodeURIComponent(backupId)}/restores`;
+
 /** Path of the Installation-scoped backup trigger REST surface. */
 export const INSTALLATION_BACKUPS_PATH = (installationId: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${
-    encodeURIComponent(installationId)
-  }/backups`;
+  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
+    installationId,
+  )}/backups`;
 
 /**
  * Ledger pointer to one sealed control-backup bundle.
@@ -123,6 +132,34 @@ export interface ServiceDataBackupPointer {
 /** Response body for a created control backup (`POST .../backups`). */
 export interface CreateBackupResponse {
   readonly backup: BackupRecord;
+}
+
+/** Body of `POST .../spaces/:spaceId/backups/:backupId/restores`. */
+export interface CreateRestoreRequest {
+  /**
+   * Target Installation to restore. Optional only when the BackupRecord was
+   * created from an Installation-scoped backup and already carries it.
+   */
+  readonly installationId?: string;
+  readonly environment?: string;
+  /**
+   * Backup-time StateSnapshot generation to restore from. The controller
+   * verifies that the selected snapshot exists and writes it as a NEW current
+   * StateSnapshot generation after approval.
+   */
+  readonly stateGeneration: number;
+  /** Optional client-side guard over BackupRecord.digest. */
+  readonly expectedBackupDigest?: string;
+  /**
+   * Service-data restore is intentionally explicit. `true` currently returns
+   * not_implemented; omitted/false performs control/state restore only.
+   */
+  readonly restoreServiceData?: boolean;
+}
+
+/** Response body for a created restore Run. */
+export interface CreateRestoreResponse {
+  readonly run: Run;
 }
 
 /** Response body for a control-backup listing (`GET .../backups`). */

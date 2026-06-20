@@ -1,35 +1,25 @@
 /**
- * §4 Space CRUD routes plus the §9 operator-connection-default routes. Owns
- * its handlers and its slice of the {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS}
+ * §4 Space CRUD routes. Owns
+ * its handlers and its slice of the {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS}
  * descriptor inventory.
  */
 
-import type {
-  PutOperatorConnectionDefaultRequest,
-} from "../domains/connections/mod.ts";
 import type { CreateSpaceRequest } from "../domains/spaces/mod.ts";
 import {
   OpenTofuControllerError,
 } from "../domains/deploy-control/mod.ts";
 import {
-  authorizeDeployControl,
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
-  ensureConnectionPermission,
   ensureSpaceCreatePermission,
   ensureSpacePermission,
-  enforceBodyLimit,
-  notImplemented,
   nonEmptyString,
   readJsonBody,
-  runHandler,
   scopeAllows,
   SPACE_ID_PATTERN,
-  DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES,
 } from "./deploy_control_shared.ts";
 import {
-  TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
   TAKOSUMI_SPACE_ROUTE,
   TAKOSUMI_SPACES_ROUTE,
 } from "./deploy_control_route_paths.ts";
@@ -82,29 +72,6 @@ export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] = 
     },
     notImplementedMessage: "spaces not wired",
   },
-  {
-    method: "PUT",
-    path: TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
-    summary:
-      "Sets one instance-wide operator default Connection for a provider.",
-    auth: "deploy-control-token",
-    operationId: "putOperatorConnectionDefault",
-    openapi: {
-      requestSchema: "PutOperatorConnectionDefaultRequest",
-      okSchema: "OperatorConnectionDefaultResponse",
-    },
-    notImplementedMessage: "connections not wired",
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
-    summary:
-      "Lists instance-wide operator default Connections by provider.",
-    auth: "deploy-control-token",
-    operationId: "listOperatorConnectionDefaults",
-    openapi: { okSchema: "ListOperatorConnectionDefaultsResponse" },
-    notImplementedMessage: "connections not wired",
-  },
 ];
 
 export function mountDeployControlSpaceRoutes(
@@ -112,7 +79,6 @@ export function mountDeployControlSpaceRoutes(
 ): void {
   const { app, dependencies, deployControlBodyLimit } = ctx;
   const spaces = dependencies.spacesService;
-  const connectionsService = dependencies.connectionsService;
 
   app.post(
     TAKOSUMI_SPACES_ROUTE,
@@ -220,46 +186,4 @@ export function mountDeployControlSpaceRoutes(
     }),
   );
 
-  // --- Operator default connections (Core Specification §9) ------------------
-
-  app.put(
-    TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE,
-    deployControlBodyLimit,
-    async (c) => {
-      const auth = await authorizeDeployControl(c, dependencies);
-      if (!auth.ok) return auth.response;
-      if (!connectionsService) {
-        return c.json(notImplemented(c, "connections not wired"), 501);
-      }
-      const limit = enforceBodyLimit(c, DEPLOY_CONTROL_JSON_BODY_LIMIT_BYTES);
-      if (limit) return limit;
-      return await runHandler(c, async () => {
-        // Instance-wide defaults: only the unrestricted bearer may set them.
-        ensureConnectionPermission(auth.principal, undefined);
-        const body = await readJsonBody<PutOperatorConnectionDefaultRequest>(
-          c,
-          "operatorConnectionDefault",
-        );
-        const record = await connectionsService.putOperatorConnectionDefault(
-          body,
-        );
-        return c.json({ operatorConnectionDefault: record }, 200);
-      });
-    },
-  );
-
-  app.get(TAKOSUMI_OPERATOR_CONNECTION_DEFAULTS_ROUTE, async (c) => {
-    const auth = await authorizeDeployControl(c, dependencies);
-    if (!auth.ok) return auth.response;
-    if (!connectionsService) {
-      return c.json(notImplemented(c, "connections not wired"), 501);
-    }
-    return await runHandler(c, async () => {
-      ensureConnectionPermission(auth.principal, undefined);
-      return c.json({
-        operatorConnectionDefaults: await connectionsService
-          .listOperatorConnectionDefaults(),
-      }, 200);
-    });
-  });
 }

@@ -71,7 +71,8 @@ const VARIANTS: Record<number, Splat> = {
 
 export default function InkSplash(props: Props): JSX.Element {
   const data = () => VARIANTS[props.variant ?? 1] ?? VARIANTS[1];
-  const ink = () => (props.color === "blue" ? "var(--tg-ink-blue)" : "var(--tg-ink-red)");
+  const ink = () =>
+    props.color === "blue" ? "var(--tg-ink-blue)" : "var(--tg-ink-red)";
   return (
     <svg
       viewBox={data().vb}

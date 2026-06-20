@@ -10,12 +10,7 @@ import { LogOut, Monitor, User } from "lucide-solid";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
-import {
-  formatDateTime,
-  locale,
-  setLocale,
-  t,
-} from "../../i18n/index.ts";
+import { formatDateTime, locale, setLocale, t } from "../../i18n/index.ts";
 import {
   Button,
   Card,
@@ -46,10 +41,7 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   return (
     <AppShell>
-      <PageHeader
-        title={t("account.title")}
-        subtitle={t("account.subtitle")}
-      />
+      <PageHeader title={t("account.title")} subtitle={t("account.subtitle")} />
 
       <div class="wc-stack">
         <Card>
@@ -129,7 +121,9 @@ function Inner(props: { readonly session: SessionRecord }) {
                 label: t("account.session.userAgent"),
                 value: (
                   <span class="muted">
-                    {typeof navigator !== "undefined" ? navigator.userAgent : "—"}
+                    {typeof navigator !== "undefined"
+                      ? navigator.userAgent
+                      : "—"}
                   </span>
                 ),
               },

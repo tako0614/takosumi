@@ -40,7 +40,7 @@ import { wrapPgResult } from "./adapters/storage/pg_result.ts";
 
 /**
  * Materialised boot output exposed to callers that want to embed the service
- * into a custom host (e.g. tests or CLI `takosumi server`). The HTTP listener is *not* started here; callers wire
+ * into a custom host (e.g. tests or the long-running core entrypoint). The HTTP listener is *not* started here; callers wire
  * it up themselves via `runtime.serveHttp(app.fetch, ...)`.
  */
 export interface StartedTakosumiService {
@@ -64,8 +64,9 @@ export async function startTakosumiService(): Promise<StartedTakosumiService> {
   const runtime = currentRuntime();
   const runtimeEnv: Record<string, string> = runtime.env.toObject();
   warnIfDevMode(runtimeEnv);
-  const runtimeConfig = await loadRuntimeConfigFromEnv({ env: runtimeEnv })
-    .catch((error) => fatalStartupError(runtime, error));
+  const runtimeConfig = await loadRuntimeConfigFromEnv({
+    env: runtimeEnv,
+  }).catch((error) => fatalStartupError(runtime, error));
   assertSecretEncryptionConfigured(runtime, runtimeEnv);
   assertDatabaseEncryptionConfigured(runtime, runtimeEnv);
   const auditReplicationSink = assertAuditReplicationConfigured(
@@ -129,11 +130,10 @@ if (import.meta.main) {
  * SIGINT to the service terminates connections mid-request and the CLI
  * / clients see truncated responses.
  *
- * The CLI command (`packages/cli/src/commands/server.ts`) registers its
- * own SIGINT handler for the embedded runtime-agent. Both handlers fire
- * concurrently when the service is launched in-process; each one runs to
- * completion and the runtime exit hook is called from this handler once
- * the server has finished draining.
+ * Embedders may register their own SIGINT handler around this core service.
+ * Both handlers can fire concurrently when the service is launched
+ * in-process; each one runs to completion and the runtime exit hook is
+ * called from this handler once the server has finished draining.
  */
 function registerServiceShutdownHandlers(
   runtime: RuntimeAdapter,
@@ -144,7 +144,8 @@ function registerServiceShutdownHandlers(
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("service.shutdown.draining", { signal });
-    server.shutdown()
+    server
+      .shutdown()
       .catch((error) => log.error("service.shutdown.error", { error }))
       .finally(() => {
         log.info("service.shutdown.complete");
@@ -174,7 +175,8 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
   if (error instanceof SecretEncryptionConfigurationError) {
     log.error("service.boot.secret_encryption_required", {
       message: error.message,
-      hint: "Refusing to start takosumi with plaintext secret storage. " +
+      hint:
+        "Refusing to start takosumi with plaintext secret storage. " +
         "See docs/reference/operator.md and " +
         "docs/reference/internal-execution-profiles.md for required " +
         "encryption-key configuration.",
@@ -184,7 +186,8 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
   if (error instanceof DatabaseEncryptionConfigurationError) {
     log.error("service.boot.database_encryption_required", {
       message: error.message,
-      hint: "Refusing to start takosumi against an unencrypted database. " +
+      hint:
+        "Refusing to start takosumi against an unencrypted database. " +
         "See docs/reference/operator.md " +
         "for database at-rest encryption configuration.",
     });
@@ -220,18 +223,20 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
 async function maybeApplyDatabaseMigrations(
   env: Record<string, string | undefined>,
 ): Promise<void> {
-  const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
-    .toLowerCase();
+  const environment = (
+    env.TAKOSUMI_ENVIRONMENT ??
+    env.NODE_ENV ??
+    "local"
+  ).toLowerCase();
   const isManaged = environment === "production" || environment === "staging";
   const explicit = env.TAKOSUMI_DB_AUTO_MIGRATE?.toLowerCase();
-  const shouldRun = explicit === "true"
-    ? true
-    : explicit === "false"
-    ? false
-    : isManaged;
+  const shouldRun =
+    explicit === "true" ? true : explicit === "false" ? false : isManaged;
   if (!shouldRun) return;
 
-  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
+  const databaseUrl =
+    env.TAKOSUMI_DATABASE_URL ??
+    env.DATABASE_URL ??
     (environment === "production"
       ? env.TAKOSUMI_PRODUCTION_DATABASE_URL
       : undefined) ??
@@ -287,8 +292,11 @@ async function maybeApplyAuditRetention(
   if (!retentionRaw && !regimeRaw) return;
   const policy = resolveAuditRetention({ env });
 
-  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
+  const databaseUrl =
+    env.TAKOSUMI_DATABASE_URL ??
+    env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ??
+    env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) {
     log.warn("service.boot.audit_retention_skipped_no_url");
     return;
@@ -358,8 +366,11 @@ function logDeploymentRecordStoreBackend(sqlClientResolved: boolean): void {
 async function createSharedSqlClient(
   env: Record<string, string | undefined>,
 ): Promise<{ client: SqlClient; close: () => Promise<void> } | undefined> {
-  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
+  const databaseUrl =
+    env.TAKOSUMI_DATABASE_URL ??
+    env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ??
+    env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) return undefined;
   return await tryCreatePostgresClient(databaseUrl);
 }
@@ -462,10 +473,14 @@ function startHeartbeatIfConfigured(
   runtime: RuntimeAdapter,
   role: TakosumiProcessRole,
 ): void {
-  const heartbeatFile = runtime.env.get("TAKOSUMI_SERVICE_WORKER_HEARTBEAT_FILE");
+  const heartbeatFile = runtime.env.get(
+    "TAKOSUMI_SERVICE_WORKER_HEARTBEAT_FILE",
+  );
   if (!heartbeatFile) return;
   if (!runtime.fs.available) {
-    log.warn("service.heartbeat.unsupported_runtime", { runtime: runtime.kind });
+    log.warn("service.heartbeat.unsupported_runtime", {
+      runtime: runtime.kind,
+    });
     return;
   }
   const intervalMs = Number(
@@ -480,12 +495,12 @@ function startHeartbeatIfConfigured(
     );
   };
   write().catch((error) =>
-    log.error("service.heartbeat.write_failed", { error })
+    log.error("service.heartbeat.write_failed", { error }),
   );
   setInterval(
     () =>
       write().catch((error) =>
-        log.error("service.heartbeat.write_failed", { error })
+        log.error("service.heartbeat.write_failed", { error }),
       ),
     Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 1_000,
   );
@@ -516,7 +531,8 @@ function assertSecretEncryptionConfigured(
     if (error instanceof SecretEncryptionConfigurationError) {
       log.error("service.boot.secret_encryption_required", {
         message: error.message,
-        hint: "Refusing to start takosumi with plaintext secret storage. " +
+        hint:
+          "Refusing to start takosumi with plaintext secret storage. " +
           "See docs/reference/operator.md and " +
           "docs/reference/internal-execution-profiles.md for required " +
           "encryption-key configuration.",
@@ -550,7 +566,8 @@ function assertDatabaseEncryptionConfigured(
     if (error instanceof DatabaseEncryptionConfigurationError) {
       log.error("service.boot.database_encryption_required", {
         message: error.message,
-        hint: "Refusing to start takosumi against an unencrypted database. " +
+        hint:
+          "Refusing to start takosumi against an unencrypted database. " +
           "See docs/reference/operator.md " +
           "for database at-rest encryption configuration.",
       });
@@ -610,8 +627,11 @@ async function maybeVerifyAuditReplicationChain(
   sink: AuditExternalReplicationSink | undefined,
 ): Promise<void> {
   if (!sink) return;
-  const databaseUrl = env.TAKOSUMI_DATABASE_URL ?? env.DATABASE_URL ??
-    env.TAKOSUMI_PRODUCTION_DATABASE_URL ?? env.TAKOSUMI_STAGING_DATABASE_URL;
+  const databaseUrl =
+    env.TAKOSUMI_DATABASE_URL ??
+    env.DATABASE_URL ??
+    env.TAKOSUMI_PRODUCTION_DATABASE_URL ??
+    env.TAKOSUMI_STAGING_DATABASE_URL;
   if (!databaseUrl) return;
 
   const client = await tryCreatePostgresClient(databaseUrl);
@@ -628,10 +648,13 @@ async function maybeVerifyAuditReplicationChain(
       });
       return;
     }
-    const environment = (env.TAKOSUMI_ENVIRONMENT ?? env.NODE_ENV ?? "local")
-      .toLowerCase();
-    const productionLike = environment === "production" ||
-      environment === "staging";
+    const environment = (
+      env.TAKOSUMI_ENVIRONMENT ??
+      env.NODE_ENV ??
+      "local"
+    ).toLowerCase();
+    const productionLike =
+      environment === "production" || environment === "staging";
     const inconsistency = {
       reason: result.reason,
       mismatchAtSequence: result.mismatchAtSequence ?? null,
@@ -641,7 +664,8 @@ async function maybeVerifyAuditReplicationChain(
     if (productionLike) {
       log.error("service.boot.audit_replication_chain_mismatch", {
         ...inconsistency,
-        hint: "Refusing to start: SQL audit chain disagrees with immutable " +
+        hint:
+          "Refusing to start: SQL audit chain disagrees with immutable " +
           "replica. Investigate possible DB tampering before resuming traffic.",
       });
       runtime.exit(1);

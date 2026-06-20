@@ -58,11 +58,11 @@ jaeger.takosumi.test {
 # one app.takosumi.com. Wrap in `route { handle @api ... handle ... }` so the
 # API handler is evaluated before the SPA fallback (Caddy's directive sorter
 # would otherwise put the catch-all `handle` first). The @api matcher (deploy control
-# / oauth / oidc / start / exports) goes to the composed app; the dashboard SPA
+# / oauth / oidc / exports) goes to the composed app; the dashboard SPA
 # is served from static build output, exactly like the worker mirror below.
 app.takosumi.test {
 	route {
-		@api path /v1/* /oauth/* /.well-known/* /healthz /start /__takosumi/exports/*
+		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1 /gateway/ai/v1/* /internal/* /healthz /readyz /__takosumi/exports/*
 		handle @api {
 			reverse_proxy cloud:8787
 		}
@@ -79,15 +79,14 @@ app.takosumi.test {
 # a postgres-profile ingress host. On the postgres profile app.takosumi.test is
 # the Bun+Postgres `cloud` service; the Worker code path is exercised on the
 # `workers` profile (where the worker is primary) — consistent with the deferred
-# workers-profile collapse. Re-add a `cloud-worker.takosumi.test` block here only
-# alongside a matching CoreDNS record so its Pebble ACME challenge can resolve.
+# workers-profile collapse. Add any future Worker-only host only alongside a
+# matching CoreDNS record so its Pebble ACME challenge can resolve.
 
 # ===== Phase 1 substrate ===================================================
-# service.takosumi.test is RETIRED: the postgres profile consolidated the
-# account plane + service into the single app.takosumi.test composed app above
-# (mirrors production). The Cloudflare service-worker mirror stays for the
-# Workers code path.
-service-worker.takosumi.test {
+# Workers profile local-only probes. app.takosumi.test remains the
+# production-equivalent platform host; service*.takosumi.test exists only so
+# smoke tests can exercise the Worker-backed service path directly.
+service.takosumi.test, service-worker.takosumi.test {
 	reverse_proxy takosumi-service-worker:8788
 }
 

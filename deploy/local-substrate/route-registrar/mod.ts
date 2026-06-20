@@ -10,8 +10,8 @@
  *
  * Static / dynamic partition strategy (no Caddy @id required):
  *
- *   - Static routes (owned by Caddyfile): hosts like app.takosumi.test and
- *     service.takosumi.test — these do not use the dynamic app suffix.
+ *   - Static routes (owned by Caddyfile): app.takosumi.test and local-only
+ *     worker probe hosts — these do not use the dynamic app suffix.
  *   - Dynamic routes (owned by us): any route whose first matcher's host
  *     ends in `.app.takosumi.test`.
  *
@@ -27,14 +27,13 @@
 import { readFile } from "node:fs/promises";
 
 const SERVICE_URL = process.env.SERVICE_URL ?? "http://service:8788";
-const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL ??
-  "http://caddy:2019";
+const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL ?? "http://caddy:2019";
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? "5000");
-const DYNAMIC_HOST_SUFFIX = process.env.DYNAMIC_HOST_SUFFIX ??
-  ".app.takosumi.test";
+const DYNAMIC_HOST_SUFFIX =
+  process.env.DYNAMIC_HOST_SUFFIX ?? ".app.takosumi.test";
 const GATEWAY_ROUTE_PROJECTION_FILE =
   process.env.GATEWAY_ROUTE_PROJECTION_FILE ??
-    "/local-substrate-runtime/gateway-routes.json";
+  "/local-substrate-runtime/gateway-routes.json";
 
 interface ServiceDeploymentRoute {
   readonly host?: string;
@@ -59,7 +58,9 @@ interface CaddyRoute {
   readonly terminal?: boolean;
 }
 
-async function fetchAppliedDeployments(): Promise<readonly ServiceDeployment[]> {
+async function fetchAppliedDeployments(): Promise<
+  readonly ServiceDeployment[]
+> {
   void SERVICE_URL;
   const records = await readGatewayProjection(GATEWAY_ROUTE_PROJECTION_FILE);
   return records.map((record) => ({
@@ -87,14 +88,16 @@ async function fetchCaddyRoutes(): Promise<readonly CaddyRoute[]> {
     );
     return [];
   }
-  const body = await res.json() as readonly CaddyRoute[] | null;
+  const body = (await res.json()) as readonly CaddyRoute[] | null;
   return body ?? [];
 }
 
 function isDynamicRoute(route: CaddyRoute): boolean {
   const hosts = route.match?.flatMap((m) => m.host ?? []) ?? [];
-  return hosts.some((host) =>
-    host.endsWith(DYNAMIC_HOST_SUFFIX) && host !== DYNAMIC_HOST_SUFFIX.slice(1)
+  return hosts.some(
+    (host) =>
+      host.endsWith(DYNAMIC_HOST_SUFFIX) &&
+      host !== DYNAMIC_HOST_SUFFIX.slice(1),
   );
 }
 
@@ -119,10 +122,12 @@ function caddyRouteFor(route: ServiceDeploymentRoute): CaddyRoute | null {
   }
   return {
     match: [matcher],
-    handle: [{
-      handler: "reverse_proxy",
-      upstreams: [{ dial: route.upstreamDial }],
-    }],
+    handle: [
+      {
+        handler: "reverse_proxy",
+        upstreams: [{ dial: route.upstreamDial }],
+      },
+    ],
     terminal: true,
   };
 }
@@ -216,19 +221,21 @@ async function readGatewayProjection(
     latestByHostAndListener.set(key, record);
   }
   return [...latestByHostAndListener.values()]
-    .filter((record) =>
-      typeof record.recordName === "string" &&
-      typeof record.fqdn === "string"
+    .filter(
+      (record) =>
+        typeof record.recordName === "string" &&
+        typeof record.fqdn === "string",
     )
     .map((record) => ({
       recordName: record.recordName,
       fqdn: record.fqdn,
       listener: typeof record.listener === "string" ? record.listener : "",
       routes: Array.isArray(record.routes)
-        ? record.routes.filter((route: ProjectedGatewayRoute) =>
-          typeof route.pathPrefix === "string" &&
-          typeof route.target === "string"
-        )
+        ? record.routes.filter(
+            (route: ProjectedGatewayRoute) =>
+              typeof route.pathPrefix === "string" &&
+              typeof route.target === "string",
+          )
         : [],
     }));
 }
@@ -239,12 +246,13 @@ function upstreamDialFromTarget(
   if (!target) return undefined;
   try {
     const url = new URL(target);
-    const port = url.port ||
+    const port =
+      url.port ||
       (url.protocol === "https:"
         ? "443"
         : url.protocol === "http:"
-        ? "80"
-        : "");
+          ? "80"
+          : "");
     if (!url.hostname || !port) return undefined;
     return `${url.hostname}:${port}`;
   } catch {

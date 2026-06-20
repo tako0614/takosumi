@@ -40,7 +40,8 @@ export async function requestAccountsApi(input: {
 export function accountsApiBase(
   options: Record<string, string | boolean>,
 ): string {
-  const raw = optionalStringOption(options, "accountsUrl") ??
+  const raw =
+    optionalStringOption(options, "accountsUrl") ??
     process.env.TAKOSUMI_ACCOUNTS_URL;
   if (raw === undefined || raw === "") {
     throw new Error(
@@ -61,7 +62,8 @@ export function accountsApiHeaders(
   const headers: Record<string, string> = {
     accept: "application/json",
   };
-  const token = optionalStringOption(options, "token") ??
+  const token =
+    optionalStringOption(options, "token") ??
     process.env.TAKOSUMI_ACCOUNTS_TOKEN ??
     process.env.TAKOS_TOKEN;
   if (token) {
@@ -107,7 +109,9 @@ export function installationStatusPatchBody(
   const mode = optionalStringOption(options, "mode");
   if (mode !== undefined) {
     if (
-      mode !== "shared-cell" && mode !== "dedicated" && mode !== "self-hosted"
+      mode !== "shared-cell" &&
+      mode !== "dedicated" &&
+      mode !== "self-hosted"
     ) {
       throw new TypeError(
         "--mode must be one of: shared-cell, dedicated, self-hosted",

@@ -1,6 +1,6 @@
 import type { JSX } from "solid-js";
-import GeometricMark from "./GeometricMark";
-import InkdropMark from "./InkdropMark";
+import GeometricMark from "./GeometricMark.tsx";
+import InkdropMark from "./InkdropMark.tsx";
 
 interface Props {
   variant?: "geometric" | "inkdrop";
@@ -15,9 +15,11 @@ interface Props {
  */
 export default function Wordmark(props: Props): JSX.Element {
   const Mark = () =>
-    props.variant === "inkdrop"
-      ? <InkdropMark size={props.size ?? 28} />
-      : <GeometricMark size={props.size ?? 28} />;
+    props.variant === "inkdrop" ? (
+      <InkdropMark size={props.size ?? 28} />
+    ) : (
+      <GeometricMark size={props.size ?? 28} />
+    );
   return (
     <a
       href="/"

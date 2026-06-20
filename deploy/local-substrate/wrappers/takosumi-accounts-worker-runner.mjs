@@ -43,7 +43,7 @@ const port = Number(process.env.WORKER_PORT ?? 8787);
 const scriptContents = readFileSync(scriptPath, "utf8");
 
 // Pass through every TAKOSUMI_ACCOUNTS_* env var as a worker binding so we
-// don't have to enumerate each new config knob (managed-offering refs,
+// don't have to enumerate each new config knob (platform-readiness refs,
 // deploy control URL, upstream OAuth, passkey RP, etc) in this runner.
 const bindings = Object.fromEntries(
   Object.entries(process.env).filter(([k, v]) =>
@@ -57,7 +57,7 @@ bindings.TAKOSUMI_ACCOUNTS_SUBJECT ??= "tsub_takosumi_accounts_local";
 bindings.TAKOSUMI_ACCOUNTS_CLIENT_ID ??= "takosumi-local";
 bindings.TAKOSUMI_ACCOUNTS_REDIRECT_URIS ??=
   "https://app.takosumi.test/sign-in/callback";
-bindings.TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS ??= "closed";
+bindings.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS ??= "closed";
 bindings.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET ??=
   "local-substrate-export-download-secret-v1";
 

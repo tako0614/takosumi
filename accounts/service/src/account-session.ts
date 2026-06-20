@@ -3,7 +3,12 @@ import type {
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
-import { errorJson, bearerChallenge, bearerToken, json } from "./http-helpers.ts";
+import {
+  errorJson,
+  bearerChallenge,
+  bearerToken,
+  json,
+} from "./http-helpers.ts";
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenIsActive } from "./pat-routes.ts";
@@ -139,7 +144,9 @@ export function serializeAccountSessionCookie(
     "SameSite=Strict",
     `Max-Age=${options.maxAgeSeconds}`,
     options.secure ? "Secure" : "",
-  ].filter(Boolean).join("; ");
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 export function clearAccountSessionCookie(secure: boolean): string {
@@ -150,13 +157,16 @@ export function clearAccountSessionCookie(secure: boolean): string {
     "SameSite=Strict",
     "Max-Age=0",
     secure ? "Secure" : "",
-  ].filter(Boolean).join("; ");
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 export interface AccountSessionMeResponse {
-  readonly subject: TakosumiSubject;
-  readonly expiresAt: number;
+  readonly subject?: TakosumiSubject;
+  readonly expiresAt?: number;
   readonly primaryAccountId?: string;
+  readonly session?: null;
 }
 
 /**
@@ -166,10 +176,12 @@ export interface AccountSessionMeResponse {
  * exposing the raw session id to JavaScript.
  *
  * Returns 200 with `{ subject, expiresAt, primaryAccountId? }` on
- * success. Returns 401 with a `Bearer` challenge when the cookie /
- * bearer is absent or no longer valid. `primaryAccountId` is omitted
- * when the operator cannot resolve a single primary owning account
- * for this subject.
+ * success. Returns 200 with `{ session: null }` when the cookie /
+ * bearer is absent or no longer valid. This route is a public session
+ * mirror for the browser shell; protected account/control routes still
+ * return 401 through `requireAccountSession` / `requireAccountsBearer`.
+ * `primaryAccountId` is omitted when the operator cannot resolve a
+ * single primary owning account for this subject.
  */
 export async function handleAccountSessionMeGet(input: {
   request: Request;
@@ -182,7 +194,9 @@ export async function handleAccountSessionMeGet(input: {
     request: input.request,
     store: input.store,
   });
-  if (!session.ok) return session.response;
+  if (!session.ok) {
+    return json({ session: null }, 200, { "cache-control": "no-store" });
+  }
   const record = await input.store.findAccountSession(session.sessionId);
   // The session existed when requireAccountSession resolved (we re-fetch only
   // to surface expiresAt without re-running the full guard).
@@ -190,16 +204,17 @@ export async function handleAccountSessionMeGet(input: {
   const primaryAccountId = input.resolvePrimaryAccountId
     ? await input.resolvePrimaryAccountId(session.subject)
     : undefined;
-  const body: AccountSessionMeResponse = primaryAccountId !== undefined
-    ? {
-      subject: session.subject,
-      expiresAt,
-      primaryAccountId,
-    }
-    : {
-      subject: session.subject,
-      expiresAt,
-    };
+  const body: AccountSessionMeResponse =
+    primaryAccountId !== undefined
+      ? {
+          subject: session.subject,
+          expiresAt,
+          primaryAccountId,
+        }
+      : {
+          subject: session.subject,
+          expiresAt,
+        };
   return json(body, 200, { "cache-control": "no-store" });
 }
 
@@ -240,14 +255,14 @@ export async function requireAccountsBearer(input: {
   store: AccountsStore;
   scope: AccountsBearerRequiredScope;
 }): Promise<
-  | { ok: true; auth: AccountsBearerSubject }
-  | { ok: false; response: Response }
+  { ok: true; auth: AccountsBearerSubject } | { ok: false; response: Response }
 > {
   // PAT callers send the secret in the Authorization header; session
   // callers may send the session_id in the header OR the takosumi_session
   // HttpOnly cookie. Look at the Authorization header first because it is
   // the only place a PAT secret can arrive.
-  const headerToken = bearerToken(input.request.headers.get("authorization")) ??
+  const headerToken =
+    bearerToken(input.request.headers.get("authorization")) ??
     input.request.headers.get("x-takosumi-account-session");
   const token = headerToken ?? extractAccountSessionId(input.request);
   if (!token) {
@@ -271,10 +286,15 @@ export async function requireAccountsBearer(input: {
   if (!personalAccessTokenHasScope(record.scopes, input.scope)) {
     return {
       ok: false,
-      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
-        "www-authenticate":
-          `Bearer error="insufficient_scope", scope="${input.scope}"`,
-      }),
+      response: errorJson(
+        "insufficient_scope",
+        "insufficient scope",
+        403,
+        undefined,
+        {
+          "www-authenticate": `Bearer error="insufficient_scope", scope="${input.scope}"`,
+        },
+      ),
     };
   }
   await input.store.recordPersonalAccessTokenUsed(record.tokenId, Date.now());

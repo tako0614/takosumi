@@ -31,4 +31,4 @@ jobs:
           space: ${{ vars.TAKOSUMI_SPACE_ID }}
           remote-url: ${{ secrets.TAKOSUMI_REMOTE_URL }}
           token: ${{ secrets.TAKOSUMI_DEPLOY_CONTROL_TOKEN }}
-          providers: ${{ vars.TAKOSUMI_REQUIRED_PROVIDERS }}
+          providers: ${{ vars.TAKOSUMI_PROVIDER_CONNECTIONS }}

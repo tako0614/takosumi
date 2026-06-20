@@ -24,6 +24,7 @@ import {
   takosumiSubjectValue,
 } from "./http-helpers.ts";
 import { readEnvVar } from "./read-env.ts";
+import { consoleErrorRedacted } from "./redacted-log.ts";
 
 export async function handleStripeCheckoutRequest(input: {
   request: Request;
@@ -37,8 +38,8 @@ export async function handleStripeCheckoutRequest(input: {
   sessionSubject: TakosumiSubject;
   /**
    * Allowlisted origins that `successUrl` / `cancelUrl` may use. Both URLs
-   * must be HTTPS (or http: for explicit dev origins on the list) and the
-   * origin must match exactly. When omitted we fall back to the
+   * must be HTTPS (or loopback http: for explicit local-dev origins on the
+   * list) and the origin must match exactly. When omitted we fall back to the
    * `TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST` env var.
    */
   billingRedirectAllowlist?: readonly string[];
@@ -69,16 +70,28 @@ export async function handleStripeCheckoutRequest(input: {
   const successUrl = stringValue(body.successUrl);
   const cancelUrl = stringValue(body.cancelUrl);
   if (!subject || !planId || !spaceId || !successUrl || !cancelUrl) {
-    return errorJson("invalid_request", "subject, planId, spaceId, successUrl, and cancelUrl are required", 400);
+    return errorJson(
+      "invalid_request",
+      "subject, planId, spaceId, successUrl, and cancelUrl are required",
+      400,
+    );
   }
   if (subject !== input.sessionSubject) {
-    return errorJson("subject_mismatch", "checkout body subject does not match the authenticated session", 403);
+    return errorJson(
+      "subject_mismatch",
+      "checkout body subject does not match the authenticated session",
+      403,
+    );
   }
   // Space ownership gate (fail closed): the plan's credits are granted to
   // `spaceId` by the webhook, so the buyer must own it. We cannot verify
   // without the control plane, so reject when it is not wired.
   if (!input.controlPlaneOperations) {
-    return errorJson("feature_unavailable", "Billing checkout requires the control plane to verify Space ownership.", 503);
+    return errorJson(
+      "feature_unavailable",
+      "Billing checkout requires the control plane to verify Space ownership.",
+      503,
+    );
   }
   const owns = await canAccessSpace({
     operations: input.controlPlaneOperations,
@@ -87,7 +100,11 @@ export async function handleStripeCheckoutRequest(input: {
     spaceId,
   });
   if (!owns) {
-    return errorJson("forbidden", "The authenticated session cannot access this Space.", 403);
+    return errorJson(
+      "forbidden",
+      "The authenticated session cannot access this Space.",
+      403,
+    );
   }
   const plans = resolveBillingPlans(input.billingPlans);
   const plan = findBillingPlan(plans, planId);
@@ -98,13 +115,25 @@ export async function handleStripeCheckoutRequest(input: {
     input.billingRedirectAllowlist,
   );
   if (!allowlist || allowlist.length === 0) {
-    return errorJson("feature_unavailable", "Billing redirect allowlist is not configured.", 503);
+    return errorJson(
+      "feature_unavailable",
+      "Billing redirect allowlist is not configured.",
+      503,
+    );
   }
   if (!isAllowedBillingRedirect(successUrl, allowlist)) {
-    return errorJson("invalid_redirect_uri", "successUrl origin is not in the billing allowlist", 400);
+    return errorJson(
+      "invalid_redirect_uri",
+      "successUrl origin is not in the billing allowlist",
+      400,
+    );
   }
   if (!isAllowedBillingRedirect(cancelUrl, allowlist)) {
-    return errorJson("invalid_redirect_uri", "cancelUrl origin is not in the billing allowlist", 400);
+    return errorJson(
+      "invalid_redirect_uri",
+      "cancelUrl origin is not in the billing allowlist",
+      400,
+    );
   }
 
   const account = await input.store.findAccount(subject);
@@ -147,10 +176,7 @@ export async function handleStripeCheckoutRequest(input: {
     // Do not leak raw upstream / driver error text to clients (it can echo
     // Stripe internals or network details). Log server-side, return a fixed
     // safe description and keep the stable error code.
-    console.error(
-      "billing_checkout_failed",
-      error instanceof Error ? (error.stack ?? error.message) : String(error),
-    );
+    consoleErrorRedacted("billing_checkout_failed", error);
     return errorJson("checkout_failed", "billing checkout failed", 502);
   }
 }
@@ -168,26 +194,46 @@ export async function handleStripeBillingPortalRequest(input: {
   const subject = takosumiSubjectValue(body.subject);
   const returnUrl = stringValue(body.returnUrl);
   if (!subject || !returnUrl) {
-    return errorJson("invalid_request", "subject and returnUrl are required", 400);
+    return errorJson(
+      "invalid_request",
+      "subject and returnUrl are required",
+      400,
+    );
   }
   if (subject !== input.sessionSubject) {
-    return errorJson("subject_mismatch", "portal body subject does not match the authenticated session", 403);
+    return errorJson(
+      "subject_mismatch",
+      "portal body subject does not match the authenticated session",
+      403,
+    );
   }
 
   const allowlist = resolveBillingRedirectAllowlist(
     input.billingRedirectAllowlist,
   );
   if (!allowlist || allowlist.length === 0) {
-    return errorJson("feature_unavailable", "Billing redirect allowlist is not configured.", 503);
+    return errorJson(
+      "feature_unavailable",
+      "Billing redirect allowlist is not configured.",
+      503,
+    );
   }
   if (!isAllowedBillingRedirect(returnUrl, allowlist)) {
-    return errorJson("invalid_redirect_uri", "returnUrl origin is not in the billing allowlist", 400);
+    return errorJson(
+      "invalid_redirect_uri",
+      "returnUrl origin is not in the billing allowlist",
+      400,
+    );
   }
 
   const existingBilling =
     await input.store.findBillingAccountForSubject(subject);
   if (!existingBilling?.stripeCustomerId) {
-    return errorJson("billing_account_not_linked", "Stripe Customer Portal requires an existing Stripe customer.", 409);
+    return errorJson(
+      "billing_account_not_linked",
+      "Stripe Customer Portal requires an existing Stripe customer.",
+      409,
+    );
   }
 
   try {
@@ -203,10 +249,7 @@ export async function handleStripeBillingPortalRequest(input: {
       url: result.url,
     });
   } catch (error) {
-    console.error(
-      "billing_portal_failed",
-      error instanceof Error ? (error.stack ?? error.message) : String(error),
-    );
+    consoleErrorRedacted("billing_portal_failed", error);
     return errorJson("portal_failed", "billing portal failed", 502);
   }
 }
@@ -265,8 +308,21 @@ function isAllowedBillingRedirect(
   } catch {
     return false;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  if (!isHttpsOrLoopbackHttp(parsed)) return false;
   return allowlist.includes(parsed.origin);
+}
+
+function isHttpsOrLoopbackHttp(url: URL): boolean {
+  if (url.protocol === "https:") return true;
+  if (url.protocol !== "http:") return false;
+  const host = url.hostname.toLowerCase();
+  if (host === "localhost" || host === "[::1]" || host === "::1") return true;
+  const parts = host.split(".");
+  return (
+    parts.length === 4 &&
+    parts[0] === "127" &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  );
 }
 
 export async function handleStripeWebhookRequest(input: {
@@ -277,7 +333,8 @@ export async function handleStripeWebhookRequest(input: {
   billingCreditReconciler?: StripeSpaceCreditReconciler;
 }): Promise<Response> {
   const signature = input.request.headers.get("stripe-signature");
-  if (!signature) return errorJson("missing_signature", "missing signature", 400);
+  if (!signature)
+    return errorJson("missing_signature", "missing signature", 400);
   const payload = await input.request.text();
 
   try {
@@ -510,4 +567,3 @@ function safeJsonRecord(payload: string): Record<string, unknown> | undefined {
     return undefined;
   }
 }
-

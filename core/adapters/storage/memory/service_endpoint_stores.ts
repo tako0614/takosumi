@@ -1,12 +1,12 @@
 // In-memory implementations of the service-endpoint domain stores:
 //   - MemoryServiceEndpointStore
 //   - MemoryServiceTrustRecordStore
-//   - MemoryServiceGrantStore
+//   - MemoryEndpointServiceGrantStore
 
 import type {
   ServiceEndpointHealthUpdate,
   ServiceEndpointStore,
-  ServiceGrantStore,
+  EndpointServiceGrantStore,
   ServiceTrustRecordStore,
   ServiceTrustRevokeInput,
 } from "../../../domains/service-endpoints/stores.ts";
@@ -14,8 +14,8 @@ import type {
   ServiceEndpoint,
   ServiceEndpointHealth,
   ServiceEndpointId,
-  ServiceGrant,
-  ServiceGrantId,
+  EndpointServiceGrant,
+  EndpointServiceGrantId,
   ServiceId,
   ServiceTrustRecord,
   ServiceTrustRecordId,
@@ -48,7 +48,8 @@ export class MemoryServiceEndpointStore implements ServiceEndpointStore {
   ): Promise<readonly ServiceEndpoint[]> {
     return filterValues(
       this.endpoints,
-      (endpoint) => endpoint.spaceId === spaceId && endpoint.groupId === groupId,
+      (endpoint) =>
+        endpoint.spaceId === spaceId && endpoint.groupId === groupId,
     );
   }
 
@@ -102,8 +103,10 @@ export class MemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
     return filterValues(
       this.records,
       (record) =>
-        record.endpointId === endpointId && record.status === "active" &&
-        (now === undefined || record.expiresAt === undefined ||
+        record.endpointId === endpointId &&
+        record.status === "active" &&
+        (now === undefined ||
+          record.expiresAt === undefined ||
           record.expiresAt > now),
     );
   }
@@ -129,27 +132,29 @@ export class MemoryServiceTrustRecordStore implements ServiceTrustRecordStore {
   }
 }
 
-export class MemoryServiceGrantStore implements ServiceGrantStore {
-  constructor(private readonly grants: Map<ServiceGrantId, ServiceGrant>) {}
+export class MemoryEndpointServiceGrantStore implements EndpointServiceGrantStore {
+  constructor(
+    private readonly grants: Map<EndpointServiceGrantId, EndpointServiceGrant>,
+  ) {}
 
-  put(grant: ServiceGrant): Promise<ServiceGrant> {
+  put(grant: EndpointServiceGrant): Promise<EndpointServiceGrant> {
     return putValue(this.grants, grant.id, grant);
   }
 
-  get(id: ServiceGrantId): Promise<ServiceGrant | undefined> {
+  get(id: EndpointServiceGrantId): Promise<EndpointServiceGrant | undefined> {
     return getFrom(this.grants, id);
   }
 
   listByTrustRecord(
     trustRecordId: ServiceTrustRecordId,
-  ): Promise<readonly ServiceGrant[]> {
+  ): Promise<readonly EndpointServiceGrant[]> {
     return filterValues(
       this.grants,
       (grant) => grant.trustRecordId === trustRecordId,
     );
   }
 
-  listBySubject(subject: string): Promise<readonly ServiceGrant[]> {
+  listBySubject(subject: string): Promise<readonly EndpointServiceGrant[]> {
     return filterValues(this.grants, (grant) => grant.subject === subject);
   }
 }

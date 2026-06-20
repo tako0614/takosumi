@@ -1,4 +1,4 @@
-import Wordmark from "./brand/Wordmark";
+import Wordmark from "./brand/Wordmark.tsx";
 
 export default function Footer() {
   return (
@@ -16,7 +16,7 @@ export default function Footer() {
             GitHub
           </a>
           <a href="https://app.takosumi.com/" rel="noopener">
-            App
+            Dashboard
           </a>
         </nav>
       </div>

@@ -46,15 +46,24 @@ import type {
   CreateSourceResponse,
   ListSourceSnapshotsResponse,
   ListSourcesResponse,
+  PatchSourceRequest,
+  SourceResponse,
+  SourceSnapshot,
 } from "takosumi-contract/sources";
+import type {
+  DeployResponse,
+  InternalDeployRequest,
+  PublicDeployResponse,
+} from "takosumi-contract/deploy";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
+  PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProviderTemplatesResponse } from "takosumi-contract/providers";
+import type { ListProviderCatalogEntriesResponse } from "takosumi-contract/providers";
 import type { Space, SpaceType } from "takosumi-contract/spaces";
 import type {
-  DeploymentProfile,
+  InstallationProviderEnvBindingSet,
   InstallConfig,
   Installation,
   PolicyConfig,
@@ -75,19 +84,28 @@ import {
   pageSorted,
 } from "takosumi-contract/pagination";
 import type {
-  ProviderBinding,
-  ProviderBindingMode,
-  ProviderBindings,
-  OperatorConnectionDefault,
-  ManagedDefaultStatus,
-} from "takosumi-contract/provider-bindings";
+  InstallationProviderConnectionBinding,
+  InstallationProviderConnectionBindings,
+  InstallationProviderEnvBinding,
+  InstallationProviderEnvBindings,
+  InstallationProviderConnectionSet,
+  ProviderEnv,
+  ProviderConnection,
+  PublicProviderEnv,
+} from "takosumi-contract/provider-envs";
+import type {
+  ProviderResolution,
+  PublicProviderResolution,
+} from "takosumi-contract/provider-resolution";
 import type {
   OutputShare,
   OutputShareEntry,
 } from "takosumi-contract/output-snapshots";
+import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
   CreateBackupResponse,
+  CreateRestoreRequest,
   ListBackupsResponse,
 } from "takosumi-contract/backups";
 import type {
@@ -96,7 +114,13 @@ import type {
   CreditReservation,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { Run, RunCostInfo } from "takosumi-contract/runs";
+import type {
+  Run,
+  RunCostInfo,
+  RunEventsResponse,
+  RunLogsResponse,
+  PublicRun,
+} from "takosumi-contract/runs";
 import { API_V1_PREFIX, isApiV1Path } from "takosumi-contract";
 import {
   errorJson,
@@ -116,8 +140,20 @@ import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
-function publicInstallation(installation: Installation): PublicInstallation {
-  const { installType: _installType, ...publicRecord } = installation;
+/** 64 MiB cap on a single local Capsule upload archive. */
+const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
+
+type PublicInstallationInput = PublicInstallation &
+  Partial<Pick<Installation, "installType" | "currentOutputSnapshotId">>;
+
+function publicInstallation(
+  installation: PublicInstallationInput,
+): PublicInstallation {
+  const {
+    installType: _installType,
+    currentOutputSnapshotId: _currentOutputSnapshotId,
+    ...publicRecord
+  } = installation;
   return publicRecord;
 }
 
@@ -125,10 +161,31 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
   const {
     installType: _installType,
     templateBinding: _templateBinding,
+    sourceKind: _sourceKind,
     ...publicRecord
   } = config;
-  return publicRecord;
+  return {
+    ...publicRecord,
+    sourceKind: publicInstallConfigSourceKind(config),
+  };
 }
+
+function publicInstallConfigSourceKind(
+  config: InstallConfig,
+): PublicInstallConfig["sourceKind"] {
+  if (config.sourceKind === "generic_capsule") return "generic_capsule";
+  if (
+    config.sourceKind === "first_party_capsule" ||
+    config.sourceKind === "official_template" ||
+    config.templateBinding
+  ) {
+    return "first_party_capsule";
+  }
+  return "generic_capsule";
+}
+
+const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<Installation["status"]> =
+  new Set(["active", "stale", "error"]);
 
 /**
  * Public projection of a Deployment for the account-plane session surface. It
@@ -143,15 +200,156 @@ function publicDeployment(deployment: Deployment): PublicDeployment {
   return rest;
 }
 
-/** Deployment row with the raw OutputSnapshot pointer projected out. */
-type PublicDeployment = Omit<Deployment, "outputSnapshotId">;
+async function publicRun(run: Run): Promise<PublicRun> {
+  const { providerResolutions, ...rest } = run;
+  if (!providerResolutions || providerResolutions.length === 0) {
+    return rest;
+  }
+  return {
+    ...rest,
+    providerResolutions: await Promise.all(
+      providerResolutions.map(publicProviderResolution),
+    ),
+  };
+}
+
+async function publicProviderResolution(
+  resolution: ProviderResolution,
+): Promise<PublicProviderResolution> {
+  const connectionId = resolution.envId
+    ? await publicProviderConnectionId(resolution.envId)
+    : undefined;
+  const ownership = resolution.materialization ? "own_key" : undefined;
+  return {
+    requirement: resolution.requirement,
+    status: publicProviderResolutionStatus(resolution),
+    ...(connectionId ? { connectionId } : {}),
+    ...(ownership ? { ownership } : {}),
+    ...(resolution.blockedReason
+      ? { blockedReason: publicProviderBlockedReason(resolution.blockedReason) }
+      : {}),
+    evidence: await publicProviderResolutionEvidence(resolution),
+  };
+}
+
+function publicProviderResolutionStatus(
+  resolution: ProviderResolution,
+): PublicProviderResolution["status"] {
+  if (resolution.status === "resolved_provider_env") {
+    return "resolved_provider_connection";
+  }
+  if (resolution.status === "blocked_missing_env") {
+    return "blocked_missing_connection";
+  }
+  return resolution.status;
+}
+
+async function publicProviderResolutionEvidence(
+  resolution: ProviderResolution,
+): Promise<PublicProviderResolution["evidence"]> {
+  const evidence = resolution.evidence;
+  if (evidence.kind === "provider_env") {
+    return {
+      kind: "provider_connection",
+      provider: evidence.provider,
+      connectionId: await publicProviderConnectionId(evidence.envId),
+      ownership: "own_key",
+      requiredEnvNames: evidence.requiredEnvNames,
+    };
+  }
+  return {
+    kind: "blocked",
+    provider: evidence.provider,
+    reason: publicProviderBlockedReason(evidence.reason),
+  };
+}
+
+function publicProviderBlockedReason(reason: string): string {
+  return reason.replace(/\bProvider Env\b/g, "Provider Connection");
+}
+
+async function publicCompatibilityReportResponse(
+  response: CapsuleCompatibilityReportResponse,
+): Promise<PublicCapsuleCompatibilityReportResponse> {
+  const { providerResolutions: internalProviderResolutions, ...report } =
+    response.report;
+  const providerResolutions = internalProviderResolutions
+    ? await Promise.all(
+        internalProviderResolutions.map(publicProviderResolution),
+      )
+    : undefined;
+  return {
+    report: {
+      ...report,
+      ...(providerResolutions ? { providerResolutions } : {}),
+    },
+    ...(response.run ? { run: await publicRun(response.run) } : {}),
+  };
+}
+
+async function publicDeployResponse(
+  response: DeployResponse,
+): Promise<PublicDeployResponse> {
+  const { run, planRun, applyRun, ...rest } = response;
+  return {
+    ...rest,
+    run: await publicRun(run),
+    ...(planRun ? { planRun: await publicRun(planRun) } : {}),
+    ...(applyRun ? { applyRun: await publicRun(applyRun) } : {}),
+  };
+}
+
+interface PublicPlanActionResponse {
+  readonly run: PublicRun;
+  readonly planSummary?: PublicPlanRun["summary"];
+  readonly cost?: RunCostInfo;
+}
+
+interface PublicApplyActionResponse {
+  readonly run: PublicRun;
+  readonly installation?: PublicInstallation;
+  readonly deployment?: PublicDeployment;
+}
+
+async function publicPlanActionResponse(
+  operations: ControlPlaneOperations,
+  response: PlanRunResponse,
+): Promise<PublicPlanActionResponse> {
+  const run = await operations.getRun(response.planRun.id);
+  const cost = await operations
+    .getRunCost(response.planRun.id)
+    .catch(() => undefined);
+  return {
+    run: await publicRun(run),
+    ...(response.planRun.summary
+      ? { planSummary: response.planRun.summary }
+      : {}),
+    ...(cost ? { cost } : {}),
+  };
+}
+
+async function publicApplyActionResponse(
+  operations: ControlPlaneOperations,
+  response: ApplyRunResponse,
+): Promise<PublicApplyActionResponse> {
+  const run = await operations.getRun(response.applyRun.id);
+  return {
+    run: await publicRun(run),
+    ...(response.installation
+      ? { installation: publicInstallation(response.installation) }
+      : {}),
+    ...(response.deployment
+      ? { deployment: publicDeployment(response.deployment) }
+      : {}),
+  };
+}
 
 // --- Membership (Space members / roles) ------------------------------------
 //
 // Structural mirror of the in-process membership domain
-// (`src/service/domains/membership`). The control routes describe the membership
+// (`core/domains/membership`). The control routes describe the membership
 // shapes structurally (like the rest of `ControlPlaneOperations`) so the
-// `packages/` layer never imports back into `src/service/`; the host's wired
+// accounts/service never imports back into `core/`; the host's wired
 // `TakosumiOperations` facade supplies the concrete service.
 
 /** A Space member's role. Mirrors the membership domain's `SpaceRole`. */
@@ -185,7 +383,7 @@ interface MembershipActor {
 
 /**
  * Structural subset of the host's `TakosumiOperations` facade the control
- * routes call. `TakosumiOperations` (wired in `src/service/bootstrap.ts`)
+ * routes call. `TakosumiOperations` (wired by the host worker/bootstrap)
  * already satisfies this shape, so the platform worker passes its existing
  * `operations` facade with no extra wiring. Genuine remote deploy-control is
  * NOT reachable through this interface — the control routes are an in-process
@@ -255,14 +453,19 @@ export interface ControlPlaneOperations {
       readonly sourceId: string;
       readonly installConfigId: string;
     }): Promise<Installation>;
+    getInstallConfig(id: string): Promise<InstallConfig>;
     listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
-    putDeploymentProfile(
-      profile: DeploymentProfile,
-    ): Promise<DeploymentProfile>;
-    getDeploymentProfileByInstallation(
+    patchInstallationStatus(
+      id: string,
+      status: Installation["status"],
+    ): Promise<Installation>;
+    putInstallationProviderEnvBindingSet(
+      profile: InstallationProviderEnvBindingSet,
+    ): Promise<InstallationProviderEnvBindingSet>;
+    getInstallationProviderEnvBindingSetByInstallation(
       installationId: string,
       environment: string,
-    ): Promise<DeploymentProfile | undefined>;
+    ): Promise<InstallationProviderEnvBindingSet | undefined>;
   };
   // --- Dependencies (§14 / §15) ---
   readonly dependencies: {
@@ -275,6 +478,10 @@ export interface ControlPlaneOperations {
       readonly visibility: DependencyVisibility;
     }): Promise<Dependency>;
     getDependency(id: string): Promise<Dependency | undefined>;
+    listForInstallation(installationId: string): Promise<{
+      readonly asProducer: readonly Dependency[];
+      readonly asConsumer: readonly Dependency[];
+    }>;
     deleteDependency(id: string): Promise<boolean>;
   };
   /**
@@ -285,6 +492,10 @@ export interface ControlPlaneOperations {
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
     createSpaceUpdate(spaceId: string): Promise<RunGroupWithRunsLike>;
+    createSpaceDriftCheck(
+      spaceId: string,
+      options?: { readonly limit?: number },
+    ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
     approveRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
   };
@@ -297,12 +508,26 @@ export interface ControlPlaneOperations {
     createBackup(input: {
       readonly spaceId: string;
       readonly createdByRunId?: string;
+      readonly installationId?: string;
+      readonly environment?: string;
     }): Promise<BackupRecord>;
     listBackups(
       spaceId: string,
       params?: PageParams,
     ): Promise<ListBackupsResponse>;
   };
+  createRestoreRun(
+    spaceId: string,
+    backupId: string,
+    request: CreateRestoreRequest,
+    context?: { readonly actor?: string },
+  ): Promise<Run>;
+  recordUploadArchive(input: {
+    readonly spaceId: string;
+    readonly bytes: Uint8Array;
+    readonly path?: string;
+  }): Promise<SourceSnapshot>;
+  deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   // --- Billing (§28) ---
   getSpaceBilling(spaceId: string): Promise<{
     readonly billing: {
@@ -341,17 +566,7 @@ export interface ControlPlaneOperations {
   ): Promise<unknown>;
   // --- Connections (§9) ---
   readonly connections: {
-    listOperatorConnectionDefaults(): Promise<
-      readonly OperatorConnectionDefault[]
-    >;
-    /**
-     * Non-secret read of whether THIS instance's managed default (operator key)
-     * can cover an install with no Space connection (spec §7.1
-     * `takosumi_managed`). Returns ONLY a boolean + the covered provider names;
-     * it carries NO connection id / value / secret material, so it is safe on
-     * the session surface (operator defaults otherwise stay bearer-gated).
-     */
-    getManagedDefaultStatus(): Promise<ManagedDefaultStatus>;
+    listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
   };
   // --- OutputShares (§18) ---
   readonly outputShares: {
@@ -381,12 +596,14 @@ export interface ControlPlaneOperations {
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   getConnection(connectionId: string): Promise<Connection>;
   /**
-   * Registers a Space-owned provider-credential Connection (§9 / §8 Provider
-   * Env Set). The control surface only ever builds Space-scoped requests here
-   * (the guided-token / OAuth credential-helper paths); the response is the
-   * public {@link Connection} projection, which carries NO secret `values`.
+   * Registers a Space-owned provider credential Connection (§9). The control
+   * surface only ever builds Space-scoped requests here (guided-token / OAuth /
+   * generic-env helper paths); the response is the public {@link Connection}
+   * projection, which carries NO secret `values`.
    */
-  createConnection(request: CreateConnectionRequest): Promise<ConnectionResponse>;
+  createConnection(
+    request: CreateConnectionRequest,
+  ): Promise<ConnectionResponse>;
   /**
    * Re-verifies a Connection's stored credential with the provider (§30
    * `POST /internal/v1/connections/:id/test`). The control surface resolves the
@@ -405,10 +622,10 @@ export interface ControlPlaneOperations {
   /**
    * OPTIONAL Cloudflare credential OAuth helper. Present only when the operator
    * has wired the upstream OAuth client (the `TAKOSUMI_CLOUDFLARE_OAUTH_*`
-   * env set); absent otherwise, so the dashboard falls back to the guided-token
+   * generic-env provider); absent otherwise, so the dashboard falls back to the guided-token
    * deep-link path and never shows a dead OAuth button. `start` returns the
    * provider authorize URL + signed state; `complete` exchanges the callback
-   * code and yields a Space-owned `provider_env_set` create request.
+   * code and yields a Space-owned `generic_env_provider` create request.
    */
   readonly connectionOAuth?: {
     readonly cloudflare?: {
@@ -443,6 +660,9 @@ export interface ControlPlaneOperations {
   // --- Runs (§6.8 / §19 / §23) ---
   createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
   createInstallationDestroyPlan(
+    installationId: string,
+  ): Promise<PlanRunResponse>;
+  createInstallationDriftCheck(
     installationId: string,
   ): Promise<PlanRunResponse>;
   /**
@@ -483,15 +703,15 @@ export interface ControlPlaneOperations {
    * pinned to that Deployment's source snapshot. The plan then flows through the
    * normal approve/apply path, so the response is a `PlanRunResponse`.
    */
-  createDeploymentRollbackPlan(
-    deploymentId: string,
-  ): Promise<PlanRunResponse>;
+  createDeploymentRollbackPlan(deploymentId: string): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
     id: string,
     input?: { readonly approvedBy?: string; readonly reason?: string },
   ): Promise<Run>;
-  getRunLogs(id: string): Promise<unknown>;
+  cancelRun(id: string): Promise<Run>;
+  getRunLogs(id: string): Promise<RunLogsResponse>;
+  getRunEvents(id: string): Promise<RunEventsResponse>;
   /**
    * Reads a plan / destroy_plan Run's public cost projection (`GET
    * /api/v1/runs/:id/cost`). The control surface resolves the Run's owning
@@ -508,7 +728,8 @@ export interface ControlPlaneOperations {
     spaceId: string,
     params?: PageParams,
   ): Promise<ListSourcesResponse>;
-  getSource(id: string): Promise<Source>;
+  getSource(id: string): Promise<SourceResponse>;
+  patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
     options?: { readonly dedupe?: boolean },
@@ -521,9 +742,12 @@ export interface ControlPlaneOperations {
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
   ): Promise<CapsuleCompatibilityReportResponse>;
+  getCompatibilityReport(
+    reportId: string,
+  ): Promise<CapsuleCompatibilityReportResponse>;
   // --- Providers (§7 / §8) ---
-  listProviderTemplates(): Promise<ListProviderTemplatesResponse>;
-  // --- Runner profiles (read; used by operator-connection-defaults view) ---
+  listProviderCatalogEntries(): Promise<ListProviderCatalogEntriesResponse>;
+  // --- Runner profiles (read; used by Provider Connection / Gateway views) ---
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
 }
 
@@ -708,6 +932,19 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return methodNotAllowed("GET, POST");
   }
 
+  // POST /api/v1/deploy — local-directory deploy uploaded by the CLI. The
+  // request carries no credential material; provider access is resolved from
+  // public Provider Connection ids before the internal deploy-control dispatch.
+  if (segments.length === 1 && segments[0] === "deploy") {
+    if (method !== "POST") return methodNotAllowed("POST");
+    return await deployUploadedSnapshot(
+      request,
+      operations,
+      store,
+      input.session.subject,
+    );
+  }
+
   // /api/v1/spaces/:spaceId ; /api/v1/spaces/:spaceId/...
   if (segments[0] === "spaces" && segments.length >= 2) {
     const spaceId = decodeURIComponent(segments[1] ?? "");
@@ -771,6 +1008,10 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         return methodNotAllowed("PATCH, DELETE");
       }
     }
+    if (leaf === "uploads" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await uploadSpaceArchive(request, url, operations, spaceId);
+    }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
         return await listSpaceInstallations(operations, spaceId, url);
@@ -810,6 +1051,21 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       }
       return methodNotAllowed("GET, POST");
     }
+    if (
+      leaf === "backups" &&
+      segments.length === 5 &&
+      segments[4] === "restores"
+    ) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const backupId = decodeURIComponent(segments[3] ?? "");
+      return await createRestoreRun(
+        request,
+        operations,
+        spaceId,
+        backupId,
+        input.session.subject,
+      );
+    }
     if (leaf === "billing" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return json(await operations.getSpaceBilling(spaceId));
@@ -833,12 +1089,26 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method !== "POST") return methodNotAllowed("POST");
       return await spacePlanUpdate(operations, spaceId);
     }
-    if (leaf === "managed-defaults" && segments.length === 3) {
-      if (method !== "GET") return methodNotAllowed("GET");
-      // Non-secret "can the operator key cover a no-config install?" read. The
-      // Space is already namespace-gated above; the projection carries only a
-      // boolean + covered provider names (no connection id / value / secret).
-      return await spaceManagedDefaults(operations);
+    if (leaf === "drift-check" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const body = await readOptionalJsonObject(request);
+      if (body === null) {
+        return errorJson("invalid_json", "invalid json body", 400);
+      }
+      const rawLimit = body.limit;
+      const limit =
+        typeof rawLimit === "number" &&
+        Number.isInteger(rawLimit) &&
+        rawLimit > 0
+          ? rawLimit
+          : undefined;
+      return jsonStatus(
+        await operations.runGroups.createSpaceDriftCheck(
+          spaceId,
+          limit !== undefined ? { limit } : {},
+        ),
+        201,
+      );
     }
   }
 
@@ -855,21 +1125,46 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
-      if (method !== "GET") return methodNotAllowed("GET");
-      return json({ installation: publicInstallation(installation) });
+      if (method === "GET") {
+        return json({ installation: publicInstallation(installation) });
+      }
+      if (method === "PATCH") {
+        return await patchInstallation(request, operations, installationId);
+      }
+      if (method === "DELETE") {
+        const response =
+          await operations.createInstallationDestroyPlan(installationId);
+        return jsonStatus(
+          await publicPlanActionResponse(operations, response),
+          202,
+        );
+      }
+      return methodNotAllowed("GET, PATCH, DELETE");
     }
     const leaf = segments[2];
     if (leaf === "plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
+      const response = await operations.createInstallationPlan(installationId);
       return jsonStatus(
-        await operations.createInstallationPlan(installationId),
+        await publicPlanActionResponse(operations, response),
         201,
       );
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
+      const response =
+        await operations.createInstallationDestroyPlan(installationId);
       return jsonStatus(
-        await operations.createInstallationDestroyPlan(installationId),
+        await publicPlanActionResponse(operations, response),
+        201,
+      );
+    }
+    if (leaf === "drift-check" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const response =
+        await operations.createInstallationDriftCheck(installationId);
+      return jsonStatus(
+        await publicPlanActionResponse(operations, response),
         201,
       );
     }
@@ -877,6 +1172,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method !== "POST") return methodNotAllowed("POST");
       const backup = await operations.backups.createBackup({
         spaceId: installation.spaceId,
+        installationId: installation.id,
+        environment: installation.environment,
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
@@ -885,7 +1182,12 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       return await listInstallationDeployments(operations, installationId, url);
     }
     if (leaf === "dependencies" && segments.length === 3) {
-      if (method !== "POST") return methodNotAllowed("POST");
+      if (method === "GET") {
+        return json(
+          await operations.dependencies.listForInstallation(installationId),
+        );
+      }
+      if (method !== "POST") return methodNotAllowed("GET, POST");
       return await createDependency(
         request,
         operations,
@@ -894,12 +1196,19 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         installationId,
       );
     }
-    if (leaf === "deployment-profile" && segments.length === 3) {
+    if (leaf === "provider-connections" && segments.length === 3) {
       if (method === "GET") {
-        return await getDeploymentProfile(operations, installation);
+        return await getInstallationProviderConnectionSet(
+          operations,
+          installation,
+        );
       }
       if (method === "PUT") {
-        return await putDeploymentProfile(request, operations, installation);
+        return await putInstallationProviderConnectionSet(
+          request,
+          operations,
+          installation,
+        );
       }
       return methodNotAllowed("GET, PUT");
     }
@@ -915,11 +1224,27 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       url,
     );
   }
+  if (segments.length === 2 && segments[0] === "install-configs") {
+    if (method !== "GET") return methodNotAllowed("GET");
+    const installConfigId = decodeURIComponent(segments[1] ?? "");
+    const config =
+      await operations.installations.getInstallConfig(installConfigId);
+    if (config.spaceId !== undefined) {
+      const auth = await requireSpaceAccess({
+        operations,
+        store,
+        spaceId: config.spaceId,
+        subject: input.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+    }
+    return json({ installConfig: publicInstallConfig(config) });
+  }
 
   // /api/v1/providers
   if (segments.length === 1 && segments[0] === "providers") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return json(await operations.listProviderTemplates());
+    return json(await operations.listProviderCatalogEntries());
   }
 
   // /api/v1/dependencies/:id
@@ -953,7 +1278,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (segments.length === 3 && segments[2] === "sync") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
-      const source = await operations.getSource(sourceId);
+      const { source } = await operations.getSource(sourceId);
       const auth = await requireSpaceAccess({
         operations,
         store,
@@ -966,7 +1291,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (segments.length === 3 && segments[2] === "snapshots") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "GET") return methodNotAllowed("GET");
-      const source = await operations.getSource(sourceId);
+      const { source } = await operations.getSource(sourceId);
       const auth = await requireSpaceAccess({
         operations,
         store,
@@ -981,7 +1306,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
-      const source = await operations.getSource(sourceId);
+      const { source } = await operations.getSource(sourceId);
       const auth = await requireSpaceAccess({
         operations,
         store,
@@ -1007,27 +1332,66 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         ...(installConfigId ? { installConfigId } : {}),
       };
       return jsonStatus(
-        await operations.createSourceCompatibilityCheck(
-          sourceId,
-          compatibilityRequest,
+        await publicCompatibilityReportResponse(
+          await operations.createSourceCompatibilityCheck(
+            sourceId,
+            compatibilityRequest,
+          ),
         ),
         201,
       );
     }
+    if (segments.length === 2) {
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      const { source } = await operations.getSource(sourceId);
+      const auth = await requireSpaceAccess({
+        operations,
+        store,
+        spaceId: source.spaceId,
+        subject: input.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+      if (method === "GET") {
+        return json({ source });
+      }
+      if (method === "PATCH") {
+        const body = await readOptionalJsonObject(request);
+        if (body === null) {
+          return errorJson("invalid_json", "invalid json body", 400);
+        }
+        return json(
+          await operations.patchSource(sourceId, body as PatchSourceRequest),
+        );
+      }
+      return methodNotAllowed("GET, PATCH");
+    }
   }
 
-  // /api/v1/plan-runs/:planRunId/apply — session-authed GUI deploy (§31).
-  if (segments[0] === "plan-runs" && segments.length === 3) {
-    const planRunId = decodeURIComponent(segments[1] ?? "");
-    if (segments[2] !== "apply") return errorJson("not_found", "not found", 404);
-    if (method !== "POST") return methodNotAllowed("POST");
-    return await applyPlanRun(
-      request,
+  if (segments[0] === "compatibility-reports" && segments.length === 2) {
+    if (method !== "GET") return methodNotAllowed("GET");
+    const reportId = decodeURIComponent(segments[1] ?? "");
+    const response = await operations.getCompatibilityReport(reportId);
+    const report = response.report;
+    const reportSpaceId = report.sourceId
+      ? (await operations.getSource(report.sourceId)).source.spaceId
+      : report.installationId
+        ? (
+            await operations.installations.getInstallation(
+              report.installationId,
+            )
+          ).spaceId
+        : undefined;
+    if (!reportSpaceId) {
+      return errorJson("not_found", "compatibility report not found", 404);
+    }
+    const auth = await requireSpaceAccess({
       operations,
       store,
-      input.session.subject,
-      planRunId,
-    );
+      spaceId: reportSpaceId,
+      subject: input.session.subject,
+    });
+    if (!auth.ok) return auth.response;
+    return json(await publicCompatibilityReportResponse(response));
   }
 
   // /api/v1/deployments/:deploymentId ; .../rollback-plan — session-authed
@@ -1051,15 +1415,17 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (segments[2] === "rollback-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
+      const response =
+        await operations.createDeploymentRollbackPlan(deploymentId);
       return jsonStatus(
-        await operations.createDeploymentRollbackPlan(deploymentId),
+        await publicPlanActionResponse(operations, response),
         201,
       );
     }
     return errorJson("not_found", "not found", 404);
   }
 
-  // /api/v1/runs/:id ; .../approve ; .../logs ; .../cost
+  // /api/v1/runs/:id ; .../apply ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
     const run = await operations.getRun(runId);
@@ -1072,7 +1438,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json({ run });
+      return json({ run: await publicRun(run) });
     }
     const leaf = segments[2];
     if (leaf === "approve" && segments.length === 3) {
@@ -1084,9 +1450,27 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         input.session.subject,
       );
     }
+    if (leaf === "apply" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await applyPlanRun(
+        request,
+        operations,
+        store,
+        input.session.subject,
+        runId,
+      );
+    }
     if (leaf === "logs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return json(await operations.getRunLogs(runId));
+    }
+    if (leaf === "events" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json(await operations.getRunEvents(runId));
+    }
+    if (leaf === "cancel" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return json({ run: await publicRun(await operations.cancelRun(runId)) });
     }
     if (leaf === "cost" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -1229,10 +1613,10 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /api/v1/operator-connection-defaults?spaceId=
-  if (segments.length === 1 && segments[0] === "operator-connection-defaults") {
+  // /api/v1/provider-connections?spaceId=
+  if (segments.length === 1 && segments[0] === "provider-connections") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await listOperatorConnectionDefaults(
+    return await listProviderConnections(
       operations,
       store,
       input.session.subject,
@@ -1263,16 +1647,15 @@ async function listSpaces(
   )) {
     byId.set(space.id, space);
   }
-  for (
-    const ledgerSpace of await store.listSpacesForOwner(
-      sessionSubject as TakosumiSubject,
-    )
-  ) {
+  for (const ledgerSpace of await store.listSpacesForOwner(
+    sessionSubject as TakosumiSubject,
+  )) {
     if (byId.has(ledgerSpace.spaceId)) continue;
     try {
-      byId.set(ledgerSpace.spaceId, await operations.spaces.getSpace(
+      byId.set(
         ledgerSpace.spaceId,
-      ));
+        await operations.spaces.getSpace(ledgerSpace.spaceId),
+      );
     } catch {
       // The deploy-control Space may not exist (or is mid-creation); skip it
       // rather than failing the whole list.
@@ -1336,7 +1719,11 @@ async function updateSpace(
     patch.policy = body.policy as PolicyConfig;
   }
   if (patch.displayName === undefined && patch.policy === undefined) {
-    return errorJson("invalid_argument", "displayName or policy is required", 400);
+    return errorJson(
+      "invalid_argument",
+      "displayName or policy is required",
+      400,
+    );
   }
   return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
 }
@@ -1423,9 +1810,7 @@ function withImplicitNamespaceOwner(
   spaceId: string,
   ownerUserId: string,
 ): readonly PublicSpaceMember[] {
-  const existing = members.find(
-    (member) => member.accountId === ownerUserId,
-  );
+  const existing = members.find((member) => member.accountId === ownerUserId);
   // Only synthesize when the namespace owner has NO active row. A suspended /
   // invited row for the owner is left as-is (the owner explicitly changed it),
   // and an existing active row already grants them management.
@@ -1434,7 +1819,9 @@ function withImplicitNamespaceOwner(
     // Replace a non-active owner row with the implicit active-owner view so the
     // namespace owner is never locked out of their own Space.
     return members.map((member) =>
-      member.accountId === ownerUserId ? implicitOwner(spaceId, ownerUserId) : member,
+      member.accountId === ownerUserId
+        ? implicitOwner(spaceId, ownerUserId)
+        : member,
     );
   }
   return [implicitOwner(spaceId, ownerUserId), ...members];
@@ -1507,7 +1894,11 @@ async function addSpaceMember(
   }
   const role = body.role === undefined ? "member" : controlRoleValue(body.role);
   if (!role) {
-    return errorJson("invalid_argument", "role must be one of owner, admin, member, viewer", 400);
+    return errorJson(
+      "invalid_argument",
+      "role must be one of owner, admin, member, viewer",
+      400,
+    );
   }
   // Mutation gate: only an active owner/admin of this Space may add members. The
   // roster includes the implicit namespace-owner row so the Space owner can
@@ -1570,7 +1961,11 @@ async function changeSpaceMemberRole(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const roles = parseRolesField(body.roles ?? body.role);
   if (!roles) {
-    return errorJson("invalid_argument", "roles must be one or more of owner, admin, member, viewer", 400);
+    return errorJson(
+      "invalid_argument",
+      "roles must be one or more of owner, admin, member, viewer",
+      400,
+    );
   }
   const members = await effectiveMembers(operations, spaceId);
   const caller = findCaller(members, subject);
@@ -1690,7 +2085,11 @@ function parseControlPageParams(
     if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1) {
       return {
         ok: false,
-        response: errorJson("invalid_request", "limit must be a positive integer", 400),
+        response: errorJson(
+          "invalid_request",
+          "limit must be a positive integer",
+          400,
+        ),
       };
     }
     limit = Number(rawLimit);
@@ -1722,10 +2121,8 @@ async function listSpaceInstallations(
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  const { items, nextCursor } = await operations.installations.listInstallationsPage(
-    spaceId,
-    page.params,
-  );
+  const { items, nextCursor } =
+    await operations.installations.listInstallationsPage(spaceId, page.params);
   return json({
     installations: items.map(publicInstallation),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
@@ -1766,6 +2163,31 @@ async function getInstallation(
   });
 }
 
+async function patchInstallation(
+  request: Request,
+  operations: ControlPlaneOperations,
+  installationId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const status = stringValue(body.status) as Installation["status"] | undefined;
+  if (!status) {
+    return errorJson("invalid_request", "status is required", 400);
+  }
+  if (!API_PATCHABLE_INSTALLATION_STATUSES.has(status)) {
+    return errorJson(
+      "invalid_request",
+      "status may only be patched to active, stale, or error; destroy states must use the destroy flow",
+      400,
+    );
+  }
+  const installation = await operations.installations.patchInstallationStatus(
+    installationId,
+    status,
+  );
+  return json({ installation: publicInstallation(installation) });
+}
+
 async function createInstallation(
   request: Request,
   operations: ControlPlaneOperations,
@@ -1780,9 +2202,13 @@ async function createInstallation(
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
   if (!name || !environment || !sourceId || !installConfigId) {
-    return errorJson("invalid_request", "name, environment, sourceId, and installConfigId are required", 400);
+    return errorJson(
+      "invalid_request",
+      "name, environment, sourceId, and installConfigId are required",
+      400,
+    );
   }
-  const source = await operations.getSource(sourceId);
+  const { source } = await operations.getSource(sourceId);
   if (source.spaceId !== spaceId) {
     const auth = await requireSpaceAccess({
       operations,
@@ -1791,7 +2217,11 @@ async function createInstallation(
       subject: sessionSubject,
     });
     if (!auth.ok) return auth.response;
-    return errorJson("invalid_request", "sourceId must belong to the target Space.", 400);
+    return errorJson(
+      "invalid_request",
+      "sourceId must belong to the target Space.",
+      400,
+    );
   }
   const installation = await operations.installations.createInstallation({
     spaceId,
@@ -1803,47 +2233,130 @@ async function createInstallation(
   return jsonStatus({ installation: publicInstallation(installation) }, 201);
 }
 
-async function getDeploymentProfile(
+async function createRestoreRun(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  backupId: string,
+  actor: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const stateGeneration = body.stateGeneration;
+  if (!Number.isInteger(stateGeneration) || Number(stateGeneration) < 0) {
+    return errorJson(
+      "invalid_request",
+      "stateGeneration must be a non-negative integer",
+      400,
+    );
+  }
+  const installationId = stringValue(body.installationId);
+  const environment = stringValue(body.environment);
+  const expectedBackupDigest = stringValue(body.expectedBackupDigest);
+  const restoreRequest: CreateRestoreRequest = {
+    stateGeneration: Number(stateGeneration),
+    ...(installationId ? { installationId } : {}),
+    ...(environment ? { environment } : {}),
+    ...(expectedBackupDigest ? { expectedBackupDigest } : {}),
+    ...(body.restoreServiceData === true ? { restoreServiceData: true } : {}),
+  };
+  const run = await operations.createRestoreRun(
+    spaceId,
+    backupId,
+    restoreRequest,
+    {
+      actor,
+    },
+  );
+  return jsonStatus({ run: await publicRun(run) }, 201);
+}
+
+async function getInstallationProviderConnectionSet(
   operations: ControlPlaneOperations,
   installation: Installation,
 ): Promise<Response> {
   const profile =
-    await operations.installations.getDeploymentProfileByInstallation(
+    await operations.installations.getInstallationProviderEnvBindingSetByInstallation(
       installation.id,
       installation.environment,
     );
-  return json({ deploymentProfile: profile ?? null });
+  return json({
+    providerConnectionSet: profile
+      ? await publicInstallationProviderConnectionSet(profile)
+      : null,
+  });
 }
 
-async function putDeploymentProfile(
+async function putInstallationProviderConnectionSet(
   request: Request,
   operations: ControlPlaneOperations,
   installation: Installation,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const parsed = parseProviderBindings(body.bindings);
+  const parsed = parseInstallationProviderConnectionBindings(body.connections);
   if (!parsed.ok) {
     return errorJson("invalid_request", parsed.message, 400);
   }
+  const resolved = await resolveProviderConnectionBindings(
+    operations,
+    installation.spaceId,
+    parsed.bindings,
+  );
+  if (!resolved.ok) {
+    return errorJson("invalid_request", resolved.message, 400);
+  }
   const existing =
-    await operations.installations.getDeploymentProfileByInstallation(
+    await operations.installations.getInstallationProviderEnvBindingSetByInstallation(
       installation.id,
       installation.environment,
     );
   const now = new Date().toISOString();
-  const profile = await operations.installations.putDeploymentProfile({
-    id:
-      existing?.id ??
-      `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-    spaceId: installation.spaceId,
-    installationId: installation.id,
-    environment: installation.environment,
-    bindings: parsed.bindings,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
+  const profile =
+    await operations.installations.putInstallationProviderEnvBindingSet({
+      id:
+        existing?.id ??
+        `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      spaceId: installation.spaceId,
+      installationId: installation.id,
+      environment: installation.environment,
+      bindings: resolved.bindings,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+  return json({
+    providerConnectionSet:
+      await publicInstallationProviderConnectionSet(profile),
   });
-  return json({ deploymentProfile: profile });
+}
+
+async function publicInstallationProviderConnectionSet(
+  profile: InstallationProviderEnvBindingSet,
+): Promise<InstallationProviderConnectionSet> {
+  return {
+    id: profile.id,
+    spaceId: profile.spaceId,
+    installationId: profile.installationId,
+    environment: profile.environment,
+    connections: await Promise.all(
+      profile.bindings.map(async (binding) => {
+        const connection: {
+          provider: string;
+          alias?: string;
+          connectionId: string;
+          region?: string;
+        } = {
+          provider: binding.provider,
+          connectionId: await publicProviderConnectionId(binding.envId),
+        };
+        if (binding.alias) connection.alias = binding.alias;
+        if (binding.region) connection.region = binding.region;
+        return connection;
+      }),
+    ),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
 }
 
 async function listInstallConfigs(
@@ -1859,7 +2372,7 @@ async function listInstallConfigs(
   if (!page.ok) return page.response;
   // Without a spaceId only built-in shared configs (spaceId-less configs) are
   // returned; with one, built-ins plus that Space's own configs —
-  // mirroring the §30 `/api/install-configs` projection. The official + scoped
+  // mirroring the §30 `/api/v1/install-configs` projection. The official + scoped
   // union is a small set, so it is materialized, merge-sorted by (createdAt,
   // id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
@@ -1927,7 +2440,11 @@ async function createDependency(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const producerInstallationId = stringValue(body.producerInstallationId);
   if (!producerInstallationId) {
-    return errorJson("invalid_request", "producerInstallationId is required", 400);
+    return errorJson(
+      "invalid_request",
+      "producerInstallationId is required",
+      400,
+    );
   }
   // The consumer is the path Installation; resolve its Space so the edge is
   // created in the right Space (mirrors the §30 dependency-create handler).
@@ -1990,7 +2507,11 @@ async function spaceActivity(
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
   if (limit === "invalid") {
-    return errorJson("invalid_request", "limit must be a positive integer", 400);
+    return errorJson(
+      "invalid_request",
+      "limit must be a positive integer",
+      400,
+    );
   }
   const events = await operations.activity.list(spaceId, limit);
   return json({ events });
@@ -2008,7 +2529,11 @@ async function listSources(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return errorJson("invalid_request", "spaceId query parameter is required", 400);
+    return errorJson(
+      "invalid_request",
+      "spaceId query parameter is required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2034,7 +2559,11 @@ async function createSource(
   const name = stringValue(body.name);
   const sourceUrl = stringValue(body.url);
   if (!spaceId || !name || !sourceUrl) {
-    return errorJson("invalid_request", "spaceId, name, and url are required", 400);
+    return errorJson(
+      "invalid_request",
+      "spaceId, name, and url are required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2057,7 +2586,11 @@ async function createSource(
         });
         if (!connectionAuth.ok) return connectionAuth.response;
       }
-      return errorJson("invalid_request", "authConnectionId must belong to the target Space.", 400);
+      return errorJson(
+        "invalid_request",
+        "authConnectionId must belong to the target Space.",
+        400,
+      );
     }
   }
   const requestBody: CreateSourceRequest = {
@@ -2075,6 +2608,160 @@ async function createSource(
   return jsonStatus(await operations.createSource(requestBody), 201);
 }
 
+async function uploadSpaceArchive(
+  request: Request,
+  url: URL,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<Response> {
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    return errorJson("invalid_argument", "upload body is empty", 400, request);
+  }
+  if (bytes.byteLength > DEFAULT_UPLOAD_MAX_BYTES) {
+    return errorJson(
+      "resource_exhausted",
+      "upload archive too large",
+      413,
+      request,
+    );
+  }
+  const path = stringValue(url.searchParams.get("path") ?? undefined);
+  const snapshot = await operations.recordUploadArchive({
+    spaceId,
+    bytes,
+    ...(path ? { path } : {}),
+  });
+  return jsonStatus({ snapshot }, 201);
+}
+
+async function deployUploadedSnapshot(
+  request: Request,
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body)
+    return errorJson("invalid_argument", "invalid request", 400, request);
+  const spaceId = stringValue(body.spaceId);
+  const name = stringValue(body.name);
+  const snapshotId = stringValue(body.snapshotId);
+  if (!spaceId || !name || !snapshotId) {
+    return errorJson(
+      "invalid_argument",
+      "spaceId, name, and snapshotId are required",
+      400,
+      request,
+    );
+  }
+  const auth = await requireSpaceAccess({
+    operations,
+    store,
+    spaceId,
+    subject: sessionSubject,
+  });
+  if (!auth.ok) return auth.response;
+  const vars = stringRecordValue(body.vars);
+  if (body.vars !== undefined && vars === undefined) {
+    return errorJson(
+      "invalid_argument",
+      "vars must be an object of string values",
+      400,
+      request,
+    );
+  }
+  const environment = stringValue(body.environment);
+  let providerEnvBindings: InstallationProviderEnvBindings | undefined;
+  if (body.providerEnvBindings !== undefined) {
+    return errorJson(
+      "invalid_argument",
+      "providerEnvBindings is internal-only; use providerConnections",
+      400,
+      request,
+    );
+  }
+  if (body.providerConnections !== undefined) {
+    const parsed = parseInstallationProviderConnectionBindings(
+      body.providerConnections,
+    );
+    if (!parsed.ok) {
+      return errorJson(
+        "invalid_argument",
+        `providerConnections: ${parsed.message}`,
+        400,
+        request,
+      );
+    }
+    const resolved = await resolveProviderConnectionBindings(
+      operations,
+      spaceId,
+      parsed.bindings,
+    );
+    if (!resolved.ok) {
+      return errorJson(
+        "invalid_argument",
+        `providerConnections: ${resolved.message}`,
+        400,
+        request,
+      );
+    }
+    providerEnvBindings = resolved.bindings;
+  }
+  const planOnly = booleanValue(body.planOnly);
+  const autoApprove = booleanValue(body.autoApprove);
+  const deployRequest: InternalDeployRequest = {
+    spaceId,
+    name,
+    ...(environment ? { environment } : {}),
+    snapshotId,
+    ...(vars ? { vars } : {}),
+    ...(providerEnvBindings ? { providerEnvBindings } : {}),
+    ...(planOnly !== undefined ? { planOnly } : {}),
+    ...(autoApprove !== undefined ? { autoApprove } : {}),
+  };
+  try {
+    return json(
+      await publicDeployResponse(await operations.deployUpload(deployRequest)),
+    );
+  } catch (error) {
+    logDeployUploadFailure(error, {
+      method: request.method,
+      path: new URL(request.url).pathname,
+      spaceId,
+      name,
+      snapshotId,
+      environment: environment ?? "production",
+      hasVars: vars !== undefined,
+      providerConnectionCount: Array.isArray(body.providerConnections)
+        ? body.providerConnections.length
+        : 0,
+    });
+    throw error;
+  }
+}
+
+function logDeployUploadFailure(
+  error: unknown,
+  context: {
+    readonly method: string;
+    readonly path: string;
+    readonly spaceId: string;
+    readonly name: string;
+    readonly snapshotId: string;
+    readonly environment: string;
+    readonly hasVars: boolean;
+    readonly providerConnectionCount: number;
+  },
+): void {
+  console.error("Takosumi control deploy upload failed", {
+    ...context,
+    errorName: error instanceof Error ? error.name : typeof error,
+    errorMessage: error instanceof Error ? error.message : String(error),
+    ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+  });
+}
+
 // --- Runs ------------------------------------------------------------------
 
 async function approveRun(
@@ -2089,7 +2776,7 @@ async function approveRun(
     approvedBy: sessionSubject,
     ...(reason ? { reason } : {}),
   });
-  return json({ run });
+  return json({ run: await publicRun(run) });
 }
 
 /**
@@ -2123,7 +2810,8 @@ async function applyPlanRun(
     expected: applyExpectedGuardFromPlanRun(planRun),
     ...(confirmDestructive ? { confirmDestructive: true } : {}),
   };
-  return jsonStatus(await operations.createApplyRun(applyRequest), 201);
+  const response = await operations.createApplyRun(applyRequest);
+  return jsonStatus(await publicApplyActionResponse(operations, response), 201);
 }
 
 /**
@@ -2154,6 +2842,12 @@ function applyExpectedGuardFromPlanRun(
     ...(planRun.sourceCommit ? { sourceCommit: planRun.sourceCommit } : {}),
     ...(planRun.providerLockDigest
       ? { providerLockDigest: planRun.providerLockDigest }
+      : {}),
+    ...(planRun.resolvedProviderEnvBindingsDigest
+      ? {
+          resolvedProviderEnvBindingsDigest:
+            planRun.resolvedProviderEnvBindingsDigest,
+        }
       : {}),
   };
 }
@@ -2201,7 +2895,11 @@ async function listControlConnections(
   // operator-bearer §30 surface. (If/when the accounts plane grows an admin
   // role, this can branch to listOperatorConnections.)
   if (!spaceId) {
-    return errorJson("invalid_request", "spaceId query parameter is required", 400);
+    return errorJson(
+      "invalid_request",
+      "spaceId query parameter is required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2216,16 +2914,16 @@ async function listControlConnections(
 }
 
 /**
- * Registers a Space-owned provider-credential Connection from the dashboard
- * session (§9 / §8 Provider Env Set). This is the credential-helper write path
+ * Registers a Space-owned provider helper Connection from the dashboard
+ * session. This is the credential-helper write path
  * the §31 connections screen calls same-origin: the guided-token paste and the
  * raw-token "詳細設定" fallback both POST here.
  *
  * Invariants enforced here (independent of any client coercion):
  *   - the session subject must own the target Space (space-permission gate);
- *   - the created Connection is ALWAYS `scope: "space"` — this surface can never
- *     create an operator-default connection (operator defaults stay on the
- *     bearer-gated §30 surface), so we force `scope` server-side;
+ *   - the created Connection is ALWAYS `scope: "space"`; Gateway/global
+ *     internal resolver records stay on the bearer-gated §30 surface, so we force
+ *     `scope` server-side;
  *   - the secret `values` are write-only: they are forwarded to the controller
  *     and NEVER read, logged, or echoed; the response is the public
  *     {@link Connection} projection, which has no `values` field.
@@ -2257,9 +2955,14 @@ async function createControlConnection(
   const createRequest: CreateConnectionRequest = {
     spaceId,
     provider,
-    // Cloudflare gets the dedicated api-token kind; anything else is a generic
-    // user provider env set. Both are Space-scoped Provider Env Sets.
-    kind: provider === "cloudflare" ? "cloudflare_api_token" : "provider_env_set",
+    credentialDriver:
+      provider === "cloudflare" ? "cloudflare_api_token" : "generic_env",
+    // Cloudflare gets the dedicated api-token kind; anything else is the
+    // generic-env provider kind. Both become Space-scoped provider connections.
+    kind:
+      provider === "cloudflare"
+        ? "cloudflare_api_token"
+        : "generic_env_provider",
     authMethod: "static_secret",
     // Force Space scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
@@ -2383,7 +3086,7 @@ async function startCloudflareOAuth(
  * `SameSite=Strict`) no session cookie either. This handler therefore does NOT
  * call `requireAccountSession`; it authorizes from the authenticated subject
  * that the cookie-gated `start` signed INTO the HMAC OAuth state. It exchanges
- * the code, registers the resulting Space-owned `provider_env_set` Connection,
+ * the code, registers the resulting Space-owned `generic_env_provider` Connection,
  * and then REDIRECTS the browser back to the dashboard `/connections` screen
  * with a result query (never a JSON body, never the token). No new SPA route is
  * introduced — the dashboard owns `/connections` already and reads the
@@ -2446,7 +3149,11 @@ async function completeCloudflareOAuth(
 }
 
 function connectionOAuthUnavailable(): Response {
-  return errorJson("feature_unavailable", "Cloudflare OAuth is not configured on this deployment.", 501);
+  return errorJson(
+    "feature_unavailable",
+    "Cloudflare OAuth is not configured on this deployment.",
+    501,
+  );
 }
 
 /**
@@ -2467,7 +3174,7 @@ function redirectToConnections(
   });
 }
 
-async function listOperatorConnectionDefaults(
+async function listProviderConnections(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
@@ -2477,7 +3184,11 @@ async function listOperatorConnectionDefaults(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return errorJson("invalid_request", "spaceId query parameter is required", 400);
+    return errorJson(
+      "invalid_request",
+      "spaceId query parameter is required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2486,50 +3197,88 @@ async function listOperatorConnectionDefaults(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  const defaults =
-    await operations.connections.listOperatorConnectionDefaults();
-  // Session surface (any Space member) must NOT see operator-internal fields:
-  // the operator-default row `id` and the `connectionId` it points at are
-  // bearer-gated (§30) — leaking the connectionId lets a Space member name an
-  // operator credential against the bearer connection surface. Project the row
-  // down to the non-secret signal the dashboard needs ("which provider does a
-  // `default` binding cover, and when was it wired?"), mirroring the
-  // credential-free managed-defaults projection (provider names only).
-  return json({
-    operatorConnectionDefaults: defaults.map((record) => ({
-      provider: record.provider,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-    })),
-  });
+  const providerConnections = await Promise.all(
+    (await operations.connections.listProviderEnvs(spaceId))
+      .filter((providerEnv) => providerEnv.spaceId !== undefined)
+      .map(publicProviderConnection),
+  );
+  return json({ providerConnections });
 }
 
-/**
- * `GET /api/v1/spaces/:spaceId/managed-defaults` — the session-surface read
- * that answers "can this instance's managed default (operator key) cover an
- * install with NO Space connection configured?" (spec §7.1 `takosumi_managed`
- * default). The dashboard uses it to decide whether to nudge the user to connect
- * their own cloud first; when the managed default is available, the no-config
- * install path already resolves `default` bindings to the operator key.
- *
- * The Space is already namespace-gated by `requireSpaceAccess` in the
- * dispatcher. The body is a credential-free {@link ManagedDefaultStatus}: a
- * boolean + the covered provider source names ONLY. It echoes NO operator-
- * default connection id, NO connection value, and NO secret material — operator
- * defaults otherwise stay on the bearer-gated §30 surface (this surface never
- * exposes their id/values).
- */
-async function spaceManagedDefaults(
+function publicProviderEnv(providerEnv: ProviderEnv): PublicProviderEnv {
+  const { secretRef: _secretRef, ...publicEnv } = providerEnv;
+  void _secretRef;
+  return publicEnv;
+}
+
+async function publicProviderConnection(
+  providerEnv: ProviderEnv,
+): Promise<ProviderConnection> {
+  const publicEnv = publicProviderEnv(providerEnv);
+  return {
+    id: await publicProviderConnectionId(publicEnv.id),
+    ...(publicEnv.spaceId ? { spaceId: publicEnv.spaceId } : {}),
+    providerSource: publicEnv.providerSource,
+    displayName: publicEnv.displayName,
+    ownership: "own_key",
+    status: publicEnv.status,
+    requiredEnvNames: publicEnv.requiredEnvNames,
+    ...(publicEnv.expiresAt ? { expiresAt: publicEnv.expiresAt } : {}),
+    createdAt: publicEnv.createdAt,
+    updatedAt: publicEnv.updatedAt,
+  };
+}
+
+async function resolveProviderConnectionBindings(
   operations: ControlPlaneOperations,
-): Promise<Response> {
-  const status: ManagedDefaultStatus =
-    await operations.connections.getManagedDefaultStatus();
-  // Re-project explicitly so this surface can never accidentally widen to carry
-  // a connection id / value even if the facade type changes.
-  return json({
-    available: status.available,
-    capabilities: status.providers,
-  });
+  spaceId: string,
+  bindings: InstallationProviderConnectionBindings,
+): Promise<
+  | { readonly ok: true; readonly bindings: InstallationProviderEnvBindings }
+  | { readonly ok: false; readonly message: string }
+> {
+  const visibleProviderEnvs = (
+    await operations.connections.listProviderEnvs(spaceId)
+  ).filter((providerEnv) => providerEnv.spaceId !== undefined);
+  const envByPublicId = new Map<string, ProviderEnv>();
+  for (const providerEnv of visibleProviderEnvs) {
+    envByPublicId.set(
+      await publicProviderConnectionId(providerEnv.id),
+      providerEnv,
+    );
+  }
+  const resolved: InstallationProviderEnvBinding[] = [];
+  for (const [index, binding] of bindings.entries()) {
+    const providerEnv = envByPublicId.get(binding.connectionId);
+    if (!providerEnv) {
+      return {
+        ok: false,
+        message: `connections[${index}]: unknown provider connection`,
+      };
+    }
+    resolved.push({
+      provider: binding.provider,
+      ...(binding.alias ? { alias: binding.alias } : {}),
+      envId: providerEnv.id,
+      ...(binding.region ? { region: binding.region } : {}),
+    });
+  }
+  return { ok: true, bindings: resolved };
+}
+
+async function publicProviderConnectionId(
+  providerEnvId: string,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      `takosumi-provider-connection:v1:${providerEnvId}`,
+    ),
+  );
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `pcn_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "").slice(0, 32)}`;
 }
 
 // --- OutputShares ----------------------------------------------------------
@@ -2544,7 +3293,11 @@ async function listOutputShares(
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
-    return errorJson("invalid_request", "spaceId query parameter is required", 400);
+    return errorJson(
+      "invalid_request",
+      "spaceId query parameter is required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2579,7 +3332,11 @@ async function createOutputShare(
   const outputs = outputShareEntries(body.outputs);
   const sensitivePolicy = outputShareSensitivePolicy(body.sensitivePolicy);
   if (!fromSpaceId || !toSpaceId || !producerInstallationId || !outputs) {
-    return errorJson("invalid_request", "fromSpaceId, toSpaceId, producerInstallationId, and outputs are required", 400);
+    return errorJson(
+      "invalid_request",
+      "fromSpaceId, toSpaceId, producerInstallationId, and outputs are required",
+      400,
+    );
   }
   const auth = await requireSpaceAccess({
     operations,
@@ -2599,7 +3356,11 @@ async function createOutputShare(
       subject: sessionSubject,
     });
     if (!producerAuth.ok) return producerAuth.response;
-    return errorJson("invalid_request", "producerInstallationId must belong to the source Space.", 400);
+    return errorJson(
+      "invalid_request",
+      "producerInstallationId must belong to the source Space.",
+      400,
+    );
   }
   const share = await operations.outputShares.createShare({
     fromSpaceId,
@@ -2676,7 +3437,11 @@ async function requireSpaceAccess(input: {
   }
   return {
     ok: false,
-    response: errorJson("forbidden", "The authenticated session cannot access this Space.", 403),
+    response: errorJson(
+      "forbidden",
+      "The authenticated session cannot access this Space.",
+      403,
+    ),
   };
 }
 
@@ -2705,85 +3470,81 @@ function jsonStatus(body: unknown, status: number): Response {
   return json(body, status);
 }
 
-function parseProviderBindings(value: unknown):
-  | { readonly ok: true; readonly bindings: ProviderBindings }
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function stringRecordValue(
+  value: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") return undefined;
+    out[key] = item;
+  }
+  return out;
+}
+
+function parseInstallationProviderConnectionBindings(value: unknown):
+  | {
+      readonly ok: true;
+      readonly bindings: InstallationProviderConnectionBindings;
+    }
   | {
       readonly ok: false;
       readonly message: string;
     } {
   if (!Array.isArray(value)) {
-    return { ok: false, message: "bindings must be an array" };
+    return { ok: false, message: "connections must be an array" };
   }
-  const bindings: ProviderBinding[] = [];
+  const connections: InstallationProviderConnectionBinding[] = [];
   for (const [index, item] of value.entries()) {
-    const parsed = parseProviderBinding(item);
+    const parsed = parseInstallationProviderConnectionBinding(item);
     if (!parsed.ok) {
       return {
         ok: false,
-        message: `bindings[${index}]: ${parsed.message}`,
+        message: `connections[${index}]: ${parsed.message}`,
       };
     }
-    bindings.push(parsed.binding);
+    connections.push(parsed.binding);
   }
-  return { ok: true, bindings };
+  return { ok: true, bindings: connections };
 }
 
-function parseProviderBinding(value: unknown):
-  | { readonly ok: true; readonly binding: ProviderBinding }
+function parseInstallationProviderConnectionBinding(value: unknown):
+  | {
+      readonly ok: true;
+      readonly binding: InstallationProviderConnectionBinding;
+    }
   | {
       readonly ok: false;
       readonly message: string;
     } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ok: false, message: "binding must be an object" };
+    return { ok: false, message: "connection must be an object" };
   }
   const input = value as Record<string, unknown>;
-  const mode = capabilityBindingModeValue(input.mode);
-  if (!mode) return { ok: false, message: "mode is invalid" };
   const provider = stringValue(input.provider);
   if (!provider) return { ok: false, message: "provider is required" };
+  const connectionId = stringValue(input.connectionId);
+  if (!connectionId) {
+    return { ok: false, message: "connectionId is required" };
+  }
   const binding: {
     provider: string;
     alias?: string;
-    mode: ProviderBindingMode;
-    connectionId?: string;
+    connectionId: string;
     region?: string;
-    values?: Readonly<Record<string, unknown>>;
-  } = { provider, mode };
+  } = { provider, connectionId };
   const alias = stringValue(input.alias);
   if (alias) binding.alias = alias;
-  const connectionId = stringValue(input.connectionId);
-  if (connectionId) binding.connectionId = connectionId;
   const region = stringValue(input.region);
   if (region) binding.region = region;
-  if (input.values !== undefined) {
-    if (
-      typeof input.values !== "object" ||
-      input.values === null ||
-      Array.isArray(input.values)
-    ) {
-      return { ok: false, message: "values must be an object" };
-    }
-    binding.values = input.values as Readonly<Record<string, unknown>>;
-  }
-  if (mode === "connection" && !binding.connectionId) {
-    return { ok: false, message: "connectionId is required" };
-  }
-  if (mode === "manual" && !binding.values) {
-    return { ok: false, message: "values is required" };
-  }
   return { ok: true, binding };
-}
-
-function capabilityBindingModeValue(
-  value: unknown,
-): ProviderBindingMode | undefined {
-  return value === "default" ||
-    value === "connection" ||
-    value === "manual" ||
-    value === "disabled"
-    ? value
-    : undefined;
 }
 
 function isPlainJsonObject(
@@ -2809,15 +3570,15 @@ function stringRecord(
 }
 
 /**
- * Extracts the non-secret connection scope hints (account/zone ids) the UI may
- * pass. Only the well-known string fields are forwarded.
+ * Extracts the non-secret connection scope hints the UI may pass. Only the
+ * well-known string fields are forwarded.
  */
 function connectionScopeHints(
   value: unknown,
 ): ConnectionScopeHints | undefined {
   if (!isPlainJsonObject(value)) return undefined;
   const hints: Record<string, string> = {};
-  for (const key of ["accountId", "zoneId"] as const) {
+  for (const key of ["accountId", "zoneId", "templateId"] as const) {
     const v = stringValue(value[key]);
     if (v) hints[key] = v;
   }

@@ -3,7 +3,7 @@
  *
  * Unlike the dashboard, the CLI can read the operator's local working
  * directory: it tars the OpenTofu Capsule, uploads it to the control plane as an
- * upload SourceSnapshot, then asks `/internal/v1/deploy` to resolve/create the
+ * upload SourceSnapshot, then asks `/api/v1/deploy` to resolve/create the
  * Installation and plan the snapshot. The heavy work (Capsule Gate / plan /
  * apply) stays server-side in the runner; the CLI only bundles, uploads, and
  * follows the resulting Run.
@@ -16,7 +16,12 @@ import { parseJson } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
 import { DEPLOY_PATH } from "takosumi-contract/deploy";
 import { SPACE_UPLOADS_PATH } from "takosumi-contract/sources";
-import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
+import { API_V1_PREFIX } from "takosumi-contract/api-surface";
+import type {
+  InstallationProviderConnectionBinding,
+  InstallationProviderConnectionBindings,
+} from "takosumi-contract/connections";
+import type { Space } from "takosumi-contract/spaces";
 
 interface UploadSnapshot {
   readonly id: string;
@@ -26,8 +31,23 @@ interface UploadSnapshot {
 
 interface DeployResult {
   readonly installation: { readonly id: string; readonly name: string };
-  readonly run: { readonly id: string; readonly status: string; readonly type: string };
+  readonly run: {
+    readonly id: string;
+    readonly status: string;
+    readonly type: string;
+  };
+  readonly planRun?: {
+    readonly id: string;
+    readonly status: string;
+    readonly type: string;
+  };
+  readonly applyRun?: {
+    readonly id: string;
+    readonly status: string;
+    readonly type: string;
+  };
   readonly created: boolean;
+  readonly status?: string;
 }
 
 interface RunRecord {
@@ -51,20 +71,22 @@ export async function runDeploy(
   options: { planOnly: boolean },
 ): Promise<number> {
   const { dir, flags } = splitDirArgs(args);
-  const space = requireFlag(flags, "space", "--space @space/name");
-  const name = optionalStringOption(flags, "name") ?? defaultNameFromSpace(space);
-  const spaceId = spaceIdFromHandle(space);
+  const space = requireFlag(flags, "space", "--space @space");
+  const name =
+    optionalStringOption(flags, "name") ?? defaultNameFromSpace(space);
+  const targetSpace = await resolveTargetSpace(flags, space);
   const environment = optionalStringOption(flags, "environment");
   const vars = collectVars(flags);
+  const providerConnections = collectProviderConnections(flags);
 
   io.stdout(`packaging ${dir} …`);
   const archive = await tarZstd(dir);
 
-  io.stdout(`uploading ${archive.byteLength} bytes to @${space} …`);
+  io.stdout(`uploading ${archive.byteLength} bytes to ${targetSpace.label} …`);
   const uploadBody = (await requestDeployControl({
     options: flags,
     method: "POST",
-    path: SPACE_UPLOADS_PATH(spaceId),
+    path: SPACE_UPLOADS_PATH(targetSpace.spaceId),
     binary: archive,
   })) as { snapshot: UploadSnapshot };
   const snapshot = uploadBody.snapshot;
@@ -75,24 +97,33 @@ export async function runDeploy(
     method: "POST",
     path: DEPLOY_PATH,
     body: {
-      spaceId,
+      spaceId: targetSpace.spaceId,
       name,
       ...(environment ? { environment } : {}),
       snapshotId: snapshot.id,
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
-      ...(options.planOnly ? { planOnly: true } : {}),
+      ...(providerConnections.length > 0 ? { providerConnections } : {}),
+      ...(options.planOnly ? { planOnly: true } : { autoApprove: true }),
     },
   })) as DeployResult;
   io.stdout(
     `${deploy.created ? "created" : "updated"} installation ${deploy.installation.id} (${deploy.installation.name})`,
   );
 
-  const run = await pollRun(flags, deploy.run.id, io);
-  io.stdout(`run ${run.id} ${run.status}${run.policyStatus ? ` (policy: ${run.policyStatus})` : ""}`);
-  return run.status === "succeeded" || run.status === "waiting_approval" ? 0 : 1;
+  const followRun = deploy.applyRun ?? deploy.planRun ?? deploy.run;
+  const run = await pollRun(flags, followRun.id, io);
+  io.stdout(
+    `run ${run.id} ${run.status}${run.policyStatus ? ` (policy: ${run.policyStatus})` : ""}`,
+  );
+  return run.status === "succeeded" || run.status === "waiting_approval"
+    ? 0
+    : 1;
 }
 
-export async function runDeployLogs(args: string[], io: CliIo): Promise<number> {
+export async function runDeployLogs(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
   const [runId, ...rest] = args;
   if (!runId) {
     io.stderr("usage: takosumi logs <run-id>");
@@ -101,7 +132,7 @@ export async function runDeployLogs(args: string[], io: CliIo): Promise<number> 
   const flags = parseFlags(rest);
   const body = (await requestDeployControl({
     options: flags,
-    path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
+    path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}/logs`,
   })) as { diagnostics?: { severity: string; message: string }[] };
   for (const d of body.diagnostics ?? []) {
     io.stdout(`[${d.severity}] ${d.message}`);
@@ -121,7 +152,7 @@ export async function runDeployStatus(
   const flags = parseFlags(rest);
   const run = (await requestDeployControl({
     options: flags,
-    path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
+    path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
   })) as RunRecord;
   io.stdout(`${run.type} ${run.id} ${run.status}`);
   return 0;
@@ -138,7 +169,7 @@ async function pollRun(
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const run = (await requestDeployControl({
       options: flags,
-      path: `${INTERNAL_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
+      path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
     })) as RunRecord;
     if (run.status !== last) {
       io.stdout(`  ${run.status}`);
@@ -184,7 +215,8 @@ async function requestDeployControl(input: {
   binary?: Uint8Array;
 }): Promise<unknown> {
   const headers: Record<string, string> = { accept: "application/json" };
-  const token = optionalStringOption(input.options, "token") ??
+  const token =
+    optionalStringOption(input.options, "token") ??
     process.env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
   if (token) headers.authorization = `Bearer ${token}`;
   const init: RequestInit = { method: input.method ?? "GET", headers };
@@ -195,7 +227,10 @@ async function requestDeployControl(input: {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(input.body);
   }
-  const response = await fetch(`${deployControlBase(input.options)}${input.path}`, init);
+  const response = await fetch(
+    `${deployControlBase(input.options)}${input.path}`,
+    init,
+  );
   const text = await response.text();
   const body = text.trim().length > 0 ? parseJson(text) : undefined;
   if (!response.ok) {
@@ -204,12 +239,14 @@ async function requestDeployControl(input: {
       `HTTP ${response.status}`;
     throw new Error(message);
   }
-  if (body === undefined) throw new Error("deploy-control returned an empty response");
+  if (body === undefined)
+    throw new Error("deploy-control returned an empty response");
   return body;
 }
 
 function deployControlBase(options: Record<string, string | boolean>): string {
-  const raw = optionalStringOption(options, "url") ??
+  const raw =
+    optionalStringOption(options, "url") ??
     process.env.TAKOSUMI_DEPLOY_CONTROL_URL;
   if (!raw) {
     throw new Error(
@@ -229,9 +266,19 @@ function splitDirArgs(args: string[]): {
 } {
   const positional: string[] = [];
   const flagArgs: string[] = [];
-  for (const arg of args) {
-    if (arg.startsWith("--")) flagArgs.push(arg);
-    else positional.push(arg);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith("--")) {
+      positional.push(arg);
+      continue;
+    }
+    flagArgs.push(arg);
+    if (arg.includes("=")) continue;
+    const next = args[index + 1];
+    if (next !== undefined && !next.startsWith("--")) {
+      flagArgs.push(next);
+      index += 1;
+    }
   }
   return { dir: positional[0] ?? ".", flags: parseFlags(flagArgs) };
 }
@@ -273,6 +320,28 @@ function collectVars(
   return out;
 }
 
+function collectProviderConnections(
+  flags: Record<string, string | boolean>,
+): InstallationProviderConnectionBindings {
+  const raw = optionalStringOption(flags, "provider");
+  if (!raw) return [];
+  const connections: InstallationProviderConnectionBinding[] = [];
+  for (const pair of raw.split(",")) {
+    const [providerRaw, ...targetParts] = pair.split("=");
+    const provider = providerRaw?.trim();
+    const target = targetParts.join("=").trim();
+    if (!provider || !target) {
+      throw new Error("--provider must be provider=providerConnectionId");
+    }
+    connections.push({
+      provider,
+      alias: "main",
+      connectionId: target,
+    });
+  }
+  return connections;
+}
+
 function requireFlag(
   flags: Record<string, string | boolean>,
   key: string,
@@ -283,10 +352,26 @@ function requireFlag(
   return value.replace(/^@/, "");
 }
 
-function spaceIdFromHandle(space: string): string {
-  // `--space` accepts either a raw space id (`space_…`) or an `@handle`. The
-  // control plane resolves handles; pass through unchanged.
-  return space;
+async function resolveTargetSpace(
+  flags: Record<string, string | boolean>,
+  space: string,
+): Promise<{ spaceId: string; label: string }> {
+  if (space.startsWith("space_")) {
+    return { spaceId: space, label: space };
+  }
+  const handle = space.replace(/^@/, "");
+  const body = (await requestDeployControl({
+    options: flags,
+    path: `${API_V1_PREFIX}/spaces`,
+  })) as { spaces?: readonly Space[] };
+  const spaces = Array.isArray(body.spaces) ? body.spaces : [];
+  const match = spaces.find((candidate) => candidate.handle === handle);
+  if (!match) {
+    throw new Error(
+      `space @${handle} was not found in the authenticated session; pass --space space_... or create/join that Space`,
+    );
+  }
+  return { spaceId: match.id, label: `@${match.handle}` };
 }
 
 function defaultNameFromSpace(space: string): string {

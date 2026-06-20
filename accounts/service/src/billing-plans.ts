@@ -111,14 +111,17 @@ function parsePlanEntry(entry: unknown): BillingPlan | undefined {
   if (typeof entry !== "object" || entry === null) return undefined;
   const record = entry as Record<string, unknown>;
   const id = nonEmptyString(record.id);
-  const kind = record.kind === "subscription" || record.kind === "pack"
-    ? record.kind
-    : undefined;
+  const kind =
+    record.kind === "subscription" || record.kind === "pack"
+      ? record.kind
+      : undefined;
   const stripePriceId = nonEmptyString(record.stripePriceId);
-  const credits = typeof record.credits === "number" &&
-      Number.isSafeInteger(record.credits) && record.credits > 0
-    ? record.credits
-    : undefined;
+  const credits =
+    typeof record.credits === "number" &&
+    Number.isSafeInteger(record.credits) &&
+    record.credits > 0
+      ? record.credits
+      : undefined;
   const name = localizedText(record.name);
   const priceDisplay = localizedText(record.priceDisplay);
   if (!id || !kind || !stripePriceId || !credits || !name || !priceDisplay) {

@@ -11,8 +11,8 @@ function hcl(strings: TemplateStringsArray): string {
 const coreMainTf = hcl`# core (first-party base-installation module)
 #
 # The base Installation under a Space (spec §5/§10). For MVP this is a pure
-# value-plumbing module: it derives the canonical Takos service origins from a
-# single \`base_domain\` input and exposes them as outputs. It declares NO
+# value-plumbing module: it derives generic service origins from a single
+# \`base_domain\` input and exposes them as outputs. It declares NO
 # providers and creates NO cloud resources, so it plans against an empty
 # provider set.
 
@@ -54,7 +54,7 @@ output "member_issuer" {
 
 output "service_registry_url" {
   description = "Well-known service registry URL advertised by this installation."
-  value       = "\${local.public_origin}/.well-known/takos-services.json"
+  value       = "\${local.public_origin}/.well-known/takosumi-services.json"
 }
 `;
 
@@ -113,7 +113,7 @@ const cloudflareWorkerServiceMainTf = hcl`terraform {
 
 variable "appName" {
   type        = string
-  description = "Worker script name (used in the workers.dev URL and route config)."
+  description = "Worker script name."
 }
 
 variable "accountId" {
@@ -133,15 +133,9 @@ variable "compatibilityDate" {
   default     = "2024-11-01"
 }
 
-variable "workersDev" {
-  type        = bool
-  description = "Whether to expose the Worker on the workers.dev subdomain."
-  default     = true
-}
-
-variable "accountSubdomain" {
+variable "publicUrl" {
   type        = string
-  description = "The account's workers.dev subdomain (the <name> in <name>.workers.dev). Used only to render the public url output."
+  description = "Optional public URL projected by a dispatcher/custom route after apply. Empty means this module only reports the Worker script name."
   default     = ""
 }
 
@@ -157,26 +151,14 @@ resource "cloudflare_workers_script" "this" {
   compatibility_date = var.compatibilityDate
 }
 
-# Optionally expose the Worker on <account>.workers.dev.
-resource "cloudflare_workers_script_subdomain" "this" {
-  count       = var.workersDev ? 1 : 0
-  account_id  = var.accountId
-  script_name = cloudflare_workers_script.this.script_name
-  enabled     = true
-}
-
 output "worker_name" {
   description = "Deployed Worker script name."
   value       = cloudflare_workers_script.this.script_name
 }
 
 output "url" {
-  description = "workers.dev URL for the Worker (empty when workers.dev is disabled or the account subdomain is unknown)."
-  value = (
-    var.workersDev && var.accountSubdomain != ""
-    ? "https://\${cloudflare_workers_script.this.script_name}.\${var.accountSubdomain}.workers.dev"
-    : ""
-  )
+  description = "Public URL projected outside this module, or empty when no dispatcher/custom route projection is configured."
+  value       = var.publicUrl
 }
 `;
 
@@ -233,9 +215,8 @@ const cloudflareHelloWorkerMainTf = hcl`terraform {
 
 # Starter capsule: a runnable Cloudflare Worker with NO build step. Unlike
 # cloudflare-worker-service (which uploads a built artifact) this bakes the
-# Worker source inline, so \`tofu apply\` alone produces something you can open —
-# the workers.dev URL is an output. Provider credentials are minted by Takosumi
-# at dispatch (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); no inline secrets.
+# Worker source inline. Provider credentials are minted by Takosumi at dispatch
+# (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); no inline secrets.
 
 variable "accountId" {
   type        = string
@@ -244,13 +225,13 @@ variable "accountId" {
 
 variable "appName" {
   type        = string
-  description = "Worker script name (also the label in the workers.dev URL)."
+  description = "Worker script name."
   default     = "takosumi-hello"
 }
 
-variable "accountSubdomain" {
+variable "publicUrl" {
   type        = string
-  description = "The account's workers.dev subdomain (<this>.workers.dev). Used only to render the public url output."
+  description = "Optional public URL projected by a dispatcher/custom route after apply. Empty means this module only reports the Worker script name."
   default     = ""
 }
 
@@ -278,25 +259,14 @@ resource "cloudflare_workers_script" "this" {
   compatibility_date = var.compatibilityDate
 }
 
-# Expose the Worker on <account>.workers.dev so the install has a reachable URL.
-resource "cloudflare_workers_script_subdomain" "this" {
-  account_id  = var.accountId
-  script_name = cloudflare_workers_script.this.script_name
-  enabled     = true
-}
-
 output "worker_name" {
   description = "Deployed Worker script name."
   value       = cloudflare_workers_script.this.script_name
 }
 
 output "url" {
-  description = "workers.dev URL for the Worker (empty until the account subdomain is known)."
-  value = (
-    var.accountSubdomain != ""
-    ? "https://\${cloudflare_workers_script.this.script_name}.\${var.accountSubdomain}.workers.dev"
-    : ""
-  )
+  description = "Public URL projected outside this module, or empty when no dispatcher/custom route projection is configured."
+  value       = var.publicUrl
 }
 `;
 

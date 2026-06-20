@@ -33,8 +33,8 @@ filesystem**, so the catalog is authored as TypeScript data:
 
 There is intentionally **no `template.yaml`**: a parallel YAML source would
 require a ts/yaml parity test to stay honest, which buys nothing over a single
-typed TS object. The `TemplateDefinition` type *is* the schema; `tsc` validates
-it, and the templates domain (`src/service/domains/templates/`) adds runtime
+typed TS object. The `TemplateDefinition` type _is_ the schema; `tsc` validates
+it, and the templates domain (`core/domains/templates/`) adds runtime
 invariants (id/version uniqueness, input/output well-formedness).
 
 The `template.ts` object and `module/main.tf` must be kept in sync by hand:
@@ -43,13 +43,13 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 
 ## Modules
 
-| id | build | providers | outputs.public |
-| --- | --- | --- | --- |
-| `core` | — | (none) | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
-| `cloudflare-r2-storage` | — | `cloudflare/cloudflare` | `bucket_name`, `location` |
-| `cloudflare-worker-service` | bun (`dist/index.js`) | `cloudflare/cloudflare` | `worker_name`, `url` |
-| `cloudflare-static-site` | — | `cloudflare/cloudflare` | `project_name`, `url` |
-| `aws-s3-storage` | — | `hashicorp/aws` | `bucket_name`, `bucket_arn`, `region` |
+| id                          | build                 | providers               | outputs.public                                                          |
+| --------------------------- | --------------------- | ----------------------- | ----------------------------------------------------------------------- |
+| `core`                      | —                     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
+| `cloudflare-r2-storage`     | —                     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
+| `cloudflare-worker-service` | bun (`dist/index.js`) | `cloudflare/cloudflare` | `worker_name`, `url`                                                    |
+| `cloudflare-static-site`    | —                     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
+| `aws-s3-storage`            | —                     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
 
 ## Adding a first-party Capsule module
 

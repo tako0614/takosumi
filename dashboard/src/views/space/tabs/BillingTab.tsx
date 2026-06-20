@@ -10,13 +10,7 @@
  * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
  * credits enter through paid checkout only.
  */
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Show,
-} from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
   type CreditReservation,

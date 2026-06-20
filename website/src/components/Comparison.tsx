@@ -4,7 +4,7 @@
  * Vendor PaaS = Heroku / Render 等。 旧「素の cloud」「Terraform」 列は
  * 削除 (= 非技術者には伝わらない + WhyOperatorOwned で本質は語り済)。
  */
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 const ROWS = [
   {

@@ -71,7 +71,9 @@ export default function Button(props: Props): JSX.Element {
         </span>
       </Show>
       <Show when={!local.busy && local.icon}>
-        <span aria-hidden="true" style="display:inline-flex">{local.icon}</span>
+        <span aria-hidden="true" style="display:inline-flex">
+          {local.icon}
+        </span>
       </Show>
       {local.children}
     </>

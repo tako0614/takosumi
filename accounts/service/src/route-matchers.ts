@@ -17,10 +17,10 @@ export type InstallationRoute =
   | { kind: "events-ingest"; installationId: string }
   | { kind: "services"; installationId: string }
   | {
-    kind: "service-rotate-token";
-    installationId: string;
-    serviceId: string;
-  }
+      kind: "service-rotate-token";
+      installationId: string;
+      serviceId: string;
+    }
   | { kind: "billing-usage-reports"; installationId: string }
   | { kind: "launch-token-consume"; installationId: string };
 
@@ -42,6 +42,7 @@ export function matchInstallationRoute(
   const parts = pathname.slice(prefix.length).split("/");
   const installationId = parts[0];
   if (!installationId) return null;
+  if (installationId === "import") return null;
   if (parts.length === 1) return { kind: "installation", installationId };
   if (parts.length === 2 && parts[1] === "status") {
     return { kind: "status", installationId };
@@ -50,7 +51,8 @@ export function matchInstallationRoute(
     return { kind: "deployment", installationId };
   }
   if (
-    parts.length === 3 && parts[1] === "deployments" &&
+    parts.length === 3 &&
+    parts[1] === "deployments" &&
     parts[2] === "plan-runs"
   ) {
     return { kind: "deployment-plan-run", installationId };
@@ -72,7 +74,9 @@ export function matchInstallationRoute(
     };
   }
   if (
-    parts.length === 4 && parts[1] === "exports" && parts[2] &&
+    parts.length === 4 &&
+    parts[1] === "exports" &&
+    parts[2] &&
     parts[3] === "download"
   ) {
     return {
@@ -91,7 +95,9 @@ export function matchInstallationRoute(
     return { kind: "services", installationId };
   }
   if (
-    parts.length === 4 && parts[1] === "services" && parts[2] &&
+    parts.length === 4 &&
+    parts[1] === "services" &&
+    parts[2] &&
     parts[3] === "rotate-token"
   ) {
     return {
@@ -101,13 +107,16 @@ export function matchInstallationRoute(
     };
   }
   if (
-    parts.length === 3 && parts[1] === "billing" &&
+    parts.length === 3 &&
+    parts[1] === "billing" &&
     parts[2] === "usage-reports"
   ) {
     return { kind: "billing-usage-reports", installationId };
   }
   if (
-    parts.length === 3 && parts[1] === "launch-token" && parts[2] === "consume"
+    parts.length === 3 &&
+    parts[1] === "launch-token" &&
+    parts[2] === "consume"
   ) {
     return { kind: "launch-token-consume", installationId };
   }

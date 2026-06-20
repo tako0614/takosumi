@@ -1,20 +1,24 @@
 /**
- * Primary navigation — the app-centric IA. Five everyday destinations; the
+ * Primary navigation — the Installation-centric IA. Five everyday destinations; the
  * former "詳細・上級設定" fold is gone because expert surfaces now live INSIDE
- * the screens they relate to (app detail tabs, Space settings tabs) instead of
+ * the screens they relate to (Installation detail tabs, Space settings tabs) instead of
  * as parallel top-level pages. Notifications ride on the TopBar bell.
  */
 import { A, useLocation } from "@solidjs/router";
-import {
-  Activity,
-  Home,
-  Plus,
-  Settings2,
-  UserCircle2,
-} from "lucide-solid";
+import { Activity, ArrowLeft, Home, Plus, Settings2, UserCircle2 } from "lucide-solid";
+import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";
 import type { MessageKey } from "../../../../i18n/index.ts";
+
+/**
+ * True only in the takos-embedded build of this shared dashboard source (set via
+ * the takos web Vite `define`). In the standalone platform-worker dashboard build
+ * it is undefined, so the "back to Takos product" affordance stays hidden there.
+ */
+const TAKOS_EMBEDDED =
+  (import.meta.env as Record<string, string | undefined>)
+    .VITE_TAKOS_EMBEDDED === "1";
 
 type NavItem = {
   href: string;
@@ -42,8 +46,17 @@ export default function Sidebar() {
   return (
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <Wordmark href="/" size={22} />
+        <Wordmark href={TAKOS_EMBEDDED ? undefined : "/"} size={22} />
+        <Show when={TAKOS_EMBEDDED}>
+          <span class="sidebar-context-label">{t("nav.deployContext")}</span>
+        </Show>
       </div>
+      <Show when={TAKOS_EMBEDDED}>
+        <a href="/" class="sidebar-link sidebar-link-back">
+          <ArrowLeft size={18} />
+          <span class="sidebar-link-label">{t("nav.backToTakos")}</span>
+        </a>
+      </Show>
       <nav class="sidebar-nav" aria-label="Primary">
         {PRIMARY.map((item) => (
           <A

@@ -17,7 +17,7 @@ product docs が所有します。
 - login / session / OIDC issuer
 - Space / Source / Connection / Installation / Dependency / SourceSnapshot /
   DependencySnapshot / StateSnapshot / Run / RunGroup / Deployment / OutputSnapshot / Backup APIs
-- Provider Templates / Provider Env Set APIs and policy gates
+- Provider Catalog / Provider Connection APIs and policy gates
 - Connection drivers and custom runner policy
 - SourceSnapshot / compatibility check / plan / apply / destroy flow
 - runner queue and container execution
@@ -44,11 +44,11 @@ incident channel.
 
 ## SEV Classification
 
-| SEV   | Customer impact                                                                                           | Examples                                                                                                                                                                                                                                       | Ack target      | Update cadence              |
-| ----- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
-| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption                                                                                                                          | 5 min           | 15 min                      |
-| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists                                    | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage, user env set provider template outage, user env set provider mint failure, provider env set egress policy regression | 15 min          | 30 min                      |
-| SEV-3 | isolated Space / non-critical degradation, operational toil                                               | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                                          | 1 business hour | daily or on material change |
+| SEV   | Customer impact                                                                                           | Examples                                                                                                                                                                                                                                    | Ack target      | Update cadence              |
+| ----- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------- |
+| SEV-1 | production-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform worker 5xx, OIDC issuer unavailable, cross-Space data exposure, known secret leak, state/artifact corruption                                                                                                                       | 5 min           | 15 min                      |
+| SEV-2 | major feature degradation, multiple Spaces affected, workaround exists                                    | plan/apply mostly failing, queue backlog, runner container startup failures, billing write failure, compatibility API outage, Provider Catalog outage, secret-backed provider mint failure, secret-backed provider egress policy regression | 15 min          | 30 min                      |
+| SEV-3 | isolated Space / non-critical degradation, operational toil                                               | single Installation run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                                       | 1 business hour | daily or on material change |
 
 When scope is unclear, start at SEV-2 or higher. Suspected customer data
 exposure is SEV-1 until disproven.
@@ -91,7 +91,7 @@ exposure is SEV-1 until disproven.
 
 ## SEV-1 Staging Simulation
 
-Hosted Takosumi launch readiness requires at least one SEV-1 simulation in
+hosted Takosumi launch readiness requires at least one SEV-1 simulation in
 staging. The simulation must not page customers.
 
 Required scenario:

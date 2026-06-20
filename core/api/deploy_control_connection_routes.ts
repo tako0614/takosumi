@@ -2,12 +2,13 @@
  * §30 Connection routes: the thin validated connection-creation subroutes
  * (git HTTPS-token / git SSH-key / Cloudflare token / AWS assume-role) plus the
  * Connection list / test / revoke handlers. Owns its handlers and its slice of
- * the {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
+ * the {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
 import type { Context } from "hono";
 import type {
   Connection,
+  ConnectionCredentialDriver,
   ConnectionKind,
   ConnectionScopeHints,
   CreateConnectionRequest,
@@ -42,7 +43,7 @@ import {
   TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE,
   TAKOSUMI_CONNECTIONS_GCP_OAUTH_CALLBACK_ROUTE,
   TAKOSUMI_CONNECTIONS_GCP_OAUTH_START_ROUTE,
-  TAKOSUMI_CONNECTIONS_PROVIDER_ENV_SET_ROUTE,
+  TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE,
   TAKOSUMI_CONNECTIONS_ROUTE,
   TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE,
   TAKOSUMI_CONNECTIONS_SOURCE_SSH_KEY_ROUTE,
@@ -73,25 +74,50 @@ interface GcpImpersonationConnectionBody {
   readonly values: Readonly<Record<string, string>>;
 }
 
-function buildProviderEnvSetConnectionRequest(
+function buildGenericEnvProviderConnectionRequest(
   body: ConnectionSubrouteBody,
 ): CreateConnectionRequest {
   if (!nonEmptyString(body.provider)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "provider is required for a provider env set connection",
+      "provider is required for a generic-env Provider Connection",
+    );
+  }
+  if (!nonEmptyString(body.spaceId)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "spaceId is required for a generic-env Provider Connection",
+    );
+  }
+  if (body.scope !== undefined && body.scope !== "space") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "generic-env Provider Connections are Space-scoped; scope must be space",
     );
   }
   return {
-    ...(body.spaceId ? { spaceId: body.spaceId } : {}),
+    spaceId: body.spaceId,
     provider: body.provider,
-    kind: "provider_env_set",
+    kind: "generic_env_provider",
+    credentialDriver: "generic_env",
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
-    ...(body.scope ? { scope: body.scope } : {}),
+    scope: "space",
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
     ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
     values: body.values,
+  };
+}
+
+function providerCredentialFields(
+  body: ConnectionSubrouteBody | GcpImpersonationConnectionBody,
+  driver: ConnectionCredentialDriver,
+): {
+  readonly credentialDriver: ConnectionCredentialDriver;
+} {
+  void body;
+  return {
+    credentialDriver: driver,
   };
 }
 
@@ -131,11 +157,11 @@ function buildSourceConnectionRequest(
 }
 
 /**
- * Resolves the `{ provider, kind }` identity a managed-provider subroute fixes
+ * Resolves the `{ provider, kind }` identity a provider-runtime subroute fixes
  * from the @takosumi/providers registry (single source of truth): the
  * Connection kind's driver provider supplies the wire `provider` id, so the
  * subroute never re-declares the provider string. The registry is statically
- * complete for the managed kinds these subroutes use.
+ * complete for the provider-backed kinds these subroutes use.
  */
 function providerIdentityForKind(kind: ConnectionKind): {
   readonly provider: string;
@@ -145,7 +171,7 @@ function providerIdentityForKind(kind: ConnectionKind): {
   if (!provider) {
     throw new OpenTofuControllerError(
       "not_implemented",
-      `no managed provider registered for connection kind ${kind}`,
+      `no provider runtime registered for connection kind ${kind}`,
     );
   }
   return { provider: provider.id, kind };
@@ -158,6 +184,7 @@ function buildCloudflareConnectionRequest(
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     ...providerIdentityForKind("cloudflare_api_token"),
+    ...providerCredentialFields(body, "cloudflare_api_token"),
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
@@ -168,7 +195,7 @@ function buildCloudflareConnectionRequest(
 }
 
 /**
- * Builds an AWS assume-role-capable provider Connection (§30 subroute). The
+ * Builds an AWS assume-role-capable Provider Connection (§30 subroute). The
  * Vault mints AWS provider env vars from sealed `values`; when static source
  * keys are present, it exchanges them for short-lived STS AssumeRole
  * credentials at runner-dispatch time. The role ARN / external id / region are
@@ -201,6 +228,7 @@ function buildAwsAssumeRoleConnectionRequest(
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     ...providerIdentityForKind("aws_assume_role"),
+    ...providerCredentialFields(body, "aws_assume_role"),
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
@@ -230,6 +258,7 @@ function buildGcpImpersonationConnectionRequest(
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     provider: "google",
     kind: "gcp_service_account_impersonation",
+    ...providerCredentialFields(body, "gcp_service_account_impersonation"),
     authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
@@ -299,11 +328,11 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
     },
     {
       method: "POST",
-      path: TAKOSUMI_CONNECTIONS_PROVIDER_ENV_SET_ROUTE,
+      path: TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE,
       summary:
-        "Registers a user-owned provider env set Connection (values write-only; helper flows may create the same shape).",
+        "Registers a secret-backed Provider Connection through the generic-env provider route (values write-only).",
       auth: "deploy-control-token",
-      operationId: "createProviderEnvSetConnection",
+      operationId: "createGenericEnvProviderConnection",
       openapi: {
         requestSchema: "CreateConnectionSubrouteRequest",
         okStatus: "201",
@@ -315,7 +344,7 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       method: "POST",
       path: TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_START_ROUTE,
       summary:
-        "Starts a Cloudflare OAuth helper flow that creates a write-only user env-set Connection.",
+        "Starts a Cloudflare OAuth helper flow that creates a write-only OAuth Provider Connection.",
       auth: "deploy-control-token",
       operationId: "startCloudflareOAuthConnection",
       openapi: {
@@ -338,7 +367,7 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       method: "POST",
       path: TAKOSUMI_CONNECTIONS_GCP_OAUTH_START_ROUTE,
       summary:
-        "Starts a Google Cloud OAuth helper flow that creates a write-only user env-set Connection.",
+        "Reserved Google Cloud OAuth helper flow. Returns 501 until a live helper driver is wired.",
       auth: "deploy-control-token",
       operationId: "startGcpOAuthConnection",
       openapi: {
@@ -351,7 +380,7 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       method: "GET",
       path: TAKOSUMI_CONNECTIONS_GCP_OAUTH_CALLBACK_ROUTE,
       summary:
-        "Completes a Google Cloud OAuth helper flow and registers the resulting write-only Connection.",
+        "Reserved Google Cloud OAuth callback. Returns 501 until a live helper driver is wired.",
       auth: "deploy-control-token",
       operationId: "completeGcpOAuthConnection",
       openapi: { okStatus: "201", okSchema: "ConnectionResponse" },
@@ -361,7 +390,7 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       method: "POST",
       path: TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE,
       summary:
-        "Registers a Google Cloud service-account impersonation helper Connection using write-only env values.",
+        "Registers a reserved Google Cloud impersonation Connection; it remains pending until GCP verify/mint drivers are wired.",
       auth: "deploy-control-token",
       operationId: "createGcpImpersonationConnection",
       openapi: {
@@ -480,10 +509,10 @@ export function mountDeployControlConnectionRoutes(
   );
 
   app.post(
-    TAKOSUMI_CONNECTIONS_PROVIDER_ENV_SET_ROUTE,
+    TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE,
     deployControlBodyLimit,
     createConnectionFromSubroute((body) =>
-      buildProviderEnvSetConnectionRequest(body),
+      buildGenericEnvProviderConnectionRequest(body),
     ),
   );
 
@@ -672,10 +701,16 @@ function normalizeOAuthConnectionRequest(
   helperProvider: "cloudflare" | "gcp",
   request: CreateConnectionRequest,
 ): CreateConnectionRequest {
-  if (helperProvider === "gcp" && request.provider === "gcp") {
-    return { ...request, provider: "google" };
-  }
-  return request;
+  const normalized =
+    helperProvider === "gcp" && request.provider === "gcp"
+      ? { ...request, provider: "google" }
+      : request;
+  return {
+    ...normalized,
+    credentialDriver:
+      normalized.credentialDriver ??
+      (helperProvider === "gcp" ? "gcp_oauth_bootstrap" : "cloudflare_oauth"),
+  };
 }
 
 function oauthCallbackInput(

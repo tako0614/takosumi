@@ -1,8 +1,8 @@
-import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
+  isInternalControlPlanePath,
   isServiceControlPlanePath,
 } from "./routes.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
@@ -58,14 +58,12 @@ export function createCloudflareWorker(
       if (url.pathname === "/healthz") {
         return Response.json({ ok: true, provider: "cloudflare-worker" });
       }
-      if (url.pathname.startsWith("/coordination/")) {
-        const denied = denyUnauthorizedCoordination(request, env);
-        if (denied) return denied;
-        const id = env.COORDINATION.idFromName("takos-control-plane");
-        const targetPath = `/${url.pathname.slice("/coordination/".length)}`;
-        return env.COORDINATION.get(id).fetch(
-          new Request(new URL(targetPath, request.url), request),
-        );
+      if (isCoordinationEdgePath(url.pathname)) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      const internalPath = isInternalControlPlanePath(url.pathname);
+      if (internalPath && !internalEdgeIngressEnabled(env)) {
+        return Response.json({ error: "not found" }, { status: 404 });
       }
       if (isRuntimeAgentPath(url.pathname)) {
         runtimeAgentApp ??= options.createRuntimeAgentApp
@@ -74,7 +72,7 @@ export function createCloudflareWorker(
         const created = await runtimeAgentApp;
         return created.app.fetch(createServiceWorkerRequest(request));
       }
-      if (isServiceControlPlanePath(url.pathname)) {
+      if (isServiceControlPlanePath(url.pathname) || internalPath) {
         serviceApp ??= options.createServiceApp
           ? options.createServiceApp(env)
           : createWorkerServiceApp(env, "takosumi-api");
@@ -103,47 +101,22 @@ export function createDeployControlQueueConsumer(): (
   return (batch, env) => consumeOpenTofuRunBatch(batch, env);
 }
 
-/**
- * The `/coordination/*` route forwards straight to a single shared
- * {@link CoordinationObject} Durable Object (lease/alarm storage for the
- * control plane). It is an internal control-plane surface, so it must not be
- * edge-reachable without authentication. We gate it on the same operator secret
- * as the Deploy Control API (`TAKOSUMI_DEPLOY_CONTROL_TOKEN`):
- *
- * - token unset  -> the control-plane surface is not exposed -> 404 (mirrors the
- *   Deploy Control "routes disabled" behavior, so an unconfigured host never
- *   accepts unauthenticated writes into the coordination DO).
- * - token set    -> require `Authorization: Bearer <token>`, constant-time
- *   compared; 401 on missing/invalid bearer.
- *
- * Returns a Response when the request must be rejected, or undefined when it is
- * authorized and may proceed to the Durable Object.
- */
-function denyUnauthorizedCoordination(
-  request: Request,
-  env: CloudflareWorkerEnv,
-): Response | undefined {
-  const configuredToken = typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
-    ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
-    : undefined;
-  if (!configuredToken) {
-    return Response.json({ error: "not found" }, { status: 404 });
-  }
-  const header = request.headers.get("authorization") ?? "";
-  const prefix = "Bearer ";
-  const bearer = header.startsWith(prefix)
-    ? header.slice(prefix.length)
-    : undefined;
-  if (!bearer || !constantTimeEqualsString(bearer, configuredToken)) {
-    return Response.json(
-      { error: "invalid coordination bearer" },
-      { status: 401 },
-    );
-  }
-  return undefined;
-}
-
 function isRuntimeAgentPath(pathname: string): boolean {
   const prefix = `${INTERNAL_V1_PREFIX}/runtime/agents`;
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isCoordinationEdgePath(pathname: string): boolean {
+  const prefix = `${INTERNAL_V1_PREFIX}/`;
+  if (!pathname.startsWith(prefix)) return false;
+  const rest = pathname.slice(prefix.length).replace(/^\/+/, "");
+  const [segment] = rest.split("/");
+  return segment === "coordination";
+}
+
+function internalEdgeIngressEnabled(env: CloudflareWorkerEnv): boolean {
+  return (
+    env.LOCAL_SUBSTRATE_TEST_BED === "1" ||
+    env.TAKOSUMI_EXPOSE_INTERNAL_EDGE === "1"
+  );
 }

@@ -1,5 +1,6 @@
 import type { CloudflareWorkerEnv } from "../bindings.ts";
 import { StateArtifactCrypto } from "../state_crypto.ts";
+import { redactString } from "../../../core/domains/observability/redaction.ts";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";
@@ -7,6 +8,7 @@ const STATE_ARTIFACT_CONTENT_TYPE = "application/json";
 const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
+const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
@@ -55,8 +57,37 @@ interface DepState {
   readonly digest: string;
 }
 
+interface RestoreState {
+  readonly objectKey: string;
+  readonly digest: string;
+}
+
 export interface ContainerRequestFetcher {
   containerFetch(request: Request, port?: number): Promise<Response>;
+}
+
+interface ContainerStartWaiter {
+  startAndWaitForPorts(
+    ports?: number | number[],
+    cancellationOptions?: {
+      readonly abort?: AbortSignal;
+      readonly instanceGetTimeoutMS?: number;
+      readonly portReadyTimeoutMS?: number;
+      readonly waitInterval?: number;
+    },
+    startOptions?: {
+      readonly envVars?: Record<string, string>;
+      readonly entrypoint?: string[];
+    },
+  ): Promise<void>;
+}
+
+interface ContainerStopper {
+  stop(): Promise<void> | void;
+}
+
+interface ContainerDestroyer {
+  destroy(): Promise<void> | void;
 }
 
 export interface ContainerHostContext {
@@ -109,19 +140,48 @@ async function loadContainerRuntime(): Promise<typeof LocalContainerRuntime> {
 const OpenTofuRunnerContainerBase = await loadContainerRuntime();
 const containerRuntimeAvailable =
   OpenTofuRunnerContainerBase !== LocalContainerRuntime;
+const CONTAINER_START_TIMEOUT_MS = 30_000;
+const CONTAINER_PORT_READY_TIMEOUT_MS = 30_000;
+const CONTAINER_START_POLL_INTERVAL_MS = 250;
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
-  sleepAfter = "10m";
-  pingEndpoint = "healthz";
+  requiredPorts = [8080];
+  sleepAfter = "30s";
+  pingEndpoint = "localhost/healthz";
+  entrypoint = ["/app/runner/start.sh"];
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
 
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
     this.envVars = {
+      PORT: "8080",
       TAKOSUMI_OPENTOFU_RUNNER: "cloudflare-container",
+      TAKOSUMI_RUNNER_START_SERVER: "1",
     };
+  }
+
+  onError(error: unknown): unknown {
+    console.error("OpenTofu runner container failed", error);
+    throw error;
+  }
+
+  onStart(): void {
+    console.log("OpenTofu runner container started", {
+      defaultPort: this.defaultPort,
+      requiredPorts: this.requiredPorts,
+      pingEndpoint: this.pingEndpoint,
+    });
+  }
+
+  onStop(params: { readonly exitCode: number; readonly reason: string }): void {
+    console.error("OpenTofu runner container stopped", params);
+  }
+
+  async onActivityExpired(): Promise<void> {
+    console.log("OpenTofu runner container activity expired; shutting down");
+    await this.#shutdownContainerIfSupported();
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -135,16 +195,30 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 501 },
       );
     }
+    const stopAfterRun = isRunDispatchRequest(request);
     try {
-      return await this.#fetchWithDurablePlanArtifacts(request);
+      const response = await this.#fetchWithDurablePlanArtifacts(request);
+      return stopAfterRun ? await bufferedResponse(response) : response;
     } catch (error) {
+      const url = new URL(request.url);
+      console.error("OpenTofu runner artifact relay failed", {
+        method: request.method,
+        path: url.pathname,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(error instanceof Error && error.stack
+          ? { stack: error.stack }
+          : {}),
+      });
       return Response.json(
         {
           error: "OpenTofu runner artifact relay failed",
-          detail: error instanceof Error ? error.message : String(error),
+          detail: redactedErrorMessage(error, "run artifact relay failed"),
         },
         { status: 500 },
       );
+    } finally {
+      if (stopAfterRun) await this.#shutdownContainerIfSupported();
     }
   }
 
@@ -163,6 +237,71 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
   }
 
+  async #startContainerIfSupported(): Promise<void> {
+    const startAndWaitForPorts = (
+      this as unknown as Partial<ContainerStartWaiter>
+    ).startAndWaitForPorts;
+    if (typeof startAndWaitForPorts !== "function") return;
+    console.log("OpenTofu runner container start requested", {
+      ports: [this.defaultPort],
+      entrypoint: this.entrypoint,
+      envNames: Object.keys(this.envVars).sort(),
+    });
+    await startAndWaitForPorts.call(
+      this,
+      [this.defaultPort],
+      {
+        instanceGetTimeoutMS: CONTAINER_START_TIMEOUT_MS,
+        portReadyTimeoutMS: CONTAINER_PORT_READY_TIMEOUT_MS,
+        waitInterval: CONTAINER_START_POLL_INTERVAL_MS,
+      },
+      {
+        envVars: this.envVars,
+        entrypoint: this.entrypoint,
+      },
+    );
+  }
+
+  async #shutdownContainerIfSupported(): Promise<void> {
+    const destroy = (this as unknown as Partial<ContainerDestroyer>).destroy;
+    if (typeof destroy === "function") {
+      try {
+        await destroy.call(this);
+        console.log("OpenTofu runner container destroy requested");
+        return;
+      } catch (error) {
+        console.error("OpenTofu runner container destroy failed", {
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const stop = (this as unknown as Partial<ContainerStopper>).stop;
+    if (typeof stop !== "function") return;
+    try {
+      await stop.call(this);
+      console.log("OpenTofu runner container stop requested");
+    } catch (error) {
+      console.error("OpenTofu runner container stop failed", {
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async #ensureContainerReady(baseUrl: URL): Promise<void> {
+    await this.#startContainerIfSupported();
+    const response = await this.#containerFetch(
+      new Request(containerHealthUrl(baseUrl), { method: "GET" }),
+    );
+    if (!response.ok) {
+      const failure = await readRunnerFailureDetail(response);
+      throw new Error(
+        `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
+      );
+    }
+  }
+
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
@@ -175,7 +314,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // Source-sync runs (LANE M1) never touch OpenTofu state; they run, leave the
     // archive on the container, and the DO pulls + persists it to R2_SOURCE.
     if (isSourceSyncEnvelope(envelope)) {
+      await this.#ensureContainerReady(url);
       return await this.#fetchWithSourceArchive(runId, request, bodyText);
+    }
+    if (envelope.action === "restore") {
+      const stateScope = parseStateScope(envelope.request);
+      const restoreState = parseRestoreState(envelope.request);
+      if (!stateScope || !restoreState) {
+        throw new Error("restore requires stateScope and restoreState");
+      }
+      return await this.#restoreStateGeneration(
+        runId,
+        stateScope,
+        restoreState,
+      );
     }
     // M2: when the dispatch carries an environment-scoped state location, route
     // state through R2_STATE (encrypted at rest, spec keys); otherwise fall back
@@ -210,10 +362,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } else if (stateKeys.length > 0) {
       await this.#restoreStateArtifact(runId, stateKeys, url);
     }
+    await this.#ensureContainerReady(url);
     const runnerResponse = await this.#containerFetch(
       new Request(request.url, {
         method: request.method,
-        headers: request.headers,
+        headers: runnerRequestHeaders(request),
         body: bodyText,
       }),
     );
@@ -273,7 +426,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const runnerResponse = await this.#containerFetch(
       new Request(request.url, {
         method: request.method,
-        headers: request.headers,
+        headers: runnerRequestHeaders(request),
         body: bodyText,
       }),
     );
@@ -355,6 +508,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (digest !== sourceArchive.digest) {
       throw new Error(`source archive digest mismatch on restore: ${digest}`);
     }
+    await this.#ensureContainerReady(baseUrl);
     const response = await this.#containerFetch(
       new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
         method: "PUT",
@@ -363,8 +517,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }),
     );
     if (!response.ok) {
+      const failure = await readRunnerFailureDetail(response);
       throw new Error(
-        `container source archive restore failed: ${response.status}`,
+        `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
       );
     }
   }
@@ -398,6 +553,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ciphertext,
         depState.digest,
       );
+      await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
         new Request(depStateRestoreUrl(baseUrl, runId, depState.name), {
           method: "PUT",
@@ -438,6 +594,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ciphertext,
       current.digest,
     );
+    await this.#ensureContainerReady(baseUrl);
     const response = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, runId), {
         method: "PUT",
@@ -545,6 +702,47 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
     });
     return key;
+  }
+
+  async #restoreStateGeneration(
+    runId: string,
+    scope: StateScope,
+    restoreState: RestoreState,
+  ): Promise<Response> {
+    assertRestoreStateObjectKey(scope, restoreState.objectKey);
+    const bucket = this.#r2State();
+    const object = await bucket.get(restoreState.objectKey);
+    if (!object) {
+      throw new Error(
+        `restore state object not found: ${restoreState.objectKey}`,
+      );
+    }
+    const plaintext = await this.#stateCrypto().open(
+      new Uint8Array(await object.arrayBuffer()),
+      restoreState.digest,
+    );
+    const sealed = await this.#stateCrypto().seal(plaintext);
+    const objectKey = stateObjectKey(scope);
+    await bucket.put(objectKey, sealed.ciphertext, {
+      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+      customMetadata: {
+        "takosumi-run-id": runId,
+        "takosumi-content-digest": sealed.contentDigest,
+        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+        "takosumi-generation": String(scope.generation),
+        "takosumi-restored-from-object": restoreState.objectKey,
+      },
+    });
+    const current = {
+      generation: scope.generation,
+      objectKey,
+      digest: sealed.contentDigest,
+    };
+    await bucket.put(currentStateKey(scope), JSON.stringify(current), {
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: { "takosumi-run-id": runId },
+    });
+    return jsonResponse({ state: current }, 200);
   }
 
   async #persistPlanArtifact(
@@ -698,6 +896,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ciphertext,
         object.customMetadata?.["takosumi-content-digest"],
       );
+      await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
         new Request(stateArtifactUrl(baseUrl, runId), {
           method: "PUT",
@@ -753,6 +952,27 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 function artifactUrl(baseUrl: URL, runId: string): string {
   const url = new URL(baseUrl);
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tfplan`;
+  url.search = "";
+  return url.toString();
+}
+
+function isRunDispatchRequest(request: Request): boolean {
+  if (request.method !== "POST") return false;
+  return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
+}
+
+async function bufferedResponse(response: Response): Promise<Response> {
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function containerHealthUrl(baseUrl: URL): string {
+  const url = new URL(baseUrl);
+  url.pathname = "/healthz";
   url.search = "";
   return url.toString();
 }
@@ -1036,6 +1256,32 @@ function parseDepStates(requestPayload: unknown): readonly DepState[] {
   });
 }
 
+function parseRestoreState(requestPayload: unknown): RestoreState | undefined {
+  const restoreState = recordField(requestPayload, "restoreState");
+  if (!restoreState) return undefined;
+  const objectKey = stringField(restoreState, "objectKey");
+  const digest = stringField(restoreState, "digest");
+  if (!objectKey || !digest) return undefined;
+  return { objectKey, digest };
+}
+
+function assertRestoreStateObjectKey(scope: StateScope, key: string): void {
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("..") ||
+    key.includes("\0") ||
+    key.includes("\\") ||
+    !key.startsWith("spaces/") ||
+    !key.endsWith(".tfstate.enc")
+  ) {
+    throw new Error(`unsafe restore state object key: ${key}`);
+  }
+  if (!key.startsWith(`${stateScopePrefix(scope)}/`)) {
+    throw new Error(`restore state object key escapes target prefix: ${key}`);
+  }
+}
+
 // Re-assert a dependency state objectKey is a traversal-free R2_STATE key inside
 // the producer env's state prefix (defense in depth against a crafted descriptor
 // pointing at another tenant's object). It must match the spec §20 state key
@@ -1269,8 +1515,44 @@ async function readJsonObject(
   throw new Error("OpenTofu runner response must be a JSON object");
 }
 
+async function readRunnerFailureDetail(
+  response: Response,
+): Promise<string | undefined> {
+  const text = await response.text();
+  if (text.length === 0) return undefined;
+  const redactedText = redactString(text, { redactedValue: "[redacted]" });
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (isRecord(value)) {
+      const detail =
+        stringField(value, "detail") ?? stringField(value, "error");
+      if (detail) return redactString(detail, { redactedValue: "[redacted]" });
+    }
+  } catch {
+    // Fall back to the redacted raw body below.
+  }
+  const trimmed = redactedText.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
+}
+
 function jsonResponse(payload: unknown, status: number): Response {
   return Response.json(payload, { status });
+}
+
+function redactedErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const text = message && message.trim().length > 0 ? message : fallback;
+  return redactString(text, { redactedValue: "[redacted]" });
+}
+
+function runnerRequestHeaders(request: Request): Headers {
+  const headers = new Headers();
+  for (const [name, value] of request.headers) {
+    if (RUNNER_REQUEST_HEADER_ALLOWLIST.has(name.toLowerCase())) {
+      headers.set(name, value);
+    }
+  }
+  return headers;
 }
 
 function recordField(

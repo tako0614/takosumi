@@ -10,7 +10,7 @@
  *
  * The reference service provides a default implementation built over the
  * `RuntimeAdapter` `SubprocessAdapter` (see
- * `src/service/shared/runtime/capability-runners.ts`). The default runner routes
+ * `core/shared/runtime/capability-runners.ts`). The default runner routes
  * through `currentRuntime().subprocess`, which provides Bun / Node / Workers
  * implementations.
  *

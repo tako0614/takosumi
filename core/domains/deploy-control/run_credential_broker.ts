@@ -17,7 +17,7 @@
  *   - `vault` — the {@link ConnectionVault}, whose run-execution handle is shared
  *     (the Connection-lifecycle facade keeps its own);
  *   - `store` — for the mint-event ledger writes;
- *   - `resolveRunProviderBindings` — the run-scoped provider-binding resolution
+ *   - `resolveRunInstallationProviderEnvBindings` — the run-scoped Provider Env binding resolution
  *     that feeds rootgen, so the minted TF_VAR vars line up byte-for-byte;
  *   - `policyForPlanRun` — the layered policy lookup (root-only requirement +
  *     credential mint policy);
@@ -36,7 +36,7 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import { CredentialBundle } from "../../adapters/vault/mod.ts";
 import type {
-  ProviderBindingMintEntry,
+  InstallationProviderEnvBindingMintEntry,
   ConnectionVault,
 } from "../../adapters/vault/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -44,15 +44,14 @@ import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
 import { providerMatches } from "./policy.ts";
 import { evaluateProviderCredentialMintPolicy } from "./provider_policy.ts";
 import {
-  mintableConnectionIds,
-  resolvedBindingsDigest,
-  type ResolvedProviderBinding,
+  resolvedProviderEnvBindingsDigest,
+  type ResolvedInstallationProviderEnvBinding,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
 
 /**
  * Ports the controller injects into {@link RunCredentialBroker}. The vault and
- * `resolveRunProviderBindings` stay owned by the controller and are passed as
+ * `resolveRunInstallationProviderEnvBindings` stay owned by the controller and are passed as
  * handles / callbacks rather than moved; `store` / `newId` / `now` mirror the
  * controller's own handles so ids and timestamps line up across both surfaces.
  */
@@ -62,10 +61,10 @@ export interface RunCredentialBrokerDependencies {
   readonly now: () => number;
   /** Run-execution Vault handle (absent on builds without provider credentials). */
   readonly vault?: ConnectionVault;
-  /** Run-scoped provider-binding resolution (feeds rootgen and the per-alias split). */
-  readonly resolveRunProviderBindings: (
+  /** Run-scoped Provider Env binding resolution (feeds rootgen and the per-alias split). */
+  readonly resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedProviderBinding[] | undefined>;
+  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
   /** Layered policy lookup for the run's installation (root-only + mint policy). */
   readonly policyForPlanRun: (
     planRun: PlanRun,
@@ -83,9 +82,9 @@ export class RunCredentialBroker {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #vault?: ConnectionVault;
-  readonly #resolveRunProviderBindings: (
+  readonly #resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
-  ) => Promise<readonly ResolvedProviderBinding[] | undefined>;
+  ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
   readonly #policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
@@ -95,7 +94,8 @@ export class RunCredentialBroker {
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
     this.#vault = dependencies.vault;
-    this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
+    this.#resolveRunInstallationProviderEnvBindings =
+      dependencies.resolveRunInstallationProviderEnvBindings;
     this.#policyForPlanRun = dependencies.policyForPlanRun;
   }
 
@@ -107,95 +107,88 @@ export class RunCredentialBroker {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
     }
-    if (!this.#vault) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "credential_mint_failed: connection vault is not configured for provider credentials",
-      );
-    }
     try {
-      // Resolve the installation's provider bindings ONCE: the same resolution
-      // feeds the per-binding credential split (TF_VAR entries) so minted vars
+      if (!planRun.installationContext) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "credential_mint_failed: installation provider connection evidence is required",
+        );
+      }
+      // Resolve the installation's provider env bindings ONCE: the same resolution
+      // feeds the per-connection credential split (TF_VAR entries) so minted vars
       // line up byte-for-byte with rootgen.
-      const resolved = await this.#resolveRunProviderBindings(planRun);
+      const resolved =
+        await this.#resolveRunInstallationProviderEnvBindings(planRun);
+      if (!resolved) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "credential_mint_failed: installation provider connection resolution is required",
+        );
+      }
       // plan→apply TOCTOU assert (S2): the plan pinned a digest of the bindings
       // it was reviewed against. At apply/destroy mint, re-hash the LIVE resolved
       // bindings and fail closed if they diverge — a Connection swap, a binding
-      // mode flip, or an operator-default repoint between plan and apply would
+      // mode flip, or a provider resolver repoint between plan and apply would
       // otherwise mint DIFFERENT credentials than the reviewer approved. The plan
       // mint is the pinning side, so it is never asserted here.
       if (
         (phase === "apply" || phase === "destroy") &&
-        planRun.resolvedBindingsDigest !== undefined
+        planRun.resolvedProviderEnvBindingsDigest !== undefined
       ) {
-        const liveDigest = await resolvedBindingsDigest(resolved);
-        if (liveDigest !== planRun.resolvedBindingsDigest) {
+        const liveDigest = await resolvedProviderEnvBindingsDigest(resolved);
+        if (liveDigest !== planRun.resolvedProviderEnvBindingsDigest) {
           throw new OpenTofuControllerError(
             "failed_precondition",
             `resolved_bindings_changed: plan run ${planRun.id} was reviewed ` +
-              `against different provider bindings than are now resolved; ` +
+              `against different provider connections than are now resolved; ` +
               `re-plan before apply`,
           );
         }
       }
-      // Per-binding split: the same resolved entries that produced the rootgen
+      assertNoCloudOnlyGatewayMaterialization(planRun, resolved);
+      // Per-connection split: the same resolved entries that produced the rootgen
       // provider blocks produce these TF_VAR_<provider>_<alias>_<arg> vars.
       // This is the only provider credential delivery path for Installation
       // runs; providers without a root-only arg mapping receive no shared env.
-      const providerEntries = resolved
-        ? providerMintEntriesFromResolved(resolved)
-        : [];
-      if (resolved) {
-        const missingRootOnly = missingRootOnlyCredentialProviders(
-          planRun.requiredProviders,
-          resolved,
+      const providerEntries = providerMintEntriesFromResolved(resolved);
+      const missingRootOnly = missingRootOnlyCredentialProviders(
+        planRun.requiredProviders,
+        resolved,
+      );
+      const credentialPolicy = (await this.#policyForPlanRun(planRun))
+        ?.providerCredentials;
+      const rootOnlyRequired = credentialPolicy?.requireRootOnly === true;
+      if (missingRootOnly.length > 0 && rootOnlyRequired) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `credential_mint_failed: root-only provider connection is required for providers: ${missingRootOnly.join(", ")}`,
         );
-        const credentialPolicy = (await this.#policyForPlanRun(planRun))
-          ?.providerCredentials;
-        const rootOnlyRequired =
-          credentialPolicy?.requireRootOnly === true ||
-          resolved.some((entry) => entry.mode === "disabled");
-        if (missingRootOnly.length > 0 && rootOnlyRequired) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `credential_mint_failed: root-only provider binding is required for providers: ${missingRootOnly.join(", ")}`,
-          );
-        }
       }
-      const sharedProviders = resolved ? [] : planRun.requiredProviders;
-      const connectionIds =
-        resolved && sharedProviders.length > 0
-          ? mintableConnectionIds(resolved)
-          : resolved
-            ? []
-            : undefined;
-      const bundle =
-        sharedProviders.length > 0
-          ? await this.#vault.mintForPhase({
-              spaceId: planRun.spaceId,
-              phase,
-              providers: sharedProviders,
-              ...(connectionIds !== undefined ? { connectionIds } : {}),
-            })
-          : new CredentialBundle({});
+      const vaultRequired = providerEntries.length > 0;
+      const vault = this.#vault;
+      if (vaultRequired && !vault) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "credential_mint_failed: connection vault is not configured for provider credentials",
+        );
+      }
+      const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
-        if (resolved) {
-          await this.#recordProviderCredentialMintEvents(
-            planRun,
-            resolved,
-            phase,
-            auditRunId,
-            bundle.providerCredentialEvidence,
-          );
-        }
+        await this.#recordProviderCredentialMintEvents(
+          planRun,
+          resolved,
+          phase,
+          auditRunId,
+          bundle.providerCredentialEvidence,
+        );
         await this.#assertProviderCredentialPolicy(
           planRun,
           bundle.providerCredentialEvidence,
-          resolved ? providerEntries.length : 0,
+          providerEntries.length,
         );
-        return bundle.env;
+        return { ...bundle.env };
       }
-      const perAlias = await this.#vault.mintForProviderBindings(
+      const perAlias = await vault!.mintForInstallationProviderEnvBindings(
         planRun.spaceId,
         providerEntries,
         { phase },
@@ -204,15 +197,13 @@ export class RunCredentialBroker {
         ...bundle.providerCredentialEvidence,
         ...perAlias.providerCredentialEvidence,
       ];
-      if (resolved) {
-        await this.#recordProviderCredentialMintEvents(
-          planRun,
-          resolved,
-          phase,
-          auditRunId,
-          evidence,
-        );
-      }
+      await this.#recordProviderCredentialMintEvents(
+        planRun,
+        resolved,
+        phase,
+        auditRunId,
+        evidence,
+      );
       await this.#assertProviderCredentialPolicy(
         planRun,
         evidence,
@@ -257,7 +248,7 @@ export class RunCredentialBroker {
 
   async #recordProviderCredentialMintEvents(
     planRun: PlanRun,
-    resolved: readonly ResolvedProviderBinding[],
+    resolved: readonly ResolvedInstallationProviderEnvBinding[],
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     evidence: readonly ProviderCredentialMintEvidence[] = [],
@@ -270,13 +261,14 @@ export class RunCredentialBroker {
     const evidenceByConnection = groupProviderCredentialEvidence(evidence);
     for (const entry of byConnection) {
       const providerCredentialEvidence =
-        evidenceByConnection.get(entry.connectionId) ?? [];
+        evidenceByConnection.get(entry.providerEnvId) ?? [];
       await this.#store.putCredentialMintEvent({
         id: this.#newId("credmint"),
         runId: auditRunId,
         spaceId: planRun.spaceId,
         ...(installationId ? { installationId } : {}),
-        connectionId: entry.connectionId,
+        providerEnvId: entry.providerEnvId,
+        ...(entry.connectionId ? { connectionId: entry.connectionId } : {}),
         phase,
         capabilities: entry.capabilities,
         ...(providerCredentialEvidence.length > 0
@@ -288,15 +280,30 @@ export class RunCredentialBroker {
   }
 }
 
+function assertNoCloudOnlyGatewayMaterialization(
+  planRun: PlanRun,
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+): void {
+  if (
+    !resolved.some((entry) => (entry.materialization as string) === "gateway")
+  ) {
+    return;
+  }
+  throw new OpenTofuControllerError(
+    "failed_precondition",
+    `credential_mint_failed: gateway materialization is Takosumi Cloud-only and is not available in OSS runner profile ${planRun.runnerProfileId}`,
+  );
+}
+
 /**
- * Derives per-binding credential mint entries from resolved provider bindings.
- * Mirrors `providerBindingsFromResolved` so minted TF_VAR names line up
+ * Derives per-connection credential mint entries from resolved provider env bindings.
+ * Mirrors `providerEnvBindingsFromResolved` so minted TF_VAR names line up
  * byte-for-byte with rootgen. The vault still re-validates each connection id.
  */
 function providerMintEntriesFromResolved(
-  resolved: readonly ResolvedProviderBinding[],
-): readonly ProviderBindingMintEntry[] {
-  const entries: ProviderBindingMintEntry[] = [];
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+): readonly InstallationProviderEnvBindingMintEntry[] {
+  const entries: InstallationProviderEnvBindingMintEntry[] = [];
   for (const entry of resolved) {
     const connection = entry.connection;
     if (!connection) continue;
@@ -311,7 +318,7 @@ function providerMintEntriesFromResolved(
 
 function missingRootOnlyCredentialProviders(
   requiredProviders: readonly string[],
-  resolved: readonly ResolvedProviderBinding[],
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): readonly string[] {
   return requiredProviders
     .filter((provider) => providerEnvRule(provider))
@@ -321,14 +328,14 @@ function missingRootOnlyCredentialProviders(
 
 function rootOnlyProviderCovered(
   requiredProvider: string,
-  resolved: readonly ResolvedProviderBinding[],
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): boolean {
   return resolved.some((entry) => {
-    if (!entry.connection) return false;
-    if (providerCredentialArgs(entry.connection.provider).length === 0) {
+    const provider = entry.connection?.provider ?? entry.provider;
+    if (providerCredentialArgs(provider).length === 0) {
       return false;
     }
-    return providerMatches(requiredProvider, entry.connection.provider);
+    return providerMatches(requiredProvider, provider);
   });
 }
 
@@ -338,37 +345,48 @@ function rootOnlyProviderCovered(
  * migrated.
  */
 function credentialMintAuditEntries(
-  resolved: readonly ResolvedProviderBinding[],
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): readonly {
-  readonly connectionId: string;
+  readonly providerEnvId: string;
+  readonly connectionId?: string;
   readonly capabilities: readonly string[];
 }[] {
-  const byConnection = new Map<string, Set<string>>();
+  const byProviderEnv = new Map<
+    string,
+    { readonly connectionId?: string; readonly providers: Set<string> }
+  >();
   for (const entry of resolved) {
-    if (!entry.connection) continue;
-    let providers = byConnection.get(entry.connection.id);
-    if (!providers) {
-      providers = new Set<string>();
-      byConnection.set(entry.connection.id, providers);
+    const providerEnvId = entry.env.id;
+    let bucket = byProviderEnv.get(providerEnvId);
+    if (!bucket) {
+      bucket = {
+        ...(entry.connection ? { connectionId: entry.connection.id } : {}),
+        providers: new Set<string>(),
+      };
+      byProviderEnv.set(providerEnvId, bucket);
     }
-    providers.add(entry.connection.provider);
+    bucket.providers.add(
+      entry.connection?.provider ?? entry.env.providerSource,
+    );
   }
-  return Array.from(byConnection.entries())
+  return Array.from(byProviderEnv.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([connectionId, providers]) => ({
-      connectionId,
-      capabilities: Array.from(providers).sort(),
+    .map(([providerEnvId, bucket]) => ({
+      providerEnvId,
+      ...(bucket.connectionId ? { connectionId: bucket.connectionId } : {}),
+      capabilities: Array.from(bucket.providers).sort(),
     }));
 }
 
 function groupProviderCredentialEvidence(
   evidence: readonly ProviderCredentialMintEvidence[],
 ): ReadonlyMap<string, readonly ProviderCredentialMintEvidence[]> {
-  const byConnection = new Map<string, ProviderCredentialMintEvidence[]>();
+  const byProviderEnv = new Map<string, ProviderCredentialMintEvidence[]>();
   const seen = new Set<string>();
   for (const item of evidence) {
     const key = [
-      item.connectionId,
+      item.providerEnvId,
+      item.connectionId ?? "",
       item.provider,
       item.delivery,
       item.rootOnly ? "root" : "shared",
@@ -380,13 +398,13 @@ function groupProviderCredentialEvidence(
     ].join("\0");
     if (seen.has(key)) continue;
     seen.add(key);
-    const existing = byConnection.get(item.connectionId) ?? [];
+    const existing = byProviderEnv.get(item.providerEnvId) ?? [];
     existing.push(item);
-    byConnection.set(item.connectionId, existing);
+    byProviderEnv.set(item.providerEnvId, existing);
   }
-  for (const [connectionId, entries] of byConnection) {
-    byConnection.set(
-      connectionId,
+  for (const [providerEnvId, entries] of byProviderEnv) {
+    byProviderEnv.set(
+      providerEnvId,
       entries.sort((a, b) =>
         `${a.delivery}:${a.provider}:${a.expiresAt ?? ""}`.localeCompare(
           `${b.delivery}:${b.provider}:${b.expiresAt ?? ""}`,
@@ -394,5 +412,5 @@ function groupProviderCredentialEvidence(
       ),
     );
   }
-  return byConnection;
+  return byProviderEnv;
 }

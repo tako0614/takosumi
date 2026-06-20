@@ -1,27 +1,22 @@
+import { readFile, readdir } from "node:fs/promises";
 import {
-  mkdir,
-  readFile,
-  readdir,
-  writeFile,
-} from "node:fs/promises";
-import {
-  type AppBindingMaterializationResult,
-  type AppBindingMaterializer,
-  type AppInstallationImportDataRestorer,
+  type ServiceBindingMaterializationResult,
+  type ServiceBindingMaterializer,
   type AppInstallationMaterializeWorker,
   type AppInstallationMaterializeWorkerResult,
-  createOpenManagedOfferingAccessPolicy,
+  createOpenPlatformAccessPolicy,
   customOidcOAuthProvider,
   InMemorySharedCellWarmPool,
-  type InstallationExportArchiveDataFile,
-  isAppBindingKind,
-  type ManagedOfferingAccessPolicy,
+  isServiceBindingMaterialKind,
+  type PlatformAccessPolicy,
   type PasskeyHttpOptions,
   type SharedCellWarmPoolSlot,
   type StripeBillingOptions,
   type UpstreamOAuthOptions,
-  type WorkloadPlatformServiceResolverHttpOptions,
+  type ServiceGraphMaterialResolverHttpOptions,
+  exportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
+import type { InstallationExportArchiveDataFile } from "../../service/src/export-archive.ts";
 import {
   optionalEnvString,
   optionalIntegerOption,
@@ -37,19 +32,32 @@ import {
 } from "./cli-util.ts";
 import {
   checkedEvidenceRef,
-  formatManagedOfferingReadinessReport,
+  formatPlatformReadinessReport,
   isSha256Digest,
-  managedOfferingPublicSummaryErrors,
-  managedOfferingReadinessDigest,
-  validateManagedOfferingReadinessDocument,
-} from "./cli-managed-offering.ts";
-import {
-  absolutePath,
-  joinPath,
-  parentPath,
-} from "./cli-git-ops.ts";
+  platformReadinessPublicSummaryErrors,
+  platformReadinessDigest,
+  validatePlatformReadinessDocument,
+} from "./cli-platform-readiness.ts";
+import { absolutePath, joinPath } from "./cli-git-ops.ts";
 
 const bindingNamePattern = /^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
+const PUBLIC_SERVICE_BINDING_ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+const SECRET_BEARING_SERVICE_BINDING_ENV_NAME_PATTERN =
+  /(^|_)(SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|CREDENTIALS|APIKEY|API_KEY|ACCESSKEY|ACCESS_KEY|PRIVATEKEY|PRIVATE_KEY|CLIENT_SECRET|REFRESH_TOKEN|SESSION_TOKEN|AUTH_TOKEN|BEARER_TOKEN)(_|$)/;
+const SECRET_BEARING_SERVICE_BINDING_ENV_EXACT_NAMES = new Set([
+  "DATABASE_URL",
+  "DB_URL",
+  "DSN",
+  "CONNECTION_STRING",
+]);
+const SECRET_BEARING_SERVICE_BINDING_ENV_SUFFIXES = [
+  "_DATABASE_URL",
+  "_DB_URL",
+  "_DSN",
+  "_CONNECTION_STRING",
+];
+const SECRET_BEARING_SERVICE_BINDING_ENV_VALUE_PATTERN =
+  /\b(?:Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+|\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)=/i;
 
 interface StaticBindingMaterial {
   kind?: string;
@@ -60,8 +68,8 @@ interface StaticBindingMaterial {
 
 export interface StaticBindingMaterializerConfig {
   source:
-    | "--use-edge-materials-file"
-    | "TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS";
+    | "--service-binding-materials-file"
+    | "TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS";
   materials: ReadonlyMap<string, StaticBindingMaterial>;
 }
 
@@ -73,10 +81,10 @@ export interface SharedCellWarmPoolConfig {
 export type SharedCellScaleOutPolicy =
   | { strategy: "manual" }
   | {
-    strategy: "available-slots";
-    minAvailableSlots: number;
-    maxCells: number;
-  };
+      strategy: "available-slots";
+      minAvailableSlots: number;
+      maxCells: number;
+    };
 
 export interface SharedCellScaleOutPolicyConfig {
   source:
@@ -99,29 +107,17 @@ export interface HttpMaterializeWorkerConfig {
   token?: string;
 }
 
-export interface WorkloadPlatformServiceResolverConfig
-  extends WorkloadPlatformServiceResolverHttpOptions {
+export interface ServiceGraphMaterialResolverConfig extends ServiceGraphMaterialResolverHttpOptions {
   source:
-    | "--workload-platform-service-resolver-token"
-    | "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN";
+    | "--service-graph-material-resolver-token"
+    | "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN";
 }
 
-export interface ManagedOfferingAccessConfig
-  extends ManagedOfferingAccessPolicy {
-  source:
-    | "--managed-offering-access"
-    | "--managed-offering-readiness-file"
-    | "default";
+export interface PlatformReadinessAccessConfig extends PlatformAccessPolicy {
+  source: "--platform-access" | "--platform-readiness-file" | "default";
   readinessFile?: string;
   readinessDigest?: string;
   approvalRef?: string;
-}
-
-export interface StaticImportDataRestorerConfig {
-  source:
-    | "--import-data-restore-dir"
-    | "TAKOSUMI_ACCOUNTS_IMPORT_DATA_RESTORE_DIR";
-  outputDirectory: string;
 }
 
 export function buildStripeBillingOptions(
@@ -153,46 +149,31 @@ export function buildStripeBillingOptions(
   };
 }
 
-export async function buildManagedOfferingAccessConfig(
+export async function buildPlatformReadinessAccessConfig(
   options: Record<string, string | boolean>,
-): Promise<ManagedOfferingAccessConfig> {
-  const rawStatus = optionalStringOption(options, "managedOfferingAccess") ??
-    "closed";
+): Promise<PlatformReadinessAccessConfig> {
+  const rawStatus = optionalStringOption(options, "platformAccess") ?? "closed";
   if (rawStatus !== "closed" && rawStatus !== "open") {
-    throw new TypeError(
-      "--managed-offering-access must be one of: closed, open",
-    );
+    throw new TypeError("--platform-access must be one of: closed, open");
   }
 
-  const readinessFile = optionalStringOption(
-    options,
-    "managedOfferingReadinessFile",
-  );
-  const evidenceRef = optionalStringOption(
-    options,
-    "managedOfferingEvidenceRef",
-  );
+  const readinessFile = optionalStringOption(options, "platformReadinessFile");
+  const evidenceRef = optionalStringOption(options, "platformEvidenceRef");
   const readinessDigest = optionalStringOption(
     options,
-    "managedOfferingReadinessDigest",
+    "platformReadinessDigest",
   );
-  const publicSummary = optionalStringOption(
-    options,
-    "managedOfferingPublicSummary",
-  );
-  const approvalRef = optionalStringOption(
-    options,
-    "managedOfferingApprovalRef",
-  );
+  const publicSummary = optionalStringOption(options, "platformPublicSummary");
+  const approvalRef = optionalStringOption(options, "platformApprovalRef");
 
   if (rawStatus === "closed") {
     return {
       status: "closed",
       source: readinessFile
-        ? "--managed-offering-readiness-file"
-        : options.managedOfferingAccess
-        ? "--managed-offering-access"
-        : "default",
+        ? "--platform-readiness-file"
+        : options.platformAccess
+          ? "--platform-access"
+          : "default",
       ...(readinessFile ? { readinessFile } : {}),
       ...(readinessDigest ? { readinessDigest } : {}),
       ...(evidenceRef ? { evidenceRef } : {}),
@@ -203,44 +184,42 @@ export async function buildManagedOfferingAccessConfig(
 
   if (!readinessFile) {
     throw new TypeError(
-      "--managed-offering-access open requires --managed-offering-readiness-file",
+      "--platform-access open requires --platform-readiness-file",
     );
   }
   if (!evidenceRef || !publicSummary || !approvalRef) {
     throw new TypeError(
-      "--managed-offering-access open requires --managed-offering-evidence-ref, --managed-offering-public-summary, and --managed-offering-approval-ref",
+      "--platform-access open requires --platform-evidence-ref, --platform-public-summary, and --platform-approval-ref",
     );
   }
   if (!readinessDigest) {
     throw new TypeError(
-      "--managed-offering-access open requires --managed-offering-readiness-digest",
+      "--platform-access open requires --platform-readiness-digest",
     );
   }
   if (!isSha256Digest(readinessDigest)) {
-    throw new TypeError(
-      "--managed-offering-readiness-digest must be a sha256: digest",
-    );
+    throw new TypeError("--platform-readiness-digest must be a sha256: digest");
   }
   const evidenceRefResult = checkedEvidenceRef(
     evidenceRef,
-    "--managed-offering-evidence-ref",
+    "--platform-evidence-ref",
   );
   if (evidenceRefResult.errors.length > 0) {
     throw new TypeError(evidenceRefResult.errors.join("\n"));
   }
   const approvalRefResult = checkedEvidenceRef(
     approvalRef,
-    "--managed-offering-approval-ref",
+    "--platform-approval-ref",
   );
   if (approvalRefResult.errors.length > 0) {
     throw new TypeError(approvalRefResult.errors.join("\n"));
   }
   if (evidenceRefResult.ref === approvalRefResult.ref) {
     throw new TypeError(
-      "--managed-offering-approval-ref must differ from --managed-offering-evidence-ref",
+      "--platform-approval-ref must differ from --platform-evidence-ref",
     );
   }
-  const publicSummaryErrors = managedOfferingPublicSummaryErrors(
+  const publicSummaryErrors = platformReadinessPublicSummaryErrors(
     publicSummary,
     { requireLaunchScope: true },
   );
@@ -253,23 +232,23 @@ export async function buildManagedOfferingAccessConfig(
     document = JSON.parse(await readFile(readinessFile, "utf8"));
   } catch (error) {
     throw new TypeError(
-      `Failed to read managed offering readiness evidence: ${
+      `Failed to read platform readiness evidence: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
   }
-  const computedDigest = await managedOfferingReadinessDigest(document);
+  const computedDigest = await platformReadinessDigest(document);
   if (readinessDigest !== computedDigest) {
     throw new TypeError(
-      "--managed-offering-readiness-digest must match the readiness file digest",
+      "--platform-readiness-digest must match the readiness file digest",
     );
   }
-  const report = validateManagedOfferingReadinessDocument(document);
+  const report = validatePlatformReadinessDocument(document);
   if (!report.ready) {
-    throw new TypeError(formatManagedOfferingReadinessReport(report));
+    throw new TypeError(formatPlatformReadinessReport(report));
   }
 
-  const policy = createOpenManagedOfferingAccessPolicy(
+  const policy = createOpenPlatformAccessPolicy(
     {
       evidenceRef: evidenceRefResult.ref,
       approvalRef: approvalRefResult.ref,
@@ -281,7 +260,7 @@ export async function buildManagedOfferingAccessConfig(
     },
   );
   return Object.assign(policy, {
-    source: "--managed-offering-access" as const,
+    source: "--platform-access" as const,
     readinessFile,
   });
 }
@@ -290,24 +269,18 @@ export function buildUpstreamOAuthOptions(
   options: Record<string, string | boolean>,
 ): UpstreamOAuthOptions | undefined {
   const providers = [
-    upstreamProviderOption(options, "github"),
     upstreamProviderOption(options, "google"),
     customOidcProviderOption(options),
   ].filter((provider) => provider !== undefined);
   const subjectSecret = optionalStringOption(options, "subjectSecret");
   const sessionTtlMs = optionalIntegerOption(options, "upstreamSessionTtlMs");
 
-  const hasUpstreamOption = Boolean(
-    subjectSecret || sessionTtlMs || providers.length > 0,
-  );
-  if (!hasUpstreamOption) return undefined;
+  if (providers.length === 0 && sessionTtlMs === undefined) return undefined;
   if (!subjectSecret) {
     throw new TypeError("Upstream OAuth requires --subject-secret");
   }
   if (providers.length === 0) {
-    throw new TypeError(
-      "Upstream OAuth requires at least one provider client",
-    );
+    throw new TypeError("Upstream OAuth requires at least one provider client");
   }
   assertUniqueUpstreamProviderIds(providers);
 
@@ -344,27 +317,29 @@ export function buildPasskeyOptions(
 
 /**
  * Standalone-serve deploy-control config used only for the dry-run diagnostic.
- * The account-plane deploy-control proxy is in-process only (it dispatches
- * through the injected typed `operations` facade, per AGENTS.md); the standalone
- * CLI serve has no operations to inject, so this config no longer wires a live
- * proxy — it is parsed solely to echo + redact the configured url/token.
+ * The account-plane deploy-control path is in-process only (it dispatches
+ * through the injected typed `operations` facade, per AGENTS.md). The standalone
+ * CLI serve has no operations to inject, so this config is parsed solely to
+ * echo + redact the configured url/token.
  */
-export interface DeployControlServeConfig {
+export interface DeployControlServeDiagnosticConfig {
   readonly url: string;
   readonly token?: string;
 }
 
-export async function buildDeployControlProxyOptions(
+export async function buildDeployControlDiagnosticConfig(
   options: Record<string, string | boolean>,
-): Promise<DeployControlServeConfig | undefined> {
-  const url = optionalStringOption(options, "deployControlUrl") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL");
-  const token = optionalStringOption(options, "deployControlToken") ??
-    await optionalEnvString("TAKOSUMI_DEPLOY_CONTROL_TOKEN");
+): Promise<DeployControlServeDiagnosticConfig | undefined> {
+  const url =
+    optionalStringOption(options, "deployControlUrl") ??
+    (await optionalEnvString("TAKOSUMI_DEPLOY_CONTROL_URL"));
+  const token =
+    optionalStringOption(options, "deployControlToken") ??
+    (await optionalEnvString("TAKOSUMI_DEPLOY_CONTROL_TOKEN"));
   if (!url && !token) return undefined;
   if (!url) {
     throw new TypeError(
-      "--deploy-control-url or TAKOSUMI_ACCOUNTS_DEPLOY_CONTROL_URL is required when configuring deploy control proxy",
+      "--deploy-control-url or TAKOSUMI_DEPLOY_CONTROL_URL is required when configuring deploy-control diagnostics",
     );
   }
   return {
@@ -376,24 +351,24 @@ export async function buildDeployControlProxyOptions(
 export async function buildStaticBindingMaterializerConfig(
   options: Record<string, string | boolean>,
 ): Promise<StaticBindingMaterializerConfig | undefined> {
-  if (options.useEdgeMaterialsFile === true) {
-    throw new TypeError("--use-edge-materials-file requires a value");
+  if (options.serviceBindingMaterialsFile === true) {
+    throw new TypeError("--service-binding-materials-file requires a value");
   }
-  const file = optionalStringOption(options, "useEdgeMaterialsFile");
+  const file = optionalStringOption(options, "serviceBindingMaterialsFile");
   const rawEnv = await optionalEnvString(
-    "TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS",
+    "TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS",
   );
   if (!file && !rawEnv) return undefined;
   if (file && rawEnv) {
     throw new TypeError(
-      "Use either --use-edge-materials-file or TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS, not both",
+      "Use either --service-binding-materials-file or TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS, not both",
     );
   }
   const raw = file ? await readFile(file, "utf8") : rawEnv;
   return {
     source: file
-      ? "--use-edge-materials-file"
-      : "TAKOSUMI_ACCOUNTS_USE_EDGE_MATERIALS",
+      ? "--service-binding-materials-file"
+      : "TAKOSUMI_ACCOUNTS_SERVICE_BINDING_MATERIALS",
     materials: parseStaticBindingMaterials(raw ?? "{}"),
   };
 }
@@ -461,8 +436,9 @@ export async function buildHttpMaterializeWorkerConfig(
   const envUrl = await optionalEnvString(
     "TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_URL",
   );
-  const token = optionalStringOption(options, "materializeWorkerToken") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_TOKEN");
+  const token =
+    optionalStringOption(options, "materializeWorkerToken") ??
+    (await optionalEnvString("TAKOSUMI_ACCOUNTS_MATERIALIZE_WORKER_TOKEN"));
   if (!cliUrl && !envUrl && !token) return undefined;
   if (cliUrl && envUrl) {
     throw new TypeError(
@@ -484,12 +460,12 @@ export async function buildHttpMaterializeWorkerConfig(
   };
 }
 
-export async function buildWorkloadPlatformServiceResolverConfig(
+export async function buildServiceGraphMaterialResolverConfig(
   options: Record<string, string | boolean>,
-): Promise<WorkloadPlatformServiceResolverConfig | undefined> {
-  if (options.workloadPlatformServiceResolverToken === true) {
+): Promise<ServiceGraphMaterialResolverConfig | undefined> {
+  if (options.serviceGraphMaterialResolverToken === true) {
     throw new TypeError(
-      "--workload-platform-service-resolver-token requires a value",
+      "--service-graph-material-resolver-token requires a value",
     );
   }
   if (options.billingPortalUrl === true) {
@@ -497,39 +473,40 @@ export async function buildWorkloadPlatformServiceResolverConfig(
   }
   const cliToken = optionalStringOption(
     options,
-    "workloadPlatformServiceResolverToken",
+    "serviceGraphMaterialResolverToken",
   );
   const envToken = await optionalEnvString(
-    "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN",
+    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
   );
-  const billingPortalUrl = optionalStringOption(options, "billingPortalUrl") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL");
+  const billingPortalUrl =
+    optionalStringOption(options, "billingPortalUrl") ??
+    (await optionalEnvString("TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL"));
   if (cliToken && envToken) {
     throw new TypeError(
-      "Use either --workload-platform-service-resolver-token or TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN, not both",
+      "Use either --service-graph-material-resolver-token or TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN, not both",
     );
   }
   const token = cliToken ?? envToken;
   if (!token) {
     if (billingPortalUrl) {
       throw new TypeError(
-        "--billing-portal-url requires --workload-platform-service-resolver-token or TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN",
+        "--billing-portal-url requires --service-graph-material-resolver-token or TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
       );
     }
     return undefined;
   }
   return {
     source: cliToken
-      ? "--workload-platform-service-resolver-token"
-      : "TAKOSUMI_ACCOUNTS_WORKLOAD_PLATFORM_SERVICE_RESOLVER_TOKEN",
+      ? "--service-graph-material-resolver-token"
+      : "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
     token,
     ...(billingPortalUrl
       ? {
-        billingPortalUrl: validateHttpUrl(
-          billingPortalUrl,
-          "--billing-portal-url",
-        ),
-      }
+          billingPortalUrl: validateHttpUrl(
+            billingPortalUrl,
+            "--billing-portal-url",
+          ),
+        }
       : {}),
   };
 }
@@ -546,14 +523,15 @@ export async function buildMetadataExportWorkerConfig(
   if (options.exportDataDir === true) {
     throw new TypeError("--export-data-dir requires a value");
   }
-  const outputDirectory = optionalStringOption(options, "exportOutputDir") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR");
-  const downloadBaseUrl = optionalStringOption(
-    options,
-    "exportDownloadBaseUrl",
-  ) ?? await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL");
-  const dataDirectory = optionalStringOption(options, "exportDataDir") ??
-    await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_DATA_DIR");
+  const outputDirectory =
+    optionalStringOption(options, "exportOutputDir") ??
+    (await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR"));
+  const downloadBaseUrl =
+    optionalStringOption(options, "exportDownloadBaseUrl") ??
+    (await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL"));
+  const dataDirectory =
+    optionalStringOption(options, "exportDataDir") ??
+    (await optionalEnvString("TAKOSUMI_ACCOUNTS_EXPORT_DATA_DIR"));
   const ttlMs = optionalIntegerOption(options, "exportDownloadTtlMs");
   const hasExportWorkerOption = Boolean(
     outputDirectory || downloadBaseUrl || dataDirectory || ttlMs,
@@ -565,48 +543,27 @@ export async function buildMetadataExportWorkerConfig(
     );
   }
   return {
-    source: options.exportOutputDir || options.exportDownloadBaseUrl
-      ? "--export-output-dir/--export-download-base-url"
-      : "TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR",
+    source:
+      options.exportOutputDir || options.exportDownloadBaseUrl
+        ? "--export-output-dir/--export-download-base-url"
+        : "TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR",
     outputDirectory,
-    downloadBaseUrl: validateHttpUrl(
+    downloadBaseUrl: exportDownloadUrl(
       downloadBaseUrl,
       "--export-download-base-url",
-    ),
+    ).toString(),
     ...(dataDirectory ? { dataDirectory } : {}),
     ...(ttlMs ? { ttlMs } : {}),
-  };
-}
-
-export async function buildStaticImportDataRestorerConfig(
-  options: Record<string, string | boolean>,
-): Promise<StaticImportDataRestorerConfig | undefined> {
-  if (options.importDataRestoreDir === true) {
-    throw new TypeError("--import-data-restore-dir requires a value");
-  }
-  const cliDirectory = optionalStringOption(options, "importDataRestoreDir");
-  const envDirectory = await optionalEnvString(
-    "TAKOSUMI_ACCOUNTS_IMPORT_DATA_RESTORE_DIR",
-  );
-  if (cliDirectory && envDirectory) {
-    throw new TypeError(
-      "Use either --import-data-restore-dir or TAKOSUMI_ACCOUNTS_IMPORT_DATA_RESTORE_DIR, not both",
-    );
-  }
-  const outputDirectory = cliDirectory ?? envDirectory;
-  if (!outputDirectory) return undefined;
-  return {
-    source: cliDirectory
-      ? "--import-data-restore-dir"
-      : "TAKOSUMI_ACCOUNTS_IMPORT_DATA_RESTORE_DIR",
-    outputDirectory,
   };
 }
 
 function parseSharedCellWarmPoolSlots(
   value: string,
 ): readonly SharedCellWarmPoolSlot[] {
-  const slots = value.split(",").map((entry) => entry.trim()).filter(Boolean)
+  const slots = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
     .map((entry) => {
       const [cellId, capacityText, ...rest] = entry.split(":");
       if (!cellId || !capacityText || rest.length > 0) {
@@ -638,9 +595,7 @@ function parseSharedCellScaleOutPolicy(
     throw new TypeError("shared-cell scale-out policy must be valid JSON");
   }
   if (!isRecord(policy)) {
-    throw new TypeError(
-      "shared-cell scale-out policy must be a JSON object",
-    );
+    throw new TypeError("shared-cell scale-out policy must be a JSON object");
   }
   if (policy.strategy === "manual") {
     return { strategy: "manual" };
@@ -684,37 +639,40 @@ function parseStaticBindingMaterials(
   try {
     value = JSON.parse(text);
   } catch {
-    throw new TypeError("use edge materials must be valid JSON");
+    throw new TypeError("service binding materials must be valid JSON");
   }
   if (!isRecord(value)) {
-    throw new TypeError("use edge materials must be a JSON object");
+    throw new TypeError("service binding materials must be a JSON object");
   }
   const materials = new Map<string, StaticBindingMaterial>();
   for (const [name, material] of Object.entries(value)) {
     if (!bindingNamePattern.test(name)) {
       throw new TypeError(
-        `use edge material key '${name}' must be a valid use edge name`,
+        `service binding material key '${name}' must be a valid service binding name`,
       );
     }
     if (!isRecord(material)) {
-      throw new TypeError(`use edge material '${name}' must be an object`);
+      throw new TypeError(
+        `service binding material '${name}' must be an object`,
+      );
     }
     const kind = stringValue(material.kind);
-    const configRef = stringValue(material.configRef) ??
-      stringValue(material.config_ref);
+    const configRef =
+      stringValue(material.configRef) ?? stringValue(material.config_ref);
     if (!configRef) {
       throw new TypeError(
-        `use edge material '${name}' requires configRef`,
+        `service binding material '${name}' requires configRef`,
       );
     }
     const secretRefs = stringArrayValue(
       material.secretRefs ?? material.secret_refs,
-      `use edge material '${name}'.secretRefs`,
+      `service binding material '${name}'.secretRefs`,
     );
     const env = optionalStringRecord(
       material.env,
-      `use edge material '${name}'.env`,
+      `service binding material '${name}'.env`,
     );
+    if (env) validatePublicServiceBindingEnv(name, env);
     materials.set(name, {
       ...(kind ? { kind } : {}),
       configRef,
@@ -725,17 +683,73 @@ function parseStaticBindingMaterials(
   return materials;
 }
 
+function validatePublicServiceBindingEnv(
+  bindingName: string,
+  env: Readonly<Record<string, string>>,
+): void {
+  for (const [name, value] of Object.entries(env)) {
+    const issue = publicServiceBindingEnvIssue(name, value);
+    if (issue) {
+      throw new TypeError(
+        `service binding material '${bindingName}'.env.${name} ${issue}`,
+      );
+    }
+  }
+}
+
+function publicServiceBindingEnvIssue(
+  name: string,
+  value: string,
+): string | undefined {
+  if (!PUBLIC_SERVICE_BINDING_ENV_NAME_PATTERN.test(name)) {
+    return "must be an uppercase environment variable name";
+  }
+  if (isSecretBearingServiceBindingEnvName(name)) {
+    return "may carry secret material; use secretRefs";
+  }
+  if (serviceBindingEnvValueLooksSecret(value)) {
+    return "value may carry secret material; use secretRefs";
+  }
+  return undefined;
+}
+
+function isSecretBearingServiceBindingEnvName(name: string): boolean {
+  const normalized = name.toUpperCase();
+  return (
+    SECRET_BEARING_SERVICE_BINDING_ENV_NAME_PATTERN.test(normalized) ||
+    SECRET_BEARING_SERVICE_BINDING_ENV_EXACT_NAMES.has(normalized) ||
+    SECRET_BEARING_SERVICE_BINDING_ENV_SUFFIXES.some((suffix) =>
+      normalized.endsWith(suffix),
+    )
+  );
+}
+
+function serviceBindingEnvValueLooksSecret(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (SECRET_BEARING_SERVICE_BINDING_ENV_VALUE_PATTERN.test(trimmed)) {
+    return true;
+  }
+  try {
+    const url = new URL(trimmed);
+    return Boolean(url.username || url.password);
+  } catch {
+    return false;
+  }
+}
+
 export function staticBindingMaterializer(
   materials: ReadonlyMap<string, StaticBindingMaterial>,
-): AppBindingMaterializer {
-  return (
-    { installation, binding },
-  ): AppBindingMaterializationResult | undefined => {
+): ServiceBindingMaterializer {
+  return ({
+    installation,
+    binding,
+  }): ServiceBindingMaterializationResult | undefined => {
     const material = materials.get(binding.name);
     if (!material) return undefined;
     if (material.kind && material.kind !== binding.kind) {
       throw new TypeError(
-        `use edge material '${binding.name}' kind ${material.kind} does not match ${binding.kind}`,
+        `service binding material '${binding.name}' kind ${material.kind} does not match ${binding.kind}`,
       );
     }
     return {
@@ -749,27 +763,27 @@ export function staticBindingMaterializer(
           value,
           installation.installationId,
           binding.name,
-        )
+        ),
       ),
       env: material.env
         ? Object.fromEntries(
-          Object.entries(material.env).map(([key, value]) => [
-            key,
-            renderBindingMaterialString(
-              value,
-              installation.installationId,
-              binding.name,
-            ),
-          ]),
-        )
+            Object.entries(material.env).map(([key, value]) => [
+              key,
+              renderBindingMaterialString(
+                value,
+                installation.installationId,
+                binding.name,
+              ),
+            ]),
+          )
         : undefined,
     };
   };
 }
 
 export function composeBindingMaterializers(
-  materializers: readonly AppBindingMaterializer[],
-): AppBindingMaterializer | undefined {
+  materializers: readonly ServiceBindingMaterializer[],
+): ServiceBindingMaterializer | undefined {
   if (materializers.length === 0) return undefined;
   return async (input) => {
     for (const materializer of materializers) {
@@ -815,9 +829,8 @@ export function httpMaterializeWorker(
       }),
     });
     const text = await response.text();
-    const body = text.trim().length > 0
-      ? parseMaterializeWorkerJson(text)
-      : undefined;
+    const body =
+      text.trim().length > 0 ? parseMaterializeWorkerJson(text) : undefined;
     if (!response.ok) {
       throw new Error(
         accountsApiErrorMessage(
@@ -841,9 +854,8 @@ function parseMaterializeWorkerJson(text: string): unknown {
 function materializeWorkerResultFromValue(
   value: unknown,
 ): AppInstallationMaterializeWorkerResult {
-  const result = isRecord(value) && isRecord(value.result)
-    ? value.result
-    : value;
+  const result =
+    isRecord(value) && isRecord(value.result) ? value.result : value;
   if (!isRecord(result)) {
     throw new TypeError("materialize worker response must be an object");
   }
@@ -896,26 +908,26 @@ function parseMaterializeContinuity(
       value.oidcClient,
       "materialize.continuity.oidcClient",
     ),
-    preservedUseEdges: parseMaterializePreservedUseEdges(
-      value.preservedUseEdges,
+    preservedServiceBindings: parseMaterializePreservedServiceBindings(
+      value.preservedServiceBindings,
     ),
     cutover: parseMaterializeCutover(value.cutover),
   };
 }
 
-function parseMaterializePreservedUseEdges(
+function parseMaterializePreservedServiceBindings(
   value: unknown,
-): AppInstallationMaterializeWorkerResult["continuity"]["preservedUseEdges"] {
+): AppInstallationMaterializeWorkerResult["continuity"]["preservedServiceBindings"] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError(
-      "materialize.continuity.preservedUseEdges must be an array",
+      "materialize.continuity.preservedServiceBindings must be an array",
     );
   }
   return value.map((entry, index) => {
     if (!isRecord(entry)) {
       throw new TypeError(
-        `materialize.continuity.preservedUseEdges[${index}] must be an object`,
+        `materialize.continuity.preservedServiceBindings[${index}] must be an object`,
       );
     }
     const name = stringValue(entry.name);
@@ -923,18 +935,19 @@ function parseMaterializePreservedUseEdges(
     const configRef = stringValue(entry.configRef);
     if (!name || !kindRaw || !configRef) {
       throw new TypeError(
-        `materialize.continuity.preservedUseEdges[${index}] requires name, kind, configRef`,
+        `materialize.continuity.preservedServiceBindings[${index}] requires name, kind, configRef`,
       );
     }
-    if (!isAppBindingKind(kindRaw)) {
+    if (!isServiceBindingMaterialKind(kindRaw)) {
       throw new TypeError(
-        `materialize.continuity.preservedUseEdges[${index}].kind '${kindRaw}' is not a recognized use edge kind`,
+        `materialize.continuity.preservedServiceBindings[${index}].kind '${kindRaw}' is not a recognized service binding kind`,
       );
     }
-    const secretRefs = stringArrayValue(
-      entry.secretRefs,
-      `materialize.continuity.preservedUseEdges[${index}].secretRefs`,
-    ) ?? [];
+    const secretRefs =
+      stringArrayValue(
+        entry.secretRefs,
+        `materialize.continuity.preservedServiceBindings[${index}].secretRefs`,
+      ) ?? [];
     return { name, kind: kindRaw, configRef, secretRefs };
   });
 }
@@ -1008,7 +1021,7 @@ async function readStaticExportDataFiles(
       ? `${relativeDirectory}/${entry.name}`
       : entry.name;
     if (entry.isDirectory()) {
-      files.push(...await readStaticExportDataFiles(root, relativePath));
+      files.push(...(await readStaticExportDataFiles(root, relativePath)));
       continue;
     }
     if (!entry.isFile()) continue;
@@ -1021,48 +1034,6 @@ async function readStaticExportDataFiles(
     });
   }
   return files.sort((a, b) => a.path.localeCompare(b.path));
-}
-
-export function staticImportDataRestorer(
-  outputDirectory: string,
-): AppInstallationImportDataRestorer {
-  return async (input) => {
-    const restoredEntries: string[] = [];
-    for (const entry of input.entries) {
-      const relativePath = importDataRelativePath(entry.path);
-      const targetPath = joinPath(
-        outputDirectory,
-        input.installation.installationId,
-        relativePath,
-      );
-      await mkdir(parentPath(targetPath), { recursive: true });
-      await writeFile(targetPath, entry.content);
-      restoredEntries.push(entry.path);
-    }
-    return {
-      restoredEntries,
-      evidence: {
-        outputDirectory,
-      },
-    };
-  };
-}
-
-function importDataRelativePath(path: string): string {
-  const prefix = "takos-export/data/";
-  if (!path.startsWith(prefix)) {
-    throw new TypeError(`import data path must start with ${prefix}`);
-  }
-  const relativePath = path.slice(prefix.length);
-  if (
-    !relativePath ||
-    relativePath.split("/").some((segment) =>
-      segment === "." || segment === ".." || segment.length === 0
-    )
-  ) {
-    throw new TypeError(`unsafe import data path: ${path}`);
-  }
-  return relativePath;
 }
 
 function guessMediaType(path: string): string | undefined {
@@ -1086,7 +1057,7 @@ function renderBindingMaterialString(
 
 function upstreamProviderOption(
   options: Record<string, string | boolean>,
-  providerId: "github" | "google",
+  providerId: "google",
 ): UpstreamOAuthOptions["providers"][number] | undefined {
   const prefix = providerId;
   const clientId = optionalStringOption(options, `${prefix}ClientId`);
@@ -1127,15 +1098,15 @@ function customOidcProviderOption(
   const subjectClaim = optionalStringOption(options, "oidcSubjectClaim");
   const hasOidcOption = Boolean(
     issuer ||
-      authorizationEndpoint ||
-      tokenEndpoint ||
-      userInfoEndpoint ||
-      clientId ||
-      clientSecret ||
-      redirectUri ||
-      scopes.length > 0 ||
-      subjectClaim ||
-      options.oidcProviderId,
+    authorizationEndpoint ||
+    tokenEndpoint ||
+    userInfoEndpoint ||
+    clientId ||
+    clientSecret ||
+    redirectUri ||
+    scopes.length > 0 ||
+    subjectClaim ||
+    options.oidcProviderId,
   );
   if (!hasOidcOption) return undefined;
 
@@ -1146,7 +1117,9 @@ function customOidcProviderOption(
     [userInfoEndpoint, "--oidc-userinfo-endpoint"],
     [clientId, "--oidc-client-id"],
     [redirectUri, "--oidc-redirect-uri"],
-  ].filter(([value]) => !value).map(([, flag]) => flag);
+  ]
+    .filter(([value]) => !value)
+    .map(([, flag]) => flag);
   if (missing.length > 0) {
     throw new TypeError(
       `OIDC upstream provider requires ${missing.join(", ")}`,
@@ -1187,5 +1160,8 @@ function assertUniqueUpstreamProviderIds(
 
 function splitScopes(value: string | undefined): readonly string[] {
   if (!value) return [];
-  return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }

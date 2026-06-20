@@ -16,6 +16,7 @@ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import {
   PROVIDER_CREDENTIAL_ENV_RULES,
   type ProviderCredentialEnvRule,
+  providerCredentialArgs,
   providerEnvRule,
 } from "../contract/provider-env-rules.ts";
 import {
@@ -36,6 +37,7 @@ const CAPSULE_COMPATIBILITY_MAX_FILES = 256;
 const CAPSULE_COMPATIBILITY_MAX_FILE_BYTES = 1024 * 1024;
 const CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 const DEFAULT_PROVIDER_MIRROR_PATH = "/opt/opentofu/provider-mirror";
+const RUNNER_START_SERVER_ENV = "TAKOSUMI_RUNNER_START_SERVER";
 const PROVIDER_SNAPSHOT_COMMAND_ENV = "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND";
 const PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX =
   "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_";
@@ -115,6 +117,7 @@ interface BackupSpec {
 
 export interface CommandContext {
   readonly env: Record<string, string>;
+  readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;
   readonly sourceArchiveMaxDecompressedBytes?: number;
@@ -237,6 +240,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
     // resolves a commit, builds a deterministic archive of source.path, PUTs the
     // bytes to the DO source-archive route, and returns resolution metadata. It
     // never runs tofu and never restores/persists OpenTofu state.
+    const requestRedactionValues = redactionValuesFromRequest(body.request);
     if (isSourceSyncRequest(body.request)) {
       try {
         const result = await runSourceSync(runId, body.request);
@@ -250,6 +254,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
             exitCode: 1,
             stderr: redactRunnerOutput(
               error instanceof Error ? error.message : String(error),
+              requestRedactionValues,
             ),
           },
           { status: 500 },
@@ -286,6 +291,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           exitCode: 1,
           stderr: redactRunnerOutput(
             error instanceof Error ? error.message : String(error),
+            requestRedactionValues,
           ),
         },
         { status: 500 },
@@ -549,8 +555,7 @@ async function runBuiltInNativeProviderSnapshotBackup(
     provider,
     outputPath: backup.outputPath,
     capturedAt: new Date().toISOString(),
-    note:
-      "Takosumi built-in provider snapshot adapter metadata. Provider-native snapshot bytes remain in the provider or service-owned artifact store; this manifest is a non-secret pointer/evidence object.",
+    note: "Takosumi built-in provider snapshot adapter metadata. Provider-native snapshot bytes remain in the provider or service-owned artifact store; this manifest is a non-secret pointer/evidence object.",
   };
   const bytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
   const fileName = `${providerSnapshotEnvSuffix(provider).toLowerCase()}-${backup.outputPath.replace(/[^A-Za-z0-9_.-]+/g, "_")}.snapshot.json`;
@@ -581,7 +586,8 @@ function normalizeProviderSource(provider: string | undefined): string {
   const value = provider?.trim().toLowerCase();
   if (!value) return "";
   if (value.includes("/")) return value;
-  if (value === "cloudflare") return "registry.opentofu.org/cloudflare/cloudflare";
+  if (value === "cloudflare")
+    return "registry.opentofu.org/cloudflare/cloudflare";
   if (value === "aws") return "registry.opentofu.org/hashicorp/aws";
   return value;
 }
@@ -598,12 +604,19 @@ function builtInProviderSnapshotKind(provider: string): string | undefined {
 
 // Only bind a port when run as the container entrypoint; importing this module
 // (e.g. for a unit test of commandContextFromRequest) must not start a server.
-if (import.meta.main) {
-  Bun.serve({ port, fetch: handleRunnerRequest });
+if (Bun.env[RUNNER_START_SERVER_ENV] === "1" || import.meta.main) {
+  console.log("Takosumi OpenTofu runner listening", {
+    hostname: "0.0.0.0",
+    port,
+  });
+  Bun.serve({ hostname: "0.0.0.0", port, fetch: handleRunnerRequest });
 }
 
-export function redactRunnerOutput(text: string): string {
-  let redacted = text
+export function redactRunnerOutput(
+  text: string,
+  exactValues: readonly string[] = [],
+): string {
+  let redacted = redactExactCredentialValues(text, exactValues)
     .replace(
       RUNNER_URL_CREDENTIAL_PATTERN,
       (_match, prefix: string) => `${prefix}${RUNNER_REDACTED_VALUE}@`,
@@ -638,13 +651,30 @@ export function redactRunnerOutput(text: string): string {
       `$1${RUNNER_REDACTED_VALUE}`,
     );
   }
-  return redacted;
+  return redactExactCredentialValues(redacted, exactValues);
 }
 
 const SOURCE_CREDENTIAL_ENV_NAMES = new Set(["GIT_HTTPS_TOKEN"]);
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function redactExactCredentialValues(
+  text: string,
+  values: readonly string[],
+): string {
+  let redacted = text;
+  for (const value of normalizedRedactionValues(values)) {
+    redacted = redacted.replaceAll(value, RUNNER_REDACTED_VALUE);
+  }
+  return redacted;
+}
+
+function normalizedRedactionValues(values: readonly string[]): string[] {
+  return [...new Set(values.filter((value) => value.length >= 8))].sort(
+    (left, right) => right.length - left.length,
+  );
 }
 
 async function runPlan(runId: string, request: unknown): Promise<JsonRecord> {
@@ -706,6 +736,7 @@ async function runGeneratedRootPlan(
       generatedRoot,
     );
   }
+  await restoreUploadedState(workspace, workspace.generatedRootDir);
   const planContext = build
     ? withArtifactPathVar(commandContext, workspace, build)
     : commandContext;
@@ -765,7 +796,7 @@ async function initPlanAndBuildResponse(
   });
   if (init.exitCode !== 0) {
     return mergeBuildLog(
-      commandFailurePayload(runId, "plan", init),
+      commandFailurePayload(runId, "plan", init, commandContext),
       options.buildLog,
     );
   }
@@ -783,7 +814,7 @@ async function initPlanAndBuildResponse(
   );
   if (plan.exitCode !== 0) {
     return mergeBuildLog(
-      commandFailurePayload(runId, "plan", plan),
+      commandFailurePayload(runId, "plan", plan, commandContext),
       options.buildLog,
     );
   }
@@ -831,9 +862,11 @@ async function initPlanAndBuildResponse(
     ...(options.extra ?? {}),
     stdout: redactRunnerOutput(
       [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join("\n"),
+      commandContext.redactionValues,
     ),
     stderr: redactRunnerOutput(
       [init.stderr, plan.stderr].filter(Boolean).join("\n"),
+      commandContext.redactionValues,
     ),
   };
 }
@@ -885,7 +918,7 @@ async function runReviewedPlanApply(
     context: applyContext,
   });
   if (init.exitCode !== 0) {
-    return commandFailurePayload(runId, action, init);
+    return commandFailurePayload(runId, action, init, applyContext);
   }
   const providerInstallation = await providerInstallationEvidence(
     moduleDir,
@@ -909,9 +942,11 @@ async function runReviewedPlanApply(
     ...(outputs ? { outputs } : {}),
     stdout: redactRunnerOutput(
       [init.stdout, result.stdout].filter(Boolean).join("\n"),
+      applyContext.redactionValues,
     ),
     stderr: redactRunnerOutput(
       [init.stderr, result.stderr].filter(Boolean).join("\n"),
+      applyContext.redactionValues,
     ),
   };
 }
@@ -1211,7 +1246,7 @@ async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
     context,
   });
   if (init.exitCode !== 0) {
-    return commandFailurePayload(runId, "compatibility_check", init);
+    return commandFailurePayload(runId, "compatibility_check", init, context);
   }
   const files = await readCapsuleCompatibilityFiles(workspace.sourceRoot);
   const providerLockDigest = await digestFileIfExists(
@@ -1224,8 +1259,8 @@ async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
     exitCode: 0,
     files,
     ...(providerLockDigest ? { providerLockDigest } : {}),
-    stdout: redactRunnerOutput(init.stdout),
-    stderr: redactRunnerOutput(init.stderr),
+    stdout: redactRunnerOutput(init.stdout, context.redactionValues),
+    stderr: redactRunnerOutput(init.stderr, context.redactionValues),
   };
 }
 
@@ -1343,6 +1378,9 @@ export function parseSourceSyncSource(request: unknown): SourceSyncSource {
 // ext::, and embedded credentials (user:pass@).
 export function assertSourceUrlPolicy(url: string): void {
   if (url.length === 0) throw new Error("source url must not be empty");
+  if (/[\\\r\n\0]/.test(url)) {
+    throw new Error("source url is malformed");
+  }
   const lower = url.toLowerCase();
   if (lower.startsWith("file://")) {
     throw new Error("source url scheme file:// is forbidden");
@@ -1690,7 +1728,12 @@ async function prepareSourceGitContext(
     env.GIT_ASKPASS = askpassPath;
   }
 
-  return { context: { env } };
+  return {
+    context: {
+      env,
+      redactionValues: sourceCredentialRedactionValues(credentials),
+    },
+  };
 }
 
 function sourceUrlScheme(url: string): "https" | "ssh" {
@@ -1730,7 +1773,7 @@ async function resolveSourceCommit(
   );
   if (result.exitCode !== 0) {
     throw new Error(
-      `git ls-remote failed: ${redactCredentialOutput(result.stderr || result.stdout)}`,
+      `git ls-remote failed: ${redactCredentialOutput(result.stderr || result.stdout, git.context)}`,
     );
   }
   const commit = parseLsRemoteCommit(result.stdout, source.ref);
@@ -1867,8 +1910,8 @@ async function shredCredentialDir(credentialDir: string): Promise<void> {
 // output. Git never receives the secret in the URL, but ls-remote/fetch errors
 // can echo the URL or env; this strips known credential env assignments and the
 // literal token value if it is known.
-function redactCredentialOutput(text: string): string {
-  return redactRunnerOutput(text);
+function redactCredentialOutput(text: string, context: CommandContext): string {
+  return redactRunnerOutput(text, context.redactionValues);
 }
 
 function shellQuote(value: string): string {
@@ -2406,6 +2449,11 @@ function normalizeArchiveEntryPath(path: string): string {
 }
 
 async function assertHttpsSourceUrl(url: string, label: string): Promise<void> {
+  // Git/libcurl and WHATWG URL parsing disagree on backslashes. Reject the raw
+  // URL before validating `new URL(url).hostname` and before handing it to git.
+  if (/[\\\r\n\0]/.test(url)) {
+    throw new Error(`${label} is malformed`);
+  }
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -2595,7 +2643,10 @@ async function runRequiredCommand(
   const result = await runCommand(command, options);
   if (result.exitCode !== 0) {
     throw new Error(
-      `${command[0]} failed with ${result.exitCode}: ${result.stderr || result.stdout}`,
+      `${command[0]} failed with ${result.exitCode}: ${redactRunnerOutput(
+        result.stderr || result.stdout,
+        options.context.redactionValues,
+      )}`,
     );
   }
 }
@@ -2683,14 +2734,15 @@ function commandFailurePayload(
     readonly stdout: string;
     readonly stderr: string;
   },
+  context?: CommandContext,
 ): JsonRecord {
   return {
     runId,
     action,
     status: "failed",
     exitCode: result.exitCode,
-    stdout: redactRunnerOutput(result.stdout),
-    stderr: redactRunnerOutput(result.stderr),
+    stdout: redactRunnerOutput(result.stdout, context?.redactionValues),
+    stderr: redactRunnerOutput(result.stderr, context?.redactionValues),
   };
 }
 
@@ -2941,6 +2993,7 @@ export function commandContextFromRequest(
   const env = baseCommandEnv();
   const requiredProviders = parseRequiredProviders(request);
   const payloadCredentials = credentialsFromRequest(request);
+  const redactionValues = redactionValuesFromRequestCredentials(request);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
     runnerProfile,
@@ -2961,6 +3014,7 @@ export function commandContextFromRequest(
   }
   return {
     env,
+    ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
       ? { sourceArchiveMaxBytes: maxSourceArchiveBytes }
@@ -2969,6 +3023,17 @@ export function commandContextFromRequest(
       ? { sourceArchiveMaxDecompressedBytes: maxSourceDecompressedBytes }
       : {}),
   };
+}
+
+export function assertRunnerPolicyForRequest(
+  request: unknown,
+  runnerProfile: JsonRecord | undefined,
+): void {
+  assertRunnerPolicyBeforeInit(
+    request,
+    runnerProfile,
+    commandContextFromRequest(request, runnerProfile),
+  );
 }
 
 /**
@@ -2987,6 +3052,38 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
     if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = value;
   }
   return out;
+}
+
+function redactionValuesFromRequest(request: unknown): string[] {
+  return [
+    ...redactionValuesFromRequestCredentials(request),
+    ...sourceCredentialRedactionValuesFromRequest(request),
+  ];
+}
+
+function redactionValuesFromRequestCredentials(request: unknown): string[] {
+  const credentials = recordField(request, "credentials");
+  if (!isRecord(credentials)) return [];
+  return Object.values(credentials).flatMap((value) =>
+    typeof value === "string" ? [value] : [],
+  );
+}
+
+function sourceCredentialRedactionValues(
+  credentials: SourceCredentials,
+): string[] {
+  return [
+    ...Object.values(credentials.env),
+    ...credentials.files.map((file) => file.content),
+  ];
+}
+
+function sourceCredentialRedactionValuesFromRequest(request: unknown): string[] {
+  try {
+    return sourceCredentialRedactionValues(parseSourceCredentials(request));
+  } catch {
+    return [];
+  }
 }
 
 function baseCommandEnv(): Record<string, string> {
@@ -3120,6 +3217,7 @@ function assertCredentialEnvAvailable(
       );
     }
     const rule = providerEnvRule(provider);
+    if (rule && rootOnlyCredentialEnvAvailable(provider, rule, env)) continue;
     const requiredGroups = envRequiredGroupsForRefs(rule, refs);
     const hasRequiredGroup =
       requiredGroups.length === 0
@@ -3133,6 +3231,75 @@ function assertCredentialEnvAvailable(
       );
     }
   }
+}
+
+function rootOnlyCredentialEnvAvailable(
+  provider: string,
+  rule: ProviderCredentialEnvRule,
+  env: Readonly<Record<string, string>>,
+): boolean {
+  const requiredGroups =
+    rule.requiredGroups.length > 0
+      ? rule.requiredGroups
+      : rule.envNames.map((name) => [name]);
+  return requiredGroups.some((group) =>
+    rootOnlyCredentialGroupAvailable(provider, group, env),
+  );
+}
+
+function rootOnlyCredentialGroupAvailable(
+  provider: string,
+  envNames: readonly string[],
+  env: Readonly<Record<string, string>>,
+): boolean {
+  const argMap = providerCredentialArgs(provider);
+  if (argMap.length === 0) {
+    return envNames.every((name) => env[`TF_VAR_${name}`]);
+  }
+  const aliasSets = envNames.map((name) =>
+    rootOnlyAliasesForProviderEnv(provider, name, env),
+  );
+  if (aliasSets.some((aliases) => aliases.size === 0)) return false;
+  const [first, ...rest] = aliasSets;
+  for (const alias of first ?? []) {
+    if (rest.every((aliases) => aliases.has(alias))) return true;
+  }
+  return false;
+}
+
+function rootOnlyAliasesForProviderEnv(
+  provider: string,
+  envName: string,
+  env: Readonly<Record<string, string>>,
+): ReadonlySet<string> {
+  const localProvider = providerLocalName(provider);
+  const aliases = new Set<string>();
+  for (const { envName: mappedEnvName, arg } of providerCredentialArgs(
+    provider,
+  )) {
+    if (mappedEnvName !== envName) continue;
+    const prefix = `TF_VAR_${localProvider}_`;
+    const suffix = `_${arg}`;
+    for (const name of Object.keys(env)) {
+      if (!name.startsWith(prefix)) continue;
+      if (name === `TF_VAR_${localProvider}_${arg}`) {
+        aliases.add("");
+        continue;
+      }
+      if (!name.endsWith(suffix)) continue;
+      const alias = name.slice(prefix.length, -suffix.length);
+      if (/^[A-Za-z0-9_]+$/.test(alias)) aliases.add(alias);
+    }
+  }
+  return aliases;
+}
+
+function providerLocalName(provider: string): string {
+  return (
+    providerEnvRule(provider)?.shortName ??
+    provider.split("/").pop() ??
+    provider
+  );
 }
 
 function credentialRefsFromRunnerProfile(
@@ -3352,7 +3519,7 @@ ${providerLines}
   }
 
   direct {
-    exclude = ["*"]
+    exclude = ["*/*"]
   }
 }
 `;

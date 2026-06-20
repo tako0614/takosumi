@@ -3,12 +3,10 @@
  * Deployment reads (incl. rollback-plan), and the §10 / §23 installation-driven
  * plan / destroy-plan / drift-check routes (mounted consecutively in the
  * original). Owns its handlers and its slice of the
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS} descriptor inventory.
+ * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
 
-import type {
-  CreateInstallationRequest,
-} from "../domains/installations/mod.ts";
+import type { CreateInstallationRequest } from "../domains/installations/mod.ts";
 import type {
   InstallConfig,
   Installation,
@@ -48,7 +46,7 @@ const DEPLOYMENT_ID_PARAM = {
 } as const;
 const INSTALL_CONFIG_ID_PARAM = {
   param: "installConfigId",
-  pattern: /^cfg_[0-9a-zA-Z]{3,64}$/,
+  pattern: /^cfg[-_][0-9a-zA-Z-]{3,96}$/,
 } as const;
 const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
 
@@ -60,7 +58,11 @@ const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
   new Set(["active", "stale", "error"]);
 
 function publicInstallation(installation: Installation): PublicInstallation {
-  const { installType: _installType, ...publicRecord } = installation;
+  const {
+    installType: _installType,
+    currentOutputSnapshotId: _currentOutputSnapshotId,
+    ...publicRecord
+  } = installation;
   return publicRecord;
 }
 
@@ -68,13 +70,31 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
   const {
     installType: _installType,
     templateBinding: _templateBinding,
+    sourceKind: _sourceKind,
     ...publicRecord
   } = config;
-  return publicRecord;
+  return {
+    ...publicRecord,
+    sourceKind: publicInstallConfigSourceKind(config),
+  };
 }
 
-export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS:
-  readonly DeployControlEndpoint[] = [
+function publicInstallConfigSourceKind(
+  config: InstallConfig,
+): PublicInstallConfig["sourceKind"] {
+  if (config.sourceKind === "generic_capsule") return "generic_capsule";
+  if (
+    config.sourceKind === "first_party_capsule" ||
+    config.sourceKind === "official_template" ||
+    config.templateBinding
+  ) {
+    return "first_party_capsule";
+  }
+  return "generic_capsule";
+}
+
+export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoint[] =
+  [
     {
       method: "POST",
       path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
@@ -374,7 +394,10 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
-        return c.json({ run: await controller.getRun(response.planRun.id) }, 202);
+        return c.json(
+          { run: await controller.getRun(response.planRun.id) },
+          202,
+        );
       },
     }),
   );
@@ -420,7 +443,10 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createDeploymentRollbackPlan(id, {
           actor: principal.actor,
         });
-        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
+        return c.json(
+          { run: await controller.getRun(response.planRun.id) },
+          201,
+        );
       },
     }),
   );
@@ -455,9 +481,10 @@ export function mountDeployControlInstallationRoutes(
         const official = (await installations!.listInstallConfigs()).filter(
           (config) => config.spaceId === undefined,
         );
-        const scoped = spaceId === undefined
-          ? []
-          : await installations!.listInstallConfigs(spaceId);
+        const scoped =
+          spaceId === undefined
+            ? []
+            : await installations!.listInstallConfigs(spaceId);
         const merged = [...official, ...scoped].sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -487,7 +514,10 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationPlan(id, {
           actor: principal.actor,
         });
-        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
+        return c.json(
+          { run: await controller.getRun(response.planRun.id) },
+          201,
+        );
       },
     }),
   );
@@ -519,7 +549,10 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
-        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
+        return c.json(
+          { run: await controller.getRun(response.planRun.id) },
+          201,
+        );
       },
     }),
   );
@@ -537,7 +570,10 @@ export function mountDeployControlInstallationRoutes(
         const response = await controller.createInstallationDriftCheck(id, {
           actor: principal.actor,
         });
-        return c.json({ run: await controller.getRun(response.planRun.id) }, 201);
+        return c.json(
+          { run: await controller.getRun(response.planRun.id) },
+          201,
+        );
       },
     }),
   );

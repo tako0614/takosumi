@@ -75,12 +75,8 @@ export const Icons = {
       <polygon points="22 2 15 22 11 13 2 9 22 2" />
     </>,
   ),
-  ChevronDown: strokeIcon(
-    <polyline points="6 9 12 15 18 9" />,
-  ),
-  ChevronRight: strokeIcon(
-    <polyline points="9 18 15 12 9 6" />,
-  ),
+  ChevronDown: strokeIcon(<polyline points="6 9 12 15 18 9" />),
+  ChevronRight: strokeIcon(<polyline points="9 18 15 12 9 6" />),
   MoreHorizontal: strokeIcon(
     <>
       <circle cx="12" cy="12" r="1" />
@@ -118,9 +114,7 @@ export const Icons = {
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </>,
   ),
-  Check: strokeIcon(
-    <polyline points="20 6 9 17 4 12" />,
-  ),
+  Check: strokeIcon(<polyline points="20 6 9 17 4 12" />),
   X: strokeIcon(
     <>
       <line x1="18" y1="6" x2="6" y2="18" />
@@ -210,12 +204,8 @@ export const Icons = {
       <line x1="10" y1="14" x2="21" y2="3" />
     </>,
   ),
-  Square: strokeIcon(
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />,
-  ),
-  Play: strokeIcon(
-    <polygon points="5 3 19 12 5 21 5 3" />,
-  ),
+  Square: strokeIcon(<rect x="3" y="3" width="18" height="18" rx="2" ry="2" />),
+  Play: strokeIcon(<polygon points="5 3 19 12 5 21 5 3" />),
   GitMerge: strokeIcon(
     <>
       <circle cx="18" cy="18" r="3" />
@@ -316,12 +306,8 @@ export const Icons = {
       <line x1="3" y1="18" x2="21" y2="18" />
     </>,
   ),
-  ChevronLeft: strokeIcon(
-    <polyline points="15 18 9 12 15 6" />,
-  ),
-  Zap: strokeIcon(
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />,
-  ),
+  ChevronLeft: strokeIcon(<polyline points="15 18 9 12 15 6" />),
+  Zap: strokeIcon(<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />),
   Eye: strokeIcon(
     <>
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />

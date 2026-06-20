@@ -57,7 +57,8 @@ interface StripeErrorSummary {
 async function summarizeStripeErrorResponse(
   response: Response,
 ): Promise<StripeErrorSummary> {
-  const requestId = response.headers.get("Stripe-Request-Id") ??
+  const requestId =
+    response.headers.get("Stripe-Request-Id") ??
     response.headers.get("request-id");
   let errorCode: string | null = null;
   let errorType: string | null = null;
@@ -180,7 +181,8 @@ export async function createStripeCheckoutSession(
 
   const data: unknown = await response.json();
   if (
-    !isRecord(data) || typeof data.id !== "string" ||
+    !isRecord(data) ||
+    typeof data.id !== "string" ||
     typeof data.url !== "string"
   ) {
     throw new TypeError(
@@ -224,7 +226,8 @@ export async function createStripeBillingPortalSession(
 
   const data: unknown = await response.json();
   if (
-    !isRecord(data) || typeof data.id !== "string" ||
+    !isRecord(data) ||
+    typeof data.id !== "string" ||
     typeof data.url !== "string"
   ) {
     throw new TypeError(
@@ -285,9 +288,7 @@ export async function verifyStripeWebhookSignature(input: {
   toleranceSeconds?: number;
   now?: number;
 }): Promise<StripeWebhookEvent> {
-  const { timestamp, signatures } = parseStripeSignatureHeader(
-    input.signature,
-  );
+  const { timestamp, signatures } = parseStripeSignatureHeader(input.signature);
   const toleranceSeconds = input.toleranceSeconds ?? 300;
   const nowSeconds = Math.floor((input.now ?? Date.now()) / 1000);
   if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) {
@@ -300,7 +301,7 @@ export async function verifyStripeWebhookSignature(input: {
   );
   if (
     !signatures.some((signature) =>
-      timingSafeEqualText(signature, expectedSignature)
+      timingSafeEqualText(signature, expectedSignature),
     )
   ) {
     throw new TypeError("Stripe webhook signature mismatch");
@@ -367,10 +368,10 @@ export async function handleStripeWebhook(
       now,
       resolveDisputeCustomerId: input.stripeSecretKey
         ? stripeDisputeCustomerResolver({
-          secretKey: input.stripeSecretKey,
-          fetch: input.fetch,
-          stripeApiBase: input.stripeApiBase,
-        })
+            secretKey: input.stripeSecretKey,
+            fetch: input.fetch,
+            stripeApiBase: input.stripeApiBase,
+          })
         : undefined,
     });
     const status = billingWebhookStatus(applyResult);
@@ -380,9 +381,10 @@ export async function handleStripeWebhook(
       status,
       receivedAt: now,
       updatedAt: now,
-      errorMessage: status === "failed" && !applyResult.applied
-        ? applyResult.reason
-        : undefined,
+      errorMessage:
+        status === "failed" && !applyResult.applied
+          ? applyResult.reason
+          : undefined,
     });
     return {
       received: true,
@@ -390,9 +392,10 @@ export async function handleStripeWebhook(
       eventId: event.id,
       status,
       applyResult,
-      errorMessage: status === "failed" && !applyResult.applied
-        ? applyResult.reason
-        : undefined,
+      errorMessage:
+        status === "failed" && !applyResult.applied
+          ? applyResult.reason
+          : undefined,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

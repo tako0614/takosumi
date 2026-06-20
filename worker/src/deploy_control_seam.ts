@@ -14,7 +14,7 @@ import { createWorkerServiceApp } from "./worker_service.ts";
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
  * bypassing the worker fetch dispatcher. The unified Takos worker injects the
  * returned service's `app.fetch` as the in-process deploy-control transport for
- * the accounts handler's deploy-control proxy seam — so the deploy-control plane
+ * the accounts handler's deploy-control seam — so the deploy-control plane
  * runs in-process and owns no public route.
  */
 export function createDeployControlService(
@@ -27,7 +27,7 @@ export function createDeployControlService(
 
 /**
  * The operator-curated provider surface. `createDefaultRunnerProfiles` seeds
- * every reference profile (most as disabled templates); the operator opts in via
+ * every reference profile (most as disabled candidates); the operator opts in via
  * `TAKOSUMI_ENABLED_RUNNER_PROFILES` (CSV). Only listed profiles are seeded into
  * the controller, each enabled, so `/v1/runner-profiles` and policy evaluation
  * never expose an unlisted provider. Unset/empty -> `["cloudflare-default"]`.
@@ -35,9 +35,19 @@ export function createDeployControlService(
 function resolveEnabledRunnerProfilesFromEnv(
   env: CloudflareWorkerEnv,
 ): readonly RunnerProfile[] {
+  const gatewayAccessOpen = env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS === "open";
+  const hardeningEnforced =
+    env.TAKOSUMI_PRODUCTION_HARDENING_GATE === "enforce";
   return resolveEnabledRunnerProfiles(
     createDefaultRunnerProfiles(),
     env.TAKOSUMI_ENABLED_RUNNER_PROFILES,
+    {
+      requireGatewayEgressEvidence: gatewayAccessOpen && hardeningEnforced,
+      egressEnforcementEvidenceRef:
+        env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
+      egressEnforcementEvidenceDigest:
+        env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
+    },
   );
 }
 
@@ -47,13 +57,11 @@ function resolveEnabledRunnerProfilesFromEnv(
  *
  * It owns the one per-env service cache and the Request normalization that each
  * host used to re-derive. `operations` is the default transport the accounts
- * deploy-control proxy calls (the wired OpenTofu controller, with no Bearer
+ * deploy-control facade calls (the wired OpenTofu controller, with no Bearer
  * handshake and no JSON round-trip); `fetch` dispatches the same per-env cached
  * service's `app.fetch` and is kept only as a transport fallback.
  */
-export function createInProcessDeployControlSeam(
-  env: CloudflareWorkerEnv,
-): {
+export function createInProcessDeployControlSeam(env: CloudflareWorkerEnv): {
   readonly fetch: typeof fetch;
   readonly operations: () => Promise<TakosumiOperations>;
 } {
@@ -63,9 +71,10 @@ export function createInProcessDeployControlSeam(
     init?: RequestInit,
   ): Promise<Response> => {
     const created = await service();
-    const request = input instanceof Request && init === undefined
-      ? input
-      : new Request(input as RequestInfo | URL, init);
+    const request =
+      input instanceof Request && init === undefined
+        ? input
+        : new Request(input as RequestInfo | URL, init);
     return await created.app.fetch(request);
   };
   return {

@@ -29,9 +29,14 @@ import {
 import { InMemoryAuditStore } from "./domains/audit/mod.ts";
 import {
   InMemoryServiceEndpointStore,
-  InMemoryServiceGrantStore,
+  InMemoryEndpointServiceGrantStore,
   InMemoryServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
+import {
+  InMemoryServiceBindingStore,
+  InMemoryServiceExportStore,
+  InMemoryServiceGraphGrantStore,
+} from "./domains/service-graph/mod.ts";
 import type {
   StorageDriver,
   StorageTransaction,
@@ -58,21 +63,28 @@ export function createAppStores(
       ...options.stores?.space,
     }),
     runtime: {
-      desiredStates: options.stores?.runtime?.desiredStates ??
+      desiredStates:
+        options.stores?.runtime?.desiredStates ??
         new InMemoryRuntimeDesiredStateStore(),
-      observedStates: options.stores?.runtime?.observedStates ??
+      observedStates:
+        options.stores?.runtime?.observedStates ??
         new InMemoryRuntimeObservedStateStore(),
-      providerObservations: options.stores?.runtime?.providerObservations ??
+      providerObservations:
+        options.stores?.runtime?.providerObservations ??
         new InMemoryProviderObservationStore(),
     },
     resources: {
-      instances: options.stores?.resources?.instances ??
+      instances:
+        options.stores?.resources?.instances ??
         new InMemoryResourceInstanceStore(),
-      bindings: options.stores?.resources?.bindings ??
+      bindings:
+        options.stores?.resources?.bindings ??
         new InMemoryResourceBindingStore(),
-      bindingSetRevisions: options.stores?.resources?.bindingSetRevisions ??
+      bindingSetRevisions:
+        options.stores?.resources?.bindingSetRevisions ??
         new InMemoryBindingSetRevisionStore(),
-      migrationLedger: options.stores?.resources?.migrationLedger ??
+      migrationLedger:
+        options.stores?.resources?.migrationLedger ??
         new InMemoryMigrationLedgerStore(),
     },
     registry: registryStores,
@@ -80,12 +92,26 @@ export function createAppStores(
       events: options.stores?.audit?.events ?? new InMemoryAuditStore(),
     },
     serviceEndpoints: {
-      endpoints: options.stores?.serviceEndpoints?.endpoints ??
+      endpoints:
+        options.stores?.serviceEndpoints?.endpoints ??
         new InMemoryServiceEndpointStore(),
-      trustRecords: options.stores?.serviceEndpoints?.trustRecords ??
+      trustRecords:
+        options.stores?.serviceEndpoints?.trustRecords ??
         new InMemoryServiceTrustRecordStore(),
-      grants: options.stores?.serviceEndpoints?.grants ??
-        new InMemoryServiceGrantStore(),
+      grants:
+        options.stores?.serviceEndpoints?.grants ??
+        new InMemoryEndpointServiceGrantStore(),
+    },
+    serviceGraph: {
+      exports:
+        options.stores?.serviceGraph?.exports ??
+        new InMemoryServiceExportStore(),
+      bindings:
+        options.stores?.serviceGraph?.bindings ??
+        new InMemoryServiceBindingStore(),
+      grants:
+        options.stores?.serviceGraph?.grants ??
+        new InMemoryServiceGraphGrantStore(),
     },
   };
 }
@@ -101,13 +127,17 @@ function createStorageBackedAppStores(
   driver: StorageDriver,
 ): AppStores {
   const registryStores = {
-    descriptors: options.stores?.registry?.descriptors ??
+    descriptors:
+      options.stores?.registry?.descriptors ??
       storageBackedStore(driver, (tx) => tx.registry.descriptors),
-    resolutions: options.stores?.registry?.resolutions ??
+    resolutions:
+      options.stores?.registry?.resolutions ??
       storageBackedStore(driver, (tx) => tx.registry.resolutions),
-    trustRecords: options.stores?.registry?.trustRecords ??
+    trustRecords:
+      options.stores?.registry?.trustRecords ??
       storageBackedStore(driver, (tx) => tx.registry.trustRecords),
-    bundledRegistry: options.stores?.registry?.bundledRegistry ??
+    bundledRegistry:
+      options.stores?.registry?.bundledRegistry ??
       storageBackedStore(driver, (tx) => tx.registry.bundledRegistry),
   };
   return {
@@ -115,43 +145,68 @@ function createStorageBackedAppStores(
       ...options.space,
       clock: options.space?.clock ?? options.clock,
       idGenerator: options.space?.idGenerator ?? options.idGenerator,
-      spaces: options.stores?.space?.spaces ??
+      spaces:
+        options.stores?.space?.spaces ??
         storageBackedStore(driver, (tx) => tx.space.spaces),
-      groups: options.stores?.space?.groups ??
+      groups:
+        options.stores?.space?.groups ??
         storageBackedStore(driver, (tx) => tx.space.groups),
-      memberships: options.stores?.space?.memberships ??
+      memberships:
+        options.stores?.space?.memberships ??
         storageBackedStore(driver, (tx) => tx.space.spaceMemberships),
     }),
     runtime: {
-      desiredStates: options.stores?.runtime?.desiredStates ??
+      desiredStates:
+        options.stores?.runtime?.desiredStates ??
         storageBackedStore(driver, (tx) => tx.runtime.desiredStates),
-      observedStates: options.stores?.runtime?.observedStates ??
+      observedStates:
+        options.stores?.runtime?.observedStates ??
         storageBackedStore(driver, (tx) => tx.runtime.observedStates),
-      providerObservations: options.stores?.runtime?.providerObservations ??
+      providerObservations:
+        options.stores?.runtime?.providerObservations ??
         storageBackedStore(driver, (tx) => tx.runtime.providerObservations),
     },
     resources: {
-      instances: options.stores?.resources?.instances ??
+      instances:
+        options.stores?.resources?.instances ??
         storageBackedStore(driver, (tx) => tx.resources.instances),
-      bindings: options.stores?.resources?.bindings ??
+      bindings:
+        options.stores?.resources?.bindings ??
         storageBackedStore(driver, (tx) => tx.resources.bindings),
-      bindingSetRevisions: options.stores?.resources?.bindingSetRevisions ??
+      bindingSetRevisions:
+        options.stores?.resources?.bindingSetRevisions ??
         storageBackedStore(driver, (tx) => tx.resources.bindingSetRevisions),
-      migrationLedger: options.stores?.resources?.migrationLedger ??
+      migrationLedger:
+        options.stores?.resources?.migrationLedger ??
         storageBackedStore(driver, (tx) => tx.resources.migrationLedger),
     },
     registry: registryStores,
     audit: {
-      events: options.stores?.audit?.events ??
+      events:
+        options.stores?.audit?.events ??
         storageBackedStore(driver, (tx) => tx.audit.events),
     },
     serviceEndpoints: {
-      endpoints: options.stores?.serviceEndpoints?.endpoints ??
+      endpoints:
+        options.stores?.serviceEndpoints?.endpoints ??
         storageBackedStore(driver, (tx) => tx.serviceEndpoints.endpoints),
-      trustRecords: options.stores?.serviceEndpoints?.trustRecords ??
+      trustRecords:
+        options.stores?.serviceEndpoints?.trustRecords ??
         storageBackedStore(driver, (tx) => tx.serviceEndpoints.trustRecords),
-      grants: options.stores?.serviceEndpoints?.grants ??
+      grants:
+        options.stores?.serviceEndpoints?.grants ??
         storageBackedStore(driver, (tx) => tx.serviceEndpoints.grants),
+    },
+    serviceGraph: {
+      exports:
+        options.stores?.serviceGraph?.exports ??
+        storageBackedStore(driver, (tx) => tx.serviceGraph.exports),
+      bindings:
+        options.stores?.serviceGraph?.bindings ??
+        storageBackedStore(driver, (tx) => tx.serviceGraph.bindings),
+      grants:
+        options.stores?.serviceGraph?.grants ??
+        storageBackedStore(driver, (tx) => tx.serviceGraph.grants),
     },
   };
 }
@@ -164,37 +219,41 @@ function storageBackedStore<TStore extends object>(
   } = {},
 ): TStore {
   const missingOptionalMethods = new Set(options.missingOptionalMethods ?? []);
-  return new Proxy({}, {
-    get(_target, property) {
-      if (typeof property !== "string") return undefined;
-      if (missingOptionalMethods.has(property)) return undefined;
-      return (...args: readonly unknown[]) =>
-        driver.transaction((transaction) => {
-          const store = select(transaction) as Record<string, unknown>;
-          const method = store[property];
-          if (typeof method !== "function") {
-            throw new Error(`storage store method not found: ${property}`);
-          }
-          return method.apply(store, args);
-        });
+  return new Proxy(
+    {},
+    {
+      get(_target, property) {
+        if (typeof property !== "string") return undefined;
+        if (missingOptionalMethods.has(property)) return undefined;
+        return (...args: readonly unknown[]) =>
+          driver.transaction((transaction) => {
+            const store = select(transaction) as Record<string, unknown>;
+            const method = store[property];
+            if (typeof method !== "function") {
+              throw new Error(`storage store method not found: ${property}`);
+            }
+            return method.apply(store, args);
+          });
+      },
     },
-  }) as TStore;
+  ) as TStore;
 }
 
 function createRegistryStores(
   overrides?: Partial<RegistryStores>,
 ): RegistryStores {
-  const descriptors = overrides?.descriptors ??
-    new InMemoryPackageDescriptorStore();
-  const resolutions = overrides?.resolutions ??
-    new InMemoryPackageResolutionStore();
-  const trustRecords = overrides?.trustRecords ??
-    new InMemoryTrustRecordStore();
+  const descriptors =
+    overrides?.descriptors ?? new InMemoryPackageDescriptorStore();
+  const resolutions =
+    overrides?.resolutions ?? new InMemoryPackageResolutionStore();
+  const trustRecords =
+    overrides?.trustRecords ?? new InMemoryTrustRecordStore();
   return {
     descriptors,
     resolutions,
     trustRecords,
-    bundledRegistry: overrides?.bundledRegistry ??
+    bundledRegistry:
+      overrides?.bundledRegistry ??
       new InMemoryBundledRegistry(descriptors, resolutions, trustRecords),
   };
 }

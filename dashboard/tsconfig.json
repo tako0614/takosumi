@@ -18,9 +18,21 @@
     "paths": {
       "@takosjp/takosumi-accounts-contract": [
         "../accounts/contract/src/mod.ts"
-      ]
+      ],
+      "takosumi-contract": ["../contract/index.ts"]
     }
   },
   "include": ["src/**/*", "*.ts"],
-  "exclude": ["node_modules", "dist", "src/**/*_test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*_test.ts",
+    "src/**/*_test.tsx",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "src/**/__tests__/**",
+    "../tests/dashboard/**"
+  ]
 }

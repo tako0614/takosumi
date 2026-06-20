@@ -41,7 +41,7 @@ export interface CapsuleCompatibilityAnalyzer {
   ): Promise<CapsuleCompatibilityAnalysis>;
 }
 
-// The managed provider-allowlist seed. The cloudflare + aws entries derive from
+// The provider runtime-allowlist seed. The cloudflare + aws entries derive from
 // the @takosumi/providers registry (single source of truth for their OpenTofu
 // provider addresses) in both fully-qualified and short `<ns>/<name>` forms;
 // random + tls are benign local-material helper providers the registry does not
@@ -79,12 +79,12 @@ const DEFAULT_ALLOWED_PROVIDERS = defaultAllowedProviders();
 //                              any zone the token can touch).
 //   - cloudflare_zone / cloudflare_account / *_member / zone- or account-level
 //     settings: account/zone configuration and other-tenant-affecting types are
-//     never added to the managed default.
+//     never allowed by the default OSS resource-type policy.
 //
 // This is a security-boundary widening of the *resource-type* layer only. The
 // other policy layers (Capsule Gate provisioner/filesystem checks, provider
-// allowlist with cloudflare-only managed default, billing/credit reservation,
-// scope/action policy, quota) are unchanged and still apply.
+// allowlist, billing/credit reservation, scope/action policy, quota) are
+// unchanged and still apply.
 const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
   // Cloudflare standard data-plane resources (tenant-scoped, no cross-domain
   // reach). Workers static assets ship inside cloudflare_workers_script in
@@ -385,7 +385,10 @@ function isLocalModuleSource(source: string): boolean {
   return source.startsWith("./") || source.startsWith("../");
 }
 
-function resolveLocalModuleDir(fromDir: string, source: string): string | undefined {
+function resolveLocalModuleDir(
+  fromDir: string,
+  source: string,
+): string | undefined {
   const parts = [
     ...(fromDir === "." ? [] : fromDir.split("/")),
     ...source.split("/"),
@@ -447,7 +450,9 @@ export function parseNormalizedCapsuleArtifactBody(
   const path = stringRecordField(parsed, "path");
   const filesValue = parsed.files;
   if (!Array.isArray(filesValue) || filesValue.length === 0) {
-    throw new Error("normalized capsule artifact files must be a non-empty array");
+    throw new Error(
+      "normalized capsule artifact files must be a non-empty array",
+    );
   }
   const files = filesValue.map((file) => {
     if (!isPlainRecord(file)) {
@@ -518,7 +523,7 @@ function collectProviders(
           message: `Provider ${providerBlock.name} contains credential-like attributes.`,
           path: file.path,
           suggestion:
-            "Move provider credentials to the Takosumi generated root through Connection and ProviderBinding.",
+            "Move provider credentials to the Takosumi generated root through Provider Env binding and Connection/Vault backing material.",
         });
       }
       if (providerBlock.body.trim().length > 0) {
@@ -534,7 +539,7 @@ function collectProviders(
       findings.push({
         severity: "info",
         code: "backend_override_candidate",
-        message: `Backend ${backend.name} will be replaced by Takosumi managed state.`,
+        message: `Backend ${backend.name} will be replaced by Takosumi-controlled state.`,
         path: file.path,
       });
     }
@@ -727,7 +732,9 @@ function allowedSet(
   return new Set([...defaults, ...configured]);
 }
 
-function allowedProviderSet(policy: PolicyConfig | undefined): ReadonlySet<string> {
+function allowedProviderSet(
+  policy: PolicyConfig | undefined,
+): ReadonlySet<string> {
   if (policy?.allowedProviders === undefined) return DEFAULT_ALLOWED_PROVIDERS;
   const providers = new Set(DEFAULT_ALLOWED_PROVIDERS);
   for (const provider of policy.allowedProviders) {

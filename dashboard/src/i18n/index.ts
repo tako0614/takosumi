@@ -103,8 +103,11 @@ export function relativeTime(iso: string): string {
   if (Number.isNaN(then)) return iso;
   const diffSec = Math.round((Date.now() - then) / 1000);
   if (diffSec < 45) return t("common.justNow");
-  if (diffSec < 3600) return t("common.minutesAgo", { n: Math.round(diffSec / 60) });
-  if (diffSec < 86400) return t("common.hoursAgo", { n: Math.round(diffSec / 3600) });
-  if (diffSec < 86400 * 7) return t("common.daysAgo", { n: Math.round(diffSec / 86400) });
+  if (diffSec < 3600)
+    return t("common.minutesAgo", { n: Math.round(diffSec / 60) });
+  if (diffSec < 86400)
+    return t("common.hoursAgo", { n: Math.round(diffSec / 3600) });
+  if (diffSec < 86400 * 7)
+    return t("common.daysAgo", { n: Math.round(diffSec / 86400) });
   return formatDate(iso);
 }

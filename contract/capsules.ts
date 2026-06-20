@@ -6,7 +6,13 @@
  * child module from a Takosumi generated root.
  */
 
-import type { Run } from "./runs.ts";
+import type { PublicRun, Run } from "./runs.ts";
+import type { ProviderCredentialOwnership } from "./connections.ts";
+import type {
+  ProviderRequirement,
+  ProviderResolution,
+  PublicProviderResolution,
+} from "./provider-resolution.ts";
 
 export type CapsuleCompatibilityLevel =
   | "ready"
@@ -31,7 +37,7 @@ export interface CapsuleProviderRequirement {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
-  readonly credentialSources?: readonly ("takosumi_managed" | "user_env_set")[];
+  readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
 }
 
 export interface CapsuleResourceSummary {
@@ -61,6 +67,8 @@ export interface CapsuleCompatibilityReport {
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
+  readonly providerRequirements?: readonly ProviderRequirement[];
+  readonly providerResolutions?: readonly ProviderResolution[];
   readonly normalizedObjectKey?: string;
   readonly normalizedDigest?: string;
   readonly createdAt: string;
@@ -93,4 +101,16 @@ export interface CreateSourceCompatibilityCheckRequest {
 export interface CapsuleCompatibilityReportResponse {
   readonly report: CapsuleCompatibilityReport;
   readonly run?: Run;
+}
+
+export type PublicCapsuleCompatibilityReport = Omit<
+  CapsuleCompatibilityReport,
+  "providerResolutions"
+> & {
+  readonly providerResolutions?: readonly PublicProviderResolution[];
+};
+
+export interface PublicCapsuleCompatibilityReportResponse {
+  readonly report: PublicCapsuleCompatibilityReport;
+  readonly run?: PublicRun;
 }

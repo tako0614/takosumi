@@ -19,13 +19,7 @@
 // rather than a partial or silently-succeeding one.
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AccountsInstallationExportBundle } from "./export-bundle.ts";
@@ -34,7 +28,7 @@ import type {
   AppInstallationExportWorker,
   AppInstallationExportWorkerInput,
 } from "./mod.ts";
-import { readEnvVar } from "./read-env.ts";
+import { exportDownloadUrl } from "./export-download-url.ts";
 
 const archiveRoot = "takos-export";
 const dataRoot = `${archiveRoot}/data`;
@@ -73,8 +67,7 @@ export interface MetadataOnlyInstallationExportWorkerOptions {
   readonly downloadBaseUrl?: string;
   readonly uploader?: InstallationExportArchiveUploader;
   readonly dataProvider?: InstallationExportDataProvider;
-  readonly artifactDescriptorProvider?:
-    InstallationExportArtifactDescriptorProvider;
+  readonly artifactDescriptorProvider?: InstallationExportArtifactDescriptorProvider;
   readonly objectKeyPrefix?: string;
   readonly ttlMs?: number;
   readonly tarExecutable?: string;
@@ -142,19 +135,18 @@ export async function buildInstallationExportArchiveFiles(
     },
     ...dataArchiveFiles(normalizedDataFiles),
     {
-      path: `${archiveRoot}/use-edges/template.yml`,
+      path: `${archiveRoot}/service-bindings/template.yml`,
       content: jsonYaml({
-        use_edges: bundle.useEdges.map((useEdge) => ({
-          name: useEdge.name,
-          kind: useEdge.kind,
-          configRef: useEdge.template.configRef,
-          secretRefs: useEdge.template.secretRefs,
+        service_bindings: bundle.serviceBindings.map((serviceBinding) => ({
+          name: serviceBinding.name,
+          kind: serviceBinding.kind,
+          configRef: serviceBinding.template.configRef,
         })),
       }),
     },
     {
-      path: `${archiveRoot}/oidc/use-edge-template.json`,
-      content: `${JSON.stringify(oidcUseEdgeTemplate(bundle), null, 2)}\n`,
+      path: `${archiveRoot}/oidc/service-binding-template.json`,
+      content: `${JSON.stringify(oidcServiceBindingTemplate(bundle), null, 2)}\n`,
     },
     {
       path: `${archiveRoot}/docs/restore.md`,
@@ -177,17 +169,18 @@ export async function writeInstallationExportTarZst(
         { artifactDescriptorContent: input.artifactDescriptorContent },
       ),
     });
-    const clearArchivePath = encryption.method === "age"
-      ? join(tempRoot, "takos-export.tar.zst")
-      : input.outputPath;
+    const clearArchivePath =
+      encryption.method === "age"
+        ? join(tempRoot, "takos-export.tar.zst")
+        : input.outputPath;
     const output = await commandOutput(input.tarExecutable ?? "tar", [
-        `--use-compress-program=${input.zstdExecutable ?? "zstd"}`,
-        "-cf",
-        clearArchivePath,
-        "-C",
-        tempRoot,
-        archiveRoot,
-      ]);
+      `--use-compress-program=${input.zstdExecutable ?? "zstd"}`,
+      "-cf",
+      clearArchivePath,
+      "-C",
+      tempRoot,
+      archiveRoot,
+    ]);
     if (!output.success) {
       const stderr = new TextDecoder().decode(output.stderr).trim();
       throw new Error(
@@ -198,11 +191,11 @@ export async function writeInstallationExportTarZst(
     }
     if (encryption.method === "age") {
       const ageOutput = await commandOutput(input.ageExecutable ?? "age", [
-          ...encryption.recipients.flatMap((recipient) => ["-r", recipient]),
-          "-o",
-          input.outputPath,
-          clearArchivePath,
-        ]);
+        ...encryption.recipients.flatMap((recipient) => ["-r", recipient]),
+        "-o",
+        input.outputPath,
+        clearArchivePath,
+      ]);
       if (!ageOutput.success) {
         const stderr = new TextDecoder().decode(ageOutput.stderr).trim();
         throw new Error(
@@ -220,13 +213,20 @@ export async function writeInstallationExportTarZst(
 export function createMetadataOnlyInstallationExportWorker(
   options: MetadataOnlyInstallationExportWorkerOptions,
 ): AppInstallationExportWorker {
-  const uploader = options.uploader ??
+  const uploader =
+    options.uploader ??
     createHttpDirectoryInstallationExportArchiveUploader({
       downloadBaseUrl: requiredDownloadBaseUrl(options.downloadBaseUrl),
       outputDirectory: options.outputDirectory,
     });
   const ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
   return async (input) => {
+    if (
+      input.request.includeData &&
+      input.request.encryption.method !== "age"
+    ) {
+      throw new TypeError("export includeData requires age encryption");
+    }
     await mkdir(options.outputDirectory, { recursive: true });
     const encrypted = input.request.encryption.method === "age";
     const fileName = `takos-export-${input.operationId}.tar.zst${
@@ -234,9 +234,10 @@ export function createMetadataOnlyInstallationExportWorker(
     }`;
     const objectKey = prefixedObjectKey(options.objectKeyPrefix, fileName);
     const outputPath = join(options.outputDirectory, fileName);
-    const dataFiles = input.request.includeData && options.dataProvider
-      ? await options.dataProvider(input)
-      : [];
+    const dataFiles =
+      input.request.includeData && options.dataProvider
+        ? await options.dataProvider(input)
+        : [];
     const artifactDescriptorContent = options.artifactDescriptorProvider
       ? await options.artifactDescriptorProvider(input)
       : undefined;
@@ -266,9 +267,8 @@ export function createMetadataOnlyInstallationExportWorker(
         format: input.request.format,
         encryption: input.request.encryption.method,
         dataIncluded: dataFiles.length > 0 ? "true" : "false",
-        artifactDescriptorIncluded: artifactDescriptorContent !== undefined
-          ? "true"
-          : "false",
+        artifactDescriptorIncluded:
+          artifactDescriptorContent !== undefined ? "true" : "false",
       },
     });
   };
@@ -356,25 +356,28 @@ async function normalizeDataFiles(
   files: readonly InstallationExportArchiveDataFile[],
 ): Promise<readonly NormalizedDataArchiveFile[]> {
   const seen = new Set<string>();
-  const normalized = await Promise.all(files.map(async (file) => {
-    const archivePath = normalizeDataArchivePath(file.path);
-    if (seen.has(archivePath)) {
-      throw new TypeError(
-        `duplicate installation export data path: ${archivePath}`,
-      );
-    }
-    seen.add(archivePath);
-    const bytes = typeof file.content === "string"
-      ? new TextEncoder().encode(file.content)
-      : file.content;
-    return {
-      path: archivePath,
-      ...(file.mediaType ? { mediaType: file.mediaType } : {}),
-      byteLength: bytes.byteLength,
-      contentDigest: await sha256HexBytes(bytes),
-      content: file.content,
-    };
-  }));
+  const normalized = await Promise.all(
+    files.map(async (file) => {
+      const archivePath = normalizeDataArchivePath(file.path);
+      if (seen.has(archivePath)) {
+        throw new TypeError(
+          `duplicate installation export data path: ${archivePath}`,
+        );
+      }
+      seen.add(archivePath);
+      const bytes =
+        typeof file.content === "string"
+          ? new TextEncoder().encode(file.content)
+          : file.content;
+      return {
+        path: archivePath,
+        ...(file.mediaType ? { mediaType: file.mediaType } : {}),
+        byteLength: bytes.byteLength,
+        contentDigest: await sha256HexBytes(bytes),
+        content: file.content,
+      };
+    }),
+  );
   return normalized.sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -389,8 +392,8 @@ function normalizeDataArchivePath(path: string): string {
   const relativeDataPath = normalized.startsWith(`${dataRoot}/`)
     ? normalized.slice(`${dataRoot}/`.length)
     : normalized.startsWith(`${archiveRoot}/`)
-    ? ""
-    : normalized;
+      ? ""
+      : normalized;
   const segments = relativeDataPath.split("/").filter(Boolean);
   if (
     segments.length === 0 ||
@@ -413,31 +416,31 @@ function dataArchiveFiles(
   dataFiles: readonly NormalizedDataArchiveFile[],
 ): readonly InstallationExportArchiveFile[] {
   if (dataFiles.length === 0) {
-    return [{
-      path: `${dataRoot}/README.md`,
-      content:
-        "# Data export\n\nData dump workers have not attached data partitions to this metadata-only bundle.\n",
-    }];
+    return [
+      {
+        path: `${dataRoot}/README.md`,
+        content:
+          "# Data export\n\nData dump workers have not attached data partitions to this metadata-only bundle.\n",
+      },
+    ];
   }
   return [
     {
       path: `${dataRoot}/manifest.json`,
-      content: `${
-        JSON.stringify(
-          {
-            kind: dataManifestKind,
-            version: "v1",
-            files: dataFiles.map((file) => ({
-              path: file.path,
-              ...(file.mediaType ? { mediaType: file.mediaType } : {}),
-              byteLength: file.byteLength,
-              contentDigest: file.contentDigest,
-            })),
-          },
-          null,
-          2,
-        )
-      }\n`,
+      content: `${JSON.stringify(
+        {
+          kind: dataManifestKind,
+          version: "v1",
+          files: dataFiles.map((file) => ({
+            path: file.path,
+            ...(file.mediaType ? { mediaType: file.mediaType } : {}),
+            byteLength: file.byteLength,
+            contentDigest: file.contentDigest,
+          })),
+        },
+        null,
+        2,
+      )}\n`,
     },
     ...dataFiles.map((file) => ({
       path: file.path,
@@ -486,36 +489,35 @@ function installationProjection(
   };
 }
 
-function oidcUseEdgeTemplate(
+function oidcServiceBindingTemplate(
   bundle: AccountsInstallationExportBundle,
 ): Record<string, unknown> {
-  const useEdge = bundle.useEdges.find((entry) =>
-    entry.kind === "identity.oidc@v1"
+  const serviceBinding = bundle.serviceBindings.find(
+    (entry) => entry.kind === "identity.oidc",
   );
   return {
-    kind: "takosumi.accounts.oidc-use-edge-template@v1",
+    kind: "takosumi.accounts.oidc-service-binding-template@v1",
     version: "v1",
     installationId: bundle.installation.installationId,
     sourceIssuer: bundle.oidcClient?.issuerUrl ?? null,
     oidcClient: bundle.oidcClient
       ? {
-        useEdge: bundle.oidcClient.useEdge,
-        servicePath: bundle.oidcClient.servicePath ??
-          bundle.oidcClient.namespacePath,
-        issuerUrl: bundle.oidcClient.issuerUrl,
-        redirectUris: bundle.oidcClient.redirectUris,
-        allowedScopes: bundle.oidcClient.allowedScopes,
-        subjectMode: bundle.oidcClient.subjectMode,
-        tokenEndpointAuthMethod: bundle.oidcClient.tokenEndpointAuthMethod,
-      }
+          serviceBinding: bundle.oidcClient.serviceBinding,
+          servicePath:
+            bundle.oidcClient.servicePath ?? bundle.oidcClient.namespacePath,
+          issuerUrl: bundle.oidcClient.issuerUrl,
+          redirectUris: bundle.oidcClient.redirectUris,
+          allowedScopes: bundle.oidcClient.allowedScopes,
+          subjectMode: bundle.oidcClient.subjectMode,
+          tokenEndpointAuthMethod: bundle.oidcClient.tokenEndpointAuthMethod,
+        }
       : null,
-    useEdge: useEdge
+    serviceBinding: serviceBinding
       ? {
-        name: useEdge.name,
-        kind: useEdge.kind,
-        configRef: useEdge.template.configRef,
-        secretRefs: useEdge.template.secretRefs,
-      }
+          name: serviceBinding.name,
+          kind: serviceBinding.kind,
+          configRef: serviceBinding.template.configRef,
+        }
       : null,
   };
 }
@@ -525,10 +527,7 @@ function jsonYaml(value: unknown): string {
 }
 
 function normalizedHttpDirectoryUrl(value: string): string {
-  const url = new URL(value);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new TypeError("downloadBaseUrl must be an http:// or https:// URL");
-  }
+  const url = exportDownloadUrl(value, "downloadBaseUrl");
   if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
   return url.toString();
 }
@@ -555,186 +554,22 @@ function prefixedObjectKey(
   return segments.length > 0 ? `${segments.join("/")}/${fileName}` : fileName;
 }
 
-/**
- * Reserved env var name that holds the HMAC-SHA256 secret used to sign
- * installation export download URLs. Operators MUST configure this in
- * production; absence at sign time forces the handler to fall back to
- * "not configured" semantics rather than emit unsigned URLs.
- */
-export const EXPORT_DOWNLOAD_SECRET_ENV =
-  "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET";
-
-const EXPORT_DOWNLOAD_SIGNATURE_PARAM = "tk_sig";
-const EXPORT_DOWNLOAD_EXPIRES_PARAM = "tk_exp";
-const EXPORT_DOWNLOAD_TTL_MS = 5 * 60 * 1000;
-
-export interface ExportDownloadSigningOptions {
-  /** HMAC secret (string or raw bytes). */
-  readonly secret: string | Uint8Array;
-  /** Override `Date.now()` for deterministic tests. */
-  readonly now?: () => number;
-  /** Override the 5-minute TTL. */
-  readonly ttlMs?: number;
-}
-
-/**
- * Sign an installation export download URL with HMAC-SHA256.
- *
- * Adds `tk_exp` (ms-since-epoch expiry) and `tk_sig` (base64url HMAC-SHA256
- * of the URL minus `tk_sig`) query parameters. The verifier (see
- * `verifyExportDownloadUrl`) recomputes the same canonical form and uses
- * constant-time comparison.
- */
-export async function signExportDownloadUrl(
-  rawUrl: string,
-  options: ExportDownloadSigningOptions,
-): Promise<{ url: string; expiresAt: string }> {
-  const url = new URL(rawUrl);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new TypeError("export download URL must be http or https");
-  }
-  const ttlMs = options.ttlMs ?? EXPORT_DOWNLOAD_TTL_MS;
-  const expiresAtMs = (options.now?.() ?? Date.now()) + ttlMs;
-  url.searchParams.delete(EXPORT_DOWNLOAD_SIGNATURE_PARAM);
-  url.searchParams.set(EXPORT_DOWNLOAD_EXPIRES_PARAM, String(expiresAtMs));
-  const signature = await computeExportDownloadSignature(
-    url.toString(),
-    options.secret,
-  );
-  url.searchParams.set(EXPORT_DOWNLOAD_SIGNATURE_PARAM, signature);
-  return {
-    url: url.toString(),
-    expiresAt: new Date(expiresAtMs).toISOString(),
-  };
-}
-
-export type ExportDownloadVerifyResult =
-  | { ok: true; expiresAtMs: number }
-  | { ok: false; reason: "missing" | "expired" | "signature" };
-
-/**
- * Verify a signed export download URL produced by `signExportDownloadUrl`.
- *
- * Returns a discriminated union rather than throwing so callers can map
- * each failure mode to the correct HTTP envelope (`400 invalid_signature`,
- * `410 expired`, etc.).
- */
-export async function verifyExportDownloadUrl(
-  rawUrl: string,
-  options: {
-    readonly secret: string | Uint8Array;
-    readonly now?: () => number;
-  },
-): Promise<ExportDownloadVerifyResult> {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return { ok: false, reason: "signature" };
-  }
-  const presentedSignature = url.searchParams.get(
-    EXPORT_DOWNLOAD_SIGNATURE_PARAM,
-  );
-  const expiresAtRaw = url.searchParams.get(EXPORT_DOWNLOAD_EXPIRES_PARAM);
-  if (!presentedSignature || !expiresAtRaw) {
-    return { ok: false, reason: "missing" };
-  }
-  const expiresAtMs = Number.parseInt(expiresAtRaw, 10);
-  if (!Number.isFinite(expiresAtMs)) {
-    return { ok: false, reason: "signature" };
-  }
-  if (expiresAtMs <= (options.now?.() ?? Date.now())) {
-    return { ok: false, reason: "expired" };
-  }
-  url.searchParams.delete(EXPORT_DOWNLOAD_SIGNATURE_PARAM);
-  const expected = await computeExportDownloadSignature(
-    url.toString(),
-    options.secret,
-  );
-  if (!constantTimeStringEqual(expected, presentedSignature)) {
-    return { ok: false, reason: "signature" };
-  }
-  return { ok: true, expiresAtMs };
-}
-
-async function computeExportDownloadSignature(
-  payload: string,
-  secret: string | Uint8Array,
-): Promise<string> {
-  const secretBytes = typeof secret === "string"
-    ? new TextEncoder().encode(secret)
-    : secret;
-  if (secretBytes.byteLength === 0) {
-    throw new TypeError("export download signing secret must not be empty");
-  }
-  // Re-allocate on an ArrayBuffer to avoid SharedArrayBuffer typing
-  // mismatches with WebCrypto's `BufferSource` parameter.
-  const keyMaterial = new Uint8Array(secretBytes.byteLength);
-  keyMaterial.set(secretBytes);
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyMaterial,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(payload),
-  );
-  return base64UrlFromBytes(new Uint8Array(digest));
-}
-
-function base64UrlFromBytes(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
-    "=",
-    "",
-  );
-}
-
-function constantTimeStringEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-/**
- * Read the export download signing secret from the operator-configured env
- * var, returning `undefined` when the var is missing or empty.
- *
- * The handler MUST treat absence as "feature unavailable" rather than
- * fall back to unsigned URLs, because the export bundle may contain
- * tenant-scoped material.
- */
-export function readExportDownloadSigningSecretFromEnv(): string | undefined {
-  const raw = readEnvVar(EXPORT_DOWNLOAD_SECRET_ENV);
-  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
-}
-
 function restoreGuide(bundle: AccountsInstallationExportBundle): string {
   return `# Restore ${bundle.installation.installationId}
 
 This archive contains a canonical \`takos-export/bundle.json\` payload for Takosumi Accounts import.
-OIDC use-edge metadata is also available at \`takos-export/oidc/use-edge-template.json\`.
+OIDC service-binding metadata is also available at \`takos-export/oidc/service-binding-template.json\`.
 
-\`\`\`bash
- takosumi accounts installations import ./takos-export.tar.zst \\
-  --to <target-accounts-url> \\
-  --account-id <target-account-id> \\
-  --space-id <target-space-id> \\
-  --subject <takosumi-subject>
-\`\`\`
+Restore this bundle through a Takosumi deploy-control restore/apply flow on the
+target Space, then let the target account plane create its Installation
+projection from that deploy-control ledger entry. The account-plane import
+route is fail-closed until it is wired to that restore flow, and the archive
+intentionally does not depend on a public install CLI command.
 
 Source commit: \`${bundle.source.commit}\`
 Plan digest digest: \`${bundle.source.planDigest}\`
 Artifact digest: \`${bundle.source.artifactDigest ?? "none"}\`
 
-Secret material is not included. Provider use edges must be reissued by the target Accounts instance.
+Secret material is not included. Provider service bindings must be reissued by the target Accounts instance.
 `;
 }

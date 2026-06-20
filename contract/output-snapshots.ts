@@ -25,6 +25,15 @@ export interface OutputSnapshot {
   readonly createdAt: string;
 }
 
+/**
+ * Public OutputSnapshot projection. The raw encrypted artifact key is an
+ * internal storage handle and is not part of edge/session API reads.
+ */
+export type PublicOutputSnapshot = Omit<
+  OutputSnapshot,
+  "rawOutputArtifactKey"
+>;
+
 export type OutputShareStatus = "pending" | "active" | "revoked";
 
 /**

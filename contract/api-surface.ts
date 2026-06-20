@@ -8,13 +8,14 @@
  * defines the canonical taxonomy so every classifier derives from one place.
  *
  * Taxonomy:
- * - {@link API_V1_PREFIX}     ONE edge-public surface (deploy-control +
- *                             installation lifecycle). Auth resolves a
- *                             `DeployControlPrincipal` from a session cookie, a
- *                             PAT, or the operator bearer.
+ * - {@link API_V1_PREFIX}     ONE edge-public customer surface (deploy-control +
+ *                             installation lifecycle). Auth resolves from an
+ *                             account session or PAT. Operator bearer belongs
+ *                             to host-internal seams, not this prefix.
  * - {@link INTERNAL_V1_PREFIX} ONE internal seam: the in-process deploy-control
- *                             ledger contract, the runtime-agent gateway, and
- *                             the OpenTofu container callbacks. Never edge-public.
+ *                             ledger contract, runtime-agent compatibility
+ *                             routes, and OpenTofu container callbacks. Never
+ *                             edge-public.
  * - {@link ACCOUNTS_IDENTITY_PREFIX} accounts identity/billing (OIDC issuer
  *                             session surface): `/v1/account`, `/v1/auth`,
  *                             `/v1/billing`, passkeys. Sibling to `/oauth`.
@@ -34,14 +35,13 @@ export const ACCOUNTS_IDENTITY_PREFIX = "/v1" as const;
 
 /**
  * External / standards-compliant prefixes that must not be renamed: the OIDC
- * authorization/discovery surface (`/oauth`, `/.well-known`), the sign-in entry
- * (`/start`), and inbound webhooks (`/hooks`). (`/install` — the external
- * install link — is a plain SPA path: the dashboard client reads its query.)
+ * authorization/discovery surface (`/oauth`, `/.well-known`) and inbound
+ * webhooks (`/hooks`). (`/install` — the external install link — is a plain SPA
+ * path: the dashboard client reads its query.)
  */
 export const EXTERNAL_STANDARD_PREFIXES = [
   "/oauth",
   "/.well-known",
-  "/start",
   "/hooks",
 ] as const;
 
@@ -93,7 +93,7 @@ export function isAccountsIdentityPath(pathname: string): boolean {
 /** True for an external/standard prefix (OIDC, install link, webhooks). */
 export function isExternalStandardPath(pathname: string): boolean {
   return EXTERNAL_STANDARD_PREFIXES.some((prefix) =>
-    matchesPrefix(pathname, prefix)
+    matchesPrefix(pathname, prefix),
   );
 }
 

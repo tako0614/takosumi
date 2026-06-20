@@ -40,6 +40,7 @@ import {
   getRunLogs,
   planInstallation,
   type Run,
+  type RunAuditEvent,
   type RunCostInfo,
   type RunDiagnostic,
 } from "../../lib/control-api.ts";
@@ -97,7 +98,9 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
     <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
       <Show when={cost().estimatedCredits > 0}>
         <p class="wa-cost-line">
-          {t("run.cost.required", { n: formatCredits(cost().estimatedCredits) })}
+          {t("run.cost.required", {
+            n: formatCredits(cost().estimatedCredits),
+          })}
         </p>
       </Show>
       <Show when={cost().availableCredits !== undefined}>
@@ -148,19 +151,20 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   );
 }
 
-function AuditEventRow(props: { event: Record<string, unknown> }) {
+function AuditEventRow(props: { event: RunAuditEvent }) {
   const eventType = () =>
     String(
       props.event.type ?? props.event.action ?? props.event.message ?? "event",
     );
   const at = () => {
     const raw = props.event.at ?? props.event.createdAt;
-    if (typeof raw === "number") return formatDateTime(new Date(raw).toISOString());
+    if (typeof raw === "number")
+      return formatDateTime(new Date(raw).toISOString());
     if (typeof raw === "string") return formatDateTime(raw);
     return "";
   };
   const detail = () => {
-    const raw = props.event.detail ?? props.event.metadata;
+    const raw = props.event.detail ?? props.event.data ?? props.event.metadata;
     if (raw === undefined) return "";
     try {
       return JSON.stringify(raw, null, 2);
@@ -242,7 +246,9 @@ function Inner() {
     onCleanup(() => clearTimeout(timer));
   });
 
-  const inputs = createMemo(() => inputNamesFromLogs(logs()?.auditEvents ?? []));
+  const inputs = createMemo(() =>
+    inputNamesFromLogs(logs()?.auditEvents ?? []),
+  );
   const changes = createMemo(() => changesFromLogs(logs()?.auditEvents ?? []));
   const changeCounts = createMemo(() => {
     const items = changes();
@@ -271,6 +277,12 @@ function Inner() {
     r.status === "succeeded" &&
     r.policyStatus === "pass" &&
     !applied();
+  const requiresDestructiveConfirmation = (r: Run): boolean =>
+    isDeployableRun(r) &&
+    (needsConfirm() ||
+      r.type === "destroy_plan" ||
+      r.requiresApproval === true ||
+      changeCounts().delete > 0);
 
   const deploy = createAction(async (confirmDestructive?: boolean) => {
     let envelope: unknown;
@@ -361,7 +373,11 @@ function Inner() {
           const counts = changeCounts();
           const sub = t("run.summary.readyChanges", counts);
           return r.type === "destroy_plan"
-            ? { kind: "danger", text: t("run.summary.destroyReady", { name }), sub }
+            ? {
+                kind: "danger",
+                text: t("run.summary.destroyReady", { name }),
+                sub,
+              }
             : { kind: "action", text: t("run.summary.ready", { name }), sub };
         }
         case "failed":
@@ -375,7 +391,9 @@ function Inner() {
         default:
           return {
             kind: "progress",
-            text: t("run.summary.fallback", { status: runStatusLabel(r.status) }),
+            text: t("run.summary.fallback", {
+              status: runStatusLabel(r.status),
+            }),
           };
       }
     }
@@ -394,15 +412,15 @@ function Inner() {
       { label: t("run.details.type"), value: <code>{r.type}</code> },
       {
         label: t("run.details.policy"),
-        value: r.policyStatus
-          ? (
-            <StatusBadge
-              status={r.policyStatus}
-              label={policyStatusLabel}
-              tone={policyTone}
-            />
-          )
-          : <span class="muted">—</span>,
+        value: r.policyStatus ? (
+          <StatusBadge
+            status={r.policyStatus}
+            label={policyStatusLabel}
+            tone={policyTone}
+          />
+        ) : (
+          <span class="muted">—</span>
+        ),
       },
     ];
     if (r.installationId) {
@@ -435,9 +453,18 @@ function Inner() {
         value: <code>{r.planDigest}</code>,
       });
     }
-    out.push({ label: t("run.details.created"), value: formatDateTime(r.createdAt) });
-    out.push({ label: t("run.details.started"), value: formatDateTime(r.startedAt) });
-    out.push({ label: t("run.details.finished"), value: formatDateTime(r.finishedAt) });
+    out.push({
+      label: t("run.details.created"),
+      value: formatDateTime(r.createdAt),
+    });
+    out.push({
+      label: t("run.details.started"),
+      value: formatDateTime(r.startedAt),
+    });
+    out.push({
+      label: t("run.details.finished"),
+      value: formatDateTime(r.finishedAt),
+    });
     if (r.errorCode) {
       out.push({
         label: t("run.details.error"),
@@ -450,7 +477,8 @@ function Inner() {
   const pageTitle = () => {
     const r = run.latest;
     if (!r) return t("run.title.other");
-    if (r.type === "apply" || r.type === "destroy_apply") return t("run.title.apply");
+    if (r.type === "apply" || r.type === "destroy_apply")
+      return t("run.title.apply");
     if (r.type === "destroy_plan") return t("run.title.destroy");
     if (r.type === "plan") return t("run.title.plan");
     return t("run.title.other");
@@ -486,7 +514,7 @@ function Inner() {
             {(id) => (
               <Button
                 variant="ghost"
-                href={`/apps/${encodeURIComponent(id())}`}
+                href={`/installations/${encodeURIComponent(id())}`}
               >
                 {t("run.backToApp")}
               </Button>
@@ -522,9 +550,7 @@ function Inner() {
                       <div class="av-run-summary-text">
                         <p class="av-run-summary-line">{s().text}</p>
                         <Show when={s().sub}>
-                          {(sub) => (
-                            <p class="av-run-summary-sub">{sub()}</p>
-                          )}
+                          {(sub) => <p class="av-run-summary-sub">{sub()}</p>}
                         </Show>
                       </div>
                     </div>
@@ -556,9 +582,17 @@ function Inner() {
                     </Button>
                   </Show>
 
-                  <Show when={!applied() && isDeployableRun(r()) && !needsConfirm()}>
+                  <Show
+                    when={
+                      !applied() &&
+                      isDeployableRun(r()) &&
+                      !requiresDestructiveConfirmation(r())
+                    }
+                  >
                     <Button
-                      variant={r().type === "destroy_plan" ? "danger" : "primary"}
+                      variant={
+                        r().type === "destroy_plan" ? "danger" : "primary"
+                      }
                       type="button"
                       disabled={deploy.busy() || costBlocked()}
                       busy={deploy.busy()}
@@ -572,7 +606,13 @@ function Inner() {
                     </Button>
                   </Show>
 
-                  <Show when={r().status === "failed" && isReviewRun(r()) && r().installationId}>
+                  <Show
+                    when={
+                      r().status === "failed" &&
+                      isReviewRun(r()) &&
+                      r().installationId
+                    }
+                  >
                     <Button
                       variant="secondary"
                       type="button"
@@ -585,15 +625,15 @@ function Inner() {
 
                   <Show
                     when={
-                      (r().status === "succeeded" &&
-                        (r().type === "apply" || r().type === "destroy_apply")) &&
+                      r().status === "succeeded" &&
+                      (r().type === "apply" || r().type === "destroy_apply") &&
                       installationId()
                     }
                   >
                     {(id) => (
                       <Button
                         variant="primary"
-                        href={`/apps/${encodeURIComponent(id())}`}
+                        href={`/installations/${encodeURIComponent(id())}`}
                       >
                         {t("run.backToApp")}
                       </Button>
@@ -602,14 +642,19 @@ function Inner() {
                 </div>
 
                 {/* destructive double-confirmation */}
-                <Show when={needsConfirm()}>
+                <Show when={!applied() && requiresDestructiveConfirmation(r())}>
                   <p class="wa-deploy-warn">{t("run.destructiveWarning")}</p>
                   <div class="wa-form-actions">
                     <Button
                       variant="secondary"
                       type="button"
                       disabled={deploy.busy()}
-                      onClick={() => setNeedsConfirm(false)}
+                      onClick={() => {
+                        setNeedsConfirm(false);
+                        const id = installationId();
+                        if (id)
+                          navigate(`/installations/${encodeURIComponent(id)}`);
+                      }}
                     >
                       {t("run.stop")}
                     </Button>
@@ -630,13 +675,25 @@ function Inner() {
                 </Show>
 
                 <Show when={approve.error()}>
-                  {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                  {(m) => (
+                    <p class="wa-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
                 </Show>
                 <Show when={deploy.error()}>
-                  {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                  {(m) => (
+                    <p class="wa-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
                 </Show>
                 <Show when={retryPlan.error()}>
-                  {(m) => <p class="wa-error" role="alert">{m()}</p>}
+                  {(m) => (
+                    <p class="wa-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
                 </Show>
               </Card>
 
@@ -645,13 +702,16 @@ function Inner() {
                 <CardHeader title={t("run.changes.title")} />
                 <div class="wa-change-strip">
                   <span class="wa-change-stat wa-change-create">
-                    {t("run.changes.create")} <strong>{changeCounts().create}</strong>
+                    {t("run.changes.create")}{" "}
+                    <strong>{changeCounts().create}</strong>
                   </span>
                   <span class="wa-change-stat wa-change-update">
-                    {t("run.changes.update")} <strong>{changeCounts().update}</strong>
+                    {t("run.changes.update")}{" "}
+                    <strong>{changeCounts().update}</strong>
                   </span>
                   <span class="wa-change-stat wa-change-delete">
-                    {t("run.changes.delete")} <strong>{changeCounts().delete}</strong>
+                    {t("run.changes.delete")}{" "}
+                    <strong>{changeCounts().delete}</strong>
                   </span>
                 </div>
                 <Show when={changes().length > 0}>
@@ -661,13 +721,26 @@ function Inner() {
                       <For each={["create", "update", "delete"] as const}>
                         {(action) => (
                           <div class="wa-change-col">
-                            <h4>{t(`run.changes.${action}` as Parameters<typeof t>[0])}</h4>
+                            <h4>
+                              {t(
+                                `run.changes.${action}` as Parameters<
+                                  typeof t
+                                >[0],
+                              )}
+                            </h4>
                             <Show
-                              when={changes().filter((c) => c.action === action).length > 0}
+                              when={
+                                changes().filter((c) => c.action === action)
+                                  .length > 0
+                              }
                               fallback={<p class="muted">{t("common.none")}</p>}
                             >
                               <ul>
-                                <For each={changes().filter((c) => c.action === action)}>
+                                <For
+                                  each={changes().filter(
+                                    (c) => c.action === action,
+                                  )}
+                                >
                                   {(item) => (
                                     <li>
                                       <code>{item.label}</code>
@@ -702,7 +775,9 @@ function Inner() {
                     {(l) => (
                       <Show
                         when={l().diagnostics.length > 0}
-                        fallback={<p class="muted">{t("run.diagnostics.empty")}</p>}
+                        fallback={
+                          <p class="muted">{t("run.diagnostics.empty")}</p>
+                        }
                       >
                         <Show
                           when={r().status !== "failed"}
@@ -717,7 +792,9 @@ function Inner() {
                           <details class="wb-disclosure">
                             <summary>
                               {t("common.details")}{" "}
-                              <Badge tone="muted">{l().diagnostics.length}</Badge>
+                              <Badge tone="muted">
+                                {l().diagnostics.length}
+                              </Badge>
                             </summary>
                             <ul class="wa-diags">
                               <For each={l().diagnostics}>
@@ -752,7 +829,9 @@ function Inner() {
                     <CardHeader title={t("run.connections.title")} />
                     <Show
                       when={connections().length > 0}
-                      fallback={<p class="muted">{t("run.connections.empty")}</p>}
+                      fallback={
+                        <p class="muted">{t("run.connections.empty")}</p>
+                      }
                     >
                       <NameList names={connections()} />
                     </Show>

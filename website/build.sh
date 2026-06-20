@@ -20,13 +20,17 @@ OUTPUT_PUBLIC="${WEBSITE_DIR}/.output/public"
 DOCS_DIR="${REPO_ROOT}/docs"
 DOCS_DIST="${DOCS_DIR}/.vitepress/dist"
 
+install_node_modules() {
+  npm --loglevel=error ci --no-fund --no-audit
+}
+
 # 1. Landing build (Solid Start, static prerender).
 echo "[takosumi/website] build landing (vinxi build)"
 cd "${WEBSITE_DIR}"
 if [ ! -d node_modules ]; then
-  npm install --no-fund --no-audit
+  install_node_modules
 fi
-npm run build
+./node_modules/.bin/vinxi build
 
 if [ ! -d "${OUTPUT_PUBLIC}" ]; then
   echo "[takosumi/website] FATAL: ${OUTPUT_PUBLIC} not produced by vinxi build" >&2
@@ -39,9 +43,9 @@ fi
 echo "[takosumi/website] build docs (vitepress build) + overlay /docs/"
 cd "${DOCS_DIR}"
 if [ ! -d node_modules ]; then
-  npm install --no-fund --no-audit
+  install_node_modules
 fi
-npx vitepress build
+./node_modules/.bin/vitepress build
 
 if [ ! -d "${DOCS_DIST}" ]; then
   echo "[takosumi/website] FATAL: ${DOCS_DIST} not produced by vitepress build" >&2

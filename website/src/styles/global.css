@@ -1,7 +1,10 @@
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
-html, body {
+html,
+body {
   padding: 0;
   margin: 0;
 }
@@ -33,7 +36,8 @@ a:hover {
   color: #fff;
 }
 
-code, pre {
+code,
+pre {
   font-family: var(--tg-font-mono);
 }
 code {
@@ -53,7 +57,8 @@ button {
   font: inherit;
   cursor: pointer;
 }
-img, svg {
+img,
+svg {
   display: block;
   max-width: 100%;
 }
@@ -196,7 +201,9 @@ section .eyebrow + h2 + .lede {
   height: var(--tg-nav-h);
   background: transparent;
   border-bottom: 1px solid transparent;
-  transition: background 200ms ease, border-color 200ms ease;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease;
   color: #fafafa; /* default over dark hero */
 }
 .nav.is-scrolled {
@@ -527,7 +534,8 @@ section > .container {
   animation: scrollHint 1.8s ease-in-out infinite;
 }
 @keyframes scrollHint {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
     opacity: 0.7;
   }
@@ -553,7 +561,9 @@ section > .container {
   border-radius: var(--tg-r-lg);
   padding: var(--tg-s-6);
   background: var(--tg-bg-elev);
-  transition: border-color 160ms ease, transform 160ms ease;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
   position: relative;
   overflow: hidden;
 }
@@ -635,7 +645,9 @@ section > .container {
   font-weight: 600;
   border-bottom: 2px solid transparent;
   font-family: var(--tg-font-display);
-  transition: color 120ms ease, background 120ms ease;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
 }
 .showcase-tabs button:hover {
   color: var(--tg-fg);
@@ -745,7 +757,8 @@ section > .container {
   font-size: var(--tg-fs-sm);
   min-width: 560px;
 }
-.comparison th, .comparison td {
+.comparison th,
+.comparison td {
   padding: var(--tg-s-3) var(--tg-s-4);
   border-bottom: 1px solid var(--tg-line);
   text-align: left;
@@ -771,7 +784,7 @@ section > .container {
   color: var(--tg-fg);
 }
 
-/* Pricing — self-host (free / OSS) vs managed (credit-based) */
+/* Pricing — self-host (free / OSS) vs hosted Takosumi (credit-based) */
 .plan-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -791,7 +804,9 @@ section > .container {
   border-radius: var(--tg-r-lg);
   padding: var(--tg-s-6);
   background: var(--tg-bg-elev);
-  transition: border-color 160ms ease, transform 160ms ease;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
 }
 .plan:hover {
   border-color: var(--tg-accent);
@@ -940,7 +955,9 @@ footer.site .copy {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     transition: none !important;
     animation: none !important;
   }
@@ -972,7 +989,9 @@ footer.site .copy {
   border-radius: var(--tg-r-lg);
   padding: var(--tg-s-5);
   background: var(--tg-bg-elev);
-  transition: border-color 160ms ease, transform 160ms ease;
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
 }
 .use-case-tile:hover {
   border-color: var(--tg-accent);
@@ -997,7 +1016,7 @@ footer.site .copy {
   color: var(--tg-fg-muted);
 }
 
-/* EcosystemMap — 3-layer stack (apps / substrate / providers) */
+/* EcosystemMap — 3-layer stack (workloads / substrate / providers) */
 .ecosystem-map {
   display: flex;
   flex-direction: column;

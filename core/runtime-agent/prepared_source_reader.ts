@@ -7,7 +7,7 @@
  * snapshot that is verified and extracted per apply request.
  *
  * The remote (`url` + `digest`) path mirrors the deploy control prepared-source
- * fetcher hardening (`packages/deployControl/src/prepared-source.ts`): the apply
+ * fetcher hardening in `takosumi-contract/reference/*`: the apply
  * route materializes operator/tenant-influenced locators, and the digest pin
  * alone does NOT mitigate SSRF (the request still reaches the host and the
  * body is buffered before the digest is computed) nor a gzip bomb. The wire is
@@ -68,8 +68,8 @@ const DEFAULT_PREPARED_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
  * wire cap so legitimate well-compressed sources are not rejected. Matches the
  * deploy control twin's defaults so behavior stays in parity.
  */
-const DEFAULT_PREPARED_DECOMPRESSED_MAX_BYTES = 10 *
-  DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
+const DEFAULT_PREPARED_DECOMPRESSED_MAX_BYTES =
+  10 * DEFAULT_PREPARED_ARCHIVE_MAX_BYTES;
 
 function preparedArchiveMaxBytes(): number {
   return readPositiveByteEnv(
@@ -144,9 +144,8 @@ export async function sourceContextFromLocator(
     // The gzip magic bytes are authoritative; the URL suffix is consulted only
     // when the body is too short to carry the 2-byte magic so a misleading
     // `.tgz` URL cannot override a body the byte check identified as not gzip.
-    const compressed = bytes.length >= 2
-      ? isGzipBytes(bytes)
-      : isGzipUrlSuffix(locator.url);
+    const compressed =
+      bytes.length >= 2 ? isGzipBytes(bytes) : isGzipUrlSuffix(locator.url);
     await assertSafeTarEntries(
       tarRunner,
       bytes,
@@ -274,4 +273,3 @@ function assertPreparedHostNotBlocked(url: string): void {
   }
   assertHostNotBlocked(host, "preparedSource host");
 }
-

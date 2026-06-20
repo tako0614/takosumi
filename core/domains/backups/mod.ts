@@ -97,7 +97,9 @@ export interface BackupObjectReader {
 }
 
 export interface ServiceDataBackupRunner {
-  run(input: ServiceDataBackupRunnerInput): Promise<ServiceDataBackupRunnerResult>;
+  run(
+    input: ServiceDataBackupRunnerInput,
+  ): Promise<ServiceDataBackupRunnerResult>;
 }
 
 export interface ServiceDataBackupRunnerInput {
@@ -386,7 +388,7 @@ export class BackupsService {
     capturedAt: string,
   ): Promise<ControlBackupBundle> {
     const space = await this.#store.getSpace(spaceId);
-    const providerTemplates = await this.#store.listProviderTemplates();
+    const providerCatalog = await this.#store.listProviderCatalogEntries();
     const sources = await this.#store.listSources(spaceId);
     const installConfigs = await this.#store.listInstallConfigs(spaceId);
     const installations = await this.#store.listInstallations(spaceId);
@@ -404,14 +406,17 @@ export class BackupsService {
       limit: this.#activityLimit,
     });
     const billingAccount =
-      space && typeof (space as { billingAccountId?: unknown }).billingAccountId === "string"
+      space &&
+      typeof (space as { billingAccountId?: unknown }).billingAccountId ===
+        "string"
         ? await this.#store.getBillingAccount(
             (space as { billingAccountId: string }).billingAccountId,
           )
         : undefined;
     const spaceSubscription = await this.#store.getSpaceSubscription(spaceId);
     const creditBalance = await this.#store.getCreditBalance(spaceId);
-    const creditReservations = await this.#store.listCreditReservations(spaceId);
+    const creditReservations =
+      await this.#store.listCreditReservations(spaceId);
     const usageEvents = await this.#store.listUsageEvents(spaceId);
     const backupRecords = await this.#store.listBackupRecords(spaceId);
 
@@ -472,16 +477,17 @@ export class BackupsService {
     );
 
     const deployments: unknown[] = [];
-    const deploymentProfiles: unknown[] = [];
+    const providerEnvBindingSets: unknown[] = [];
     const stateSnapshots: BundleStateSnapshot[] = [];
     const outputSnapshots: BundleOutputSnapshot[] = [];
     for (const installation of installations) {
-      const profile = await this.#store.getDeploymentProfileByInstallation(
-        installation.id,
-        installation.environment,
-      );
+      const profile =
+        await this.#store.getInstallationProviderEnvBindingSetByInstallation(
+          installation.id,
+          installation.environment,
+        );
       if (profile) {
-        deploymentProfiles.push(profile);
+        providerEnvBindingSets.push(profile);
       }
       const installationDeployments = (
         deploymentsByInstallation.get(installation.id) ?? []
@@ -547,12 +553,12 @@ export class BackupsService {
       spaceId,
       capturedAt,
       space: space ?? null,
-      providerTemplates,
+      providerCatalog,
       sources: sources.map(stripSource),
       sourceSnapshots,
       installConfigs: [...installConfigs],
       installations: [...installations],
-      deploymentProfiles,
+      providerEnvBindingSets,
       dependencies: [...dependencies],
       outputSharesGranted: [...outputSharesGranted],
       outputSharesReceived: [...outputSharesReceived],
@@ -636,9 +642,7 @@ export class BackupsService {
     );
     const artifacts = [
       { kind: "control", ...input.control },
-      ...(input.stateArchive
-        ? [{ kind: "state", ...input.stateArchive }]
-        : []),
+      ...(input.stateArchive ? [{ kind: "state", ...input.stateArchive }] : []),
       ...(input.serviceData
         ? [{ kind: "service_data", ...input.serviceData }]
         : []),
@@ -784,14 +788,16 @@ export class BackupsService {
           ...(backup.command ? { command: backup.command } : {}),
         });
         if (produced.status === "exported") {
-          entries.push(durableServiceDataEntry({
-            installation,
-            config,
-            mode: backup.mode,
-            outputPath,
-            artifact: produced.artifact,
-            backupRunId: produced.runId,
-          }));
+          entries.push(
+            durableServiceDataEntry({
+              installation,
+              config,
+              mode: backup.mode,
+              outputPath,
+              artifact: produced.artifact,
+              backupRunId: produced.runId,
+            }),
+          );
         } else {
           entries.push(
             serviceDataEntry(installation, config, {
@@ -835,13 +841,15 @@ export class BackupsService {
         continue;
       }
 
-      entries.push(durableServiceDataEntry({
-        installation,
-        config,
-        mode: backup.mode,
-        outputPath,
-        artifact,
-      }));
+      entries.push(
+        durableServiceDataEntry({
+          installation,
+          config,
+          mode: backup.mode,
+          outputPath,
+          artifact,
+        }),
+      );
     }
 
     return {
@@ -858,7 +866,7 @@ async function latestSourceSnapshot(
   store: OpenTofuDeploymentStore,
   sourceId: string,
 ): Promise<SourceSnapshot | undefined> {
-  const snapshots = [...await store.listSourceSnapshots(sourceId)].sort(
+  const snapshots = [...(await store.listSourceSnapshots(sourceId))].sort(
     (a, b) =>
       b.fetchedAt.localeCompare(a.fetchedAt) || b.id.localeCompare(a.id),
   );
@@ -875,12 +883,12 @@ export interface ControlBackupBundle {
   readonly spaceId: string;
   readonly capturedAt: string;
   readonly space: unknown;
-  readonly providerTemplates: readonly unknown[];
+  readonly providerCatalog: readonly unknown[];
   readonly sources: readonly PublicSource[];
   readonly sourceSnapshots: readonly BundleSourceSnapshot[];
   readonly installConfigs: readonly unknown[];
   readonly installations: readonly unknown[];
-  readonly deploymentProfiles: readonly unknown[];
+  readonly providerEnvBindingSets: readonly unknown[];
   readonly dependencies: readonly unknown[];
   readonly outputSharesGranted: readonly unknown[];
   readonly outputSharesReceived: readonly unknown[];
@@ -923,8 +931,7 @@ function durableServiceDataEntry(input: {
       status: "missing",
       mode: input.mode,
       outputPath: input.outputPath,
-      reason:
-        `service-data artifact ref ${input.artifact.ref} is not durable outside the runner`,
+      reason: `service-data artifact ref ${input.artifact.ref} is not durable outside the runner`,
       ...(input.backupRunId ? { backupRunId: input.backupRunId } : {}),
     });
   }
@@ -1150,8 +1157,10 @@ function isSafeArtifactRef(ref: string): boolean {
 function isDurableServiceDataRef(ref: string): boolean {
   if (/^runner-local:\/\//u.test(ref)) return false;
   if (/^r2:\/\/[A-Za-z0-9._-]+\/[^\s]+$/u.test(ref)) return true;
-  return /^[A-Za-z][A-Za-z0-9_-]*:[A-Za-z0-9._/@:+-]+$/u.test(ref) &&
-    !ref.includes("..");
+  return (
+    /^[A-Za-z][A-Za-z0-9_-]*:[A-Za-z0-9._/@:+-]+$/u.test(ref) &&
+    !ref.includes("..")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1288,7 +1297,11 @@ function zstdCompressRaw(input: Uint8Array): Uint8Array {
   chunks.push(new Uint8Array([0xa0]));
   chunks.push(uint32le(input.byteLength));
   const maxBlockSize = 128 * 1024;
-  for (let offset = 0; offset < input.byteLength || offset === 0; offset += maxBlockSize) {
+  for (
+    let offset = 0;
+    offset < input.byteLength || offset === 0;
+    offset += maxBlockSize
+  ) {
     const end = Math.min(offset + maxBlockSize, input.byteLength);
     const block = input.slice(offset, end);
     const last = end >= input.byteLength ? 1 : 0;

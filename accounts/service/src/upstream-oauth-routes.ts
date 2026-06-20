@@ -3,7 +3,6 @@ import type { AccountsStore } from "./store.ts";
 import {
   buildUpstreamAuthorizationUrl,
   exchangeUpstreamAuthorizationCode,
-  githubOAuthProvider,
   googleOAuthProvider,
   type UpstreamOAuthProvider,
 } from "./upstream.ts";
@@ -27,10 +26,13 @@ const upstreamOAuthStateCookie = "takosumi_oauth_state";
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
 
 export function upstreamOAuthNotConfigured(): Response {
-  return json({
-    error: "feature_unavailable",
-    error_description: "Sign-in is temporarily unavailable.",
-  }, 503);
+  return json(
+    {
+      error: "feature_unavailable",
+      error_description: "Sign-in is temporarily unavailable.",
+    },
+    503,
+  );
 }
 
 /**
@@ -40,7 +42,7 @@ export function upstreamOAuthNotConfigured(): Response {
  * unconfigured provider otherwise hits a 503). Exposes provider ids + enabled
  * flags only — never client ids, secrets, or redirect URIs.
  *
- * Always lists the built-in `google`/`github`/`passkey` methods so the screen
+ * Always lists the built-in `google`/`passkey` methods so the screen
  * can render disabled placeholders for unconfigured ones; any additional
  * configured upstream provider (e.g. a custom OIDC id) is appended as enabled.
  */
@@ -53,7 +55,7 @@ export function handleAuthProvidersRequest(input: {
   );
   const providers: TakosumiAccountsAuthProvider[] = [];
   // Built-in methods the sign-in screen always renders (enabled or disabled).
-  for (const id of ["google", "github"] as const) {
+  for (const id of ["google"] as const) {
     providers.push({ id, enabled: configuredUpstream.has(id) });
   }
   providers.push({ id: "passkey", enabled: input.passkeys !== undefined });
@@ -70,21 +72,26 @@ export function handleAuthProvidersRequest(input: {
 export function handleUpstreamAuthorizeRequest(input: {
   url: URL;
   upstreamOAuth: UpstreamOAuthOptions;
+  secureCookie: boolean;
 }): Response {
   const resolved = resolveUpstreamClient(
     input.upstreamOAuth,
     input.url.searchParams.get("provider"),
   );
   if (!resolved) return json({ error: "unknown_provider" }, 400);
-  const state = input.url.searchParams.get("state");
-  if (!state) {
-    return json({
-      error: "invalid_request",
-      error_description: "state is required",
-    }, 400);
+  const clientState = input.url.searchParams.get("state");
+  if (!clientState) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "state is required",
+      },
+      400,
+    );
   }
-  const codeChallenge = input.url.searchParams.get("code_challenge") ??
-    undefined;
+  const state = mintUpstreamOAuthServerState();
+  const codeChallenge =
+    input.url.searchParams.get("code_challenge") ?? undefined;
   const codeChallengeMethod = input.url.searchParams.get(
     "code_challenge_method",
   );
@@ -110,8 +117,9 @@ export function handleUpstreamAuthorizeRequest(input: {
     headers: {
       location: authorizationUrl.toString(),
       "set-cookie": serializeUpstreamOAuthStateCookie(
+        resolved.client.providerId,
         state,
-        input.url.protocol === "https:",
+        input.secureCookie,
       ),
     },
   });
@@ -122,6 +130,7 @@ export async function handleUpstreamCallbackRequest(input: {
   url: URL;
   store: AccountsStore;
   upstreamOAuth: UpstreamOAuthOptions;
+  secureCookie: boolean;
 }): Promise<Response> {
   const resolved = resolveUpstreamClient(
     input.upstreamOAuth,
@@ -130,26 +139,39 @@ export async function handleUpstreamCallbackRequest(input: {
   if (!resolved) return json({ error: "unknown_provider" }, 400);
   const code = input.url.searchParams.get("code");
   if (!code) {
-    return json({
-      error: "invalid_request",
-      error_description: "code is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "code is required",
+      },
+      400,
+    );
   }
   const state = input.url.searchParams.get("state");
   if (!state) {
-    return json({
-      error: "invalid_state",
-      error_description: "state is required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_state",
+        error_description: "state is required",
+      },
+      400,
+    );
   }
-  const cookieState = parseCookie(input.request.headers.get("cookie"))[
-    upstreamOAuthStateCookie
-  ];
-  if (cookieState !== state) {
-    return json({
-      error: "invalid_state",
-      error_description: "OAuth state cookie does not match callback state",
-    }, 400);
+  const cookieState = readUpstreamOAuthStateCookie(
+    input.request.headers.get("cookie"),
+  );
+  if (
+    !cookieState ||
+    cookieState.providerId !== resolved.client.providerId ||
+    cookieState.state !== state
+  ) {
+    return json(
+      {
+        error: "invalid_state",
+        error_description: "OAuth state cookie does not match callback state",
+      },
+      400,
+    );
   }
 
   try {
@@ -187,9 +209,8 @@ export async function handleUpstreamCallbackRequest(input: {
       ttlMs,
     });
 
-    const secure = input.url.protocol === "https:";
     const sessionCookie = serializeAccountSessionCookie(rotated.sessionId, {
-      secure,
+      secure: input.secureCookie,
       maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
     });
     // Build a single set-cookie header value that clears the previous state
@@ -201,7 +222,7 @@ export async function handleUpstreamCallbackRequest(input: {
     });
     headers.append(
       "set-cookie",
-      clearUpstreamOAuthStateCookie(secure),
+      clearUpstreamOAuthStateCookie(input.secureCookie),
     );
     headers.append("set-cookie", sessionCookie);
     return new Response(
@@ -219,25 +240,41 @@ export async function handleUpstreamCallbackRequest(input: {
     // matches the Cloudflare credential-OAuth callback (which never surfaces
     // upstream/state failure detail) and the `upstreamOAuthNotConfigured`
     // posture. The typed `upstream_oauth_failed` code is preserved for callers.
-    return json({
-      error: "upstream_oauth_failed",
-      error_description: "Sign-in could not be completed. Please try again.",
-    }, 502);
+    return json(
+      {
+        error: "upstream_oauth_failed",
+        error_description: "Sign-in could not be completed. Please try again.",
+      },
+      502,
+    );
   }
 }
 
 function serializeUpstreamOAuthStateCookie(
+  providerId: string,
   state: string,
   secure: boolean,
 ): string {
   return [
-    `${upstreamOAuthStateCookie}=${encodeURIComponent(state)}`,
+    `${upstreamOAuthStateCookie}=${encodeURIComponent(
+      `${providerId}:${state}`,
+    )}`,
     "Path=/v1/auth/upstream/callback",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${upstreamOAuthStateCookieMaxAgeSeconds}`,
     secure ? "Secure" : "",
-  ].filter(Boolean).join("; ");
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
+function mintUpstreamOAuthServerState(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 function clearUpstreamOAuthStateCookie(secure: boolean): string {
@@ -248,7 +285,9 @@ function clearUpstreamOAuthStateCookie(secure: boolean): string {
     "SameSite=Lax",
     "Max-Age=0",
     secure ? "Secure" : "",
-  ].filter(Boolean).join("; ");
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 function parseCookie(header: string | null): Record<string, string> {
@@ -266,6 +305,19 @@ function parseCookie(header: string | null): Record<string, string> {
   return output;
 }
 
+function readUpstreamOAuthStateCookie(
+  header: string | null,
+): { providerId: string; state: string } | null {
+  const value = parseCookie(header)[upstreamOAuthStateCookie];
+  if (!value) return null;
+  const separator = value.indexOf(":");
+  if (separator <= 0 || separator === value.length - 1) return null;
+  return {
+    providerId: value.slice(0, separator),
+    state: value.slice(separator + 1),
+  };
+}
+
 function resolveUpstreamClient(
   options: UpstreamOAuthOptions,
   providerId: string | null,
@@ -273,13 +325,12 @@ function resolveUpstreamClient(
   client: UpstreamOAuthClientRegistration;
   provider: UpstreamOAuthProvider;
 } | null {
-  const client = options.providers.find((candidate) =>
-    candidate.providerId === providerId
+  const client = options.providers.find(
+    (candidate) => candidate.providerId === providerId,
   );
   if (!client) return null;
-  const provider = client.provider ?? builtinUpstreamOAuthProvider(
-    client.providerId,
-  );
+  const provider =
+    client.provider ?? builtinUpstreamOAuthProvider(client.providerId);
   if (!provider) return null;
   return {
     client,
@@ -291,13 +342,14 @@ function builtinUpstreamOAuthProvider(
   providerId: string,
 ): UpstreamOAuthProvider | undefined {
   if (providerId === "google") return googleOAuthProvider();
-  if (providerId === "github") return githubOAuthProvider();
   return undefined;
 }
 
-function profileFromUpstreamUserInfo(
-  userInfo: Record<string, unknown>,
-): { email?: string; displayName?: string; emailVerified?: boolean } {
+function profileFromUpstreamUserInfo(userInfo: Record<string, unknown>): {
+  email?: string;
+  displayName?: string;
+  emailVerified?: boolean;
+} {
   return {
     email: stringValue(userInfo.email),
     displayName: stringValue(userInfo.name) ?? stringValue(userInfo.login),
@@ -305,8 +357,9 @@ function profileFromUpstreamUserInfo(
     // token. OIDC providers (e.g. Google) return a boolean `email_verified`
     // claim; providers that omit it leave this undefined (genuinely unknown),
     // and we never coerce unknown to true. A non-boolean value is ignored.
-    emailVerified: typeof userInfo.email_verified === "boolean"
-      ? userInfo.email_verified
-      : undefined,
+    emailVerified:
+      typeof userInfo.email_verified === "boolean"
+        ? userInfo.email_verified
+        : undefined,
   };
 }

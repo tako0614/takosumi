@@ -12,6 +12,7 @@ import type {
   ResourceStorageStores,
   RuntimeStorageStores,
   ServiceEndpointStorageStores,
+  ServiceGraphStorageStores,
   StorageDriver,
   StorageTransaction,
 } from "./driver.ts";
@@ -49,9 +50,14 @@ import { MemoryAuditStore } from "./memory/audit_store.ts";
 import { MemoryRuntimeAgentLedgerStore } from "./memory/runtime_agent_store.ts";
 import {
   MemoryServiceEndpointStore,
-  MemoryServiceGrantStore,
+  MemoryEndpointServiceGrantStore,
   MemoryServiceTrustRecordStore,
 } from "./memory/service_endpoint_stores.ts";
+import {
+  InMemoryServiceBindingStore,
+  InMemoryServiceExportStore,
+  InMemoryServiceGraphGrantStore,
+} from "../../domains/service-graph/mod.ts";
 
 export type { MemoryStorageSnapshot };
 
@@ -67,9 +73,9 @@ export class MemoryStorageDriver implements StorageDriver {
   constructor(options: MemoryStorageDriverOptions = {}) {
     this.#state = options.snapshot
       ? stateFromSnapshot(
-        options.snapshot,
-        options.providerSupportReports ?? [],
-      )
+          options.snapshot,
+          options.providerSupportReports ?? [],
+        )
       : createEmptyState(options.providerSupportReports ?? []);
   }
 
@@ -81,7 +87,10 @@ export class MemoryStorageDriver implements StorageDriver {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.#transactionTail = previous.then(() => gate, () => gate);
+    this.#transactionTail = previous.then(
+      () => gate,
+      () => gate,
+    );
     await previous;
 
     const working = cloneState(this.#state);
@@ -114,6 +123,7 @@ class MemoryStorageTransaction implements StorageTransaction {
   };
   readonly audit: { readonly events: AuditStore };
   readonly serviceEndpoints: ServiceEndpointStorageStores;
+  readonly serviceGraph: ServiceGraphStorageStores;
   readonly runtimeAgent: WorkLedger;
 
   constructor(state: MemoryStorageState) {
@@ -176,7 +186,14 @@ class MemoryStorageTransaction implements StorageTransaction {
       trustRecords: new MemoryServiceTrustRecordStore(
         state.serviceEndpoints.trustRecords,
       ),
-      grants: new MemoryServiceGrantStore(state.serviceEndpoints.grants),
+      grants: new MemoryEndpointServiceGrantStore(
+        state.serviceEndpoints.grants,
+      ),
+    };
+    this.serviceGraph = {
+      exports: new InMemoryServiceExportStore(state.serviceGraph.exports),
+      bindings: new InMemoryServiceBindingStore(state.serviceGraph.bindings),
+      grants: new InMemoryServiceGraphGrantStore(state.serviceGraph.grants),
     };
     this.runtimeAgent = new MemoryRuntimeAgentLedgerStore(
       state.runtimeAgent.agents,

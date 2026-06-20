@@ -16,7 +16,7 @@ watch_dir = "worker/src"
 enabled = true
 
 [[d1_databases]]
-binding = "TAKOS_D1"
+binding = "TAKOSUMI_CONTROL_DB"
 database_name = "takosumi"
 database_id = "<cloudflare-d1-database-id>"
 
@@ -68,7 +68,7 @@ name = "RUNNER"
 class_name = "OpenTofuRunnerObject"
 
 [vars]
-TAKOS_RUNTIME_MODE = "cloudflare-worker"
+TAKOSUMI_RUNTIME_MODE = "cloudflare-worker"
 TAKOSUMI_ENVIRONMENT = "staging"
 TAKOSUMI_RUN_MODEL = "opentofu-plan-apply-destroy"
 R2_ARTIFACTS_BUCKET_NAME = "takos-artifacts"
