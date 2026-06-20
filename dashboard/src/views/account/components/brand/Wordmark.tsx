@@ -15,7 +15,9 @@ interface Props {
 export default function Wordmark(props: Props): JSX.Element {
   const inner = (
     <>
-      <GeometricMark size={props.size ?? 26} />
+      <span aria-hidden="true">
+        <GeometricMark size={props.size ?? 26} />
+      </span>
       <span class="wordmark-text">
         Takosumi
         {props.showSub !== false && (
