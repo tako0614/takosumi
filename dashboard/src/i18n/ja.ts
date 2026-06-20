@@ -412,6 +412,11 @@ export const ja = {
   "conn.scope.space": "Workspace",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
+  "conn.return.title": "{name} の追加に戻る",
+  "conn.return.subtitle": "{source} / {ref} / {path}",
+  "conn.return.defaultRef": "デフォルト ref",
+  "conn.return.rootPath": "root module",
+  "conn.return.cta": "Capsule 追加に戻る",
   "conn.add.title": "接続を追加",
   "conn.add.subtitle":
     "プロバイダを選び、トークンを貼り付けるか環境変数として登録します。",

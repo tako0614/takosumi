@@ -28,6 +28,10 @@ import {
   capsuleNameFromUrl,
   parseInstallPrefill,
 } from "../../lib/install-link.ts";
+import {
+  installReturnPathFromPrefill,
+  providerConnectionsHrefForInstallReturn,
+} from "../../lib/install-return-context.ts";
 import { CATALOG, type CatalogEntry } from "../../catalog.ts";
 import {
   checkCapsuleCompatibility,
@@ -196,6 +200,14 @@ function Inner() {
     if (pinned && current === displayRef(pinned)) return pinned;
     return current || "main";
   };
+  const currentInstallReturnPath = () =>
+    installReturnPathFromPrefill({
+      git: gitUrl(),
+      ref: effectiveRef(),
+      path: path().trim() || ".",
+    });
+  const providerConnectionsHref = () =>
+    providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
   const providerConnectionOwnershipLabel = (
     ownership: ProviderCredentialOwnership,
@@ -639,7 +651,7 @@ function Inner() {
               <Show when={needsCloudCredential()}>
                 <p class="wb-note" role="note">
                   {t("new.managed.needCredential")}{" "}
-                  <A href="/space/settings/connections" class="link">
+                  <A href={providerConnectionsHref()} class="link">
                     {t("new.managed.connectFirst")}
                   </A>
                 </p>
@@ -648,7 +660,7 @@ function Inner() {
                 <summary>{t("new.managed.byoTitle")}</summary>
                 <p class="wb-note">
                   {t("new.managed.byoBody")}{" "}
-                  <A href="/space/settings/connections" class="link">
+                  <A href={providerConnectionsHref()} class="link">
                     {t("new.managed.byoLink")}
                   </A>
                 </p>
@@ -786,7 +798,7 @@ function Inner() {
                         )}
                       </Show>
                       <p class="wb-note">
-                        <A href="/space/settings/connections" class="link">
+                        <A href={providerConnectionsHref()} class="link">
                           {t("new.providers.manageConnections")}
                         </A>
                       </p>
