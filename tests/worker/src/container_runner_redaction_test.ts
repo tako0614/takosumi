@@ -145,6 +145,52 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   expect(diagnostics).toContain("[redacted]");
 });
 
+test("container runner surfaces non-2xx apply stderr instead of raw JSON envelope", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        providerInstallation: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            mirrored: true,
+            installationMethod: "filesystem_mirror",
+            installedPath:
+              "/tmp/takosumi-provider-cache/registry.opentofu.org/cloudflare/cloudflare/5.0.0",
+          },
+        ],
+        stderr:
+          "cloudflare_r2_bucket.assets: Error creating bucket: API token=apply-secret denied",
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.apply({
+      planRun: { id: "apply_failed" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://apply_failed/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(Error);
+  const message = error instanceof Error ? error.message : String(error);
+  expect(message).toContain("cloudflare_r2_bucket.assets");
+  expect(message).toContain("Error creating bucket");
+  expect(message).not.toContain("providerInstallation");
+  expect(message).not.toContain("apply-secret");
+  expect(message).toContain("[redacted]");
+});
+
 test("container runner reads Capsule compatibility source files", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({
@@ -298,6 +344,7 @@ test("container runner dispatches provider_snapshot service-data backups without
 function envReturning(
   payload: Record<string, unknown>,
   onRequest?: (body: Record<string, unknown>) => void,
+  status = 200,
 ): CloudflareWorkerEnv {
   return {
     RUNNER: {
@@ -307,7 +354,7 @@ function envReturning(
           onRequest?.(await request.json() as Record<string, unknown>);
           return Promise.resolve(
             Response.json(payload, {
-              status: 200,
+              status,
             }),
           );
         },
