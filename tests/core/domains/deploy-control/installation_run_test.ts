@@ -450,6 +450,42 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(run.baseStateGeneration).toEqual(0);
 });
 
+test("installation plan treats sourceArchive as the selected module subtree", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await store.putSource({
+    ...seeded.source,
+    defaultPath: "deploy/opentofu",
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    path: "deploy/opentofu",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.sourceSnapshotId).toEqual(seeded.snapshot.id);
+  expect(planRun.source.kind).toEqual("git");
+  expect(planRun.source).toHaveProperty(
+    "commit",
+    seeded.snapshot.resolvedCommit,
+  );
+  expect("modulePath" in planRun.source).toBe(false);
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.sourceArchive).toEqual({
+    objectKey: ARCHIVE_KEY,
+    digest: FIXTURE_ARCHIVE_DIGEST,
+  });
+  expect("modulePath" in runner.planJobs[0]!.planRun.source).toBe(false);
+});
+
 test("installation queued plan fails before credential mint when generated-root sidecar is missing", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
