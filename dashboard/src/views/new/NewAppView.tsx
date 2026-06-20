@@ -214,6 +214,33 @@ function displayRef(value: string): string {
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
 }
 
+function slugInputValue(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 48) || "capsule"
+  );
+}
+
+function spaceSuffix(value: string | null): string {
+  return (value ?? "").replace(/^space_/u, "").slice(0, 6).toLowerCase();
+}
+
+function isTakosOpenTofuCapsule(git: string, modulePath: string): boolean {
+  const normalizedPath = modulePath.trim().replace(/^\/+|\/+$/gu, "") || ".";
+  if (normalizedPath !== "deploy/opentofu") return false;
+  try {
+    const url = new URL(git.trim());
+    const repo = url.pathname.replace(/\.git$/iu, "").toLowerCase();
+    return url.hostname === "github.com" && repo.endsWith("/takos");
+  } catch {
+    return false;
+  }
+}
+
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
   const body = error?.body;
   if (body && typeof body === "object" && "sourceId" in body) {
@@ -273,8 +300,13 @@ function Inner() {
     isFullCommitSha(initialRef) ? initialRef : null,
   );
   const [path, setPath] = createSignal(prefill?.path || ".");
-  const [name, setName] = createSignal(
-    prefill ? capsuleNameFromUrl(prefill.git) : "",
+  const initialName = prefill ? capsuleNameFromUrl(prefill.git) : "";
+  const [name, setName] = createSignal(initialName);
+  const [resourcePrefix, setResourcePrefix] = createSignal(
+    prefill?.vars?.project_name ?? "",
+  );
+  const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
+    prefill?.vars?.project_name !== undefined,
   );
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
@@ -373,14 +405,36 @@ function Inner() {
     if (pinned && current === displayRef(pinned)) return pinned;
     return current || "main";
   };
+  const supportsProjectNameInput = () =>
+    isTakosOpenTofuCapsule(gitUrl(), path()) ||
+    prefill?.vars?.project_name !== undefined;
+  const defaultProjectName = () => {
+    const base = slugInputValue(name() || capsuleNameFromUrl(gitUrl()));
+    const suffix = spaceSuffix(spaceId());
+    return suffix && base === "takos" ? `${base}-${suffix}` : base;
+  };
+  const projectNameVariable = () =>
+    slugInputValue(resourcePrefix() || defaultProjectName());
+  const installVariables = () =>
+    supportsProjectNameInput()
+      ? { project_name: projectNameVariable() }
+      : undefined;
   const currentInstallReturnPath = () =>
     installReturnPathFromPrefill({
       git: gitUrl(),
       ref: effectiveRef(),
       path: path().trim() || ".",
+      ...(supportsProjectNameInput()
+        ? { vars: { project_name: projectNameVariable() } }
+        : {}),
     });
   const providerConnectionsHref = () =>
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
+
+  createEffect(() => {
+    if (!supportsProjectNameInput() || resourcePrefixTouched()) return;
+    setResourcePrefix(defaultProjectName());
+  });
 
   const providerConnectionOwnershipLabel = (
     ownership: ProviderCredentialOwnership,
@@ -577,6 +631,8 @@ function Inner() {
     setPinnedFullRef(isFullCommitSha(entry.ref) ? entry.ref : null);
     setPath(entry.path);
     setName(entry.suggestedName);
+    setResourcePrefix("");
+    setResourcePrefixTouched(false);
     resetCompatibility();
     setActiveTab("git");
   };
@@ -742,6 +798,7 @@ function Inner() {
       let installationId = createdInstallationId();
       if (!installationId) {
         setStepInstall("running");
+        const vars = installVariables();
         const installation = await createInstallation({
           spaceId: space,
           name: name().trim(),
@@ -749,6 +806,7 @@ function Inner() {
           sourceId,
           installConfigId:
             compatibility()?.installConfigId ?? selectedInstallConfigId(),
+          ...(vars ? { vars } : {}),
         });
         installationId = installation.id;
         setCreatedInstallationId(installationId);
@@ -1009,6 +1067,25 @@ function Inner() {
                     spellcheck={false}
                   />
                 </FormField>
+
+                <Show when={supportsProjectNameInput()}>
+                  <FormField label={t("new.vars.projectName")}>
+                    <Input
+                      id="new-project-name"
+                      name="project_name"
+                      type="text"
+                      value={projectNameVariable()}
+                      onInput={(e) => {
+                        setResourcePrefixTouched(true);
+                        setResourcePrefix(e.currentTarget.value);
+                        resetCompatibility();
+                      }}
+                      placeholder="takos-production"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </FormField>
+                </Show>
 
                 <Show when={!configs.loading && configList().length === 0}>
                   <p class="wb-error" role="alert">

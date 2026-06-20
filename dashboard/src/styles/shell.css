@@ -350,14 +350,20 @@
   }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)
-      calc(var(--tg-mobile-tab-h) + var(--tg-s-4));
+      calc(
+        var(--tg-mobile-tab-h) + var(--tg-s-4) +
+          env(safe-area-inset-bottom, 0px)
+      );
   }
   .mobile-tabs {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
-    height: var(--tg-mobile-tab-h);
+    min-height: calc(
+      var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px)
+    );
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     background: color-mix(in srgb, var(--tg-bg-elev) 96%, transparent);
