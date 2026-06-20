@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { installReturnContext } from "../../../../dashboard/src/lib/install-return-context.ts";
+import {
+  installReturnContext,
+  installReturnPathFromPrefill,
+  installReturnPathFromReturnParam,
+  providerConnectionsHrefForInstallReturn,
+} from "../../../../dashboard/src/lib/install-return-context.ts";
 
 describe("installReturnContext", () => {
   test("extracts a safe /new git prefill for the sign-in screen", () => {
@@ -66,5 +71,75 @@ describe("installReturnContext", () => {
     ]) {
       expect(installReturnContext(value)).toBeUndefined();
     }
+  });
+
+  test("builds a canonical /new return path from current install fields", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+      label: "worker",
+    });
+  });
+
+  test("builds Provider Connections hrefs with a safe /new return parameter", () => {
+    const returnPath =
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu";
+    const href = providerConnectionsHrefForInstallReturn(returnPath);
+    const url = new URL(href, "https://app.takosumi.test");
+
+    expect(url.pathname).toEqual("/space/settings/connections");
+    expect(url.searchParams.get("return")).toEqual(returnPath);
+    expect(
+      installReturnPathFromReturnParam(url.searchParams.get("return")),
+    ).toEqual(returnPath);
+  });
+
+  test("keeps pinned full commit refs in Provider Connections return hrefs", () => {
+    const fullRef = "e343560dc63bb0440614da2589169404d8543efa";
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: fullRef,
+      path: "deploy/opentofu",
+    });
+    expect(returnPath).toContain(fullRef);
+
+    const href = providerConnectionsHrefForInstallReturn(returnPath);
+    const url = new URL(href, "https://app.takosumi.test");
+
+    expect(url.pathname).toEqual("/space/settings/connections");
+    expect(url.searchParams.get("return")).toEqual(returnPath);
+    expect(installReturnContext(url.searchParams.get("return"))).toMatchObject({
+      ref: fullRef,
+      displayRef: "e343560d",
+    });
+  });
+
+  test("omits return parameters for unsafe install return material", () => {
+    expect(
+      installReturnPathFromPrefill({
+        git: "https://user:secret@github.com/acme/worker.git",
+        ref: "main",
+        path: "deploy/opentofu",
+      }),
+    ).toBeUndefined();
+    expect(
+      providerConnectionsHrefForInstallReturn(
+        "/new?git=http%3A%2F%2Fexample.com%2Facme%2Fworker.git&ref=main&path=deploy",
+      ),
+    ).toEqual("/space/settings/connections");
+    expect(
+      providerConnectionsHrefForInstallReturn(
+        "//evil.example/new?git=https://github.com/acme/worker.git",
+      ),
+    ).toEqual("/space/settings/connections");
   });
 });
