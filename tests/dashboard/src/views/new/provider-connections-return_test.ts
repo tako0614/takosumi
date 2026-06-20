@@ -79,6 +79,10 @@ describe("/new Provider Connections return context", () => {
 
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {
     expect(newAppViewSource).toContain("defaultProviderRowsWithReadyConnections");
+    expect(newAppViewSource).toContain("const visibleProviderConnections = ()");
+    expect(newAppViewSource).toContain(
+      "providerConnections() ?? providerConnections.latest ?? []",
+    );
     expect(newAppViewSource).toContain("createEffect(() =>");
     expect(newAppViewSource).toContain("const defaultedRows =");
     expect(newAppViewSource).toContain(
