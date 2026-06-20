@@ -69,6 +69,26 @@ test("handleAuthProvidersRequest surfaces custom upstream provider ids", async (
   expect(body.providers).toContainEqual({ id: "google", enabled: false });
 });
 
+test("handleAuthProvidersRequest hides retired GitHub sign-in config", async () => {
+  const upstreamOAuth: UpstreamOAuthOptions = {
+    subjectSecret: "secret",
+    providers: [
+      {
+        providerId: "github",
+        clientId: "gh-client",
+        redirectUri: "https://accounts.example.test/callback",
+      },
+    ],
+  };
+  const body = await readProviders(
+    handleAuthProvidersRequest({ upstreamOAuth }),
+  );
+  expect(body.providers).toEqual([
+    { id: "google", enabled: false },
+    { id: "passkey", enabled: false },
+  ]);
+});
+
 test("handleAuthProvidersRequest never leaks credentials in the body", async () => {
   const upstreamOAuth: UpstreamOAuthOptions = {
     subjectSecret: "top-secret-subject-secret",

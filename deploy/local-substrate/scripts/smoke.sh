@@ -232,7 +232,7 @@ echo "==> OAuth flow — upstream mock (accounts.google.com)"
 # assert a session is created. The dedicated script handles the redirect
 # chain.
 if bash "$SCRIPT_DIR/oauth-e2e.sh" google >/dev/null 2>&1; then
-	echo "    PASS [oauth.e2e.google] full authorize → callback dance returned session"
+	echo "    PASS [oauth.e2e.google] full authorize → callback dance set a verified HttpOnly session"
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [oauth.e2e.google] see scripts/oauth-e2e.sh google for the failure"

@@ -9,8 +9,8 @@ Walks:
   4. POST /v1/auth/passkeys/register/complete {subject, credentialId, publicKeyJwk}
   5. POST /v1/auth/passkeys/authenticate/options {subject}  → challenge
   6. Build authenticatorData + clientDataJSON, sign with the private key.
-  7. POST /v1/auth/passkeys/authenticate/complete and assert a session record
-     comes back.
+  7. POST /v1/auth/passkeys/authenticate/complete and assert the HttpOnly
+     session cookie resolves through /v1/account/session/me.
 
 Run as: scripts/passkey-e2e.py
 """
@@ -220,13 +220,22 @@ def main() -> None:
     if status != 200:
         sys.exit(f"authenticate/complete failed: {status} {body}")
     auth_resp = json.loads(body)
-    if not auth_resp.get("subject") or not auth_resp.get("session_id"):
+    if not auth_resp.get("subject") or auth_resp.get("session_id"):
         sys.exit(f"authenticate/complete returned unexpected shape: {auth_resp}")
+    status, _h, body = http_request("GET", "/v1/account/session/me")
+    if status != 200:
+        sys.exit(f"session/me failed after passkey auth: {status} {body}")
+    session_me = json.loads(body)
+    if session_me.get("subject") != auth_resp["subject"]:
+        sys.exit(
+            "session/me subject mismatch after passkey auth: "
+            f"auth={auth_resp} me={session_me}"
+        )
 
     print()
     print(f"OK passkey register + assert verified — "
           f"subject={auth_resp['subject'][:24]}... "
-          f"session={auth_resp['session_id'][:24]}...")
+          "cookie session verified")
 
 
 if __name__ == "__main__":
