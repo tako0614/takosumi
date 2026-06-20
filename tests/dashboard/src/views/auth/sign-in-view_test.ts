@@ -61,6 +61,12 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('{t("auth.retryProviderCheck")}');
   });
 
+  test("shows the pending install target name on the sign-in context", () => {
+    expect(signInViewSource).toContain(
+      "{pendingInstall()?.label ?? t(\"auth.installContextTitle\")}",
+    );
+  });
+
   test("uses Google as the only first-party OAuth button", () => {
     expect(signInViewSource).toContain('type Provider = "google"');
     expect(signInViewSource).toContain('id: "google"');

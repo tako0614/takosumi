@@ -144,7 +144,7 @@ export function SignInPanel() {
             {t("auth.installContextKicker")}
           </span>
           <strong class="sign-in-return-title">
-            {t("auth.installContextTitle")}
+            {pendingInstall()?.label ?? t("auth.installContextTitle")}
           </strong>
           <span class="sign-in-return-detail">{pendingInstallDetails()}</span>
         </div>
