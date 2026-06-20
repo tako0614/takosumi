@@ -333,6 +333,8 @@ export const ja = {
   "new.compat.unsupported": "今は追加できません",
   "new.compat.patchHelp":
     "表示された手直し内容を確認してください。リポジトリ側の修正が必要な場合と、外部サービス接続の設定で進められる場合があります。",
+  "new.compat.summary.providerCredentials":
+    "{provider} の認証情報を Git から外す必要があります。",
   "new.compat.issue.providerCredentials.message":
     "{provider} の認証情報が Git の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
