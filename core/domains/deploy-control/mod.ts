@@ -5782,10 +5782,12 @@ function rawOutputArtifactKey(input: {
  * Builds the OpenTofu module source for an env-driven plan from the registered
  * Source + resolved SourceSnapshot (M2). The bytes are restored from the
  * snapshot archive via the `sourceArchive` dispatch field, so this descriptor is
- * identity/metadata only: a `git` source pinned to the resolved commit and the
- * snapshot module path. SSH / scp-style Source URLs are normalized to their
- * https form so the descriptor satisfies the HTTPS-only git source validation
- * (the real fetch never uses this URL).
+ * identity/metadata only: a `git` source pinned to the resolved commit. The
+ * source_sync archive already contains the SourceSnapshot module subtree at its
+ * root, so the runner must not receive the original repo subdirectory as
+ * `modulePath` again. SSH / scp-style Source URLs are normalized to their https
+ * form so the descriptor satisfies the HTTPS-only git source validation (the
+ * real fetch never uses this URL).
  */
 /**
  * In-memory Source for an upload-origin Installation that has no registered
@@ -5815,30 +5817,13 @@ function snapshotModuleSource(
   source: Source,
   snapshot: SourceSnapshot,
 ): OpenTofuModuleSource {
-  const modulePath = normalizeModulePath(snapshot.path);
   return {
     kind: "git",
     url: normalizeGitUrlToHttps(source.url),
     ...(snapshot.resolvedCommit
       ? { commit: snapshot.resolvedCommit.toLowerCase() }
       : {}),
-    ...(modulePath ? { modulePath } : {}),
   };
-}
-
-/**
- * Normalizes a SourceSnapshot `path` (the module path within the repo) to the
- * OpenTofu `modulePath` shape: drops a leading `./`, trims slashes, and returns
- * `undefined` for the repo root (`.` / empty) so the descriptor omits it.
- */
-function normalizeModulePath(path: string | undefined): string | undefined {
-  if (!path) return undefined;
-  const trimmed = path
-    .replace(/^\.\/+/, "")
-    .replace(/^\/+|\/+$/g, "")
-    .trim();
-  if (trimmed.length === 0 || trimmed === ".") return undefined;
-  return trimmed;
 }
 
 /**
