@@ -29,6 +29,13 @@
           document.documentElement.dataset.theme = resolved;
           document.documentElement.dataset.themePreference = preference;
           document.documentElement.style.colorScheme = resolved;
+          const themeColor = document.querySelector('meta[name="theme-color"]');
+          if (themeColor) {
+            themeColor.setAttribute(
+              "content",
+              resolved === "dark" ? "#101316" : "#f6f7f9",
+            );
+          }
         } catch {
           document.documentElement.dataset.theme = "light";
           document.documentElement.dataset.themePreference = "system";
