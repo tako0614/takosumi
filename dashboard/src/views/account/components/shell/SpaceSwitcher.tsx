@@ -69,6 +69,8 @@ export default function SpaceSwitcher() {
         when={!spaces.loading && (spaces() ?? []).length > 0}
         fallback={
           <Select
+            id="workspace-switcher"
+            name="workspaceId"
             class="topbar-space-select"
             disabled
             aria-label={t("space.label")}
@@ -80,6 +82,8 @@ export default function SpaceSwitcher() {
         }
       >
         <Select
+          id="workspace-switcher"
+          name="workspaceId"
           class="topbar-space-select"
           aria-label={t("space.label")}
           value={currentSpaceId()}
