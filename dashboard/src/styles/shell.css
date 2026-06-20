@@ -186,7 +186,7 @@
   padding: 0 4px;
   border-radius: var(--tg-r-full);
   background: var(--tg-danger);
-  color: #fff;
+  color: var(--tg-danger-fg);
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
@@ -421,6 +421,38 @@
   position: relative;
   z-index: 1;
 }
+.auth-theme-switcher {
+  position: absolute;
+  top: var(--tg-s-4);
+  right: var(--tg-s-4);
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--tg-bg-elev);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  box-shadow: var(--tg-shadow-sm);
+}
+.auth-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--tg-r-sm);
+  background: transparent;
+  color: var(--tg-fg-muted);
+  cursor: pointer;
+}
+.auth-theme-btn:hover {
+  color: var(--tg-fg);
+  background: var(--tg-bg-subtle);
+}
+.auth-theme-btn.active {
+  color: var(--tg-accent-text);
+  background: var(--tg-accent-soft);
+}
 .auth-brand {
   display: inline-flex;
   align-items: center;
@@ -520,7 +552,7 @@
 }
 .sign-in-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.56;
+  opacity: 0.72;
 }
 .sign-in-icon {
   display: inline-flex;
@@ -573,8 +605,11 @@
   color: var(--tg-fg-muted);
 }
 .sign-in-notice-warn {
-  background: #fff8ed;
-  border-color: #efd2aa;
+  background: color-mix(in srgb, var(--tg-warn) 12%, var(--tg-bg-elev));
+  border-color: color-mix(in srgb, var(--tg-warn) 38%, var(--tg-line));
+}
+.sign-in-notice-warn strong {
+  color: var(--tg-fg);
 }
 .sign-in-retry {
   align-self: flex-start;
@@ -601,6 +636,17 @@
 }
 
 @media (max-width: 520px) {
+  .auth-page {
+    align-items: stretch;
+    justify-content: flex-start;
+    padding-top: clamp(76px, 12vh, 112px);
+  }
+
+  .auth-theme-switcher {
+    top: var(--tg-s-3);
+    right: var(--tg-s-3);
+  }
+
   .auth-brand {
     align-self: center;
     margin-bottom: var(--tg-s-6);

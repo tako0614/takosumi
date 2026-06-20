@@ -11,7 +11,14 @@
  */
 import { createSignal, type JSX, onMount, Show } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
+import { Monitor, Moon, Sun } from "lucide-solid";
 import { installReturnContext } from "../../lib/install-return-context.ts";
+import {
+  setThemePreference,
+  themePreference,
+  type ThemePreference,
+} from "../../lib/theme.ts";
+import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import LogoMark from "../account/components/brand/LogoMark.tsx";
@@ -39,6 +46,18 @@ const PROVIDERS: ProviderInfo[] = [
     ),
   },
 ];
+
+const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
+  system: "theme.system",
+  light: "theme.light",
+  dark: "theme.dark",
+};
+
+const THEME_ICON: Record<ThemePreference, () => JSX.Element> = {
+  system: () => <Monitor size={16} aria-hidden="true" />,
+  light: () => <Sun size={16} aria-hidden="true" />,
+  dark: () => <Moon size={16} aria-hidden="true" />,
+};
 
 export function SignInPanel() {
   const [params] = useSearchParams<{ return?: string }>();
@@ -217,11 +236,31 @@ function BrandLogoMark() {
   );
 }
 
+function ThemeSwitcher() {
+  return (
+    <div class="auth-theme-switcher" role="group" aria-label={t("shell.theme")}>
+      {(["system", "light", "dark"] as const).map((theme) => (
+        <button
+          type="button"
+          class="auth-theme-btn"
+          classList={{ active: themePreference() === theme }}
+          aria-label={t(THEME_LABEL_KEY[theme])}
+          title={t(THEME_LABEL_KEY[theme])}
+          onClick={() => setThemePreference(theme)}
+        >
+          {THEME_ICON[theme]()}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Sign-in page wrapper (brand + panel). */
 export default function SignInView() {
   onMount(() => setDocumentTitle(t("auth.signIn")));
   return (
     <main class="auth-page">
+      <ThemeSwitcher />
       <a href="/" class="auth-brand">
         <BrandLogoMark />
         <span class="auth-brand-text">Takosumi</span>

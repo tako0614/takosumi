@@ -47,7 +47,11 @@ export const ja = {
   "shell.userMenu": "ユーザーメニュー",
   "shell.signOut": "サインアウト",
   "shell.language": "言語",
+  "shell.theme": "表示",
   "shell.notificationsAria": "通知（要対応 {n} 件）",
+  "theme.system": "自動",
+  "theme.light": "ライト",
+  "theme.dark": "ダーク",
 
   // --- space switcher -------------------------------------------------------
   "space.label": "Workspace",
@@ -309,15 +313,16 @@ export const ja = {
   "new.managed.byoBody":
     "Takosumi Cloud の接続で対応できない AWS / GCP / Kubernetes や自分の Cloudflare アカウントが必要な Capsule では、確認済みの接続を追加してください。",
   "new.managed.byoLink": "接続を設定する",
-  "new.compat.check": "取得元を登録して確認",
-  "new.compat.checking": "登録して確認中...",
+  "new.compat.check": "確認して続ける",
+  "new.compat.recheck": "もう一度確認",
+  "new.compat.checking": "確認中...",
   "new.compat.title": "確認結果",
   "new.compat.ready": "このまま追加できます",
   "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
-  "new.proceed": "確認して追加",
-  "new.proceedHint": "先に「取得元を登録して確認」してから進めてください。",
+  "new.proceed": "追加内容を確認",
+  "new.proceedHint": "先に「確認して続ける」を押してください。",
   "new.providers.title": "外部サービス接続",
   "new.providers.subtitle":
     "最初の確認に進む前に、この Capsule が使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
@@ -569,7 +574,7 @@ export const ja = {
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
-  "account.subtitle": "サインイン情報・セッション・言語の設定です。",
+  "account.subtitle": "サインイン情報・セッション・言語・表示の設定です。",
   "account.profile.title": "サインイン情報",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "表示名",
@@ -585,6 +590,8 @@ export const ja = {
     "他デバイスのセッション一覧とリモートサインアウトは準備中です。現在管理できるのはこのブラウザのセッションのみです。",
   "account.language.title": "言語",
   "account.language.body": "ダッシュボードの表示言語を選びます。",
+  "account.theme.title": "表示",
+  "account.theme.body": "ライト / ダーク / 端末設定に合わせた表示を選べます。",
 
   // --- billing -------------------------------------------------------------------
   "billing.mode.disabled": "この Workspace では課金は無効です。",

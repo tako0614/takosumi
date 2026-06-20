@@ -146,6 +146,9 @@
   flex-wrap: wrap;
   gap: var(--tg-s-3);
 }
+.wb-form-actions .tg-btn {
+  min-width: 168px;
+}
 .wb-note {
   margin: 0;
   font-size: var(--tg-fs-sm);
@@ -303,6 +306,9 @@
   }
   .wb-provider-row {
     grid-template-columns: 1fr;
+  }
+  .wb-form-actions .tg-btn {
+    flex: 1 1 100%;
   }
 }
 

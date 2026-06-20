@@ -9,6 +9,7 @@ import {
   useParams,
 } from "@solidjs/router";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
+import "./lib/theme.ts";
 
 // Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
 import "@fontsource-variable/bricolage-grotesque";

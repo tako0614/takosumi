@@ -44,7 +44,11 @@ export const en: Record<keyof typeof ja, string> = {
   "shell.userMenu": "User menu",
   "shell.signOut": "Sign out",
   "shell.language": "Language",
+  "shell.theme": "Appearance",
   "shell.notificationsAria": "Notifications ({n} need attention)",
+  "theme.system": "System",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
 
   // --- space switcher -------------------------------------------------------
   "space.label": "Workspace",
@@ -304,15 +308,16 @@ export const en: Record<keyof typeof ja, string> = {
   "new.managed.byoBody":
     "If Takosumi Cloud cannot cover the AWS, GCP, Kubernetes, or personal Cloudflare account this Capsule needs, add your verified connection.",
   "new.managed.byoLink": "Set up a connection",
-  "new.compat.check": "Register source & inspect",
-  "new.compat.checking": "Registering and inspecting...",
+  "new.compat.check": "Check and continue",
+  "new.compat.recheck": "Check again",
+  "new.compat.checking": "Checking...",
   "new.compat.title": "Inspection result",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
-  "new.proceed": "Review & add",
-  "new.proceedHint": "Run “Register source & inspect” first.",
+  "new.proceed": "Review and add",
+  "new.proceedHint": "Run “Check and continue” first.",
   "new.providers.title": "External service connections",
   "new.providers.subtitle":
     "Choose the connections this Capsule will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
@@ -558,7 +563,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
-  "account.subtitle": "Sign-in info, session, and language.",
+  "account.subtitle": "Sign-in info, session, language, and appearance.",
   "account.profile.title": "Sign-in info",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "Display name",
@@ -574,6 +579,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Listing and signing out other devices' sessions is coming soon. Only this browser's session can be managed for now.",
   "account.language.title": "Language",
   "account.language.body": "Choose the dashboard display language.",
+  "account.theme.title": "Appearance",
+  "account.theme.body": "Choose light, dark, or your device setting.",
 
   // --- billing -------------------------------------------------------------------
   "billing.mode.disabled": "Billing is disabled for this Workspace.",

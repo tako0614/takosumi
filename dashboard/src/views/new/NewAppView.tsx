@@ -820,25 +820,41 @@ function Inner() {
                 </Show>
 
                 <div class="wb-form-actions">
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    busy={checkingCompatibility()}
-                    disabled={checkingCompatibility() || busy()}
-                    onClick={() => void runCompatibilityCheck()}
+                  <Show
+                    when={compatibility()}
+                    fallback={
+                      <Button
+                        variant="primary"
+                        type="submit"
+                        busy={checkingCompatibility()}
+                        disabled={checkingCompatibility() || busy()}
+                      >
+                        {checkingCompatibility()
+                          ? t("new.compat.checking")
+                          : t("new.compat.check")}
+                      </Button>
+                    }
                   >
-                    {checkingCompatibility()
-                      ? t("new.compat.checking")
-                      : t("new.compat.check")}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    busy={busy()}
-                    disabled={busy() || !canContinue()}
-                  >
-                    {t("new.proceed")}
-                  </Button>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      busy={checkingCompatibility()}
+                      disabled={checkingCompatibility() || busy()}
+                      onClick={() => void runCompatibilityCheck()}
+                    >
+                      {checkingCompatibility()
+                        ? t("new.compat.checking")
+                        : t("new.compat.recheck")}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      type="submit"
+                      busy={busy()}
+                      disabled={busy() || !canContinue()}
+                    >
+                      {t("new.proceed")}
+                    </Button>
+                  </Show>
                   <Show when={syncRequired() && !busy()}>
                     <Button
                       variant="secondary"
