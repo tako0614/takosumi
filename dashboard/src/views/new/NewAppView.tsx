@@ -197,8 +197,14 @@ function Inner() {
     return current || "main";
   };
 
+  const providerConnectionOwnershipLabel = (
+    ownership: ProviderCredentialOwnership,
+  ) =>
+    ownership === "takos_provided"
+      ? t("conn.ownership.takosProvided")
+      : t("conn.ownership.ownKey");
   const providerConnectionLabel = (connection: ProviderConnection) =>
-    `${connection.displayName || connection.providerSource} (${t("conn.ownership.ownKey")})`;
+    `${connection.displayName || connection.providerSource} (${providerConnectionOwnershipLabel(connection.ownership)})`;
 
   const canonicalProvider = (provider: string) => provider.toLowerCase().trim();
   const providerTail = (provider: string) => {
@@ -222,8 +228,7 @@ function Inner() {
   const connectionMatchesOwnershipOptions = (
     connection: ProviderConnection,
     ownershipOptions: readonly ProviderCredentialOwnership[],
-  ) =>
-    connection.ownership === "own_key" && ownershipOptions.includes("own_key");
+  ) => ownershipOptions.includes(connection.ownership);
   const providerConnectionsForProvider = (
     provider: string,
     ownershipOptions: readonly ProviderCredentialOwnership[],
@@ -233,12 +238,11 @@ function Inner() {
         connectionMatchesOwnershipOptions(connection, ownershipOptions) &&
         sameProviderFamily(provider, connection.providerSource),
     );
-  const hasProviderConnection = () => {
-    if (providerConnections.loading || providerConnections.error) return true;
-    if (providerConnections.latest === undefined) return true;
-    return readyProviderConnections().length > 0;
-  };
-  const needsCloudCredential = () => !hasProviderConnection();
+  const providerNeedsConnection = (row: ProviderConnectionRow) =>
+    providerConnectionsForProvider(row.provider, row.ownershipOptions)
+      .length === 0;
+  const needsCloudCredential = () =>
+    compatibility() !== null && providerRows().some(providerNeedsConnection);
 
   const defaultConnectionForProvider = (
     provider: string,
@@ -615,6 +619,11 @@ function Inner() {
                   {t("new.deeplink.summary", {
                     capsule: capsuleNameFromUrl(gitUrl() || prefill!.git),
                   })}
+                </p>
+              </Show>
+              <Show when={!compatibility()}>
+                <p class="wb-note" role="note">
+                  {t("new.managed.notice")}
                 </p>
               </Show>
               <Show when={needsCloudCredential()}>

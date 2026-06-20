@@ -633,7 +633,7 @@ export type ProviderConnectionStatus =
   | "needs_setup"
   | "expired"
   | "blocked";
-export type ProviderCredentialOwnership = "own_key";
+export type ProviderCredentialOwnership = "own_key" | "takos_provided";
 
 export interface ProviderConnection {
   readonly id: string;

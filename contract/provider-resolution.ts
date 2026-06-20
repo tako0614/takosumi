@@ -109,7 +109,7 @@ export interface BasePublicProviderResolutionEvidence {
 export interface PublicProviderConnectionResolutionEvidence extends BasePublicProviderResolutionEvidence {
   readonly kind: "provider_connection";
   readonly connectionId: string;
-  readonly ownership: "own_key";
+  readonly ownership: ProviderCredentialOwnership;
   readonly requiredEnvNames: readonly string[];
 }
 

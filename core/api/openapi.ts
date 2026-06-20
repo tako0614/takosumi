@@ -1132,7 +1132,7 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
         kind: { const: "provider_connection" },
         provider: { type: "string" },
         connectionId: { type: "string" },
-        ownership: { const: "own_key" },
+        ownership: { enum: [...PROVIDER_CREDENTIAL_OWNERSHIPS] },
         requiredEnvNames: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,
