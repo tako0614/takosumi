@@ -47,9 +47,9 @@ export function upstreamOAuthNotConfigured(): Response {
  * unconfigured provider otherwise hits a 503). Exposes provider ids + enabled
  * flags only — never client ids, secrets, or redirect URIs.
  *
- * Always lists the built-in `google`/`passkey` methods so the screen
- * can render disabled placeholders for unconfigured ones; any additional
- * configured upstream provider (e.g. a custom OIDC id) is appended as enabled.
+ * Hosted Takosumi Cloud sign-in is intentionally Google-only for now. The
+ * endpoint still reports passkey as disabled/enabled for future UI wiring, but
+ * custom upstream IdP ids are not public dashboard login methods.
  */
 export function handleAuthProvidersRequest(input: {
   upstreamOAuth?: UpstreamOAuthOptions;
@@ -64,14 +64,6 @@ export function handleAuthProvidersRequest(input: {
     providers.push({ id, enabled: configuredUpstream.has(id) });
   }
   providers.push({ id: "passkey", enabled: input.passkeys !== undefined });
-  // Surface any extra configured upstream providers (custom OIDC ids) as
-  // enabled so a non-builtin operator-configured provider isn't hidden.
-  for (const id of configuredUpstream) {
-    // GitHub sign-in is retired; do not re-expose a stale operator config as a
-    // dashboard login method.
-    if (id === "google" || id === "github") continue;
-    providers.push({ id, enabled: true });
-  }
   const body: TakosumiAccountsAuthProvidersResponse = { providers };
   return json(body, 200, { "cache-control": "no-store" });
 }
