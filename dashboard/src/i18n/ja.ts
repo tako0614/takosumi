@@ -41,7 +41,7 @@ export const ja = {
   "nav.spaceSettings": "Space 設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
-  "nav.backToTakos": "Takos に戻る",
+  "nav.backToTakos": "戻る",
   "nav.deployContext": "デプロイ / 管理",
   "shell.skipToContent": "本文へスキップ",
   "shell.userMenu": "ユーザーメニュー",
@@ -72,11 +72,11 @@ export const ja = {
   "auth.providerChecking": "利用可否を確認中です",
   "auth.providerUnavailable": "現在利用できません",
   "auth.providerRetryNeeded": "確認できませんでした",
-  "auth.noProvidersTitle": "Takosumi Cloud は現在準備中です",
+  "auth.noProvidersTitle": "現在サインインできません",
   "auth.noProvidersMessage":
-    "この Takosumi Cloud 環境では、まだサインインを開始していません。アクセスが有効になるまでお待ちください。",
+    "現在利用できるサインイン方法がありません。しばらくしてから再試行してください。続く場合はサポートに連絡してください。",
   "auth.noProvidersMessageWithInstall":
-    "サインイン方法が有効になると、この追加内容からそのまま続行できます。",
+    "追加内容はこの画面に保持されています。サインインが利用可能になってから再試行してください。",
   "auth.providersLoadFailedTitle": "サインイン方法を確認できませんでした",
   "auth.providersLoadFailedMessage": "通信状態を確認して再試行してください。",
   "auth.providersLoadFailedMessageWithInstall":
@@ -151,7 +151,7 @@ export const ja = {
   "apps.attentionView": "通知を確認",
   "apps.empty.title": "まだ Installation がありません",
   "apps.empty.message":
-    "Starter Capsule から始めるか、Git URL から OpenTofu Capsule を追加できます。",
+    "サンプル Capsule から始めるか、Git URL から OpenTofu Capsule を追加できます。",
   "apps.empty.cta": "Installation を追加",
   "apps.openApp": "出力を開く",
   "apps.reviewChanges": "変更を確認",
@@ -176,7 +176,7 @@ export const ja = {
     "この Installation は公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
   "app.nextSteps.title": "次にやること",
   "app.nextSteps.infraOnly":
-    "この Installation にはまだ公開 URL の出力がありません。最新 Run、OutputSnapshot、Capsule docs を確認し、infra-only なのか別 Capsule への依存が必要なのかを確認してください。",
+    "この Installation にはまだ公開 URL の出力がありません。最新 Run、OpenTofu outputs、Capsule docs を確認し、infra-only なのか別 Capsule への依存が必要なのかを確認してください。",
   "app.nextSteps.docs": "ドキュメントを開く →",
   "app.output.launchUrl": "公開アドレス",
   "app.output.url": "アドレス",
@@ -196,7 +196,7 @@ export const ja = {
   "app.info.id": "ID",
   "app.info.generation": "State generation",
   "app.info.deployment": "Current deployment",
-  "app.info.installConfig": "InstallConfig",
+  "app.info.installConfig": "追加設定",
   "app.deploys.title": "デプロイ履歴",
   "app.deploys.subtitle":
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
@@ -292,10 +292,10 @@ export const ja = {
   "new.title": "Installation を追加",
   "new.subtitle":
     "既知の Capsule から始めるか、任意の Git URL の OpenTofu Capsule を追加します。",
-  "new.tab.catalog": "Starter Capsules",
+  "new.tab.catalog": "サンプル",
   "new.tab.git": "Git URL から",
   "new.catalog.intro":
-    "既知の OpenTofu Capsule の取得元です。選ぶだけでは追加せず、Source 座標を入力済みにします。",
+    "サンプルの OpenTofu Capsule 取得元です。選ぶだけでは追加せず、取得元を入力済みにします。",
   "new.catalog.select": "この Capsule を使う",
   "new.deeplink.summary":
     "リンクから「{capsule}」の取得元が入力されています。内容を確認してから追加してください。",
@@ -304,14 +304,14 @@ export const ja = {
   "new.git.path": "Path（モジュールパス）",
   "new.name": "Installation 名",
   "new.managed.notice":
-    "運営が確認済みの provider credential を用意しています。必要な provider がすべて対応済みなら、自分の key を追加せずに進めます。",
+    "Takosumi Cloud が対応済み Capsule の認証情報を用意できます。必要な provider がすべて対応済みなら、自分のクラウド key を追加せずに進めます。",
   "new.managed.needCredential":
     "適用には Cloudflare や AWS などクラウドの接続が必要です。まだ接続がないようです。",
   "new.managed.connectFirst": "先にクラウドに接続する",
-  "new.managed.byoTitle": "自分の provider key を使いたい場合（任意）",
+  "new.managed.byoTitle": "自分のクラウド key を使いたい場合（任意）",
   "new.managed.byoBody":
-    "運営提供の credential は、この operator が有効にした provider だけをカバーします。AWS / GCP / GitHub / Kubernetes や自分の Cloudflare account が必要な Capsule では、確認済みの Space connection を追加してください。",
-  "new.managed.byoLink": "自分の provider 接続を設定する",
+    "この Takosumi 環境で用意できる認証情報は、運営が有効にした provider だけです。AWS / GCP / GitHub / Kubernetes や自分の Cloudflare account が必要な Capsule では、確認済みの接続を追加してください。",
+  "new.managed.byoLink": "接続を設定する",
   "new.compat.check": "取得元を登録して確認",
   "new.compat.checking": "登録して確認中...",
   "new.compat.title": "確認結果",
@@ -323,7 +323,7 @@ export const ja = {
   "new.proceedHint": "先に「取得元を登録して確認」してから進めてください。",
   "new.providers.title": "Provider connections",
   "new.providers.subtitle":
-    "最初の変更確認に進む前に、provider ごとに使う provider connection を選びます。未設定の provider は fail-closed で止まり、Takosumi が別の connection を暗黙利用することはありません。",
+    "最初の変更確認に進む前に、provider ごとに使う provider connection を選びます。必要な provider が未設定の場合、Takosumi は別の接続を勝手に使わず、選択を求めて停止します。",
   "new.providers.noneRequired":
     "この Capsule は最初の変更確認で provider credential を要求していません。",
   "new.providers.alias": "alias: {alias}",
@@ -410,8 +410,8 @@ export const ja = {
   "conn.providerConnections.ownership": "所有",
   "conn.providerConnections.status": "状態",
   "conn.ownership.ownKey": "自分の key",
-  "conn.ownership.takosProvided": "Takosumi 提供",
-  "conn.scope.operator": "Gateway",
+  "conn.ownership.takosProvided": "運営管理",
+  "conn.scope.operator": "Takosumi Cloud",
   "conn.scope.space": "Space",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",

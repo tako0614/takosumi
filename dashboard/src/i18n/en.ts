@@ -38,7 +38,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.spaceSettings": "Space settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
-  "nav.backToTakos": "Back to Takos",
+  "nav.backToTakos": "Back",
   "nav.deployContext": "Deploy / manage",
   "shell.skipToContent": "Skip to content",
   "shell.userMenu": "User menu",
@@ -68,11 +68,11 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.providerChecking": "Checking availability",
   "auth.providerUnavailable": "Currently unavailable",
   "auth.providerRetryNeeded": "Could not check availability",
-  "auth.noProvidersTitle": "Takosumi Cloud is getting ready",
+  "auth.noProvidersTitle": "Sign-in is temporarily unavailable",
   "auth.noProvidersMessage":
-    "Sign-in is not open on this Takosumi Cloud environment yet. Please check back after access is enabled.",
+    "No sign-in method is available right now. Please retry in a moment or contact support if this continues.",
   "auth.noProvidersMessageWithInstall":
-    "Once sign-in is enabled, these install details will continue from here.",
+    "These install details are preserved here. Retry after sign-in is available to continue.",
   "auth.providersLoadFailedTitle": "Could not check sign-in methods",
   "auth.providersLoadFailedMessage": "Check your connection and try again.",
   "auth.providersLoadFailedMessageWithInstall":
@@ -148,7 +148,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.attentionView": "View notifications",
   "apps.empty.title": "No Installations yet",
   "apps.empty.message":
-    "Start from a Starter Capsule or add an OpenTofu Capsule from a Git URL.",
+    "Start from an example Capsule or add an OpenTofu Capsule from a Git URL.",
   "apps.empty.cta": "Add Installation",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
@@ -172,7 +172,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This Installation exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
   "app.nextSteps.title": "Next steps",
   "app.nextSteps.infraOnly":
-    "This Installation has no public URL output yet. Check the latest Run, OutputSnapshot, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
+    "This Installation has no public URL output yet. Check the latest Run, OpenTofu outputs, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
   "app.nextSteps.docs": "Open the docs →",
   "app.output.launchUrl": "Public address",
   "app.output.url": "URL",
@@ -192,7 +192,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.info.id": "ID",
   "app.info.generation": "State generation",
   "app.info.deployment": "Current deployment",
-  "app.info.installConfig": "InstallConfig",
+  "app.info.installConfig": "Install settings",
   "app.deploys.title": "Deploy history",
   "app.deploys.subtitle":
     "Past deployed states. Pick an older one to review a change that restores it.",
@@ -289,10 +289,10 @@ export const en: Record<keyof typeof ja, string> = {
   "new.title": "Add Installation",
   "new.subtitle":
     "Start from a known Capsule or add any OpenTofu Capsule from a Git URL.",
-  "new.tab.catalog": "Starter Capsules",
+  "new.tab.catalog": "Examples",
   "new.tab.git": "From Git URL",
   "new.catalog.intro":
-    "Known OpenTofu Capsule coordinates. Picking one only pre-fills the source.",
+    "Example OpenTofu Capsule sources. Picking one only pre-fills the source.",
   "new.catalog.select": "Use this Capsule",
   "new.deeplink.summary":
     "The source for “{capsule}” was filled in from a link. Review it before adding.",
@@ -301,14 +301,14 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.path": "Path (module path)",
   "new.name": "Installation name",
   "new.managed.notice":
-    "The Gateway has verified coverage for supported Capsules. You can continue without adding an own-key Provider Connection when every required provider is covered.",
+    "Takosumi Cloud can provide credentials for supported Capsules. You can continue without adding your own cloud key when every required provider is covered.",
   "new.managed.needCredential":
     "Applying needs a cloud connection (Cloudflare, AWS, …) and this Space has none yet.",
   "new.managed.connectFirst": "Connect a cloud first",
-  "new.managed.byoTitle": "Want to use your own provider key? (optional)",
+  "new.managed.byoTitle": "Want to use your own cloud key? (optional)",
   "new.managed.byoBody":
-    "Operator-provided credentials only cover providers enabled by this operator. Add a verified Space connection when the Capsule needs AWS, GCP, GitHub, Kubernetes, or your own Cloudflare account.",
-  "new.managed.byoLink": "Set up your provider connection",
+    "This Takosumi environment only covers providers enabled by its operator. Add a verified connection when the Capsule needs AWS, GCP, GitHub, Kubernetes, or your own Cloudflare account.",
+  "new.managed.byoLink": "Set up a connection",
   "new.compat.check": "Register source & inspect",
   "new.compat.checking": "Registering and inspecting...",
   "new.compat.title": "Inspection result",
@@ -320,7 +320,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.proceedHint": "Run “Register source & inspect” first.",
   "new.providers.title": "Provider connections",
   "new.providers.subtitle":
-    "Choose the provider connection for each provider before the first plan. Unset providers fail closed; Takosumi will not silently use another connection.",
+    "Choose the provider connection for each provider before the first plan. If a required provider is unset, Takosumi stops and asks you to choose one instead of using another connection silently.",
   "new.providers.noneRequired":
     "This Capsule did not declare any provider credentials for the first plan.",
   "new.providers.alias": "alias: {alias}",
@@ -404,8 +404,8 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.providerConnections.ownership": "Ownership",
   "conn.providerConnections.status": "Status",
   "conn.ownership.ownKey": "Own key",
-  "conn.ownership.takosProvided": "Takosumi-provided",
-  "conn.scope.operator": "Gateway",
+  "conn.ownership.takosProvided": "Operator managed",
+  "conn.scope.operator": "Takosumi Cloud",
   "conn.scope.space": "Space",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",

@@ -1,8 +1,8 @@
 /**
- * Add an Installation (`/new`) — Starter Capsules + Git URL, one flow.
+ * Add an Installation (`/new`) — examples + Git URL, one flow.
  *
  * Three entry shapes, identical install path:
- *   - Starter Capsules: curated first-party / known Capsule coordinates (src/catalog.ts).
+ *   - Examples: curated first-party / known Capsule coordinates (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
  *   - Git URL: the raw source form (the developer power path).
  *   - External install link: another site links `/install?git=…` (or the
@@ -525,7 +525,7 @@ function Inner() {
           />
         }
       >
-        {/* tab strip: starter capsules | git url */}
+        {/* tab strip: examples | git url */}
         <nav class="tg-tabs" aria-label="Add method">
           <button
             type="button"
