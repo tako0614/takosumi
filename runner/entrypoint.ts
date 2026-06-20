@@ -725,11 +725,12 @@ async function runGeneratedRootPlan(
       workspace.sourceRoot,
       "source module directory",
     );
-    sourceCommit =
-      sourceCommit ??
-      (source.kind === "git"
-        ? await gitRevParseHead(workspace.sourceRoot, commandContext)
-        : undefined);
+    const pinnedGitCommit =
+      source.kind === "git"
+        ? source.commit ??
+          (await gitRevParseHead(workspace.sourceRoot, commandContext))
+        : undefined;
+    sourceCommit = sourceCommit ?? pinnedGitCommit;
     await materializeGeneratedRootFromModule(
       workspace,
       moduleDir,
