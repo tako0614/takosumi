@@ -357,6 +357,19 @@ section h2 + .lede {
   background-size: 30px 30px;
   pointer-events: none;
 }
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0.48) 0%,
+    rgba(0, 0, 0, 0.28) 42%,
+    transparent 68%
+  );
+}
 /* ===== Decorative ink splatter layer (crisp blue/red splats) ===== */
 .splat-field {
   position: absolute;
@@ -864,6 +877,65 @@ footer.site .copy {
   z-index: 0;
   pointer-events: none;
   will-change: transform;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding-top: calc(var(--tg-nav-h) + var(--tg-s-2));
+  }
+  .hero::after {
+    background:
+      radial-gradient(
+        ellipse at center,
+        rgba(0, 0, 0, 0.76) 0%,
+        rgba(0, 0, 0, 0.62) 42%,
+        rgba(0, 0, 0, 0.2) 72%,
+        transparent 100%
+      ),
+      linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.12) 0%,
+        rgba(0, 0, 0, 0.48) 34%,
+        rgba(0, 0, 0, 0.5) 72%,
+        rgba(0, 0, 0, 0.18) 100%
+      );
+  }
+  .hero-splat-wrap {
+    opacity: 0.54;
+  }
+  .hero-simple .hero-center {
+    gap: var(--tg-s-4);
+    padding: var(--tg-s-7) 0 var(--tg-s-5);
+  }
+  .hero h1 {
+    font-size: 4.1rem;
+    line-height: 0.98;
+    margin-bottom: var(--tg-s-4);
+  }
+  .hero .lede {
+    color: rgba(250, 250, 250, 0.84);
+    text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8);
+  }
+  .hero .cta-row {
+    width: 100%;
+    max-width: 360px;
+    gap: var(--tg-s-2);
+  }
+  .hero .cta-row .btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+    padding: 0.88em 1em;
+  }
+}
+
+@media (max-width: 420px) {
+  .hero h1 {
+    font-size: 3.45rem;
+  }
+  .hero .cta-row {
+    flex-direction: column;
+  }
 }
 
 /* Why — numbered 3-point grid (red top rule) */
