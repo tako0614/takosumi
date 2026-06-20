@@ -2,7 +2,7 @@
 
 **This is NOT a real approval record.** It is a deterministic file the local-substrate uses to satisfy the `TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF` requirement of the hosted Takosumi access gate. The gate insists the approval ref must differ from the evidence ref (`p0-local-evidence.md`); this file exists solely to be a distinct second pointer.
 
-Real launches used approval records that were tracked under `docs/launch-readiness/` in the now-archived `takos-private` repository (preserved in that repo's Git history), with a human reviewer's signature, audit trail, and an immutable commit SHA. This fixture satisfies only the local-substrate gate, never production.
+Real launch approval records live outside the OSS repo in the operator evidence store, currently `takosumi-private/evidence/...`, with a human reviewer's sign-off, audit trail, and immutable evidence refs. This fixture satisfies only the local-substrate gate, never production.
 
 ## Why the gate requires distinct refs
 
@@ -10,4 +10,4 @@ Conflating "evidence I reviewed" and "approval I granted" defeats the purpose of
 
 ## Local-substrate scope
 
-The local worker is reachable only from the docker network (`prove-no-public-leak.sh` enforces this). No user traffic is served by the local worker, so the fixture approval is acceptable for local smoke runs. Production deploys reject this fixture because the ref hostname (`github.com/tako0614/takosumi.git`) doesn't match the production approval repo and the digest sha256 doesn't match the production evidence file.
+The local worker is reachable only from the docker network (`prove-no-public-leak.sh` enforces this). No user traffic is served by the local worker, so the fixture approval is acceptable for local smoke runs. Production deploys must use non-fixture operator evidence refs, matching readiness digests, and a public readiness summary; these local fixture refs are not production evidence.

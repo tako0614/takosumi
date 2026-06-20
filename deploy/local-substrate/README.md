@@ -27,7 +27,7 @@ probe host 経由の run ledger surface を検証する。
 
 該当 product を local-substrate の service として直起動する運用は扱わない。OpenTofu module repo は deploy control run ledger の入力として扱い、個別 product の runtime smoke は各 product repo 側で実行する。
 
-## Current smoke coverage (30 checks)
+## Current smoke coverage (27 smoke-script checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
 
@@ -35,7 +35,7 @@ probe host 経由の run ledger surface を検証する。
 | ------------------ | ---: | --------------------------------------------------------------------------------------------------- |
 | ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                         |
 | prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                  |
-| OAuth              |    4 | `oauth.e2e.{google,github}`, `oauth.tls-negative`, `oauth.csrf-replay`                              |
+| OAuth              |    3 | `oauth.e2e.google`, `oauth.tls-negative`, `oauth.csrf-replay`                                       |
 | tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
 | docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
 | passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
@@ -53,9 +53,10 @@ probe host 経由の run ledger surface を検証する。
 
 CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で takosumi + takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた full chain を毎 PR で再現する。
 
-Latest local CLI verification: 2026-05-27 fresh Docker volumes,
-`bash scripts/up.sh --profile postgres` followed by `bash scripts/smoke.sh`
-completed with `30 passed, 0 failed`.
+For a fresh local verification, run `bash scripts/up.sh --profile postgres`
+followed by `bash scripts/smoke.sh`. Do not treat old pass-count notes as
+current readiness evidence; record fresh output in the relevant evidence file
+when preparing a release.
 
 ## Quick start
 

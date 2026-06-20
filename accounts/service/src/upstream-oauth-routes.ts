@@ -62,6 +62,8 @@ export function handleAuthProvidersRequest(input: {
   // Surface any extra configured upstream providers (custom OIDC ids) as
   // enabled so a non-builtin operator-configured provider isn't hidden.
   for (const id of configuredUpstream) {
+    // GitHub sign-in is retired; do not re-expose a stale operator config as a
+    // dashboard login method.
     if (id === "google" || id === "github") continue;
     providers.push({ id, enabled: true });
   }
