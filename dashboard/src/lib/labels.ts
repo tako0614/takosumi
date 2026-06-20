@@ -73,6 +73,16 @@ const CONNECTION: Record<string, MessageKey> = {
 export const connectionStatusLabel = (status?: string) =>
   label(CONNECTION, status);
 
+/** ProviderConnection readiness status. */
+const PROVIDER_CONNECTION: Record<string, MessageKey> = {
+  ready: "status.providerConnection.ready",
+  needs_setup: "status.providerConnection.needs_setup",
+  expired: "status.providerConnection.expired",
+  blocked: "status.providerConnection.blocked",
+};
+export const providerConnectionStatusLabel = (status?: string) =>
+  label(PROVIDER_CONNECTION, status);
+
 /** Run operation noun (plan/apply/destroy_* …) for feeds and summaries. */
 const OPERATION: Record<string, MessageKey> = {
   plan: "op.plan",
@@ -161,6 +171,21 @@ export function connectionTone(status: string | undefined): Tone {
     case "error":
       return "danger";
     case "revoked":
+    case "expired":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
+
+export function providerConnectionTone(status: string | undefined): Tone {
+  switch (status) {
+    case "ready":
+      return "ok";
+    case "needs_setup":
+      return "warn";
+    case "blocked":
+      return "danger";
     case "expired":
       return "muted";
     default:

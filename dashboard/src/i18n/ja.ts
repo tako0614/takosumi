@@ -134,6 +134,10 @@ export const ja = {
   "status.connection.revoked": "無効化",
   "status.connection.expired": "期限切れ",
   "status.connection.error": "エラー",
+  "status.providerConnection.ready": "利用できます",
+  "status.providerConnection.needs_setup": "確認が必要",
+  "status.providerConnection.expired": "期限切れ",
+  "status.providerConnection.blocked": "利用停止",
 
   // --- run operation nouns (shared by run view / feeds) -------------------
   "op.plan": "変更の確認",
@@ -357,6 +361,8 @@ export const ja = {
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceFetchFailed":
     "Git の中身を取得できませんでした。URL、Ref、Path、または非公開リポジトリの接続を確認してください。詳細: {message}",
+  "new.error.notRunnable":
+    "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Workspace 設定",
@@ -436,6 +442,11 @@ export const ja = {
   "conn.return.defaultRef": "デフォルト ref",
   "conn.return.rootPath": "root module",
   "conn.return.cta": "Capsule 追加に戻る",
+  "conn.saved.message": "{name} を保存しました。",
+  "conn.saved.needsTest":
+    "{name} を保存しました。Capsule 追加に戻る前に、接続確認を完了してください。",
+  "conn.saved.testCta": "接続を確認",
+  "conn.saved.returnCta": "追加に戻る",
   "conn.add.title": "接続を追加",
   "conn.add.subtitle":
     "接続先を選び、トークンを貼り付けるか環境変数として登録します。",
@@ -475,6 +486,7 @@ export const ja = {
     "この Workspace にはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
   "conn.testing": "確認中...",
+  "conn.test.notReady": "接続はまだ利用できません（状態: {status}）。",
   "conn.remove.confirmTitle": "接続を削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存された認証情報も削除され、取り消せません。",
