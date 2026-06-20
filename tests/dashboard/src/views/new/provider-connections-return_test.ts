@@ -24,6 +24,10 @@ const connectionsTabSource = readFileSync(
   ),
   "utf8",
 );
+const controlApiSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
+  "utf8",
+);
 
 describe("/new Provider Connections return context", () => {
   test("all /new Provider Connections links use the return-context href", () => {
@@ -85,6 +89,18 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("onSourceCreated");
     expect(newAppViewSource).toContain("const retryAfterSyncWait = () =>");
     expect(newAppViewSource).toContain("else void runCompatibilityCheck()");
+  });
+
+  test("/new translates known compatibility diagnostics into user-facing copy", () => {
+    expect(controlApiSource).toContain("code: finding.code");
+    expect(newAppViewSource).toContain("compatibilityDiagnosticDisplay");
+    expect(newAppViewSource).toContain("provider_credentials_in_source");
+    expect(newAppViewSource).toContain("provider_block_lift_candidate");
+    expect(newAppViewSource).toContain("dependency_lock_detected");
+    expect(newAppViewSource).toContain(
+      '"new.compat.issue.providerCredentials.message"',
+    );
+    expect(newAppViewSource).toContain('"new.compat.issue.lockfile.message"');
   });
 
   test("connections tab gives form controls stable names", () => {
