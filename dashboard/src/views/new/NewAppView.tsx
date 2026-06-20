@@ -19,6 +19,7 @@
  */
 import "../../styles/wave-b.css";
 import {
+  createEffect,
   createMemo,
   createResource,
   createSignal,
@@ -441,6 +442,49 @@ function Inner() {
     );
     return candidates[0]?.id ?? "";
   };
+
+  const defaultProviderRowsWithReadyConnections = (
+    rows: readonly ProviderConnectionRow[],
+  ): ProviderConnectionRow[] => {
+    let changed = false;
+    const defaultedRows = rows.map((row) => {
+      const candidates = providerConnectionsForProvider(
+        row.provider,
+        row.ownershipOptions,
+      );
+      if (
+        row.connectionId &&
+        candidates.some((connection) => connection.id === row.connectionId)
+      ) {
+        return row;
+      }
+      const connectionId = defaultConnectionForProvider(
+        row.provider,
+        row.ownershipOptions,
+        row.resourceTypes,
+      );
+      if (!connectionId || connectionId === row.connectionId) {
+        return row;
+      }
+      changed = true;
+      return { ...row, connectionId };
+    });
+    return changed ? defaultedRows : [...rows];
+  };
+
+  createEffect(() => {
+    if (!compatibility()) return;
+    const rows = providerRows();
+    if (rows.length === 0) return;
+    const defaultedRows = defaultProviderRowsWithReadyConnections(rows);
+    if (
+      defaultedRows.some(
+        (row, index) => row.connectionId !== rows[index]?.connectionId,
+      )
+    ) {
+      setProviderRows(defaultedRows);
+    }
+  });
 
   const ownershipOptionsForProvider = (
     provider: CapsuleCompatibilityProvider,

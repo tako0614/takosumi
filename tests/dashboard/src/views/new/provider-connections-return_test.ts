@@ -77,6 +77,16 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
+  test("/new defaults a ready ProviderConnection after asynchronous loading", () => {
+    expect(newAppViewSource).toContain("defaultProviderRowsWithReadyConnections");
+    expect(newAppViewSource).toContain("createEffect(() =>");
+    expect(newAppViewSource).toContain("const defaultedRows =");
+    expect(newAppViewSource).toContain(
+      "candidates.some((connection) => connection.id === row.connectionId)",
+    );
+    expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
+  });
+
   test("/new only proceeds when the compatibility report is runnable", () => {
     expect(newAppViewSource).toContain("const compatibilityRunnable = () =>");
     expect(newAppViewSource).toContain('level === "ready"');
