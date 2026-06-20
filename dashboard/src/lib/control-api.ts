@@ -1232,7 +1232,10 @@ export async function listSourceSnapshots(
 export async function waitForLatestSourceSnapshot(
   sourceId: string,
 ): Promise<SourceSnapshot> {
-  const deadline = Date.now() + 20_000;
+  // Hosted runner source-sync includes container scheduling and git/archive work.
+  // Production regularly takes more than 20s, so the dashboard must wait long
+  // enough for the normal happy path instead of showing a false failure.
+  const deadline = Date.now() + 120_000;
   let lastSnapshots: readonly SourceSnapshot[] = [];
   while (Date.now() < deadline) {
     lastSnapshots = await listSourceSnapshots(sourceId);
@@ -1245,7 +1248,7 @@ export async function waitForLatestSourceSnapshot(
   throw new ControlApiError(
     409,
     "source_sync_required",
-    "Source sync has not produced a SourceSnapshot yet.",
+    "Source contents are still being fetched.",
     { snapshots: lastSnapshots },
   );
 }

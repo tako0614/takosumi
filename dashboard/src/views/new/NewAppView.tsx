@@ -378,7 +378,11 @@ function Inner() {
       setCompatibility(result);
     } catch (err) {
       const apiError = err instanceof ControlApiError ? err : undefined;
-      setError(apiError?.message ?? String(err));
+      setError(
+        apiError?.isSourceSyncRequired
+          ? t("new.error.syncPending")
+          : (apiError?.message ?? String(err)),
+      );
     } finally {
       setCheckingCompatibility(false);
     }
@@ -484,6 +488,8 @@ function Inner() {
     <>
       <FormField label={t("new.git.url")}>
         <Input
+          id="new-capsule-git-url"
+          name="gitUrl"
           type="text"
           value={gitUrl()}
           onInput={(e) => {
@@ -499,6 +505,8 @@ function Inner() {
       <div class="wb-form-row">
         <FormField label={t("new.git.ref")}>
           <Input
+            id="new-capsule-ref"
+            name="ref"
             type="text"
             value={ref()}
             onInput={(e) => {
@@ -513,6 +521,8 @@ function Inner() {
         </FormField>
         <FormField label={t("new.git.path")}>
           <Input
+            id="new-capsule-path"
+            name="path"
             type="text"
             value={path()}
             onInput={(e) => {
@@ -656,6 +666,8 @@ function Inner() {
 
                 <FormField label={t("new.name")}>
                   <Input
+                    id="new-capsule-name"
+                    name="name"
                     type="text"
                     value={name()}
                     onInput={(e) => {
@@ -741,6 +753,8 @@ function Inner() {
                                   </Show>
                                 </div>
                                 <Select
+                                  id={`provider-connection-${index()}`}
+                                  name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
                                   value={row.connectionId}
                                   onChange={(e) =>
                                     updateProviderRow(index(), {
