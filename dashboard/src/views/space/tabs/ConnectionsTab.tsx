@@ -383,6 +383,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         <div class="wc-form">
           <FormField label={t("conn.add.provider")}>
             <Select
+              id="connection-provider"
+              name="provider"
               value={provider()}
               onChange={(e) => {
                 setProvider(e.currentTarget.value);
@@ -404,6 +406,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
           <FormField label={t("conn.add.displayName")}>
             <Input
+              id="connection-display-name"
+              name="displayName"
               type="text"
               value={displayName()}
               onInput={(e) => setDisplayName(e.currentTarget.value)}
@@ -433,6 +437,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                           required={field().required}
                         >
                           <Input
+                            id={`connection-field-${field().envName}`}
+                            name={`field:${field().envName}`}
                             type={field().secret ? "password" : "text"}
                             value={values()[field().envName] ?? ""}
                             onInput={(e) =>
@@ -509,6 +515,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                       >
                         <FormField label={t("conn.guided.pasteLabel")} required>
                           <Input
+                            id="connection-helper-token"
+                            name="helperToken"
                             type="password"
                             value={helperToken()}
                             onInput={(e) =>
@@ -552,6 +560,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                               required={field().required}
                             >
                               <Input
+                                id={`connection-advanced-field-${field().envName}`}
+                                name={`advancedField:${field().envName}`}
                                 type={field().secret ? "password" : "text"}
                                 value={values()[field().envName] ?? ""}
                                 onInput={(e) =>
@@ -599,6 +609,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               >
                 <FormField label={t("conn.genericEnv.providerName")} required>
                   <Input
+                    id="connection-generic-provider"
+                    name="genericProvider"
                     type="text"
                     value={genericEnvProvider()}
                     onInput={(e) =>
@@ -615,6 +627,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                     <div class="wc-env-pair">
                       <FormField label={t("conn.genericEnv.envName")}>
                         <Input
+                          id={`connection-generic-env-name-${index}`}
+                          name={`genericEnvName:${index}`}
                           type="text"
                           value={pair().name}
                           onInput={(e) =>
@@ -627,6 +641,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                       </FormField>
                       <FormField label={t("conn.genericEnv.value")}>
                         <Input
+                          id={`connection-generic-env-value-${index}`}
+                          name={`genericEnvValue:${index}`}
                           type="password"
                           value={pair().value}
                           onInput={(e) =>
