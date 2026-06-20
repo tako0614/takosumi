@@ -1,10 +1,9 @@
 /*
- * base.css — global reset + dark base for the Takosumi dashboard SPA.
+ * base.css — global reset + app base for the Takosumi dashboard SPA.
  *
  * Ported from takosumi/website/src/styles/global.css (the reset / body / link /
  * code / focus-visible / reduced-motion / skip-link bits) plus the dashboard's
- * own a11y helpers. The dashboard is dark-only; the canonical dark tokens live
- * in styles/tokens.css.
+ * own a11y helpers. Dashboard tokens live in styles/tokens.css.
  */
 
 *,

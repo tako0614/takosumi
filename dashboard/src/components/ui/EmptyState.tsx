@@ -1,5 +1,4 @@
 import { type JSX, Show } from "solid-js";
-import InkBackdrop from "./InkBackdrop.tsx";
 
 interface Props {
   /** Leading icon (lucide element); shown on an accent-soft disc. */
@@ -8,17 +7,14 @@ interface Props {
   message?: JSX.Element;
   /** Action slot (e.g. a Button). */
   action?: JSX.Element;
-  /** Add a subtle ink backdrop behind the empty state. */
+  /** Deprecated: ignored in the dashboard. Ink decoration belongs to the public site. */
   ink?: boolean;
 }
 
-/** Ink-accented empty state: icon + title + message + optional action. */
+/** Empty state: icon + title + message + optional action. */
 export default function EmptyState(props: Props): JSX.Element {
   return (
     <div class="tg-empty">
-      <Show when={props.ink}>
-        <InkBackdrop density="shell" />
-      </Show>
       <Show when={props.icon}>
         <span class="tg-empty-icon" aria-hidden="true">
           {props.icon}

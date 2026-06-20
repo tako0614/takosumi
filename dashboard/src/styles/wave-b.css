@@ -2,7 +2,7 @@
  * wave-b.css — view-local rules for the Wave B control views
  * (Sources / Providers / Graph / OutputShares / Backups / Members /
  * InstallFromGit). Imported locally at the top of each Wave B view file, NOT
- * via the shared index.tsx. These rules layer on top of the canonical dark
+ * via the shared index.tsx. These rules layer on top of the canonical app
  * tokens + the shared component classes (tg-*) and never redefine them.
  *
  * Everything here is namespaced under `wb-` (wave-b) to avoid colliding with the
