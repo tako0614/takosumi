@@ -50,7 +50,6 @@ import {
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { canonicalProviderAddress } from "@takosumi/providers";
-import { redactString } from "../observability/redaction.ts";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
@@ -835,9 +834,8 @@ export { normalizedModuleObjectKey };
 
 function compatibilityCheckFailureAnalysis(
   snapshot: SourceSnapshot,
-  error: unknown,
+  _error: unknown,
 ): CapsuleCompatibilityAnalysis {
-  const diagnostic = compatibilityFailureDiagnostic(error);
   return {
     level: "unsupported",
     findings: [
@@ -847,9 +845,8 @@ function compatibilityCheckFailureAnalysis(
         message:
           "Takosumi could not inspect this Capsule before installation.",
         path: snapshot.path,
-        suggestion: diagnostic
-          ? `Retry the check after source sync finishes. Operator diagnostic: ${diagnostic}`
-          : "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",
+        suggestion:
+          "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",
       },
     ],
     providers: [],
@@ -859,12 +856,6 @@ function compatibilityCheckFailureAnalysis(
     normalizedObjectKey: snapshot.archiveObjectKey,
     normalizedDigest: snapshot.archiveDigest,
   };
-}
-
-function compatibilityFailureDiagnostic(error: unknown): string | undefined {
-  const raw = error instanceof Error ? error.message : String(error);
-  const redacted = redactString(raw).replace(/\s+/g, " ").trim();
-  return redacted.length > 0 ? redacted.slice(0, 400) : undefined;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {
