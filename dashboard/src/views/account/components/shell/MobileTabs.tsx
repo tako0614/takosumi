@@ -13,10 +13,16 @@ export default function MobileTabs() {
   const TABS = [
     { href: "/", label: () => t("nav.home"), icon: Home, end: true },
     { href: "/new", label: () => t("nav.add"), icon: Plus },
-    { href: "/notifications", label: () => t("nav.notifications"), icon: Bell },
+    {
+      href: "/notifications",
+      label: () => t("nav.notifications"),
+      mobileLabel: () => t("nav.notificationsShort"),
+      icon: Bell,
+    },
     {
       href: "/space/settings",
       label: () => t("nav.spaceSettings"),
+      mobileLabel: () => t("nav.spaceSettingsShort"),
       icon: Settings2,
     },
     { href: "/account", label: () => t("nav.account"), icon: UserCircle2 },
@@ -34,9 +40,10 @@ export default function MobileTabs() {
           classList={{
             active: isActive(tab.href, "end" in tab ? tab.end : false),
           }}
+          aria-label={tab.label()}
         >
           <tab.icon size={20} />
-          <span>{tab.label()}</span>
+          <span>{("mobileLabel" in tab ? tab.mobileLabel : tab.label)()}</span>
         </A>
       ))}
     </nav>
