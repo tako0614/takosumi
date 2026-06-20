@@ -17,7 +17,7 @@ export interface InstallReturnContext {
 }
 
 export const INSTALL_RETURN_QUERY_PARAM = "return";
-export const PROVIDER_CONNECTIONS_PATH = "/space/settings/connections";
+export const PROVIDER_CONNECTIONS_PATH = "/workspace/settings/connections";
 
 /**
  * Extract the safe `/new?...` install prefill from a sign-in return URL.

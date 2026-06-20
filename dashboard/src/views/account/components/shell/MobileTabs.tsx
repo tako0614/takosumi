@@ -20,7 +20,7 @@ export default function MobileTabs() {
       icon: Bell,
     },
     {
-      href: "/space/settings",
+      href: "/workspace/settings",
       label: () => t("nav.spaceSettings"),
       mobileLabel: () => t("nav.spaceSettingsShort"),
       icon: Settings2,
