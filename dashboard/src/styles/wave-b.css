@@ -245,6 +245,31 @@
   overflow-wrap: anywhere;
 }
 
+.wb-action-callout,
+.wb-status-panel {
+  display: grid;
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line-strong);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.wb-action-callout p,
+.wb-action-callout ul,
+.wb-status-panel p {
+  margin: 0;
+}
+.wb-action-callout ul {
+  padding-left: var(--tg-s-5);
+}
+.wb-status-panel {
+  border-color: color-mix(in srgb, var(--tg-accent) 34%, var(--tg-line));
+}
+.wb-status-meta {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
 .wb-steps {
   list-style: none;
   margin: var(--tg-s-4) 0 0;

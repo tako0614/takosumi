@@ -73,6 +73,12 @@ interface RequestOpts {
   readonly signal?: AbortSignal;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Request was aborted.", "AbortError");
+  }
+}
+
 async function controlFetch<T>(
   path: string,
   opts: RequestOpts = {},
@@ -154,6 +160,7 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
+  opts: { readonly signal?: AbortSignal } = {},
 ): Promise<readonly T[]> {
   const all: T[] = [];
   let cursor: string | undefined;
@@ -165,7 +172,7 @@ async function fetchAllPages<T>(
         : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
     const body = await controlFetch<
       { nextCursor?: string } & Record<string, unknown>
-    >(path);
+    >(path, { signal: opts.signal });
     all.push(...extract(body));
     if (typeof body.nextCursor !== "string" || body.nextCursor === "") break;
     cursor = body.nextCursor;
@@ -441,6 +448,12 @@ export interface Run {
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly finishedAt?: string;
+}
+
+export interface SourceSnapshotWaitProgress {
+  readonly elapsedMs: number;
+  readonly snapshotsCount: number;
+  readonly run?: Run;
 }
 
 export interface RunDiagnostic {
@@ -1020,6 +1033,10 @@ export async function checkCapsuleCompatibility(input: {
   readonly path: string;
   readonly name: string;
   readonly installConfigId?: string;
+  readonly signal?: AbortSignal;
+  readonly onSourceSyncProgress?: (
+    progress: SourceSnapshotWaitProgress,
+  ) => void;
 }): Promise<CapsuleCompatibilityResult> {
   const { source } = await createSource({
     spaceId: input.spaceId,
@@ -1028,8 +1045,12 @@ export async function checkCapsuleCompatibility(input: {
     defaultRef: input.ref,
     defaultPath: input.path,
   });
-  await syncSource(source.id);
-  const snapshot = await waitForLatestSourceSnapshot(source.id);
+  const syncEnvelope = await syncSource(source.id, { signal: input.signal });
+  const snapshot = await waitForLatestSourceSnapshot(source.id, {
+    runId: extractRunId(syncEnvelope),
+    signal: input.signal,
+    onProgress: input.onSourceSyncProgress,
+  });
   const body = await controlFetch<{
     report: {
       readonly level: CapsuleCompatibilityLevel;
@@ -1213,37 +1234,96 @@ export async function createSource(input: {
 }
 
 /** Kick a `source_sync` run. Returns the opaque run envelope. */
-export async function syncSource(sourceId: string): Promise<unknown> {
+export async function syncSource(
+  sourceId: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}/sync`,
-    { method: "POST" },
+    { method: "POST", signal: options.signal },
   );
 }
 
 export async function listSourceSnapshots(
   sourceId: string,
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<readonly SourceSnapshot[]> {
   return await fetchAllPages<SourceSnapshot>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots`,
     (body) => (body.snapshots as readonly SourceSnapshot[]) ?? [],
+    { signal: options.signal },
   );
 }
 
 export async function waitForLatestSourceSnapshot(
   sourceId: string,
+  options: {
+    readonly runId?: string;
+    readonly timeoutMs?: number;
+    readonly pollMs?: number;
+    readonly maxPollMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onProgress?: (progress: SourceSnapshotWaitProgress) => void;
+  } = {},
 ): Promise<SourceSnapshot> {
   // Hosted runner source-sync includes container scheduling and git/archive work.
   // Production regularly takes more than 20s, so the dashboard must wait long
   // enough for the normal happy path instead of showing a false failure.
-  const deadline = Date.now() + 120_000;
+  const startedAt = Date.now();
+  const deadline = startedAt + (options.timeoutMs ?? 120_000);
+  let nextPollMs = options.pollMs ?? 1_500;
+  const maxPollMs = options.maxPollMs ?? 5_000;
   let lastSnapshots: readonly SourceSnapshot[] = [];
   while (Date.now() < deadline) {
-    lastSnapshots = await listSourceSnapshots(sourceId);
+    throwIfAborted(options.signal);
+    lastSnapshots = await listSourceSnapshots(sourceId, {
+      signal: options.signal,
+    });
     const latest = [...lastSnapshots].sort((a, b) =>
       b.fetchedAt.localeCompare(a.fetchedAt),
     )[0];
     if (latest) return latest;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    let run: Run | undefined;
+    if (options.runId) {
+      try {
+        run = await getRunWithOptions(options.runId, {
+          signal: options.signal,
+        });
+      } catch (err) {
+        const apiError = err instanceof ControlApiError ? err : undefined;
+        if (
+          !apiError ||
+          apiError.status === 401 ||
+          apiError.status === 403
+        ) {
+          throw err;
+        }
+      }
+      if (
+        run?.status === "failed" ||
+        run?.status === "cancelled" ||
+        run?.status === "expired"
+      ) {
+        throw new ControlApiError(
+          409,
+          "source_sync_failed",
+          run.errorCode
+            ? `Source sync ${run.status}: ${run.errorCode}`
+            : `Source sync ${run.status}.`,
+          { run, snapshots: lastSnapshots },
+        );
+      }
+    }
+
+    options.onProgress?.({
+      elapsedMs: Date.now() - startedAt,
+      snapshotsCount: lastSnapshots.length,
+      ...(run ? { run } : {}),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, nextPollMs));
+    nextPollMs = Math.min(Math.round(nextPollMs * 1.4), maxPollMs);
   }
   throw new ControlApiError(
     409,
@@ -1274,11 +1354,19 @@ export async function destroyPlanInstallation(
   );
 }
 
-export async function getRun(id: string): Promise<Run> {
+async function getRunWithOptions(
+  id: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
     `${BASE}/runs/${encodeURIComponent(id)}`,
+    { signal: options.signal },
   );
   return body.run;
+}
+
+export async function getRun(id: string): Promise<Run> {
+  return await getRunWithOptions(id);
 }
 
 export async function approveRun(

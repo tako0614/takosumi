@@ -2410,6 +2410,46 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   expect(resolution?.evidence?.connectionId).toEqual(resolution?.connectionId);
 });
 
+test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  let requestedRunId: string | undefined;
+  const operations = fakeOperations({
+    getRun: async (id) => {
+      requestedRunId = id;
+      return {
+        id,
+        spaceId: "space_a",
+        type: "source_sync",
+        status: "running",
+        sourceSnapshotId: "snap_pending",
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+      } as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>;
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/runs/ssr_1", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    run: { id: string; type: string; status: string; spaceId: string };
+  };
+  expect(body.run).toMatchObject({
+    id: "ssr_1",
+    type: "source_sync",
+    status: "running",
+    spaceId: "space_a",
+  });
+  expect(requestedRunId).toEqual("ssr_1");
+});
+
 test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
