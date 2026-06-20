@@ -804,7 +804,7 @@ output "public_url" {
   expect(ownershipOptionsBySource.get("draft/provider")).toBeUndefined();
 });
 
-test("createCompatibilityCheck records a failed source-scoped Run when analysis fails", async () => {
+test("createCompatibilityCheck returns an unsupported report when analysis fails", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => {
       throw new Error("runner unavailable");
@@ -830,11 +830,29 @@ test("createCompatibilityCheck records a failed source-scoped Run when analysis 
     fetchedAt: "2026-06-06T00:00:00.000Z",
   });
 
-  await expect(
-    service.createCompatibilityCheck(source.id, {
-      sourceSnapshotId: run.snapshotId,
+  const checked = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+  });
+  expect(checked.report).toMatchObject({
+    id: "caprep_test00000005",
+    sourceId: source.id,
+    sourceSnapshotId: run.snapshotId,
+    level: "unsupported",
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: run.archiveObjectKey,
+    normalizedDigest: "sha256:source",
+  });
+  expect(checked.report.findings).toEqual([
+    expect.objectContaining({
+      severity: "error",
+      code: "capsule_compatibility_check_failed",
+      message: "Takosumi could not inspect this Capsule before installation.",
+      suggestion: expect.stringContaining("runner unavailable"),
     }),
-  ).rejects.toThrow("runner unavailable");
+  ]);
 
   const compatibilityRun =
     await store.getCompatibilityCheckRun("ccr_test00000004");
@@ -843,10 +861,10 @@ test("createCompatibilityCheck records a failed source-scoped Run when analysis 
     spaceId: "space_1",
     sourceId: source.id,
     type: "compatibility_check",
-    status: "failed",
+    status: "succeeded",
     sourceSnapshotId: run.snapshotId,
-    errorCode: "compatibility_check_failed",
+    compatibilityReportId: "caprep_test00000005",
     createdBy: "system",
   });
-  expect(compatibilityRun?.compatibilityReportId).toBeUndefined();
+  expect(compatibilityRun?.errorCode).toBeUndefined();
 });
