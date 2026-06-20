@@ -446,15 +446,12 @@
   justify-content: center;
   width: 42px;
   height: 42px;
-  border: 1px dashed var(--tg-line-strong);
+  border: 0;
   border-radius: var(--tg-r-sm);
-  background:
-    linear-gradient(var(--tg-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--tg-line) 1px, transparent 1px),
-    var(--tg-bg-subtle);
-  background-size: 10px 10px;
+  background: transparent;
   color: var(--tg-fg-muted);
   box-shadow: none;
+  overflow: hidden;
 }
 .auth-brand-text {
   font-family: var(--tg-font-display);

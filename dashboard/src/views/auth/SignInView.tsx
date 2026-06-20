@@ -209,10 +209,10 @@ export function SignInPanel() {
   );
 }
 
-function DraftBrandMark() {
+function BrandLogoMark() {
   return (
     <span class="auth-brand-mark" aria-hidden="true">
-      <GeometricMark size={28} />
+      <GeometricMark size={42} />
     </span>
   );
 }
@@ -223,7 +223,7 @@ export default function SignInView() {
   return (
     <div class="auth-page">
       <a href="/" class="auth-brand">
-        <DraftBrandMark />
+        <BrandLogoMark />
         <span class="auth-brand-text">Takosumi</span>
       </a>
       <SignInPanel />
