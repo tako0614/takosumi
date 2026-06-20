@@ -412,14 +412,17 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--tg-s-7) var(--tg-s-5);
+  justify-content: center;
+  padding: clamp(56px, 10vh, 112px) var(--tg-s-5)
+    clamp(32px, 7vh, 72px);
   background:
     linear-gradient(var(--tg-line) 1px, transparent 1px),
     linear-gradient(90deg, var(--tg-line) 1px, transparent 1px), var(--tg-bg);
   background-size: 32px 32px;
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .auth-page::before {
   position: absolute;
@@ -436,7 +439,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--tg-s-4);
-  margin-bottom: var(--tg-s-7);
+  margin-bottom: var(--tg-s-6);
   color: var(--tg-fg);
   text-decoration: none;
 }
