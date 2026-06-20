@@ -14,8 +14,8 @@ import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import "@fontsource-variable/bricolage-grotesque";
 import "@fontsource-variable/jetbrains-mono";
 
-// Dark "Splatoon ink" design system:
-//   tokens (canonical dark palette) → base (reset/body/a11y) → components
+// Takosumi dashboard design system:
+//   tokens (app palette) → base (reset/body/a11y) → components
 //   (shared + ui/* classes) → shell (app chrome + auth) → views (per-view rules).
 // Imported once here so the tokens are present on the public `/sign-in` screens
 // that render before any AppShell-wrapped screen mounts.

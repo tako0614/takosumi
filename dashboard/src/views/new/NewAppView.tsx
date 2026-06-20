@@ -372,6 +372,11 @@ function Inner() {
     }
     setCheckingCompatibility(true);
     setError(null);
+    setSyncRequired(false);
+    setStepSource("running");
+    setStepSync("running");
+    setStepInstall("idle");
+    setStepPlan("idle");
     try {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
@@ -383,13 +388,21 @@ function Inner() {
       });
       if (result.sourceId) {
         setCreatedSourceId(result.sourceId);
-        setStepSource("done");
-        setStepSync("done");
       }
+      setStepSource("done");
+      setStepSync("done");
       setProviderRows(rowsFromCompatibility(result));
       setCompatibility(result);
     } catch (err) {
       const apiError = err instanceof ControlApiError ? err : undefined;
+      if (apiError?.isSourceSyncRequired) {
+        setStepSource("done");
+        setStepSync("error");
+        setSyncRequired(true);
+      } else {
+        setStepSource("error");
+        setStepSync("idle");
+      }
       setError(
         apiError?.isSourceSyncRequired
           ? t("new.error.syncPending")
