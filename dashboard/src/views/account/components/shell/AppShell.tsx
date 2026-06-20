@@ -19,7 +19,7 @@ interface Props {
 }
 
 /**
- * Dashboard chrome: sidebar (primary nav) + topbar (Space switcher / bell /
+ * Dashboard chrome: sidebar (primary nav) + topbar (Workspace switcher / bell /
  * user menu) + mobile tabs.
  */
 export default function AppShell(props: Props) {

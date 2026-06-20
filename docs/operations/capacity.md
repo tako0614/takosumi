@@ -14,15 +14,15 @@ product worker、Git service、agent runtime の capacity は各 host product do
 baseline は 0 customer RPS。capacity planning は staging signal と launch
 floor を使います。
 
-| Surface                            | Current measured production traffic | Planning floor for launch | Notes                                                                                                                   |
-| ---------------------------------- | ----------------------------------: | ------------------------: | ----------------------------------------------------------------------------------------------------------------------- |
-| Dashboard / account read traffic   |                      0 customer RPS |               50 RPS peak | platform worker Web/API                                                                                                 |
-| Control-plane write traffic        |                      0 customer RPS |               10 RPS peak | Workspace / Project / Capsule / Source / ProviderConnection / ProviderBinding / Run writes                     |
-| Source sync / compatibility checks |                 0 customer runs/min |          30 runs/min peak | git/provider-bound                                                                                                      |
-| Plan runs                          |                0 customer plans/min |         30 plans/min peak | OpenTofu init/plan and policy-bound                                                                                     |
-| Apply / destroy runs               |              0 customer applies/min |       10 applies/min peak | provider RPC-bound                                                                                                      |
-| Runner queue depth                 |                   0 customer queued |    500 queued / 50 active | Cloudflare Queue + runner container                                                                                     |
-| Artifact / state writes            |               0 customer writes/min |       100 writes/min peak | R2 source/artifact/state/backup buckets                                                                                 |
+| Surface                            | Current measured production traffic | Planning floor for launch | Notes                                                                                      |
+| ---------------------------------- | ----------------------------------: | ------------------------: | ------------------------------------------------------------------------------------------ |
+| Dashboard / account read traffic   |                      0 customer RPS |               50 RPS peak | platform worker Web/API                                                                    |
+| Control-plane write traffic        |                      0 customer RPS |               10 RPS peak | Workspace / Project / Capsule / Source / ProviderConnection / ProviderBinding / Run writes |
+| Source sync / compatibility checks |                 0 customer runs/min |          30 runs/min peak | git/provider-bound                                                                         |
+| Plan runs                          |                0 customer plans/min |         30 plans/min peak | OpenTofu init/plan and policy-bound                                                        |
+| Apply / destroy runs               |              0 customer applies/min |       10 applies/min peak | provider RPC-bound                                                                         |
+| Runner queue depth                 |                   0 customer queued |    500 queued / 50 active | Cloudflare Queue + runner container                                                        |
+| Artifact / state writes            |               0 customer writes/min |       100 writes/min peak | R2 source/artifact/state/backup buckets                                                    |
 
 launch floor は current traffic より高めに設定し、最初の hosted environment で
 即時 resizing が不要な水準にします。
@@ -34,7 +34,7 @@ launch floor は current traffic より高めに設定し、最初の hosted env
 前提:
 
 - 月次 peak traffic 成長率: 15 %
-- 上位 10 % の Space が Run traffic の 60 % を生成しうる
+- 上位 10 % の Workspace が Run traffic の 60 % を生成しうる
 - apply / destroy は provider RPC と policy gate により plan より低く throttle する
 - billing enforce 有効化後は credit reservation read/write が control-plane write に乗る
 
@@ -50,7 +50,7 @@ required_capacity = forecast_peak * 2.0 headroom
 | Takosumi platform worker        | Cloudflare-managed Worker capacity | p95 latency > target for 30 min or 5xx > 1 % | isolate slow runner dispatch from request handling |
 | Queue consumer                  | 2 logical consumers / env          | queue age above target or DLQ growth         | keep one consumer failure domain spare             |
 | Runner container pool           | 50 active launch cap               | active runs > 60 % of cap for 15 min         | throttle apply below provider limits               |
-| CoordinationObject              | per-Installation lease namespace   | lease takeover or alarm lag                  | no single DO hot spot for all Spaces               |
+| CoordinationObject              | per-Capsule lease namespace        | lease takeover or alarm lag                  | no single DO hot spot for all Workspaces           |
 | D1 control ledger               | managed D1 tier                    | lock wait / storage threshold                | 90 days storage runway                             |
 | R2 source/artifact/state/backup | provider managed                   | growth > forecast for 7 days                 | lifecycle policy reviewed monthly                  |
 
@@ -78,7 +78,7 @@ capacity review で見る signal:
 - runner container startup latency and failure rate
 - D1 CPU, lock wait, storage growth
 - R2 object count / byte growth per bucket
-- Space-level top-N usage concentration
+- Workspace-level top-N usage concentration
 
 Release blocker しきい値:
 
@@ -86,7 +86,7 @@ Release blocker しきい値:
 - queue age above SLO with no throttle plan
 - runner active cap forecast below 1.5x design peak
 - DB / object storage runway under 30 days
-- one Space can consume more than 50 % of regional runner capacity without quota guard
+- one Workspace can consume more than 50 % of regional runner capacity without quota guard
 
 ## Review Cadence
 

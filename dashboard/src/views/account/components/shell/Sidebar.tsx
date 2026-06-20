@@ -1,11 +1,18 @@
 /**
  * Primary navigation — the Installation-centric IA. Five everyday destinations; the
  * former "詳細・上級設定" fold is gone because expert surfaces now live INSIDE
- * the screens they relate to (Installation detail tabs, Space settings tabs) instead of
+ * the screens they relate to (Capsule detail tabs, Workspace settings tabs) instead of
  * as parallel top-level pages. Notifications ride on the TopBar bell.
  */
 import { A, useLocation } from "@solidjs/router";
-import { Activity, ArrowLeft, Home, Plus, Settings2, UserCircle2 } from "lucide-solid";
+import {
+  Activity,
+  ArrowLeft,
+  Home,
+  Plus,
+  Settings2,
+  UserCircle2,
+} from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";

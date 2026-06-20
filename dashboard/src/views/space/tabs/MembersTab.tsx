@@ -1,5 +1,5 @@
 /**
- * Space settings — メンバー. Port of the former ControlMembersView body.
+ * Workspace settings — メンバー. Port of the former ControlMembersView body.
  *
  * Role gates mirror the backend (convenience only — the server re-checks every
  * mutation from the membership ledger): list = any member; invite = owner /

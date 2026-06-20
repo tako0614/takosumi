@@ -1,14 +1,14 @@
 /**
  * Shared current-Space state for the §31 control-plane views.
  *
- * The control views (Spaces / Installations / Graph / Activity / Install flow)
+ * The control views (Workspaces / Capsules / Graph / Activity / Add flow)
  * all operate on one "current Space". This module owns that selection so the
  * header space selector and every control view agree on it without prop
  * drilling.
  *
  * Persistence convention matches the existing dashboard screens, which remember
  * the last picked space in `localStorage` under `tg_apps_space_id` (see
- * views/installations/InstallationsListView.tsx + views/connections). We reuse
+ * legacy installation-list and connection views). We reuse
  * the SAME key so a space picked in either world carries across both. The value
  * here is a deploy-control Space id (`space_...`), which is what the control
  * routes expect.

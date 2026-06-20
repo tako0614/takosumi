@@ -1,8 +1,8 @@
-# Takosumi Accounts — Bun + Postgres reference distribution
+# Takosumi Account Plane — Bun + Postgres substrate
 
-Substrate-neutral counterpart to `deploy/accounts-cloudflare/`. The accounts service runs on Bun against a Postgres database, fronted by Caddy for TLS. Use this when self-hosting on a VM, container host, or Kubernetes pod instead of Cloudflare.
+Substrate-neutral counterpart to `deploy/accounts-cloudflare/`. The account-plane handler runs on Bun against a Postgres database, fronted by Caddy for TLS. Use this when the composed Takosumi origin is hosted on a VM, container host, or Kubernetes pod instead of Cloudflare.
 
-The handler is the same `createAccountsHandler` that ships in the Cloudflare worker. Only the substrate plumbing differs:
+The handler is the same `createAccountsHandler` mounted in the platform worker. Only the substrate plumbing differs:
 
 | layer   | Cloudflare reference    | Bun + Postgres reference             |
 | ------- | ----------------------- | ------------------------------------ |
@@ -11,10 +11,12 @@ The handler is the same `createAccountsHandler` that ships in the Cloudflare wor
 | TLS     | Cloudflare edge         | Caddy automatic HTTPS                |
 | secrets | `wrangler secret put`   | `.env` file or operator secret store |
 
-Accounts is the backing layer for session cookies, upstream sign-in, billing checkout/portal, installed-service OIDC
-material, Installation projection ledgers, and export handoff. It is not a second control plane: product resources are
-created and read through `/api/v1/*`, while `/v1/installation-projections` only hands identity/billing/export/service-token
-projection material to installed services.
+The account plane is the backing layer for session cookies, upstream sign-in, the bare-origin OIDC issuer, dashboard
+account records, Capsule projection metadata, and export handoff. It is mounted on the same composed Takosumi origin as
+the dashboard and control plane; it is not a second control plane and does not require a dedicated accounts subdomain.
+Workspace / Project / Capsule / Run / StateVersion / Output resources are created and read through the control-plane
+surface. The current `/v1/installation-projections` route is a compatibility projection path for older installed-service
+clients and must map back to Capsule / Output / account-plane evidence in public docs.
 
 ## Quick start
 
@@ -29,8 +31,8 @@ Required `.env`:
 
 ```
 POSTGRES_PASSWORD=replace-me-with-a-strong-passphrase
-TAKOSUMI_ACCOUNTS_ISSUER=https://accounts.example.com
-TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME=accounts.example.com
+TAKOSUMI_ACCOUNTS_ISSUER=https://app.example.com
+TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME=app.example.com
 TAKOSUMI_ACCOUNTS_BIND_HOST=0.0.0.0
 TAKOSUMI_ACCOUNTS_CLIENT_ID=takos-app
 TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
@@ -56,15 +58,15 @@ TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET=replace-me-with-another-64-char-r
 
 The Caddy site label and the Bun listener bind address are intentionally separate env vars:
 
-- `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` — the eTLD+1 your users dial (e.g. `accounts.example.com`). Caddy uses this as the site label in `Caddyfile.example` and obtains an ACME certificate for it.
+- `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` — the hostname of the composed Takosumi origin your users dial (e.g. `app.example.com`). Caddy uses this as the site label in `Caddyfile.example` and obtains an ACME certificate for it. Do not point this at a separate accounts subdomain unless that subdomain is the entire composed Takosumi origin for the deployment.
 - `TAKOSUMI_ACCOUNTS_BIND_HOST` — the in-container Bun listener bind address. Defaults to `0.0.0.0`. Caddy reverse-proxies to `accounts:8787` on the docker-compose network, so this address is private to the container.
 
-## Installation export downloads
+## Export downloads
 
-Installation export downloads are portability/import artifacts owned by the account-plane projection flow. They are not
-the operator backup/restore mechanism for the Takosumi control ledger or state artifacts.
+Export downloads are portability/import artifacts owned by the account-plane projection flow. They are not the operator
+backup/restore mechanism for the Takosumi control ledger, StateVersion records, Output records, or raw state artifacts.
 
-To enable installation export downloads the operator must set, together:
+To enable export downloads the operator must set, together:
 
 - `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET` — long-lived HMAC secret used to sign and verify the time-limited export download URLs. The export worker signs each emitted URL (`tk_exp` expiry + `tk_sig` HMAC-SHA256 query params), mirroring the Cloudflare profile.
 - `TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR` — filesystem directory where `takos-export-<op>.tar.zst[.age]` archives are materialized.
@@ -75,9 +77,14 @@ The export worker writes archives to the local filesystem. The shipped `docker-c
 
 When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service handles the download path itself and verifies the HMAC signature + expiry fail-closed (invalid signature → 403, expired → 410) before reading the archive off disk; a basename-only file resolution prevents path traversal. Do not point export downloads at an unauthenticated static directory: the service-owned verifier is the security boundary for export artifacts.
 
-## Stripe billing
+## Billing configuration boundary
 
-`TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` (publishable key, `pk_live_...` or `pk_test_...`) is parsed for completeness but **not** forwarded into `StripeBillingOptions`; the upstream `@takosjp/takosumi-accounts-service` type only carries the secret key + webhook secret. Publishable keys are surfaced to dashboards / SDKs through the separate dashboard-config plumbing in the operator distribution.
+`TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` (publishable key, `pk_live_...` or `pk_test_...`) is parsed for compatibility with
+older account-plane configuration, but this substrate does not make official billing an OSS feature. OSS Takosumi and
+Takosumi for Operators may record disabled/showback quota evidence selected by the operator. Official billing,
+payment-processor checkout, usage metering sold as a service, support, and abuse workflows are Takosumi Cloud-only
+closed features and should be configured through Cloud/private deployment plumbing, not treated as part of this public
+distribution.
 
 ## Operator notes
 
@@ -88,7 +95,8 @@ When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service ha
   readiness evidence and production hardening evidence are in place. The node-postgres distribution mirrors the
   Cloudflare worker gate: open access requires the readiness digest, evidence/approval refs, reviewed public summary,
   `TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce`, and the container / layer-2 platform-control-plane smoke / egress /
-  restore rehearsal / provider-catalog / cost-attribution / secret-boundary evidence refs and digests.
+  restore rehearsal / ProviderConnection / CredentialRecipe / ProviderBinding / cost-showback / secret-boundary
+  evidence refs and digests.
 - The Caddyfile expects `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` to resolve to the host running the stack. Caddy will obtain a Let's Encrypt cert automatically on port 80/443. The Caddyfile pins TLS to 1.2 / 1.3, emits structured JSON logs, and sets a default-deny `Content-Security-Policy` (`default-src 'self'; frame-ancestors 'none'`); override this header with the exact source allowlist your dashboard payload needs rather than removing it.
 
 ## Container hardening defaults
@@ -108,6 +116,9 @@ If you bind-mount additional directories into the `accounts` container (e.g. the
 - **Caddy data** (issued certificates, OCSP staples): the `caddy-data` and `caddy-config` volumes hold ACME account state. Backing them up avoids Let's Encrypt rate-limit hits during disaster recovery, but losing them is non-fatal — Caddy will re-provision certificates on next start.
 - **Export archives**: `TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR` is a per-deploy artifact directory. Treat it as ephemeral; archives are reproducible by re-running the export operation from the dashboard.
 
-## Why two reference distributions
+## Why two substrate references
 
-The architectural claim that Takosumi Accounts is substrate-neutral needs a second working deployment to be more than a spec promise. This distribution is that second working deployment. See `takosumi/docs/reference/operator.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability table.
+The architectural claim that the Takosumi account plane is substrate-neutral needs a second working deployment to be more
+than a spec promise. This distribution is that second working substrate for the same composed-origin account-plane
+handler. See `takosumi/docs/reference/operator.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability
+table.

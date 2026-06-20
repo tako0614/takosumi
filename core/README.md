@@ -1,10 +1,22 @@
 # Takosumi Service
 
-Reference service for the OpenTofu-native Takosumi control plane. It records Space, Source, Connection, Installation,
-Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, policy decisions, logs, and audit events.
+Reference service for the OpenTofu-native Takosumi control plane. The target
+public model is Workspace, Project, Capsule, Source, ProviderConnection,
+CredentialRecipe, ProviderBinding, Secret, Run, Plan, Apply, Destroy,
+StateVersion, Output, Runner, AuditEvent, and Operator.
 
-The service does not hold provider credential values. OpenTofu execution runs through the internal runner/profile
-machinery selected by the operator and resolved from Connection + InstallationProviderEnvBinding + policy.
+The service records source identity, provider bindings, policy decisions, logs,
+state versions, outputs, run history, and audit evidence. It does not hold
+provider credential values. OpenTofu execution runs through the internal
+runner/profile machinery selected by the operator and resolved from
+ProviderConnection + CredentialRecipe + ProviderBinding + policy.
+
+Current implementation routes and stores still contain legacy Space,
+Installation, Dependency, RunGroup, StateSnapshot, OutputSnapshot, Deployment,
+OutputShare, and Activity names. Treat those as migration debt or internal
+compatibility vocabulary. They should be mapped back to Workspace, Project,
+Capsule, Run, StateVersion, Output, output-to-input wiring, and AuditEvent when
+describing the public product.
 
 ## Run From Source
 
@@ -18,8 +30,8 @@ PORT=8788 bun core/index.ts
 
 This `core/api` Hono table is **not** edge-reachable. It is the in-process deploy-control seam dialed by the accounts
 composition; the single edge-public surface is `/api/v1/*`, owned by the accounts router (see
-[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The seam models the §30 vocabulary —
-Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups, Deployments, OutputShares, and Activity:
+[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The current seam still exposes
+legacy route names while the implementation migrates to the final public model:
 
 - `POST /internal/v1/spaces` / `GET /internal/v1/spaces`
 - `POST /internal/v1/sources` / `POST /internal/v1/sources/{id}/sync`
@@ -32,6 +44,13 @@ Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups, Depl
 - `GET /internal/v1/deployments/{id}`
 - `GET /internal/v1/spaces/{spaceId}/activity`
 
+These route names are current implementation details. They are not the target
+customer vocabulary. New docs and API surfaces should describe Workspace /
+Project / Capsule / Source / ProviderConnection / CredentialRecipe /
+ProviderBinding / Secret / Run / Plan / Apply / Destroy / StateVersion /
+Output / Runner / AuditEvent / Operator unless they are explicitly documenting
+this migration seam.
+
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
 `/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
 are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/installation-projections` and
@@ -43,6 +62,12 @@ seam. Connections are served only under `/api/v1/connections`; there is no `/v1/
 - Optional `/internal/v1/artifacts*` routes — operator-internal object extension, not part of public Deploy Control v1
 - `/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
 - `TakosumiDeploymentRecordStore` — internal apply evidence and status for reference implementation workflows
+
+These extensions must not introduce OSS Cloudflare Compatibility Gateway,
+AWS/GCP compatibility APIs, S3 gateway, Resource Driver systems, Compat Pack
+systems, managed resources, or official resource backends. OSS Takosumi runs
+existing OpenTofu/Terraform providers as-is; Cloud-only gateway and managed
+resource behavior belongs outside this repo's public control-plane contract.
 
 ## Required env (production)
 

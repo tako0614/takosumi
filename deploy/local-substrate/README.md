@@ -39,7 +39,7 @@ probe host 経由の run ledger surface を検証する。
 | tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
 | docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
 | passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
-| deploy control API |    1 | `deploy-control.api.e2e` (Installation, Run, Deployment, OutputSnapshot ledger path)                |
+| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                           |
 | workers            |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                      |
 | route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
 | object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |

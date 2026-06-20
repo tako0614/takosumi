@@ -58,7 +58,7 @@ export interface ComposedAppInput {
   readonly runtimeEnv?: CreateTakosumiServiceArg["runtimeEnv"];
   /**
    * Optional SQL client backing the Takosumi Deploy Control API ledger so
-   * Installation / Deployment records survive restarts. When omitted the
+   * Capsule / Run / StateVersion / Output records survive restarts. When omitted the
    * service falls back to its in-memory ledger (fine for dev / local-substrate).
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
@@ -141,7 +141,7 @@ export async function buildComposedApp(
   // Mount the accounts projection route on the outer app before the embedded
   // service fallback. Projection create/revision operations are wired with the
   // in-process DeployControl facade, so they cannot bypass the canonical
-  // Installation / Run ledger even though the account plane owns identity,
+  // Capsule / Run ledger even though the account plane owns identity,
   // billing, export, and service-token projections.
   const app = new Hono();
   if (input.preHandle) {

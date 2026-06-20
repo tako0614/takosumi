@@ -668,7 +668,7 @@ function parseExportDownload(
   if (!configured) return undefined;
   if (!secret || !outputDirectory || !baseUrl) {
     throw new TypeError(
-      "Installation export downloads require TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET, TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR, and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
+      "Capsule export downloads require TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET, TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR, and TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL",
     );
   }
   if (ttlMs !== undefined && ttlMs <= 0) {

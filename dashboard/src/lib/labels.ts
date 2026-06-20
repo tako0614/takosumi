@@ -5,8 +5,8 @@
  * wording in the active locale. Unknown values render as their raw string so
  * a new backend status stays truthful instead of disappearing.
  *
- * Vocabulary contract: Installation / 追加 / 変更を確認 / デプロイ / デプロイ済み
- * (Installation / Add / Review changes / Deploy / Deployed) — see i18n/ja.ts.
+ * Vocabulary contract: Capsule / 追加 / 変更を確認 / デプロイ / デプロイ済み
+ * (Capsule / Add / Review changes / Deploy / Deployed) — see i18n/ja.ts.
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { Tone } from "../components/ui/Badge.tsx";
@@ -20,7 +20,7 @@ function label(
   return key ? t(key) : status;
 }
 
-/** Installation status (spec §5): pending/active/stale/error/disabled/destroyed. */
+/** Capsule lifecycle status: pending/active/stale/error/disabled/destroyed. */
 const INSTALLATION: Record<string, MessageKey> = {
   pending: "status.installation.pending",
   active: "status.installation.active",
@@ -52,7 +52,7 @@ const POLICY: Record<string, MessageKey> = {
 };
 export const policyStatusLabel = (status?: string) => label(POLICY, status);
 
-/** Deployment status (spec §21). */
+/** Legacy deployment evidence status retained for current compatibility views. */
 const DEPLOYMENT: Record<string, MessageKey> = {
   active: "status.deployment.active",
   superseded: "status.deployment.superseded",

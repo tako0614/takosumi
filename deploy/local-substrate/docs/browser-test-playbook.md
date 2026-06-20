@@ -49,7 +49,7 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
    ```bash
    bash scripts/cli-smoke.sh
    ```
-2. Expect: runner profile lookup, plan Run, apply Run, Installation read, and Deployment list all succeed through the local worker probe API.
+2. Expect: runner profile lookup, plan Run, apply Run, Capsule read, and run/state/output evidence list all succeed through the local worker probe API.
 
 Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public deploy control API does not expose raw desired-route listings; route projection must come from a future operator-internal source.
 

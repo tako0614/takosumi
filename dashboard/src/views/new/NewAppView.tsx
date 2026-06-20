@@ -1,5 +1,5 @@
 /**
- * Add an Installation (`/new`) — examples + Git URL, one flow.
+ * Add a Capsule (`/new`) — examples + Git URL, one flow.
  *
  * Three entry shapes, identical install path:
  *   - Examples: curated first-party / known Capsule coordinates (src/catalog.ts).
@@ -12,7 +12,7 @@
  *     client (compatibility check → explicit add). No worker-side handling.
  *
  * The flow runs five explicit steps — register/fetch → compatibility →
- * provider connection review → createInstallation → plan — and
+ * provider connection review → create the current compatibility record → plan — and
  * lands on `/runs/:id`. A 409 source_sync_required surfaces a humane retry
  * instead of a raw error. OSS Takosumi requires a ready Provider Connection
  * before apply.
@@ -222,7 +222,8 @@ function Inner() {
   const connectionMatchesOwnershipOptions = (
     connection: ProviderConnection,
     ownershipOptions: readonly ProviderCredentialOwnership[],
-  ) => connection.ownership === "own_key" && ownershipOptions.includes("own_key");
+  ) =>
+    connection.ownership === "own_key" && ownershipOptions.includes("own_key");
   const providerConnectionsForProvider = (
     provider: string,
     ownershipOptions: readonly ProviderCredentialOwnership[],
@@ -237,8 +238,7 @@ function Inner() {
     if (providerConnections.latest === undefined) return true;
     return readyProviderConnections().length > 0;
   };
-  const needsCloudCredential = () =>
-    !hasProviderConnection();
+  const needsCloudCredential = () => !hasProviderConnection();
 
   const defaultConnectionForProvider = (
     provider: string,
@@ -425,7 +425,8 @@ function Inner() {
         setStepSync("done");
       }
 
-      // Step 3 — create the Installation bound to the chosen InstallConfig.
+      // Step 3 — create the current compatibility record bound to the chosen
+      // service-side config. Public UI presents this as Capsule creation.
       setStepInstall("running");
       const installation = await createInstallation({
         spaceId: space,

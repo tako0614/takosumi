@@ -1,5 +1,5 @@
 /**
- * Space settings — お支払い. The real user-facing billing surface (spec §32):
+ * Workspace settings — お支払い. The real user-facing billing surface:
  *   - plan / credit-pack cards from the operator catalog
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
  *   - balance + billing-mode explanation
