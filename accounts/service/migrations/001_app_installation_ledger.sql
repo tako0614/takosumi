@@ -13,11 +13,11 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'app_binding_kind_v1') THEN
     CREATE TYPE installation_v1.app_binding_kind_v1 AS ENUM (
-      'identity.oidc@v1',
-      'database.postgres@v1',
-      'object-store.s3-compatible@v1',
-      'domain.http@v1',
-      'install-launch-token@v1'
+      'identity.oidc',
+      'storage.sql',
+      'storage.object',
+      'protocol.http.api',
+      'auth.bootstrap_token'
     );
   END IF;
 END
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS installation_v1.app_bindings (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (installation_id, name),
-  CHECK (kind <> 'install-launch-token@v1' OR array_length(secret_refs, 1) IS NULL)
+  CHECK (kind <> 'auth.bootstrap_token' OR array_length(secret_refs, 1) IS NULL)
 );
 
 CREATE TABLE IF NOT EXISTS installation_v1.app_grants (

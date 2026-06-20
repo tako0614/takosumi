@@ -3,31 +3,31 @@
  *
  * This module holds the cross-cutting pieces used by more than one of the
  * installation lifecycle route modules (create/import, status/uninstall/
- * revision, plan/materialize, export): the Takosumi deploy-control proxy
+ * revision, plan/materialize, export): the Takosumi deploy-control facade
  * projection helpers, the activated-HTTP-domain projection helpers, the
- * shared use-edge / permission-scope request parsers, and the revision
+ * shared service-binding / service-grant request parsers, and the revision
  * permission-digest / confirm helpers. Behavior is identical to the prior
  * single-file implementation; these are pure moves.
  */
 import { takosumiAccountsInstallationEventsPath } from "@takosjp/takosumi-accounts-contract";
 import {
-  type AppBindingKind,
-  type AppBindingRecord,
-  type AppGrantRecord,
+  type ServiceBindingMaterialKind,
+  type ServiceBindingMaterialRecord,
+  type ServiceGrantMaterialRecord,
   type AppInstallationMode,
-  assertValidAppBindingRecord,
+  assertValidServiceBindingMaterialRecord,
   type InstallationEventRecord,
   type InstallationRecord,
-  isAppBindingKind,
-  isAppGrantCapability,
+  isServiceBindingMaterialKind,
+  isServiceGrantMaterialCapability,
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import { constantTimeEqual, sha256HexText } from "./encoding.ts";
 import {
   type ActivatedHttpDomainProjection,
   activatedHttpDomainProjectionFromEvents,
-  appBindingApprovalPayload,
-  appGrantApprovalPayload,
+  serviceBindingMaterialApprovalPayload,
+  serviceGrantMaterialApprovalPayload,
   canonicalJson,
   compareCanonicalJson,
   installationEnvelope,
@@ -43,12 +43,14 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import {
-  type DeployControlProxyOptions,
+  type DeployControlFacadeOptions,
   requestDeploymentApply,
   requestDeploymentPlanRun,
   requestInstallationApply,
   requestRollback,
-} from "./deploy-control-proxy.ts";
+} from "./deploy-control-facade.ts";
+import { consoleErrorRedacted } from "./redacted-log.ts";
+import { redactPublicRecord, redactPublicString } from "./public-redaction.ts";
 
 export type { ActivatedHttpDomainProjection };
 
@@ -66,7 +68,9 @@ export function sanitizeUpstreamErrorPayload(
   payload: unknown,
 ): Record<string, unknown> | undefined {
   if (
-    typeof payload !== "object" || payload === null || Array.isArray(payload)
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload)
   ) {
     return undefined;
   }
@@ -76,22 +80,24 @@ export function sanitizeUpstreamErrorPayload(
   // (the prior behavior) always missed them and silently dropped the upstream
   // code from every failed-deploy facade response. Unwrap the envelope, falling
   // back to a top-level shape so a non-nested payload still works.
-  const inner = (typeof record.error === "object" && record.error !== null &&
-      !Array.isArray(record.error))
-    ? record.error as Record<string, unknown>
-    : record;
+  const inner =
+    typeof record.error === "object" &&
+    record.error !== null &&
+    !Array.isArray(record.error)
+      ? (record.error as Record<string, unknown>)
+      : record;
   const output: Record<string, unknown> = {};
   if (typeof inner.code === "string" && inner.code.length > 0) {
     output.code = inner.code;
   }
   if (typeof inner.message === "string" && inner.message.length > 0) {
-    output.message = inner.message;
+    output.message = redactPublicString(inner.message);
   }
   if (typeof inner.requestId === "string" && inner.requestId.length > 0) {
     output.requestId = inner.requestId;
   }
   if (typeof inner.hint === "string" && inner.hint.length > 0) {
-    output.hint = inner.hint;
+    output.hint = redactPublicString(inner.hint);
   }
   return Object.keys(output).length > 0 ? output : undefined;
 }
@@ -129,7 +135,7 @@ export interface CoreDeploymentProjection {
 }
 
 export async function applyCoreInstallationForCloudProjection(input: {
-  deployControl: DeployControlProxyOptions;
+  deployControl: DeployControlFacadeOptions;
   spaceId: string | undefined;
   source: Record<string, unknown>;
   expected: Record<string, unknown> | undefined;
@@ -148,7 +154,11 @@ export async function applyCoreInstallationForCloudProjection(input: {
     body.planRunId = input.planRunId;
   }
   if (!input.expected || !isRecord(input.expected)) {
-    return errorJson("invalid_request", "installation apply through Takosumi deploy control requires expected review guards", 400);
+    return errorJson(
+      "invalid_request",
+      "installation apply through Takosumi deploy control requires expected review guards",
+      400,
+    );
   }
   body.expected = { ...input.expected };
   const result = await requestInstallationApply({
@@ -172,7 +182,7 @@ export async function applyCoreInstallationForCloudProjection(input: {
 }
 
 export async function planCoreDeploymentForCloudProjection(input: {
-  deployControl: DeployControlProxyOptions;
+  deployControl: DeployControlFacadeOptions;
   installationId: string;
   source: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
@@ -198,7 +208,7 @@ export async function planCoreDeploymentForCloudProjection(input: {
 }
 
 export async function applyCoreDeploymentForCloudProjection(input: {
-  deployControl: DeployControlProxyOptions;
+  deployControl: DeployControlFacadeOptions;
   installationId: string;
   source: Record<string, unknown> | undefined;
   expected: Record<string, unknown> | undefined;
@@ -209,7 +219,11 @@ export async function applyCoreDeploymentForCloudProjection(input: {
   });
   if (body instanceof Response) return body;
   if (!body.expected || !isRecord(body.expected)) {
-    return errorJson("invalid_request", "deployment apply through Takosumi deploy control requires expected review guards", 400);
+    return errorJson(
+      "invalid_request",
+      "deployment apply through Takosumi deploy control requires expected review guards",
+      400,
+    );
   }
   const result = await requestDeploymentApply({
     deployControl: input.deployControl,
@@ -231,14 +245,18 @@ export async function applyCoreDeploymentForCloudProjection(input: {
 }
 
 export async function rollbackCoreDeploymentForCloudProjection(input: {
-  deployControl: DeployControlProxyOptions;
+  deployControl: DeployControlFacadeOptions;
   installationId: string;
   deploymentId: string | undefined;
   planRunId: string | undefined;
   expected: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
   if (!input.deploymentId) {
-    return errorJson("invalid_request", "rollback through Takosumi deploy control requires deploymentId", 400);
+    return errorJson(
+      "invalid_request",
+      "rollback through Takosumi deploy control requires deploymentId",
+      400,
+    );
   }
   const result = await requestRollback({
     deployControl: input.deployControl,
@@ -288,28 +306,44 @@ export function coreDeployControlSourceFromCloudSource(
   if (kind === "git") {
     const ref = stringValue(source.ref);
     if (!ref) {
-      return errorJson("invalid_request", "source.ref is required for git sources", 400);
+      return errorJson(
+        "invalid_request",
+        "source.ref is required for git sources",
+        400,
+      );
     }
     return { kind: "git", url, ref };
   }
   if (kind === "prepared") {
     const digest = stringValue(source.digest);
     if (!digest) {
-      return errorJson("invalid_request", "source.digest is required for prepared sources", 400);
+      return errorJson(
+        "invalid_request",
+        "source.digest is required for prepared sources",
+        400,
+      );
     }
     return { kind: "prepared", url, digest };
   }
   if (kind === "local") {
     return { kind: "local", path: url };
   }
-  return errorJson("invalid_request", "source.kind must be git, prepared, or local", 400);
+  return errorJson(
+    "invalid_request",
+    "source.kind must be git, prepared, or local",
+    400,
+  );
 }
 
 export function coreInstallationProjectionFromApply(
   payload: unknown,
 ): CoreInstallationProjection | Response {
   if (!isRecord(payload)) {
-    return errorJson("feature_unavailable", "Takosumi installation apply returned a non-object response", 502);
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi installation apply returned a non-object response",
+      502,
+    );
   }
   const installation = isRecord(payload.installation)
     ? payload.installation
@@ -317,34 +351,38 @@ export function coreInstallationProjectionFromApply(
   const deployment = isRecord(payload.deployment)
     ? payload.deployment
     : undefined;
-  const source = deployment && isRecord(deployment.source)
-    ? deployment.source
-    : undefined;
+  const source =
+    deployment && isRecord(deployment.source) ? deployment.source : undefined;
   const installationId = stringValue(installation?.id);
-  const appId = stringValue(installation?.appId) ??
-    stringValue(installation?.app_id);
+  const appId =
+    stringValue(installation?.appId) ?? stringValue(installation?.app_id);
   const sourceUrl = stringValue(source?.url) ?? stringValue(source?.path);
   const sourceKind = stringValue(source?.kind);
-  const sourceRef = stringValue(source?.ref) ?? stringValue(source?.digest) ??
+  const sourceRef =
+    stringValue(source?.ref) ??
+    stringValue(source?.digest) ??
     (sourceKind === "local" ? "local" : undefined);
-  const sourceCommit = stringValue(source?.commit) ??
+  const sourceCommit =
+    stringValue(source?.commit) ??
     stringValue(deployment?.sourceCommit) ??
     stringValue(deployment?.source_commit);
   const sourceDigest = stringValue(source?.digest);
-  const planDigest = stringValue(deployment?.planDigest) ??
-    stringValue(deployment?.plan_digest);
+  const planDigest =
+    stringValue(deployment?.planDigest) ?? stringValue(deployment?.plan_digest);
   const artifactDigest =
     stringValue(deployment?.artifactDigest) ??
-      stringValue(deployment?.artifact_digest);
+    stringValue(deployment?.artifact_digest);
   const activatedHttpDomain = activatedHttpDomainProjectionFromCoreOutputs({
     deploymentId: stringValue(deployment?.id),
     outputs: deployment?.outputs,
     now: Date.now(),
   });
-  if (
-    !installationId || !appId || !sourceUrl || !sourceRef || !planDigest
-  ) {
-    return errorJson("feature_unavailable", "Takosumi installation apply response is missing installation/deployment projection fields", 502);
+  if (!installationId || !appId || !sourceUrl || !sourceRef || !planDigest) {
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi installation apply response is missing installation/deployment projection fields",
+      502,
+    );
   }
   return {
     installationId,
@@ -363,7 +401,11 @@ export function coreDeploymentProjectionFromPlanRun(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return errorJson("feature_unavailable", "Takosumi deployment PlanRun returned a non-object response", 502);
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi deployment PlanRun returned a non-object response",
+      502,
+    );
   }
   const projection = coreDeploymentProjectionFromDeploymentLike({
     deployment: payload,
@@ -379,7 +421,11 @@ export function coreDeploymentProjectionFromApply(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return errorJson("feature_unavailable", "Takosumi deployment apply returned a non-object response", 502);
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi deployment apply returned a non-object response",
+      502,
+    );
   }
   const deployment = isRecord(payload.deployment)
     ? payload.deployment
@@ -391,7 +437,11 @@ export function coreDeploymentProjectionFromRollback(
   payload: unknown,
 ): CoreDeploymentProjection | Response {
   if (!isRecord(payload)) {
-    return errorJson("feature_unavailable", "Takosumi rollback returned a non-object response", 502);
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi rollback returned a non-object response",
+      502,
+    );
   }
   const deployment = isRecord(payload.deployment)
     ? payload.deployment
@@ -405,35 +455,42 @@ export function coreDeploymentProjectionFromDeploymentLike(input: {
   fallbackDeploymentId?: string;
 }): CoreDeploymentProjection | Response {
   const deployment = input.deployment;
-  const source = deployment && isRecord(deployment.source)
-    ? deployment.source
-    : isRecord(input.payload) && isRecord(input.payload.source)
-    ? input.payload.source
-    : undefined;
-  const deploymentId = stringValue(deployment?.id) ??
-    input.fallbackDeploymentId;
-  const planDigest = stringValue(deployment?.planDigest) ??
+  const source =
+    deployment && isRecord(deployment.source)
+      ? deployment.source
+      : isRecord(input.payload) && isRecord(input.payload.source)
+        ? input.payload.source
+        : undefined;
+  const deploymentId =
+    stringValue(deployment?.id) ?? input.fallbackDeploymentId;
+  const planDigest =
+    stringValue(deployment?.planDigest) ??
     stringValue(deployment?.plan_digest) ??
     (isRecord(input.payload)
-      ? stringValue(input.payload.planDigest) ??
-        stringValue(input.payload.plan_digest)
+      ? (stringValue(input.payload.planDigest) ??
+        stringValue(input.payload.plan_digest))
       : undefined);
   const artifactDigest =
     stringValue(deployment?.artifactDigest) ??
-      stringValue(deployment?.artifact_digest);
+    stringValue(deployment?.artifact_digest);
   const activatedHttpDomain = activatedHttpDomainProjectionFromCoreOutputs({
     deploymentId,
     outputs: deployment?.outputs,
     now: Date.now(),
   });
   if (!deploymentId || !planDigest) {
-    return errorJson("feature_unavailable", "Takosumi deployment response is missing deployment projection fields", 502);
+    return errorJson(
+      "feature_unavailable",
+      "Takosumi deployment response is missing deployment projection fields",
+      502,
+    );
   }
   return {
     deploymentId,
     sourceUrl: stringValue(source?.url) ?? stringValue(source?.path),
     sourceRef: stringValue(source?.ref) ?? stringValue(source?.digest),
-    sourceCommit: stringValue(source?.commit) ??
+    sourceCommit:
+      stringValue(source?.commit) ??
       stringValue(deployment?.sourceCommit) ??
       stringValue(deployment?.source_commit),
     sourceDigest: stringValue(source?.digest),
@@ -456,9 +513,9 @@ export function activatedHttpDomainProjectionFromCoreOutputs(input: {
   return {
     url: candidate.url,
     canonicalOrigin,
-    exposureId: `exposure_${
-      stableProjectionIdSegment(input.deploymentId ?? "deployment")
-    }_${stableProjectionIdSegment(candidate.component ?? "http")}`,
+    exposureId: `exposure_${stableProjectionIdSegment(
+      input.deploymentId ?? "deployment",
+    )}_${stableProjectionIdSegment(candidate.component ?? "http")}`,
     deploymentOutputRef: candidate.deploymentOutputRef,
     activationEvidenceId: input.deploymentId,
     component: candidate.component,
@@ -470,46 +527,47 @@ export function activatedHttpDomainProjectionFromCoreOutputs(input: {
   };
 }
 
-export function activatedHttpDomainCandidateFromCoreOutputs(
-  outputs: unknown,
-): {
-  readonly url: string;
-  readonly deploymentOutputRef: string;
-  readonly component?: string;
-  readonly host?: string;
-  readonly scheme?: string;
-  readonly listener?: string;
-} | undefined {
+export function activatedHttpDomainCandidateFromCoreOutputs(outputs: unknown):
+  | {
+      readonly url: string;
+      readonly deploymentOutputRef: string;
+      readonly component?: string;
+      readonly host?: string;
+      readonly scheme?: string;
+      readonly listener?: string;
+    }
+  | undefined {
   if (Array.isArray(outputs)) {
-    const candidates = outputs
-      .filter(isRecord)
-      .flatMap((output, index) => {
-        const kind = stringValue(output.kind);
-        const name = stringValue(output.name);
-        const value = stringValue(output.value);
-        if (
-          !value ||
-          !canonicalHttpOrigin(value) ||
-          !(
-            kind === "launch_url" ||
-            kind === "service_url" ||
-            name === "launch_url" ||
-            name === "takosumi_launch_url" ||
-            name === "service_url" ||
-            name === "takosumi_service_url"
-          )
-        ) {
-          return [];
-        }
-        return [{
+    const candidates = outputs.filter(isRecord).flatMap((output, index) => {
+      const kind = stringValue(output.kind);
+      const name = stringValue(output.name);
+      const value = stringValue(output.value);
+      if (
+        !value ||
+        !canonicalHttpOrigin(value) ||
+        !(
+          kind === "launch_url" ||
+          kind === "service_url" ||
+          name === "launch_url" ||
+          name === "takosumi_launch_url" ||
+          name === "service_url" ||
+          name === "takosumi_service_url"
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
           url: value,
           deploymentOutputRef: `deployment.outputs.${index}`,
           component: name ?? kind,
-        }];
-      });
-    return candidates.sort((left, right) =>
-      activatedHttpDomainCandidateScore(right) -
-      activatedHttpDomainCandidateScore(left)
+        },
+      ];
+    });
+    return candidates.sort(
+      (left, right) =>
+        activatedHttpDomainCandidateScore(right) -
+        activatedHttpDomainCandidateScore(left),
     )[0];
   }
   if (!isRecord(outputs)) return undefined;
@@ -529,11 +587,10 @@ export function activatedHttpDomainCandidateFromCoreOutputs(
       if (!isRecord(value)) continue;
       const providerOutputs = isRecord(value.outputs)
         ? activatedHttpDomainCandidateFromOutputRecord({
-          output: value.outputs,
-          deploymentOutputRef:
-            `deployment.outputs.components.${component}.outputs`,
-          component,
-        })
+            output: value.outputs,
+            deploymentOutputRef: `deployment.outputs.components.${component}.outputs`,
+            component,
+          })
         : undefined;
       if (providerOutputs) candidates.push(providerOutputs);
       const candidate = activatedHttpDomainCandidateFromOutputRecord({
@@ -549,8 +606,7 @@ export function activatedHttpDomainCandidateFromCoreOutputs(
         if (!isRecord(slotValue)) continue;
         const slotCandidate = activatedHttpDomainCandidateFromOutputRecord({
           output: slotValue,
-          deploymentOutputRef:
-            `deployment.outputs.components.${component}.${slotName}`,
+          deploymentOutputRef: `deployment.outputs.components.${component}.${slotName}`,
           component,
         });
         if (slotCandidate) candidates.push(slotCandidate);
@@ -571,8 +627,7 @@ export function activatedHttpDomainCandidateFromCoreOutputs(
       const material = isRecord(value.material) ? value.material : value;
       const candidate = activatedHttpDomainCandidateFromOutputRecord({
         output: material,
-        deploymentOutputRef:
-          `deployment.outputs.extensions.servicePathExposures.${name}.material`,
+        deploymentOutputRef: `deployment.outputs.extensions.servicePathExposures.${name}.material`,
         component: component || name,
       });
       if (candidate) candidates.push(candidate);
@@ -583,9 +638,10 @@ export function activatedHttpDomainCandidateFromCoreOutputs(
     deploymentOutputRef: "deployment.outputs",
   });
   if (direct) candidates.push(direct);
-  return candidates.sort((left, right) =>
-    activatedHttpDomainCandidateScore(right) -
-    activatedHttpDomainCandidateScore(left)
+  return candidates.sort(
+    (left, right) =>
+      activatedHttpDomainCandidateScore(right) -
+      activatedHttpDomainCandidateScore(left),
   )[0];
 }
 
@@ -593,16 +649,18 @@ export function activatedHttpDomainCandidateFromOutputRecord(input: {
   output: Record<string, unknown>;
   deploymentOutputRef: string;
   component?: string;
-}): {
-  readonly url: string;
-  readonly deploymentOutputRef: string;
-  readonly component?: string;
-  readonly host?: string;
-  readonly scheme?: string;
-  readonly listener?: string;
-} | undefined {
-  const endpoint = firstRecord(input.output.endpoints) ??
-    firstRecord(input.output.targets);
+}):
+  | {
+      readonly url: string;
+      readonly deploymentOutputRef: string;
+      readonly component?: string;
+      readonly host?: string;
+      readonly scheme?: string;
+      readonly listener?: string;
+    }
+  | undefined {
+  const endpoint =
+    firstRecord(input.output.endpoints) ?? firstRecord(input.output.targets);
   const url = stringValue(input.output.url) ?? stringValue(endpoint?.url);
   if (!url || !canonicalHttpOrigin(url)) return undefined;
   return {
@@ -611,12 +669,14 @@ export function activatedHttpDomainCandidateFromOutputRecord(input: {
     component: input.component,
     host: stringValue(input.output.host) ?? stringValue(endpoint?.host),
     scheme: stringValue(input.output.scheme) ?? stringValue(endpoint?.scheme),
-    listener: stringValue(input.output.listener) ??
-      stringValue(endpoint?.listener),
+    listener:
+      stringValue(input.output.listener) ?? stringValue(endpoint?.listener),
   };
 }
 
-export function firstRecord(value: unknown): Record<string, unknown> | undefined {
+export function firstRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.find(isRecord);
 }
@@ -692,20 +752,25 @@ export function installationRecordFromCoreDeploymentProjection(input: {
 }): InstallationRecord {
   return {
     ...input.installation,
-    sourceGitUrl: input.projection.sourceUrl ??
+    sourceGitUrl:
+      input.projection.sourceUrl ??
       input.fallback?.sourceGitUrl ??
       input.installation.sourceGitUrl,
-    sourceRef: input.projection.sourceRef ??
+    sourceRef:
+      input.projection.sourceRef ??
       input.fallback?.sourceRef ??
       input.installation.sourceRef,
-    sourceCommit: input.projection.sourceCommit ??
+    sourceCommit:
+      input.projection.sourceCommit ??
       input.projection.sourceDigest ??
       input.fallback?.sourceCommit ??
       input.installation.sourceCommit,
-    planDigest: input.projection.planDigest ??
+    planDigest:
+      input.projection.planDigest ??
       input.fallback?.planDigest ??
       input.installation.planDigest,
-    artifactDigest: input.projection.artifactDigest ??
+    artifactDigest:
+      input.projection.artifactDigest ??
       input.fallback?.artifactDigest ??
       input.installation.artifactDigest,
     updatedAt: input.now,
@@ -718,10 +783,10 @@ export async function revisionEnvelopeResponse(input: {
   operation: "deployment" | "rollback";
   event: InstallationEventRecord;
 }): Promise<Response> {
-  const bindings = await input.store.listAppBindingsForInstallation(
+  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
     input.installation.installationId,
   );
-  const grants = await input.store.listAppGrantsForInstallation(
+  const grants = await input.store.listServiceGrantMaterialsForInstallation(
     input.installation.installationId,
   );
   const oidcClient = await input.store.findOidcClientForInstallation(
@@ -765,88 +830,123 @@ export function appInstallationRevisionPayload(
 }
 
 export function normalizeSourceGitUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "").replace(/\.git$/, "");
+  return value
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/, "");
 }
 
-export function appBindingRecordsFromValue(input: {
+export function serviceBindingMaterialRecordsFromValue(input: {
   value: unknown;
   installationId: string;
   now: number;
-}): readonly AppBindingRecord[] | Response {
+}): readonly ServiceBindingMaterialRecord[] | Response {
   if (input.value === undefined) return [];
   if (!Array.isArray(input.value)) {
-    return errorJson("invalid_use_edges", "invalid use edges", 400);
+    return errorJson(
+      "invalid_service_bindings",
+      "invalid service bindings",
+      400,
+    );
   }
-  const records: AppBindingRecord[] = [];
+  const records: ServiceBindingMaterialRecord[] = [];
   const seenNames = new Set<string>();
   for (const [index, value] of input.value.entries()) {
-    if (!isRecord(value)) return errorJson("invalid_use_edges", "invalid use edges", 400);
+    if (!isRecord(value))
+      return errorJson(
+        "invalid_service_bindings",
+        "invalid service bindings",
+        400,
+      );
     const name = stringValue(value.name);
-    const kind = appBindingKindValue(value.kind ?? value.type);
+    const kind = serviceBindingMaterialKindValue(value.kind ?? value.type);
     const configRef = stringValue(value.configRef);
-    const secretRefs = value.secretRefs === undefined
-      ? []
-      : stringArrayValue(value.secretRefs);
-    if (!name || !kind || !configRef || !secretRefs) {
-      return errorJson("invalid_use_edges", `useEdges[${index}] requires name, kind/type, configRef, and secretRefs`, 400);
+    if (value.secretRefs !== undefined || value.secret_refs !== undefined) {
+      return errorJson(
+        "invalid_service_bindings",
+        `serviceBindings[${index}].secretRefs is internal delivery metadata and must not appear in request bodies`,
+        400,
+      );
+    }
+    if (!name || !kind || !configRef) {
+      return errorJson(
+        "invalid_service_bindings",
+        `serviceBindings[${index}] requires name, kind/type, and configRef`,
+        400,
+      );
     }
     if (seenNames.has(name)) {
-      return errorJson("invalid_use_edges", `duplicate use edge name: ${name}`, 400);
+      return errorJson(
+        "invalid_service_bindings",
+        `duplicate service binding name: ${name}`,
+        400,
+      );
     }
     seenNames.add(name);
-    const record: AppBindingRecord = {
-      bindingId: stringValue(value.useEdgeId) ?? `bind_${crypto.randomUUID()}`,
+    const record: ServiceBindingMaterialRecord = {
+      bindingId:
+        stringValue(value.serviceBindingId) ?? `bind_${crypto.randomUUID()}`,
       installationId: input.installationId,
       name,
       kind,
       configRef,
-      secretRefs,
+      secretRefs: [],
       createdAt: input.now,
       updatedAt: input.now,
     };
     try {
-      assertValidAppBindingRecord(record);
+      assertValidServiceBindingMaterialRecord(record);
     } catch (error) {
-      console.error(
-        "invalid_use_edge_binding",
-        error instanceof Error ? error.stack ?? error.message : String(error),
+      consoleErrorRedacted("invalid_service_binding", error);
+      return errorJson(
+        "invalid_service_bindings",
+        "service binding record is invalid",
+        422,
       );
-      return errorJson("invalid_use_edges", "use edge binding record is invalid", 422);
     }
     records.push(record);
   }
   return records;
 }
 
-export function appGrantRecordsFromValue(input: {
+export function serviceGrantMaterialRecordsFromValue(input: {
   value: unknown;
   installationId: string;
   now: number;
-}): readonly AppGrantRecord[] | Response {
+}): readonly ServiceGrantMaterialRecord[] | Response {
   if (input.value === undefined) return [];
   if (!Array.isArray(input.value)) {
-    return errorJson("invalid_permission_scopes", "invalid permission scopes", 400);
+    return errorJson("invalid_service_grants", "invalid service grants", 400);
   }
-  const records: AppGrantRecord[] = [];
+  const records: ServiceGrantMaterialRecord[] = [];
   for (const [index, value] of input.value.entries()) {
     if (!isRecord(value)) {
-      return errorJson("invalid_permission_scopes", "invalid permission scopes", 400);
+      return errorJson("invalid_service_grants", "invalid service grants", 400);
     }
     const capability = stringValue(value.capability);
-    const scope = value.scope === undefined
-      ? {}
-      : isRecord(value.scope)
-      ? value.scope
-      : undefined;
+    const scope =
+      value.scope === undefined
+        ? {}
+        : isRecord(value.scope)
+          ? redactPublicRecord(value.scope)
+          : undefined;
     if (!capability || !scope) {
-      return errorJson("invalid_permission_scopes", `permissionScopes[${index}] requires capability and optional object scope`, 400);
+      return errorJson(
+        "invalid_service_grants",
+        `serviceGrants[${index}] requires capability and optional object scope`,
+        400,
+      );
     }
-    if (!isAppGrantCapability(capability)) {
-      return errorJson("invalid_permission_scopes", `permissionScopes[${index}].capability is not in the v1 permission scope catalog`, 422);
+    if (!isServiceGrantMaterialCapability(capability)) {
+      return errorJson(
+        "invalid_service_grants",
+        `serviceGrants[${index}].capability is not in the v1 service grant catalog`,
+        422,
+      );
     }
     records.push({
-      grantId: stringValue(value.permissionScopeId) ??
-        `grant_${crypto.randomUUID()}`,
+      grantId:
+        stringValue(value.serviceGrantId) ?? `grant_${crypto.randomUUID()}`,
       installationId: input.installationId,
       capability,
       scope,
@@ -866,8 +966,8 @@ export async function appInstallationRevisionConfirmFromValue(input: {
   sourceCommit: string;
   planDigest: string;
   artifactDigest: string | null;
-  requestedBindings: readonly AppBindingRecord[];
-  requestedGrants: readonly AppGrantRecord[];
+  requestedBindings: readonly ServiceBindingMaterialRecord[];
+  requestedGrants: readonly ServiceGrantMaterialRecord[];
 }): Promise<{ permissionDigest: string; costAck: boolean } | Response> {
   if (!isRecord(input.value)) {
     return errorJson("invalid_confirm", "confirm must be an object", 400);
@@ -881,12 +981,14 @@ export async function appInstallationRevisionConfirmFromValue(input: {
     !isSha256HexDigest(permissionDigest) ||
     (costAck !== undefined && typeof costAck !== "boolean")
   ) {
-    return errorJson("invalid_confirm", "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck", 400);
+    return errorJson(
+      "invalid_confirm",
+      "confirm requires permissionDigest=sha256:<64-hex> and optional boolean costAck",
+      400,
+    );
   }
   const expectedPermissionDigest =
-    await appInstallationRevisionPermissionDigest(
-      input,
-    );
+    await appInstallationRevisionPermissionDigest(input);
   if (!constantTimeEqual(permissionDigest, expectedPermissionDigest)) {
     return errorJson(
       "approval_digest_mismatch",
@@ -899,10 +1001,15 @@ export async function appInstallationRevisionConfirmFromValue(input: {
   }
   if (
     input.requestedBindings.some((binding) =>
-      isMeteredBindingKind(binding.kind)
-    ) && costAck !== true
+      isMeteredBindingKind(binding.kind),
+    ) &&
+    costAck !== true
   ) {
-    return errorJson("cost_ack_required", "confirm.costAck=true is required when requested use edges include metered provider resources", 400);
+    return errorJson(
+      "cost_ack_required",
+      "confirm.costAck=true is required when requested service bindings include metered provider resources",
+      400,
+    );
   }
   return { permissionDigest, costAck: costAck === true };
 }
@@ -916,38 +1023,43 @@ export async function appInstallationRevisionPermissionDigest(input: {
   sourceCommit: string;
   planDigest: string;
   artifactDigest: string | null;
-  requestedBindings: readonly AppBindingRecord[];
-  requestedGrants: readonly AppGrantRecord[];
+  requestedBindings: readonly ServiceBindingMaterialRecord[];
+  requestedGrants: readonly ServiceGrantMaterialRecord[];
 }): Promise<string> {
-  return await sha256HexText(canonicalJson({
-    operation: input.operation,
-    installationId: input.installationId,
-    appId: input.appId,
-    source: {
-      gitUrl: normalizeSourceGitUrl(input.sourceGitUrl),
-      ref: input.sourceRef,
-      commit: input.sourceCommit,
-      planDigest: input.planDigest,
-      artifactDigest: input.artifactDigest,
-    },
-    requestedBindings: input.requestedBindings
-      .map(appBindingApprovalPayload)
-      .sort(compareCanonicalJson),
-    requestedGrants: input.requestedGrants
-      .map(appGrantApprovalPayload)
-      .sort(compareCanonicalJson),
-  }));
+  return await sha256HexText(
+    canonicalJson({
+      operation: input.operation,
+      installationId: input.installationId,
+      appId: input.appId,
+      source: {
+        gitUrl: normalizeSourceGitUrl(input.sourceGitUrl),
+        ref: input.sourceRef,
+        commit: input.sourceCommit,
+        planDigest: input.planDigest,
+        artifactDigest: input.artifactDigest,
+      },
+      requestedBindings: input.requestedBindings
+        .map(serviceBindingMaterialApprovalPayload)
+        .sort(compareCanonicalJson),
+      requestedGrants: input.requestedGrants
+        .map(serviceGrantMaterialApprovalPayload)
+        .sort(compareCanonicalJson),
+    }),
+  );
 }
 
-export function appBindingKindValue(value: unknown): AppBindingKind | undefined {
-  return isAppBindingKind(value) ? value : undefined;
+export function serviceBindingMaterialKindValue(
+  value: unknown,
+): ServiceBindingMaterialKind | undefined {
+  return isServiceBindingMaterialKind(value) ? value : undefined;
 }
 
 export function appInstallationModeValue(
   value: unknown,
 ): AppInstallationMode | undefined {
-  return value === "shared-cell" || value === "dedicated" ||
-      value === "self-hosted"
+  return value === "shared-cell" ||
+    value === "dedicated" ||
+    value === "self-hosted"
     ? value
     : undefined;
 }

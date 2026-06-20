@@ -10,7 +10,7 @@
  * fields render as `type=password`. The cloudflare field set is hardcoded here
  * for Phase 1 (the only guided provider); later providers extend the map.
  */
-export interface ProviderEnvField {
+export interface ProviderCredentialField {
   readonly envName: string;
   readonly label: string;
   readonly required: boolean;
@@ -38,7 +38,7 @@ export interface ProviderTokenHelper {
 export interface ProviderDescriptor {
   readonly provider: string;
   readonly label: string;
-  readonly fields: readonly ProviderEnvField[];
+  readonly fields: readonly ProviderCredentialField[];
   /**
    * Optional guided-token helper. When present, the connections screen leads
    * with "<provider> に接続" → deep-link → paste, and demotes the raw field
@@ -66,7 +66,7 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
   "https://dash.cloudflare.com/profile/api-tokens?" +
   new URLSearchParams({
     // Cloudflare reads this to pre-select permission rows on the custom-token
-    // screen. Unknown keys are ignored by Cloudflare, so this degrades to a
+    // screen. Unknown query values are ignored by Cloudflare, so this degrades to a
     // plain custom-token screen if the format changes — never a broken link.
     permissionGroupKeys: JSON.stringify([
       { key: "workers_scripts", type: "edit" },
@@ -81,7 +81,8 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
 /**
  * Guided providers + their credential field sets. Cloudflare only for Phase 1:
  * CLOUDFLARE_API_TOKEN (required, secret) + CLOUDFLARE_ACCOUNT_ID (optional).
- * Everything else enters through the generic Provider Env Set editor.
+ * Everything else enters through the Provider Connection editor backed by the
+ * internal provider resolver.
  */
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   {

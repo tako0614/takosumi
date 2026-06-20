@@ -5,13 +5,12 @@ export const OFFICIAL_MATERIAL_KIND_NAMES = [
   "service-binding",
   "object-store",
   "event-channel",
-  "identity.oidc@v1",
-  "billing.port@v1",
-  "mcp-server@v1",
+  "identity.oidc",
+  "billing.usage",
 ] as const;
 
 export type OfficialMaterialKindName =
-  typeof OFFICIAL_MATERIAL_KIND_NAMES[number];
+  (typeof OFFICIAL_MATERIAL_KIND_NAMES)[number];
 
 export const OUTPUT_FIELD_TYPE_NAMES = [
   "boolean",
@@ -22,7 +21,7 @@ export const OUTPUT_FIELD_TYPE_NAMES = [
   "string[]",
 ] as const;
 
-export type OutputFieldTypeName = typeof OUTPUT_FIELD_TYPE_NAMES[number];
+export type OutputFieldTypeName = (typeof OUTPUT_FIELD_TYPE_NAMES)[number];
 
 export const PROJECTION_FAMILY_NAMES = [
   "env",
@@ -31,7 +30,7 @@ export const PROJECTION_FAMILY_NAMES = [
   "config-mount",
 ] as const;
 
-export type ProjectionFamilyName = typeof PROJECTION_FAMILY_NAMES[number];
+export type ProjectionFamilyName = (typeof PROJECTION_FAMILY_NAMES)[number];
 
 export const ACCESS_MODES = [
   "read",
@@ -41,7 +40,7 @@ export const ACCESS_MODES = [
   "observe-only",
 ] as const;
 
-export type AccessMode = typeof ACCESS_MODES[number];
+export type AccessMode = (typeof ACCESS_MODES)[number];
 
 export const SAFE_DEFAULT_ACCESS_MODES = [
   null,
@@ -50,7 +49,7 @@ export const SAFE_DEFAULT_ACCESS_MODES = [
   "observe-only",
 ] as const;
 
-export type SafeDefaultAccessMode = typeof SAFE_DEFAULT_ACCESS_MODES[number];
+export type SafeDefaultAccessMode = (typeof SAFE_DEFAULT_ACCESS_MODES)[number];
 
 export const OFFICIAL_SENSITIVITY_CLASSES = [
   "public-config",
@@ -60,17 +59,13 @@ export const OFFICIAL_SENSITIVITY_CLASSES = [
 ] as const;
 
 export type OfficialSensitivityClass =
-  typeof OFFICIAL_SENSITIVITY_CLASSES[number];
+  (typeof OFFICIAL_SENSITIVITY_CLASSES)[number];
 
 export interface SecretReference {
   readonly secretRef: string;
 }
 
-export type EndpointVisibility =
-  | "private"
-  | "space"
-  | "public"
-  | "internal";
+export type EndpointVisibility = "private" | "space" | "public" | "internal";
 
 export interface HttpEndpointTarget {
   readonly name?: string;
@@ -156,23 +151,13 @@ export interface BillingPortMaterial {
   readonly meteringCredentialRef?: SecretReference;
 }
 
-export interface McpServerMaterial {
-  readonly endpointUrl: string;
-  readonly transport: "streamable-http";
-  readonly protocolVersion?: string;
-  readonly serverName?: string;
-  readonly description?: string;
-  readonly tokenRef?: SecretReference;
-}
-
 export interface OfficialMaterialByKind {
   readonly "http-endpoint": HttpEndpointMaterial;
   readonly "service-binding": ServiceBindingMaterial;
   readonly "object-store": ObjectStoreMaterial;
   readonly "event-channel": EventChannelMaterial;
-  readonly "identity.oidc@v1": IdentityOidcMaterial;
-  readonly "billing.port@v1": BillingPortMaterial;
-  readonly "mcp-server@v1": McpServerMaterial;
+  readonly "identity.oidc": IdentityOidcMaterial;
+  readonly "billing.usage": BillingPortMaterial;
 }
 
 export type OfficialMaterial = OfficialMaterialByKind[OfficialMaterialKindName];
@@ -221,15 +206,21 @@ export function isOfficialSensitivityClass(
 export function isSafeDefaultAccessMode(
   value: unknown,
 ): value is SafeDefaultAccessMode {
-  return value === null || value === "read" || value === "invoke-only" ||
-    value === "observe-only";
+  return (
+    value === null ||
+    value === "read" ||
+    value === "invoke-only" ||
+    value === "observe-only"
+  );
 }
 
 export function isSecretReference(value: unknown): value is SecretReference {
-  return isRecord(value) &&
+  return (
+    isRecord(value) &&
     Object.keys(value).length === 1 &&
     typeof (value as { readonly secretRef?: unknown }).secretRef === "string" &&
-    (value as { readonly secretRef: string }).secretRef.length > 0;
+    (value as { readonly secretRef: string }).secretRef.length > 0
+  );
 }
 
 export function allowedProjectionFamiliesForMaterialKind(
@@ -257,10 +248,7 @@ export function validateOfficialMaterial(
   }
   switch (kind) {
     case "http-endpoint":
-      checkNoUnknownKeys(value, "$", issues, [
-        "targets",
-        "endpoints",
-      ]);
+      checkNoUnknownKeys(value, "$", issues, ["targets", "endpoints"]);
       checkHttpEndpointMaterial(value, issues);
       break;
     case "service-binding":
@@ -334,12 +322,9 @@ export function validateOfficialMaterial(
         optional: true,
       });
       checkStringArray(value.policyRefs, "$.policyRefs", issues);
-      requireSecretReference(
-        value.accessKeyIdRef,
-        "$.accessKeyIdRef",
-        issues,
-        { optional: true },
-      );
+      requireSecretReference(value.accessKeyIdRef, "$.accessKeyIdRef", issues, {
+        optional: true,
+      });
       requireSecretReference(
         value.secretAccessKeyRef,
         "$.secretAccessKeyRef",
@@ -396,7 +381,7 @@ export function validateOfficialMaterial(
         { optional: true },
       );
       break;
-    case "identity.oidc@v1":
+    case "identity.oidc":
       checkNoUnknownKeys(value, "$", issues, [
         "issuerUrl",
         "discoveryUrl",
@@ -428,7 +413,7 @@ export function validateOfficialMaterial(
         { optional: true },
       );
       break;
-    case "billing.port@v1":
+    case "billing.usage":
       checkNoUnknownKeys(value, "$", issues, [
         "portalUrl",
         "usageReportEndpoint",
@@ -455,12 +440,13 @@ export function validateOfficialMaterial(
         { optional: true },
       );
       if (
-        value.portalUrl === undefined && value.usageReportEndpoint === undefined
+        value.portalUrl === undefined &&
+        value.usageReportEndpoint === undefined
       ) {
         issues.push({
           path: "$",
           message:
-            "billing.port@v1 material requires portalUrl or usageReportEndpoint",
+            "billing.usage material requires portalUrl or usageReportEndpoint",
         });
       }
       requireSecretReference(
@@ -470,36 +456,9 @@ export function validateOfficialMaterial(
         { optional: true },
       );
       break;
-    case "mcp-server@v1":
-      checkNoUnknownKeys(value, "$", issues, [
-        "endpointUrl",
-        "transport",
-        "protocolVersion",
-        "serverName",
-        "description",
-        "tokenRef",
-      ]);
-      requireString(value.endpointUrl, "$.endpointUrl", issues);
-      requireHttpUrl(value.endpointUrl, "$.endpointUrl", issues);
-      requireString(value.transport, "$.transport", issues);
-      requireMcpTransport(value.transport, "$.transport", issues);
-      requireString(value.protocolVersion, "$.protocolVersion", issues, {
-        optional: true,
-      });
-      requireString(value.serverName, "$.serverName", issues, {
-        optional: true,
-      });
-      requireString(value.description, "$.description", issues, {
-        optional: true,
-      });
-      requireSecretReference(value.tokenRef, "$.tokenRef", issues, {
-        optional: true,
-      });
-      break;
   }
   return issues;
 }
-
 
 function checkServiceBindingAddress(
   value: Record<string, unknown>,
@@ -544,7 +503,7 @@ function checkHttpEndpointMaterial(
       issues.push({ path: "$.targets", message: "must be an array" });
     } else {
       targets.forEach((target, index) =>
-        checkHttpEndpointTarget(target, `$.targets[${index}]`, issues)
+        checkHttpEndpointTarget(target, `$.targets[${index}]`, issues),
       );
     }
   }
@@ -553,11 +512,11 @@ function checkHttpEndpointMaterial(
       issues.push({ path: "$.endpoints", message: "must be an array" });
     } else {
       endpoints.forEach((endpoint, index) =>
-        checkHttpEndpoint(endpoint, `$.endpoints[${index}]`, issues)
+        checkHttpEndpoint(endpoint, `$.endpoints[${index}]`, issues),
       );
       if (endpoints.length > 1) {
-        const primaryCount = endpoints.filter((endpoint) =>
-          isRecord(endpoint) && endpoint.primary === true
+        const primaryCount = endpoints.filter(
+          (endpoint) => isRecord(endpoint) && endpoint.primary === true,
         ).length;
         if (primaryCount !== 1) {
           issues.push({
@@ -609,17 +568,16 @@ function checkHttpEndpointTarget(
   requireString(value.visibility, `${path}.visibility`, issues, {
     optional: true,
   });
-  requireEndpointVisibility(
-    value.visibility,
-    `${path}.visibility`,
-    issues,
-    { optional: true },
-  );
+  requireEndpointVisibility(value.visibility, `${path}.visibility`, issues, {
+    optional: true,
+  });
   const hasUrl = typeof value.url === "string" && value.url.length > 0;
   const hasHostField = value.host !== undefined;
   const hasPortField = value.port !== undefined;
-  const hasHostPort = typeof value.host === "string" &&
-    value.host.length > 0 && typeof value.port === "number";
+  const hasHostPort =
+    typeof value.host === "string" &&
+    value.host.length > 0 &&
+    typeof value.port === "number";
   if (!hasUrl && !hasHostPort) {
     issues.push({
       path,
@@ -677,12 +635,9 @@ function checkHttpEndpoint(
   requireString(value.visibility, `${path}.visibility`, issues, {
     optional: true,
   });
-  requireEndpointVisibility(
-    value.visibility,
-    `${path}.visibility`,
-    issues,
-    { optional: true },
-  );
+  requireEndpointVisibility(value.visibility, `${path}.visibility`, issues, {
+    optional: true,
+  });
   requireBoolean(value.primary, `${path}.primary`, issues, { optional: true });
   crossCheckHttpEndpointUrl(value, path, issues);
   if (value.routes !== undefined) {
@@ -690,7 +645,7 @@ function checkHttpEndpoint(
       issues.push({ path: `${path}.routes`, message: "must be an array" });
     } else {
       value.routes.forEach((route, index) =>
-        checkRouteSummary(route, `${path}.routes[${index}]`, issues)
+        checkRouteSummary(route, `${path}.routes[${index}]`, issues),
       );
     }
   }
@@ -880,19 +835,6 @@ function requireHttpScheme(
   }
 }
 
-function requireMcpTransport(
-  value: unknown,
-  path: string,
-  issues: CatalogValidationIssue[],
-  opts: { readonly optional?: boolean } = {},
-): void {
-  if (value === undefined && opts.optional) return;
-  if (typeof value !== "string") return;
-  if (value !== "streamable-http") {
-    issues.push({ path, message: 'must be "streamable-http"' });
-  }
-}
-
 function crossCheckHttpEndpointUrl(
   value: Record<string, unknown>,
   path: string,
@@ -933,7 +875,9 @@ function requireEndpointVisibility(
   if (value === undefined && opts.optional) return;
   if (typeof value !== "string") return;
   if (
-    value !== "private" && value !== "space" && value !== "public" &&
+    value !== "private" &&
+    value !== "space" &&
+    value !== "public" &&
     value !== "internal"
   ) {
     issues.push({
@@ -987,7 +931,7 @@ function checkStringArray(
     return;
   }
   value.forEach((entry, index) =>
-    requireString(entry, `${path}[${index}]`, issues)
+    requireString(entry, `${path}[${index}]`, issues),
   );
 }
 

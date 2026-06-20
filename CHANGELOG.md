@@ -1,7 +1,9 @@
 # Changelog
 
-All notable user-visible changes to the published Takosumi package live here.
-The current package is the single npm stream `@takosjp/takosumi`.
+All notable user-visible changes to the Takosumi source/module release live here.
+Takosumi is consumed in-process by the operator platform worker and the
+self-hosted Takos distribution worker; there is no npm-published service package
+for the v1 GA line.
 
 ## Unreleased — OpenTofu Capsule DAG Rebaseline
 
@@ -19,10 +21,10 @@ The current package is the single npm stream `@takosjp/takosumi`.
 - OpenTofu execution, provider credentials, state backend, resource limits,
   network policy, account plane, billing mode, OIDC, dashboard, and deploy
   facade wiring are operator responsibilities expressed through Connection /
-  ProviderBinding / policy and operator distribution configuration.
+  InstallationProviderConnection / policy and operator distribution configuration.
 - Runner profiles, backend adapters, and runtime-agent implementation code are
   operator-selected implementation details, not source authoring vocabulary.
-- Build and npm publication tasks are Bun-first.
+- Build, operator CLI, dashboard, and platform-worker release tasks are Bun-first.
 
 ## Pre-v1 Notes
 

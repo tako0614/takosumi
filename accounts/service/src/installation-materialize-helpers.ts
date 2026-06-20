@@ -1,5 +1,5 @@
 import type {
-  AppBindingKind,
+  ServiceBindingMaterialKind,
   AppInstallationMode,
   AppInstallationStatus,
   InstallationRecord,
@@ -7,6 +7,7 @@ import type {
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import { collectInstallationExportBundle } from "./export-bundle.ts";
+import { exportDownloadUrl } from "./export-download-url.ts";
 import {
   appendExportOperationCompletion,
   appendExportOperationFailure,
@@ -42,6 +43,7 @@ import type {
   AppInstallationMaterializeWorker,
   AppInstallationMaterializeWorkerResult,
 } from "./mod.ts";
+import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
 
 export function runtimeBindingFromValue(input: {
   value: unknown;
@@ -53,14 +55,15 @@ export function runtimeBindingFromValue(input: {
   if (!isRecord(input.value)) return undefined;
   const targetId = stringValue(input.value.targetId);
   if (!targetId) return undefined;
-  const targetType = input.value.targetType === "dedicated" ||
-      input.value.targetType === "self-hosted" ||
-      input.value.targetType === "shared-cell"
-    ? input.value.targetType
-    : input.mode;
+  const targetType =
+    input.value.targetType === "dedicated" ||
+    input.value.targetType === "self-hosted" ||
+    input.value.targetType === "shared-cell"
+      ? input.value.targetType
+      : input.mode;
   return {
-    runtimeBindingId: stringValue(input.value.runtimeTargetId) ??
-      `rtb_${crypto.randomUUID()}`,
+    runtimeBindingId:
+      stringValue(input.value.runtimeTargetId) ?? `rtb_${crypto.randomUUID()}`,
     installationId: input.installationId,
     mode: input.mode,
     targetType,
@@ -104,7 +107,7 @@ export async function materializePreservationSnapshot(input: {
   const runtimeBinding = input.installation.runtimeBindingId
     ? await input.store.findRuntimeBinding(input.installation.runtimeBindingId)
     : undefined;
-  const bindings = await input.store.listAppBindingsForInstallation(
+  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
     input.installation.installationId,
   );
   const oidcClient = await input.store.findOidcClientForInstallation(
@@ -122,24 +125,24 @@ export async function materializePreservationSnapshot(input: {
     billingAccountId: input.installation.billingAccountId ?? null,
     runtimeTarget: runtimeBinding
       ? {
-        id: runtimeBinding.runtimeBindingId,
-        mode: runtimeBinding.mode,
-        targetType: runtimeBinding.targetType,
-        targetId: runtimeBinding.targetId,
-      }
+          id: runtimeBinding.runtimeBindingId,
+          mode: runtimeBinding.mode,
+          targetType: runtimeBinding.targetType,
+          targetId: runtimeBinding.targetId,
+        }
       : null,
     oidcClient: oidcClient
       ? {
-        clientId: oidcClient.clientId,
-        namespacePath: oidcClient.namespacePath,
-        issuerUrl: oidcClient.issuerUrl,
-        redirectUris: [...oidcClient.redirectUris],
-        allowedScopes: [...oidcClient.allowedScopes],
-        subjectMode: oidcClient.subjectMode,
-        tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
-      }
+          clientId: oidcClient.clientId,
+          namespacePath: oidcClient.namespacePath,
+          issuerUrl: oidcClient.issuerUrl,
+          redirectUris: [...oidcClient.redirectUris],
+          allowedScopes: [...oidcClient.allowedScopes],
+          subjectMode: oidcClient.subjectMode,
+          tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
+        }
       : null,
-    useEdges: bindings
+    serviceBindings: bindings
       .filter((binding) => isMaterializePreservedBindingKind(binding.kind))
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((binding) => ({
@@ -152,12 +155,14 @@ export async function materializePreservationSnapshot(input: {
 }
 
 export function isMaterializePreservedBindingKind(
-  kind: AppBindingKind,
+  kind: ServiceBindingMaterialKind,
 ): boolean {
-  return kind === "identity.oidc@v1" ||
-    kind === "database.postgres@v1" ||
-    kind === "object-store.s3-compatible@v1" ||
-    kind === "domain.http@v1";
+  return (
+    kind === "identity.oidc" ||
+    kind === "storage.sql" ||
+    kind === "storage.object" ||
+    kind === "protocol.http.api"
+  );
 }
 
 export async function completeAppInstallationMaterializeWithWorker(input: {
@@ -178,17 +183,17 @@ export async function completeAppInstallationMaterializeWithWorker(input: {
       preserve: input.preserve,
       preserveDigest: input.preserveDigest,
     });
-  } catch (error) {
+  } catch {
     return await materializeOperationFailedBody({
       store: input.store,
       installation: input.installation,
       operationId: input.operationId,
-      error: error instanceof Error ? error.message : String(error),
+      error: "materialize worker failed",
     });
   }
 
-  const returnedPreserveDigest = stringValue(result.preserveDigest) ??
-    input.preserveDigest;
+  const returnedPreserveDigest =
+    stringValue(result.preserveDigest) ?? input.preserveDigest;
   if (returnedPreserveDigest !== input.preserveDigest) {
     return await materializeOperationFailedBody({
       store: input.store,
@@ -271,6 +276,10 @@ export async function materializeOperationFailedBody(input: {
   error: string;
 }): Promise<Record<string, unknown>> {
   const now = Date.now();
+  const error = publicInstallationOperationErrorMessage(
+    input.error,
+    "materialize failed",
+  );
   const event = await appendLedgerEvent(input.store, {
     installationId: input.installation.installationId,
     eventType: installationMaterializeFailedEvent,
@@ -279,8 +288,8 @@ export async function materializeOperationFailedBody(input: {
       fromMode: input.installation.mode,
       toMode: "dedicated",
       runtimeTargetId: input.installation.runtimeBindingId ?? null,
-      reason: input.error,
-      error: input.error,
+      reason: error,
+      error,
     },
     now,
   });
@@ -298,7 +307,7 @@ export async function materializeOperationFailedBody(input: {
         installationMaterializeFailedEvent,
       ],
     ),
-    error: input.error,
+    error,
     event: serializeInstallationEvent(event),
   };
 }
@@ -337,25 +346,24 @@ export function validateMaterializeContinuity(input: {
     : null;
   if (
     canonicalJson(input.evidence.oidcClient) !==
-      canonicalJson(expectedOidcClient)
+    canonicalJson(expectedOidcClient)
   ) {
     return "materialize worker continuity OIDC client mismatch";
   }
 
   if (
-    canonicalJson(normalizeContinuityBindings(
-      input.evidence.preservedUseEdges,
-    )) !==
-      canonicalJson(normalizeContinuityBindings(input.preserve.useEdges))
+    canonicalJson(
+      normalizeContinuityBindings(input.evidence.preservedServiceBindings),
+    ) !==
+    canonicalJson(normalizeContinuityBindings(input.preserve.serviceBindings))
   ) {
-    return "materialize worker continuity use edge refs mismatch";
+    return "materialize worker continuity service binding refs mismatch";
   }
 }
 
-export function normalizeContinuityBindings(value: unknown): readonly Record<
-  string,
-  unknown
->[] {
+export function normalizeContinuityBindings(
+  value: unknown,
+): readonly Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter(isPlainRecord)
@@ -396,12 +404,12 @@ export async function completeAppInstallationExportWithWorker(input: {
       request: input.requestPayload,
       bundle,
     });
-  } catch (error) {
+  } catch {
     return await exportOperationFailedBody({
       store: input.store,
       installation: input.installation,
       operationId: input.operationId,
-      error: error instanceof Error ? error.message : String(error),
+      error: "export worker failed",
     });
   }
 
@@ -413,6 +421,24 @@ export async function completeAppInstallationExportWithWorker(input: {
       installation: input.installation,
       operationId: input.operationId,
       error: "export worker did not return a downloadUrl",
+    });
+  }
+  try {
+    exportDownloadUrl(downloadUrl, "export worker downloadUrl");
+  } catch {
+    return await exportOperationFailedBody({
+      store: input.store,
+      installation: input.installation,
+      operationId: input.operationId,
+      error: "export worker returned an unsupported downloadUrl",
+    });
+  }
+  if (downloadExpiresAt && !Number.isFinite(Date.parse(downloadExpiresAt))) {
+    return await exportOperationFailedBody({
+      store: input.store,
+      installation: input.installation,
+      operationId: input.operationId,
+      error: "export worker returned an invalid downloadExpiresAt",
     });
   }
   const event = await appendExportOperationCompletion({
@@ -442,11 +468,15 @@ export async function exportOperationFailedBody(input: {
   operationId: string;
   error: string;
 }): Promise<Record<string, unknown>> {
+  const error = publicInstallationOperationErrorMessage(
+    input.error,
+    "export failed",
+  );
   const event = await appendExportOperationFailure({
     store: input.store,
     installation: input.installation,
     operationId: input.operationId,
-    error: input.error,
+    error,
   });
   return {
     ...exportOperationBody(
@@ -456,7 +486,7 @@ export async function exportOperationFailedBody(input: {
         status: "failed",
         downloadUrl: null,
         downloadExpiresAt: null,
-        error: input.error,
+        error,
       },
     ),
     event: serializeInstallationEvent(event),
@@ -472,17 +502,18 @@ export async function materializeCompletionFromStatusPatch(input: {
   now: number;
 }): Promise<
   | {
-    runtimeBinding?: RuntimeBindingRecord;
-    runtimeBindingId: string;
-    preserveDigest: string;
-  }
+      runtimeBinding?: RuntimeBindingRecord;
+      runtimeBindingId: string;
+      preserveDigest: string;
+    }
   | Response
 > {
   const operationId = stringValue(input.body.operationId);
-  const expectedPreserveDigest = stringValue(input.body.preserveDigest) ??
+  const expectedPreserveDigest =
+    stringValue(input.body.preserveDigest) ??
     (isRecord(input.body.preserved)
-      ? stringValue(input.body.preserved.preserveDigest) ??
-        stringValue(input.body.preserved.digest)
+      ? (stringValue(input.body.preserved.preserveDigest) ??
+        stringValue(input.body.preserved.digest))
       : undefined);
   if (
     input.installation.status !== "ready" ||
@@ -491,7 +522,11 @@ export async function materializeCompletionFromStatusPatch(input: {
     input.requestedMode !== "dedicated" ||
     !operationId
   ) {
-    return errorJson("state_conflict", "materialize completion requires ready shared-cell -> dedicated with operationId", 409);
+    return errorJson(
+      "state_conflict",
+      "materialize completion requires ready shared-cell -> dedicated with operationId",
+      409,
+    );
   }
   const events = await input.store.listInstallationEvents(
     input.installation.installationId,
@@ -502,14 +537,22 @@ export async function materializeCompletionFromStatusPatch(input: {
     eventTypes: [installationMaterializeRequestedEvent],
   });
   if (!requested) {
-    return errorJson("operation_not_found", "materialize completion requires a matching materialize request event", 409);
+    return errorJson(
+      "operation_not_found",
+      "materialize completion requires a matching materialize request event",
+      409,
+    );
   }
   const requestedPreserveDigest = stringValue(requested.payload.preserveDigest);
   if (
     !requestedPreserveDigest ||
     expectedPreserveDigest !== requestedPreserveDigest
   ) {
-    return errorJson("preservation_mismatch", "materialize completion requires preserveDigest from the materialize request", 409);
+    return errorJson(
+      "preservation_mismatch",
+      "materialize completion requires preserveDigest from the materialize request",
+      409,
+    );
   }
   const closed = findOperationEvent({
     events,
@@ -520,7 +563,11 @@ export async function materializeCompletionFromStatusPatch(input: {
     ],
   });
   if (closed) {
-    return errorJson("operation_already_closed", "materialize operation already has a completion event", 409);
+    return errorJson(
+      "operation_already_closed",
+      "materialize operation already has a completion event",
+      409,
+    );
   }
   const runtimeBinding = runtimeBindingFromValue({
     value: input.body.runtimeTarget,
@@ -528,13 +575,21 @@ export async function materializeCompletionFromStatusPatch(input: {
     mode: input.requestedMode,
     now: input.now,
   });
-  const runtimeBindingId = runtimeBinding?.runtimeBindingId ??
-    stringValue(input.body.runtimeTargetId);
+  const runtimeBindingId =
+    runtimeBinding?.runtimeBindingId ?? stringValue(input.body.runtimeTargetId);
   if (!runtimeBindingId) {
-    return errorJson("invalid_request", "materialize completion requires runtimeTarget or runtimeTargetId", 400);
+    return errorJson(
+      "invalid_request",
+      "materialize completion requires runtimeTarget or runtimeTargetId",
+      400,
+    );
   }
   if (runtimeBinding?.targetType !== "dedicated") {
-    return errorJson("invalid_runtime_target", "materialize completion requires a dedicated runtime target", 400);
+    return errorJson(
+      "invalid_runtime_target",
+      "materialize completion requires a dedicated runtime target",
+      400,
+    );
   }
   return {
     runtimeBinding,
@@ -556,7 +611,11 @@ export async function validateOperationCompletionFromStatusPatch(input: {
     eventTypes: [operationRequestedEventType(input.operation)],
   });
   if (!requested) {
-    return errorJson("operation_not_found", `${input.operation} completion requires a matching request event`, 409);
+    return errorJson(
+      "operation_not_found",
+      `${input.operation} completion requires a matching request event`,
+      409,
+    );
   }
   const closed = findOperationEvent({
     events,
@@ -564,6 +623,10 @@ export async function validateOperationCompletionFromStatusPatch(input: {
     eventTypes: operationClosedEventTypes(input.operation),
   });
   if (closed) {
-    return errorJson("operation_already_closed", `${input.operation} operation already has a completion event`, 409);
+    return errorJson(
+      "operation_already_closed",
+      `${input.operation} operation already has a completion event`,
+      409,
+    );
   }
 }

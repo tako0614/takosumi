@@ -32,11 +32,13 @@ const runnerProfile = {
     },
   },
   allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-  credentialRefs: [{
-    provider: "registry.opentofu.org/cloudflare/cloudflare",
-    ref: "secret://takosumi/cloudflare-default",
-    required: true,
-  }],
+  credentialRefs: [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      ref: "secret://takosumi/cloudflare-default",
+      required: true,
+    },
+  ],
   resourceLimits: {
     maxRunSeconds: 900,
     maxSourceArchiveBytes: 104857600,
@@ -54,28 +56,6 @@ const runnerProfile = {
     durableObjectBinding: "RUNNER",
     workDir: "/workspace",
   },
-  cloudflareWorkersForPlatforms: {
-    dispatchNamespace: "takosumi-tenants",
-    dispatchWorkerBinding: "TAKOSUMI_TENANT_DISPATCH",
-    outboundWorker: {
-      serviceBinding: "TAKOSUMI_OUTBOUND_WORKER",
-      enforceNetworkPolicy: true,
-    },
-    userWorkerBindings: {
-      mode: "tenant-scoped-only",
-      allowedBindingKinds: [
-        "kv_namespace",
-        "durable_object_namespace",
-        "queue",
-        "r2_bucket",
-        "d1_database",
-      ],
-    },
-    apiProxy: {
-      origin: "https://app.takosumi.com",
-      route: "/internal/cf-proxy",
-    },
-  },
   secretExposurePolicy: {
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",
@@ -91,6 +71,7 @@ const runnerProfile = {
 const spaceId = "space_personal";
 const installationId = "ins_0123456789abcdef";
 const environment = "production";
+const outputSnapshotId = "snap_0123456789abcdef";
 
 const source = {
   kind: "git",
@@ -133,8 +114,7 @@ const planRun = {
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   planArtifact: {
     kind: "object-storage",
-    ref:
-      "r2://takos-artifacts/spaces/space_0123456789abcdef/installations/inst_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
+    ref: "r2://takos-artifacts/spaces/space_0123456789abcdef/installations/inst_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
     digest:
       "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     contentType: "application/vnd.opentofu.plan",
@@ -151,15 +131,17 @@ const planRun = {
     installationId,
     environment,
   },
-  auditEvents: [{
-    id: "plan_0123456789abcdef:plan.completed:1716000000002",
-    type: "plan.completed",
-    at: 1716000000002,
-    data: {
-      planDigest:
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  auditEvents: [
+    {
+      id: "plan_0123456789abcdef:plan.completed:1716000000002",
+      type: "plan.completed",
+      at: 1716000000002,
+      data: {
+        planDigest:
+          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      },
     },
-  }],
+  ],
   createdAt: 1716000000001,
   updatedAt: 1716000000002,
   finishedAt: 1716000000002,
@@ -187,7 +169,6 @@ const installation = {
   environment,
   currentDeploymentId: "dep_0123456789abcdef",
   currentStateGeneration: 1,
-  currentOutputSnapshotId: "snap_0123456789abcdef",
   status: "active",
   createdAt: "2024-05-18T03:00:00.000Z",
   updatedAt: "2024-05-18T03:00:05.000Z",
@@ -219,7 +200,7 @@ const deployment = {
   applyRunId: "apply_0123456789abcdef",
   sourceSnapshotId: "ssn_0123456789abcdef",
   stateGeneration: stateSnapshot.generation,
-  outputSnapshotId: installation.currentOutputSnapshotId,
+  outputSnapshotId,
   outputsPublic: { launch_url: deploymentOutput.value },
   status: "active",
   createdAt: "2024-05-18T03:00:05.000Z",
@@ -254,12 +235,14 @@ const applyRun = {
     releasedAt: 1716000000005,
   },
   outputs: [deploymentOutput],
-  auditEvents: [{
-    id: "apply_0123456789abcdef:apply.completed:1716000000005",
-    type: "apply.completed",
-    at: 1716000000005,
-    data: { deploymentId: deployment.id },
-  }],
+  auditEvents: [
+    {
+      id: "apply_0123456789abcdef:apply.completed:1716000000005",
+      type: "apply.completed",
+      at: 1716000000005,
+      data: { deploymentId: deployment.id },
+    },
+  ],
   createdAt: 1716000000003,
   updatedAt: 1716000000005,
   finishedAt: 1716000000005,

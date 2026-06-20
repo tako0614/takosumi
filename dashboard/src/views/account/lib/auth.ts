@@ -1,18 +1,17 @@
 /**
- * Auth flows for the account-plane RPC client: upstream OAuth (Google/GitHub),
+ * Auth flows for the account-plane RPC client: upstream OAuth (Google),
  * navigation-based. (Passkey/WebAuthn client code returns together with an
  * actual passkey sign-in UI — the API stays on the backend.)
  */
 import { apiFetch, qs } from "./http.ts";
 import * as paths from "./paths.ts";
-import type { SessionRecord } from "./session.ts";
 import type { TakosumiAccountsAuthProvidersResponse } from "@takosjp/takosumi-accounts-contract";
 
 const STATE_KEY = "tg_oauth_state";
 const RETURN_KEY = "tg_oauth_return";
 const PROVIDER_KEY = "tg_oauth_provider";
 
-type Provider = "google" | "github";
+type Provider = "google";
 
 /**
  * Read which sign-in methods the operator configured on this worker. Public +
@@ -21,9 +20,7 @@ type Provider = "google" | "github";
  * ids + enabled flags only — never any credential — so the panel can disable
  * buttons that would otherwise hit a 503 on click.
  */
-export async function listAuthProviders(): Promise<
-  TakosumiAccountsAuthProvidersResponse
-> {
+export async function listAuthProviders(): Promise<TakosumiAccountsAuthProvidersResponse> {
   return await apiFetch<TakosumiAccountsAuthProvidersResponse>(
     paths.AUTH_PROVIDERS,
     { method: "GET", auth: false },
@@ -36,17 +33,17 @@ function randomState(): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function startUpstreamOAuth(provider: "google" | "github"): void {
+export function startUpstreamOAuth(provider: Provider): void {
   if (typeof window === "undefined") return;
   const state = randomState();
   sessionStorage.setItem(STATE_KEY, state);
   // Upstream OAuth providers don't echo back which provider was used in the
   // callback URL — stash it here so /sign-in/callback can recover it.
   sessionStorage.setItem(PROVIDER_KEY, provider);
-  // Preserve intended return URL (e.g. user landed on /apps unauth and was
-  // bounced to /sign-in; after auth we want to send them back to /apps).
+  // Preserve intended return URL (e.g. user landed on /installations unauth
+  // and was bounced to /sign-in; after auth we want to send them back there).
   const url = new URL(location.href);
-  const intended = url.searchParams.get("return") ?? "/";
+  const intended = safeOAuthReturnTo(url.searchParams.get("return"));
   sessionStorage.setItem(RETURN_KEY, intended);
 
   location.assign(
@@ -59,20 +56,18 @@ export function startUpstreamOAuth(provider: "google" | "github"): void {
   );
 }
 
-export function recallOAuthProvider(): "google" | "github" | null {
+export function recallOAuthProvider(): Provider | null {
   if (typeof sessionStorage === "undefined") return null;
   const v = sessionStorage.getItem(PROVIDER_KEY);
-  return v === "google" || v === "github" ? v : null;
+  return v === "google" ? v : null;
 }
 
 export interface CallbackResult {
-  readonly session: SessionRecord;
   readonly returnTo: string;
 }
 
 interface CallbackResponse {
   readonly subject: string;
-  readonly session_id: string;
   readonly expires_at: number;
   readonly provider_id?: string;
   readonly display_name?: string;
@@ -85,32 +80,37 @@ export async function completeUpstreamOAuth(
   provider: Provider,
 ): Promise<CallbackResult> {
   const expected = sessionStorage.getItem(STATE_KEY);
-  if (!expected || expected !== state) {
-    throw new Error("oauth state mismatch — possible CSRF or stale tab");
+  if (!expected) {
+    throw new Error("oauth flow was not started in this tab");
   }
   sessionStorage.removeItem(STATE_KEY);
   sessionStorage.removeItem(PROVIDER_KEY);
-  const returnTo = sessionStorage.getItem(RETURN_KEY) ?? "/";
+  const returnTo = safeOAuthReturnTo(sessionStorage.getItem(RETURN_KEY));
   sessionStorage.removeItem(RETURN_KEY);
 
   // The worker's /v1/auth/upstream/callback handler only accepts GET with
   // query params (it was originally designed as the direct upstream redirect
   // target). Calling via GET with code/state/provider in the URL keeps the
   // SPA out of the redirect chain while still using the documented contract.
-  const body: CallbackResponse = await apiFetch(
+  await apiFetch<CallbackResponse>(
     paths.UPSTREAM_CALLBACK + qs({ code, state, provider }),
     { method: "GET", auth: false },
   );
   return {
-    session: {
-      subject: body.subject,
-      sessionId: body.session_id,
-      // expires_at is epoch ms (worker passes Date.now() + ttl).
-      expiresAt: body.expires_at,
-      provider,
-      ...(body.display_name ? { displayName: body.display_name } : {}),
-      ...(body.email ? { email: body.email } : {}),
-    },
     returnTo,
   };
+}
+
+export function safeOAuthReturnTo(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw || raw.startsWith("//") || !raw.startsWith("/")) return "/";
+  if (/[\r\n\0]/.test(raw)) return "/";
+  try {
+    const base = "https://takosumi.invalid";
+    const parsed = new URL(raw, base);
+    if (parsed.origin !== base) return "/";
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return "/";
+  }
 }

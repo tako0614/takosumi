@@ -90,7 +90,10 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
   return (
     <Card>
       <CardHeader title={t("spaceSettings.tab.general")} />
-      <Show when={space()} fallback={<p class="muted">{t("common.loading")}</p>}>
+      <Show
+        when={space()}
+        fallback={<p class="muted">{t("common.loading")}</p>}
+      >
         {(current) => (
           <>
             <KVList

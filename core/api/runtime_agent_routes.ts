@@ -38,8 +38,7 @@ export const TAKOSUMI_RUNTIME_AGENT_PATHS = {
   lease: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/leases`,
   report: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/reports`,
   drain: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/drain`,
-  gatewayManifest:
-    `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/gateway-manifest`,
+  gatewayManifest: `${INTERNAL_V1_PREFIX}/runtime/agents/:agentId/gateway-manifest`,
 } as const;
 
 /**
@@ -54,6 +53,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
     summary: "Enrolls a runtime agent for provider work leasing.",
     auth: "internal-service",
     operationId: "enrollRuntimeAgent",
+    discoverable: false,
     openapi: {
       requestSchema: "RuntimeAgentEnrollRequest",
       okStatus: "201",
@@ -66,6 +66,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
     summary: "Records a runtime agent heartbeat.",
     auth: "internal-service",
     operationId: "heartbeatRuntimeAgent",
+    discoverable: false,
     openapi: {
       pathParams: ["agentId"],
       requestSchema: "RuntimeAgentHeartbeatRequest",
@@ -78,6 +79,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
     summary: "Leases work to a runtime agent.",
     auth: "internal-service",
     operationId: "leaseRuntimeAgentWork",
+    discoverable: false,
     openapi: {
       pathParams: ["agentId"],
       requestSchema: "RuntimeAgentLeaseRequest",
@@ -90,6 +92,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
     summary: "Reports runtime-agent work completion or failure.",
     auth: "internal-service",
     operationId: "reportRuntimeAgentWork",
+    discoverable: false,
     openapi: {
       pathParams: ["agentId"],
       requestSchema: "RuntimeAgentReportRequest",
@@ -102,6 +105,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
     summary: "Requests runtime-agent drain.",
     auth: "internal-service",
     operationId: "drainRuntimeAgent",
+    discoverable: false,
     openapi: {
       pathParams: ["agentId"],
       requestSchema: "RuntimeAgentDrainRequest",
@@ -115,6 +119,7 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
       "Issues a service-trusted Ed25519 signed gateway manifest the agent pins for fail-closed identity verification.",
     auth: "internal-service",
     operationId: "issueGatewayManifest",
+    discoverable: false,
     openapi: {
       pathParams: ["agentId"],
       okSchema: "GatewayManifestResponse",
@@ -124,13 +129,13 @@ export const RUNTIME_AGENT_ENDPOINTS: readonly ApiEndpoint[] = [
 
 export type RuntimeAgentAuthResult =
   | {
-    readonly ok: true;
-    readonly actor?: {
-      readonly actorAccountId: string;
-      readonly spaceId?: string;
-    } & Partial<TakosumiActorContext>;
-    readonly workloadIdentityId?: string;
-  }
+      readonly ok: true;
+      readonly actor?: {
+        readonly actorAccountId: string;
+        readonly spaceId?: string;
+      } & Partial<TakosumiActorContext>;
+      readonly workloadIdentityId?: string;
+    }
   | { readonly ok: false; readonly status?: 401 | 403; readonly error: string };
 
 export interface RegisterRuntimeAgentRoutesOptions {
@@ -171,8 +176,8 @@ export function registerRuntimeAgentRoutes(
   options: RegisterRuntimeAgentRoutesOptions,
 ): void {
   registerApiErrorHandler(app);
-  const authenticate = options.authenticate ??
-    createDefaultAuthenticator(options);
+  const authenticate =
+    options.authenticate ?? createDefaultAuthenticator(options);
   const { registry } = options;
   const signer = options.gatewayResponseSigner;
   if (signer) {
@@ -190,7 +195,8 @@ export function registerRuntimeAgentRoutes(
       const body = await cloned.text();
       const timestamp = clock().toISOString();
       const path = new URL(c.req.url).pathname;
-      const requestId = c.req.header(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER) ??
+      const requestId =
+        c.req.header(TAKOSUMI_INTERNAL_REQUEST_ID_HEADER) ??
         crypto.randomUUID();
       const nonce = crypto.randomUUID();
       const sig = await signGatewayResponse({
@@ -244,7 +250,8 @@ export function registerRuntimeAgentRoutes(
         endpoint: optionalString(request.endpoint),
         capabilities: optionalCapabilities(request.capabilities),
         metadata: optionalRecord(request.metadata),
-        heartbeatAt: optionalString(request.heartbeatAt) ??
+        heartbeatAt:
+          optionalString(request.heartbeatAt) ??
           optionalString(request.enrolledAt),
         hostKeyDigest: optionalString(request.hostKeyDigest),
       });
@@ -347,8 +354,8 @@ export function registerRuntimeAgentRoutes(
         const work = await registry.failWork({
           agentId,
           leaseId,
-          reason: optionalString(request.reason) ??
-            "runtime agent reported failure",
+          reason:
+            optionalString(request.reason) ?? "runtime agent reported failure",
           retry: optionalBoolean(request.retry),
           result: optionalRecord(request.result),
         });
@@ -409,10 +416,7 @@ export function registerRuntimeAgentRoutes(
     const issuer = options.gatewayManifestIssuer;
     if (!issuer) {
       return c.json(
-        apiError(
-          "not_implemented",
-          "gateway manifest issuer not configured",
-        ),
+        apiError("not_implemented", "gateway manifest issuer not configured"),
         501,
       );
     }
@@ -474,16 +478,16 @@ interface AuthorizeRuntimeAgentMutationInput {
 type RuntimeAgentAuthorizationResponse =
   | { readonly ok: true }
   | {
-    readonly ok: false;
-    readonly status: 403;
-    readonly body: {
-      readonly error: {
-        readonly code: string;
-        readonly message: string;
-        readonly details?: unknown;
+      readonly ok: false;
+      readonly status: 403;
+      readonly body: {
+        readonly error: {
+          readonly code: string;
+          readonly message: string;
+          readonly details?: unknown;
+        };
       };
     };
-  };
 
 function authorizeRuntimeAgentPathSubject(input: {
   readonly auth: Extract<RuntimeAgentAuthResult, { ok: true }>;
@@ -493,8 +497,8 @@ function authorizeRuntimeAgentPathSubject(input: {
   if (input.allowServicePrincipal && isServicePrincipal(input.auth)) {
     return { ok: true };
   }
-  const subjectAgentId = input.auth.actor?.agentId ??
-    input.auth.workloadIdentityId;
+  const subjectAgentId =
+    input.auth.actor?.agentId ?? input.auth.workloadIdentityId;
   if (!subjectAgentId || subjectAgentId !== input.agentId) {
     return {
       ok: false,
@@ -511,16 +515,18 @@ function authorizeRuntimeAgentPathSubject(input: {
 function isServicePrincipal(
   auth: Extract<RuntimeAgentAuthResult, { ok: true }>,
 ): boolean {
-  return auth.actor?.principalKind === "service" ||
+  return (
+    auth.actor?.principalKind === "service" ||
     (auth.actor?.serviceId !== undefined &&
-      auth.workloadIdentityId === auth.actor.serviceId);
+      auth.workloadIdentityId === auth.actor.serviceId)
+  );
 }
 
 async function authorizeRuntimeAgentMutation(
   input: AuthorizeRuntimeAgentMutationInput,
 ): Promise<RuntimeAgentAuthorizationResponse> {
-  const spaceId = optionalString(input.request.spaceId) ??
-    input.auth.actor?.spaceId;
+  const spaceId =
+    optionalString(input.request.spaceId) ?? input.auth.actor?.spaceId;
   const groupId = optionalString(input.request.groupId);
 
   try {
@@ -565,10 +571,7 @@ async function toJsonResponse(
   } catch (error) {
     if (error instanceof DomainError) {
       const status = domainStatus(error);
-      return c.json(
-        apiError(error.code, error.message, error.details),
-        status,
-      );
+      return c.json(apiError(error.code, error.message, error.details), status);
     }
     throw error;
   }
@@ -651,8 +654,8 @@ function optionalStringRecord(
   const record = optionalRecord(value);
   if (!record) return undefined;
   return Object.fromEntries(
-    Object.entries(record).filter((entry): entry is [string, string] =>
-      typeof entry[1] === "string"
+    Object.entries(record).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
 }

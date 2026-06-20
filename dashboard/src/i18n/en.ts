@@ -38,6 +38,8 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.spaceSettings": "Space settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
+  "nav.backToTakos": "Back to Takos",
+  "nav.deployContext": "Deploy / manage",
   "shell.skipToContent": "Skip to content",
   "shell.userMenu": "User menu",
   "shell.signOut": "Sign out",
@@ -58,8 +60,30 @@ export const en: Record<keyof typeof ja, string> = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
   "auth.signInSub": "Continue with your Takosumi account.",
+  "auth.brandDraft": "draft",
+  "auth.brandDraftAria": "Temporary Takosumi logo",
+  "auth.brandDraftMark": "tmp",
   "auth.continueWith": "Continue with {provider}",
-  "auth.notConfigured": "Not configured by the operator",
+  "auth.notConfigured": "Currently unavailable",
+  "auth.providerChecking": "Checking availability",
+  "auth.providerUnavailable": "Currently unavailable",
+  "auth.providerRetryNeeded": "Could not check availability",
+  "auth.noProvidersTitle": "Takosumi Cloud is getting ready",
+  "auth.noProvidersMessage":
+    "Sign-in is not open on this Takosumi Cloud environment yet. Please check back after access is enabled.",
+  "auth.noProvidersMessageWithInstall":
+    "Once sign-in is enabled, these install details will continue from here.",
+  "auth.providersLoadFailedTitle": "Could not check sign-in methods",
+  "auth.providersLoadFailedMessage": "Check your connection and try again.",
+  "auth.providersLoadFailedMessageWithInstall":
+    "Check your connection and try again. These install details are still preserved on this screen.",
+  "auth.retryProviderCheck": "Check again",
+  "auth.installContextAria": "Install source to continue after sign-in",
+  "auth.installContextKicker": "Install details",
+  "auth.installContextTitle": "Continue adding {name}",
+  "auth.installContextRef": "pinned version {ref}",
+  "auth.installContextDefaultRef": "default ref",
+  "auth.installContextRootPath": "root module",
   "auth.termsPrefix": "By continuing, you agree to the ",
   "auth.termsOfService": "Terms of Service",
   "auth.and": " and ",
@@ -115,41 +139,42 @@ export const en: Record<keyof typeof ja, string> = {
   "op.compatibility_check": "Compatibility check",
   "op.generic": "Operation",
 
-  // --- app list (home) -----------------------------------------------------
-  "apps.title": "Apps",
-  "apps.subtitle": "Apps in this Space and their status.",
-  "apps.add": "Add app",
+  // --- Installation list (home) --------------------------------------------
+  "apps.title": "Installations",
+  "apps.subtitle":
+    "OpenTofu Capsule Installations in this Space and their status.",
+  "apps.add": "Add Installation",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
-  "apps.empty.title": "No apps yet",
+  "apps.empty.title": "No Installations yet",
   "apps.empty.message":
-    "Pick one from the catalog or add an OpenTofu Capsule from a Git URL.",
-  "apps.empty.cta": "Add an app",
-  "apps.openApp": "Open",
+    "Start from a Starter Capsule or add an OpenTofu Capsule from a Git URL.",
+  "apps.empty.cta": "Add Installation",
+  "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.graphLink": "Dependency graph",
 
-  // --- app detail ----------------------------------------------------------
+  // --- Installation detail -------------------------------------------------
   "app.installationSub": "Installation",
   "app.tab.overview": "Overview",
   "app.tab.deploys": "Deploys",
   "app.tab.settings": "Settings",
   "app.tab.danger": "Danger zone",
-  "app.notFound": "App not found",
+  "app.notFound": "Installation not found",
   "app.backToList": "Back to list",
   "app.outputs.title": "Public addresses & outputs",
   "app.outputs.subtitle":
-    "Addresses and values this app exposes. Secrets are never shown.",
+    "Addresses and values this Installation exposes. Secrets are never shown.",
   "app.outputs.empty": "No public outputs yet. They appear after a deploy.",
   "app.outputs.none":
-    "This app exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
+    "This Installation exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
   "app.nextSteps.title": "Next steps",
   "app.nextSteps.infraOnly":
-    "The infrastructure (D1 / KV / R2 / Queues, …) is provisioned. Launching the app itself may need a separate step (e.g. a wrangler deploy). See the docs for the procedure.",
+    "This Installation has no public URL output yet. Check the latest Run, OutputSnapshot, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
   "app.nextSteps.docs": "Open the docs →",
-  "app.output.launchUrl": "App URL",
+  "app.output.launchUrl": "Public address",
   "app.output.url": "URL",
   "app.output.publicUrl": "Public URL",
   "app.output.endpoint": "Endpoint",
@@ -166,7 +191,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.info.title": "Installation info",
   "app.info.id": "ID",
   "app.info.generation": "State generation",
-  "app.info.outputSnapshot": "Output snapshot",
+  "app.info.deployment": "Current deployment",
   "app.info.installConfig": "InstallConfig",
   "app.deploys.title": "Deploy history",
   "app.deploys.subtitle":
@@ -179,20 +204,18 @@ export const en: Record<keyof typeof ja, string> = {
   "app.recentRuns.title": "Recent runs",
   "app.recentRuns.empty": "No recent runs.",
   "app.recentRuns.open": "Details",
-  "app.bindings.title": "Provider bindings",
+  "app.bindings.title": "Provider connections",
   "app.bindings.subtitle":
-    "Credential assignment per provider. Usually no change is needed.",
+    "Choose the provider connection each OpenTofu provider uses. Usually no change is needed.",
   "app.bindings.add": "Add provider",
   "app.bindings.aliasPlaceholder": "alias (optional)",
-  "app.bindings.defaultUnset": "no default",
-  "app.bindings.default": "default: {provider}",
   "app.bindings.selectConnection": "Select a connection",
   "app.bindings.remove": "Remove",
-  "app.bindings.errorProvider": "Enter the provider for binding {index}.",
-  "app.bindings.errorConnection": "Select a connection for {provider}.",
-  "app.bindings.errorManualRequired": "Enter values for {provider}.",
-  "app.bindings.errorManualJson": "Values for {provider} must be a JSON object.",
-  "app.danger.destroyTitle": "Delete this app",
+  "app.bindings.errorProvider":
+    "Enter the provider for provider connection {index}.",
+  "app.bindings.errorConnection":
+    "Select a ready provider connection for {provider}.",
+  "app.danger.destroyTitle": "Delete this Installation",
   "app.danger.destroyBody":
     "Deletion first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
   "app.danger.destroyCta": "Review deletion",
@@ -207,14 +230,16 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.waitingApproval":
     "This change needs approval before it can run. Review it and approve.",
   "run.summary.ready": "“{name}” is ready to deploy.",
-  "run.summary.readyChanges": "Create {create} / Update {update} / Delete {delete}",
+  "run.summary.readyChanges":
+    "Create {create} / Update {update} / Delete {delete}",
   "run.summary.destroyReady":
     "“{name}” is ready to be deleted. This cannot be undone once run.",
   "run.summary.applied": "Deploy started. It will take a moment to settle.",
   "run.summary.applying": "Deploying…",
   "run.summary.applySucceeded": "Deploy complete.",
   "run.summary.failed": "{operation} failed.",
-  "run.summary.failedHint": "Check the diagnostics and logs below for the cause.",
+  "run.summary.failedHint":
+    "Check the diagnostics and logs below for the cause.",
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
   "run.summary.fallback": "Run status: {status}",
@@ -224,7 +249,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.deploying": "Deploying...",
   "run.deployBlocked": "Insufficient balance",
   "run.retryPlan": "Review changes again",
-  "run.backToApp": "Back to app",
+  "run.backToApp": "Back to Installation",
   "run.destructiveWarning":
     "This change replaces or deletes existing resources. Running it may lose data.",
   "run.destructiveConfirm": "Run, accepting the destructive changes",
@@ -261,41 +286,51 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.empty": "No audit events.",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "Add an app",
+  "new.title": "Add Installation",
   "new.subtitle":
-    "Pick one from the catalog or add an OpenTofu Capsule from a Git URL.",
-  "new.tab.catalog": "Catalog",
+    "Start from a known Capsule or add any OpenTofu Capsule from a Git URL.",
+  "new.tab.catalog": "Starter Capsules",
   "new.tab.git": "From Git URL",
   "new.catalog.intro":
-    "Official and known OpenTofu Capsules. Picking one pre-fills the source.",
-  "new.catalog.select": "Add this",
+    "Known OpenTofu Capsule coordinates. Picking one only pre-fills the source.",
+  "new.catalog.select": "Use this Capsule",
   "new.deeplink.summary":
     "The source for “{capsule}” was filled in from a link. Review it before adding.",
   "new.git.url": "Git URL",
   "new.git.ref": "Ref",
   "new.git.path": "Path (module path)",
-  "new.name": "Name for this install",
+  "new.name": "Installation name",
   "new.managed.notice":
-    "This will run on the operator's managed cloud — you don't need to bring your own cloud connection.",
+    "The Gateway has verified coverage for supported Capsules. You can continue without adding an own-key Provider Connection when every required provider is covered.",
   "new.managed.needCredential":
     "Applying needs a cloud connection (Cloudflare, AWS, …) and this Space has none yet.",
   "new.managed.connectFirst": "Connect a cloud first",
-  "new.managed.byoTitle": "Want to run it on your own cloud? (optional)",
+  "new.managed.byoTitle": "Want to use your own provider key? (optional)",
   "new.managed.byoBody":
-    "By default the app runs on the operator's managed cloud. To deploy to your own Cloudflare or AWS instead, add a connection to this Space. You can also just continue as is.",
-  "new.managed.byoLink": "Set up your own cloud connection",
-  "new.compat.check": "Inspect contents",
-  "new.compat.checking": "Inspecting...",
+    "Operator-provided credentials only cover providers enabled by this operator. Add a verified Space connection when the Capsule needs AWS, GCP, GitHub, Kubernetes, or your own Cloudflare account.",
+  "new.managed.byoLink": "Set up your provider connection",
+  "new.compat.check": "Register source & inspect",
+  "new.compat.checking": "Registering and inspecting...",
   "new.compat.title": "Inspection result",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
   "new.proceed": "Review & add",
-  "new.proceedHint": "Run “Inspect contents” first.",
+  "new.proceedHint": "Run “Register source & inspect” first.",
+  "new.providers.title": "Provider connections",
+  "new.providers.subtitle":
+    "Choose the provider connection for each provider before the first plan. Unset providers fail closed; Takosumi will not silently use another connection.",
+  "new.providers.noneRequired":
+    "This Capsule did not declare any provider credentials for the first plan.",
+  "new.providers.alias": "alias: {alias}",
+  "new.providers.selectConnection": "Select a connection",
+  "new.providers.manageConnections": "Manage provider connections",
+  "new.providers.errorConnection":
+    "Select a ready provider connection for {provider}.",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
-  "new.step.create": "Create app",
+  "new.step.create": "Create Installation",
   "new.step.plan": "Review changes",
   "new.error.spaceRequired": "Select a Space.",
   "new.error.urlRequired": "Enter a Git URL.",
@@ -361,13 +396,16 @@ export const en: Record<keyof typeof ja, string> = {
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
     "Register provider credentials per Space. Values are write-only and never shown again after saving.",
-  "conn.operatorDefaults.title": "Operator default connections",
-  "conn.operatorDefaults.subtitle":
-    "The operator-side defaults used when you don't configure a connection.",
-  "conn.operatorDefaults.provider": "Provider",
-  "conn.operatorDefaults.status": "Status",
-  "conn.operatorDefaults.configured": "Configured",
-  "conn.scope.operator": "Operator default",
+  "conn.providerConnections.title": "Provider connections",
+  "conn.providerConnections.subtitle":
+    "Credential ownership available to this Space. Values stay write-only.",
+  "conn.providerConnections.provider": "Provider",
+  "conn.providerConnections.name": "Name",
+  "conn.providerConnections.ownership": "Ownership",
+  "conn.providerConnections.status": "Status",
+  "conn.ownership.ownKey": "Own key",
+  "conn.ownership.takosProvided": "Takosumi-provided",
+  "conn.scope.operator": "Gateway",
   "conn.scope.space": "Space",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
@@ -375,7 +413,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.add.subtitle":
     "Pick a provider, then paste a token or register env values.",
   "conn.add.provider": "Provider",
-  "conn.add.envSetOption": "Other provider (Provider Env Set)",
+  "conn.add.genericEnvOption": "Use my own provider key",
   "conn.add.displayName": "Display name (optional)",
   "conn.add.displayNamePlaceholder": "Production Cloudflare",
   "conn.guided.intro":
@@ -390,18 +428,19 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.advanced.register": "Register values directly",
   "conn.register": "Register connection",
   "conn.registering": "Registering...",
-  "conn.envset.intro":
+  "conn.genericEnv.intro":
     "Register credentials for any OpenTofu provider (AWS / GCP / Kubernetes / …) as environment variables (NAME=value). Values are write-only; only the env names remain visible.",
-  "conn.envset.providerName": "Provider name",
-  "conn.envset.envName": "Env variable name",
-  "conn.envset.value": "Value",
-  "conn.envset.valuePlaceholder": "Paste the value",
-  "conn.envset.addRow": "Add env variable",
-  "conn.envset.providerRequired": "Enter a provider name.",
-  "conn.envset.cloudflareGuided":
+  "conn.genericEnv.providerName": "Provider name",
+  "conn.genericEnv.envName": "Env variable name",
+  "conn.genericEnv.value": "Value",
+  "conn.genericEnv.valuePlaceholder": "Paste the value",
+  "conn.genericEnv.addRow": "Add env variable",
+  "conn.genericEnv.providerRequired": "Enter a provider name.",
+  "conn.genericEnv.cloudflareGuided":
     "Register Cloudflare via the provider above (it has a guided flow).",
-  "conn.envset.nameRequired": "Rows with a value need an env variable name.",
-  "conn.envset.oneRequired": "Enter at least one env variable.",
+  "conn.genericEnv.nameRequired":
+    "Rows with a value need an env variable name.",
+  "conn.genericEnv.oneRequired": "Enter at least one env variable.",
   "conn.error.invalidProvider": "Invalid provider.",
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
@@ -416,7 +455,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Manage this Space's control backups and service-data archives.",
+    "Manage this Space's control/state backups. Service-data archives appear only for Installations that provide an export.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
@@ -460,23 +499,24 @@ export const en: Record<keyof typeof ja, string> = {
     "Adds, runs, approvals, failures — what happened across your Spaces, newest first.",
   "notif.empty.title": "No notifications yet",
   "notif.empty.message":
-    "Events appear here when you add or run apps.",
+    "Events appear here when you add or run Installations.",
   "notif.attention": "{n} events need attention.",
   "notif.badge.attention": "Attention",
   "notif.viewRaw": "View the raw audit log (Activity) →",
-  "notif.event.installCreated": "Added app “{name}”",
+  "notif.event.installCreated": "Added Installation “{name}”",
   "notif.event.installCreatedEnv": "Environment: {env}",
   "notif.event.planReady": "{operation} is ready",
   "notif.event.planReadyDetail": "Review the contents and approve",
   "notif.event.planBlockedDetail": "Approval is blocked by policy",
   "notif.event.approved": "Approved {operation}",
-  "notif.event.applied": "Deployed app changes",
+  "notif.event.applied": "Deployed Installation changes",
   "notif.event.appliedDetail": "Updated {n} outputs",
-  "notif.event.destroyed": "Deleted an app",
+  "notif.event.destroyed": "Deleted an Installation",
   "notif.event.failed": "{operation} failed",
   "notif.event.failedDetail": "Error: {code}",
   "notif.event.failedHint": "Check the run logs for details",
-  "notif.event.drift": "An app's real state has drifted from the record",
+  "notif.event.drift":
+    "An Installation's real state has drifted from the record",
   "notif.event.driftDetail": "A redeploy may be needed",
   "notif.event.stale": "A dependency update requires a redeploy",
   "notif.event.staleDetail": "Updated by: {producer}",
@@ -485,8 +525,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.connRevoked": "Connection “{provider}” was revoked",
   "notif.event.connRevokedGeneric": "A connection was revoked",
   "notif.event.backupCreated": "Created a backup",
-  "notif.event.depCreated": "Linked two apps",
-  "notif.event.depDeleted": "Unlinked two apps",
+  "notif.event.depCreated": "Linked two Installations",
+  "notif.event.depDeleted": "Unlinked two Installations",
   "notif.event.shareRequested": "Received an output-share request",
   "notif.event.shareApproved": "Approved an output share",
   "notif.event.shareRevoked": "Revoked an output share",
@@ -497,8 +537,7 @@ export const en: Record<keyof typeof ja, string> = {
   "activity.subtitle":
     "The Space's audit trail (recent operations), as raw events.",
   "activity.empty.title": "No activity yet",
-  "activity.empty.message":
-    "Operations in this Space are recorded here.",
+  "activity.empty.message": "Operations in this Space are recorded here.",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Grouped update",
@@ -512,12 +551,12 @@ export const en: Record<keyof typeof ja, string> = {
   // --- graph ---------------------------------------------------------------------
   "graph.title": "Dependency graph",
   "graph.subtitle":
-    "The dependency DAG between apps — producers above, consumers below.",
+    "The dependency DAG between Installations — producers above, consumers below.",
   "graph.layer": "Layer {n}",
   "graph.cycle": "Cycle (unresolvable)",
   "graph.dependsOn": "↑ depends on {names}",
-  "graph.empty.title": "No apps",
-  "graph.empty.message": "This Space has no apps yet.",
+  "graph.empty.title": "No Installations",
+  "graph.empty.message": "This Space has no Installations yet.",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
@@ -570,15 +609,4 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.reservations.title": "Credit reservations",
   "billing.reservations.empty": "No reservations yet.",
   "billing.reservations.expires": "Expires",
-
-  // --- takos start -------------------------------------------------------------------
-  "start.title": "Start Takos",
-  "start.subtitle": "Confirm the destination and Space, then open Takos.",
-  "start.takosUrl": "Takos URL",
-  "start.account": "Account ID",
-  "start.space": "Space ID",
-  "start.terms": "I agree to the Takosumi Terms of Service.",
-  "start.launch": "Open Takos",
-  "start.error.idsRequired": "Enter the Account ID and Space ID.",
-  "start.error.termsRequired": "You must agree to the Terms of Service.",
 };

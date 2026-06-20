@@ -5,7 +5,7 @@
 #   2. Mock /authorize                     -> 302 to /sign-in/callback with code
 #   3. Worker /v1/auth/upstream/callback   -> 200 with {subject, session_id, ...}
 #
-# Run as: bash scripts/oauth-e2e.sh [google|github]
+# Run as: bash scripts/oauth-e2e.sh [google]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +19,10 @@ trap 'rm -f "$COOKIE_JAR"' EXIT
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
 	exit 1
+fi
+if [[ "$PROVIDER" != "google" ]]; then
+	echo "Unsupported local OAuth provider '$PROVIDER'; Takosumi sign-in is Google-only." >&2
+	exit 2
 fi
 
 # 1. /v1/auth/upstream/authorize → 302 to mock /authorize

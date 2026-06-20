@@ -29,7 +29,7 @@ import {
   isPrivateIpv4,
   isPrivateIpv6Groups,
   parseIpv6,
-} from "takosumi-contract/reference/ip-classification";
+} from "./ip-classification.ts";
 
 export class BlockedHostError extends Error {
   constructor(label: string, host: string) {

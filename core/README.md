@@ -4,14 +4,14 @@ Reference service for the OpenTofu-native Takosumi control plane. It records Spa
 Dependency, Run, RunGroup, StateSnapshot, OutputSnapshot, Deployment, policy decisions, logs, and audit events.
 
 The service does not hold provider credential values. OpenTofu execution runs through the internal runner/profile
-machinery selected by the operator and resolved from Connection + ProviderBinding + policy.
+machinery selected by the operator and resolved from Connection + InstallationProviderEnvBinding + policy.
 
 ## Run From Source
 
 ```bash
 cd takosumi
 bun install
-bun src/cli/main.ts server --port 8788
+PORT=8788 bun core/index.ts
 ```
 
 ## Internal deploy-control seam (`/internal/v1`)
@@ -34,7 +34,7 @@ Spaces, Sources, Connections, Installations, Dependencies, Runs, RunGroups, Depl
 
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
 `/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
-are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/app-installations` and
+are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/installation-projections` and
 the session-authed control surface `/api/v1/connections` are a distinct edge API, owned by the accounts plane, not this
 seam. Connections are served only under `/api/v1/connections`; there is no `/v1/connections` edge.)
 
@@ -46,12 +46,12 @@ seam. Connections are served only under `/api/v1/connections`; there is no `/v1/
 
 ## Required env (production)
 
-| Env var | Description |
-| --- | --- |
-| `TAKOSUMI_DATABASE_URL` | Postgres URL for state / record store |
+| Env var                            | Description                                 |
+| ---------------------------------- | ------------------------------------------- |
+| `TAKOSUMI_DATABASE_URL`            | Postgres URL for state / record store       |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` | Symmetric key for at-rest secret encryption |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | Bearer for Deploy Control API routes |
-| `TAKOSUMI_ENVIRONMENT=production` | strict-runtime checks |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN`    | Bearer for Deploy Control API routes        |
+| `TAKOSUMI_ENVIRONMENT=production`  | strict-runtime checks                       |
 
 For dev:
 

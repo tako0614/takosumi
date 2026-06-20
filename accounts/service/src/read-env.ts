@@ -15,9 +15,11 @@ type ProcessEnvLike = Record<string, string | undefined>;
 
 function processEnv(): ProcessEnvLike | undefined {
   try {
-    return (globalThis as {
-      process?: { env?: ProcessEnvLike };
-    }).process?.env;
+    return (
+      globalThis as {
+        process?: { env?: ProcessEnvLike };
+      }
+    ).process?.env;
   } catch {
     return undefined;
   }

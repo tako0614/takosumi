@@ -1,7 +1,13 @@
 /* @refresh reload */
 import { lazy } from "solid-js";
 import { render } from "solid-js/web";
-import { Navigate, Route, Router, useLocation, useParams } from "@solidjs/router";
+import {
+  Navigate,
+  Route,
+  Router,
+  useLocation,
+  useParams,
+} from "@solidjs/router";
 
 // Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
 import "@fontsource-variable/bricolage-grotesque";
@@ -24,11 +30,11 @@ const SignInView = lazy(() => import("./views/auth/SignInView.tsx"));
 const SignInCallbackView = lazy(() =>
   import("./views/auth/SignInView.tsx").then((m) => ({
     default: m.SignInCallbackView,
-  }))
+  })),
 );
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
-// --- app-centric core ---------------------------------------------------------
+// --- Installation-centric core ------------------------------------------------
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
@@ -36,10 +42,13 @@ const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const GraphView = lazy(() => import("./views/graph/GraphView.tsx"));
 const ActivityView = lazy(() => import("./views/activity/ActivityView.tsx"));
-const NotificationsView = lazy(() => import("./views/notifications/NotificationsView.tsx"));
-const SpaceSettingsView = lazy(() => import("./views/space/SpaceSettingsView.tsx"));
+const NotificationsView = lazy(
+  () => import("./views/notifications/NotificationsView.tsx"),
+);
+const SpaceSettingsView = lazy(
+  () => import("./views/space/SpaceSettingsView.tsx"),
+);
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
-const TakosStartView = lazy(() => import("./views/account/TakosStartView.tsx"));
 
 // --- redirects ---------------------------------------------------------------
 
@@ -51,10 +60,12 @@ function RedirectWithQuery(props: { readonly to: string }) {
   return <Navigate href={`${props.to}${loc.search}`} />;
 }
 
-/** `/installations/:id` → `/apps/:id` (old control-plane detail links). */
-function RedirectInstallationDetail() {
+/** `/apps/:id` -> `/installations/:id` (legacy dashboard links). */
+function RedirectLegacyAppDetail() {
   const params = useParams();
-  return <Navigate href={`/apps/${encodeURIComponent(params.id ?? "")}`} />;
+  const id = encodeURIComponent(params.id ?? "");
+  const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
+  return <Navigate href={`/installations/${id}${tab}`} />;
 }
 
 function App() {
@@ -63,16 +74,23 @@ function App() {
       {/* Public — no session required. */}
       <Route path="/sign-in" component={SignInView} />
       <Route path="/sign-in/callback" component={SignInCallbackView} />
-      {/* Marketing-site CTA aliases (the takosumi.com website links /signup
-          and /login). */}
-      <Route path="/signup" component={() => <Navigate href="/sign-in" />} />
-      <Route path="/login" component={() => <Navigate href="/sign-in" />} />
+      {/* Legacy external aliases. Current website CTAs avoid open signup, but
+          old links should still land on the only sign-in screen. */}
+      <Route
+        path="/signup"
+        component={() => <RedirectWithQuery to="/sign-in" />}
+      />
+      <Route
+        path="/login"
+        component={() => <RedirectWithQuery to="/sign-in" />}
+      />
 
-      {/* App-centric core (AuthGuard-gated inside each view). */}
+      {/* Installation-centric core (AuthGuard-gated inside each view). */}
       <Route path="/" component={AppListView} />
+      <Route path="/installations" component={AppListView} />
       <Route path="/new" component={NewAppView} />
-      <Route path="/apps/:id" component={AppDetailView} />
-      <Route path="/apps/:id/:tab" component={AppDetailView} />
+      <Route path="/installations/:id" component={AppDetailView} />
+      <Route path="/installations/:id/:tab" component={AppDetailView} />
       <Route path="/runs/:id" component={RunView} />
       <Route path="/run-groups/:id" component={RunGroupView} />
       <Route path="/graph" component={GraphView} />
@@ -81,31 +99,60 @@ function App() {
       <Route path="/space/settings" component={SpaceSettingsView} />
       <Route path="/space/settings/:tab" component={SpaceSettingsView} />
       <Route path="/account" component={AccountView} />
-      <Route path="/takos/start" component={TakosStartView} />
 
       {/* Old paths → new homes. /install is the external install link
           (client-handled): it forwards its query to /new, where
           lib/install-link.ts seeds the Git form — pre-fill only, the visitor
           always confirms before anything installs. The Cloudflare OAuth
           callback's /connections keeps its result query too. */}
-      <Route path="/install" component={() => <RedirectWithQuery to="/new" />} />
+      <Route
+        path="/install"
+        component={() => <RedirectWithQuery to="/new" />}
+      />
       <Route
         path="/connections"
         component={() => <RedirectWithQuery to="/space/settings/connections" />}
       />
       <Route path="/home" component={() => <Navigate href="/" />} />
-      <Route path="/installations" component={() => <Navigate href="/" />} />
-      <Route path="/installations/:id" component={RedirectInstallationDetail} />
-      <Route path="/apps" component={() => <Navigate href="/" />} />
-      <Route path="/members" component={() => <Navigate href="/space/settings/members" />} />
-      <Route path="/backups" component={() => <Navigate href="/space/settings/backups" />} />
-      <Route path="/output-shares" component={() => <Navigate href="/space/settings/shares" />} />
+      <Route
+        path="/apps"
+        component={() => <Navigate href="/installations" />}
+      />
+      <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
+      <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
+      <Route
+        path="/members"
+        component={() => <Navigate href="/space/settings/members" />}
+      />
+      <Route
+        path="/backups"
+        component={() => <Navigate href="/space/settings/backups" />}
+      />
+      <Route
+        path="/output-shares"
+        component={() => <Navigate href="/space/settings/shares" />}
+      />
       <Route path="/sources" component={() => <Navigate href="/" />} />
-      <Route path="/providers" component={() => <Navigate href="/space/settings/connections" />} />
-      <Route path="/account/settings" component={() => <Navigate href="/space/settings" />} />
-      <Route path="/account/billing" component={() => <Navigate href="/space/settings/billing" />} />
-      <Route path="/account/profile" component={() => <Navigate href="/account" />} />
-      <Route path="/account/sessions" component={() => <Navigate href="/account" />} />
+      <Route
+        path="/providers"
+        component={() => <Navigate href="/space/settings/connections" />}
+      />
+      <Route
+        path="/account/settings"
+        component={() => <Navigate href="/space/settings" />}
+      />
+      <Route
+        path="/account/billing"
+        component={() => <Navigate href="/space/settings/billing" />}
+      />
+      <Route
+        path="/account/profile"
+        component={() => <Navigate href="/account" />}
+      />
+      <Route
+        path="/account/sessions"
+        component={() => <Navigate href="/account" />}
+      />
 
       {/* Anything else is a real 404 — no silent bounce to home. */}
       <Route path="*" component={NotFoundView} />

@@ -4,7 +4,7 @@
  * outputs; create + revoke are gated by space-permission on the GRANTING (from)
  * Space, approve is gated on the RECEIVING (to) Space, and the list returns the
  * grants a Space granted OR received. Owns its handlers and its slice of the
- * {@link DEPLOY_CONTROL_PUBLIC_ENDPOINTS}
+ * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS}
  * descriptor inventory.
  */
 

@@ -1,6 +1,6 @@
 import { For } from "solid-js";
 import { ACCOUNTS, APPS, PROVIDERS, SUBSTRATE } from "~/content/ecosystem";
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 export default function EcosystemMap() {
   return (
@@ -10,13 +10,13 @@ export default function EcosystemMap() {
         <span class="eyebrow">ecosystem map</span>
         <h2>ひとつの土台、たくさんの形。</h2>
         <p class="lede">
-          上に並ぶ app、真ん中の Takosumi、下の deploy 先。この 3 層を
-          operator が自由に組み替えても、app の入口は変わりません。
+          上に並ぶ Capsule / workload、真ん中の Takosumi、下の deploy 先。この 3
+          層を組み替えても、Capsule と Run の入口は変わりません。
         </p>
         <div class="ecosystem-map">
-          <div class="ecosystem-layer ecosystem-apps">
+          <div class="ecosystem-layer ecosystem-workloads">
             <div class="ecosystem-layer-label">
-              Takosumi が deploy する module / product（例）
+              Takosumi が deploy する Capsule / workload（例）
             </div>
             <div class="ecosystem-chips">
               <For each={APPS}>

@@ -2,14 +2,11 @@ import process from "node:process";
 import { readFile } from "node:fs/promises";
 import {
   booleanOption,
-  commaSeparatedOption,
   optionalStringOption,
   parseOptions,
 } from "./cli-options.ts";
 import {
   connectionsCreateCloudflareHelpText,
-  connectionsDefaultsHelpText,
-  connectionsDefaultsSetHelpText,
   connectionsHelpText,
   connectionsListHelpText,
   connectionsRevokeHelpText,
@@ -18,10 +15,6 @@ import {
 import { isRecord, parseJson, stringValue } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
 import { CONNECTIONS_PATH } from "takosumi-contract/connections";
-import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
-
-const OPERATOR_DEFAULTS_PATH =
-  `${INTERNAL_V1_PREFIX}/operator-connection-defaults`;
 
 export async function runConnections(
   args: string[],
@@ -38,7 +31,6 @@ export async function runConnections(
   }
   if (command === "test") return await runConnectionsTest(rest, io);
   if (command === "revoke") return await runConnectionsRevoke(rest, io);
-  if (command === "defaults") return await runConnectionsDefaults(rest, io);
   io.stderr(`Unknown connections command: ${command}`);
   io.stderr(connectionsHelpText());
   return 2;
@@ -83,10 +75,7 @@ export async function runConnectionsCreateCloudflareToken(
       body,
       options,
     });
-    await applyRequestedDefaults(response, options);
-    io.stdout(
-      formatConnectionCreate(response, booleanOption(options, "json")),
-    );
+    io.stdout(formatConnectionCreate(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -157,90 +146,6 @@ export async function runConnectionsRevoke(
   }
 }
 
-export async function runConnectionsDefaults(
-  args: string[],
-  io: CliIo,
-): Promise<number> {
-  const [command, ...rest] = args;
-  if (!command || command === "--help" || command === "-h") {
-    io.stdout(connectionsDefaultsHelpText());
-    return 0;
-  }
-  if (command === "list") {
-    const options = parseOptions(rest);
-    try {
-      const response = await requestDeployControlApi({
-        path: OPERATOR_DEFAULTS_PATH,
-        options,
-      });
-      io.stdout(formatOperatorDefaults(response, booleanOption(options, "json")));
-      return 0;
-    } catch (error) {
-      io.stderr(error instanceof Error ? error.message : String(error));
-      return 1;
-    }
-  }
-  if (command === "set") return await runConnectionsDefaultsSet(rest, io);
-  io.stderr(`Unknown connections defaults command: ${command}`);
-  io.stderr(connectionsDefaultsHelpText());
-  return 2;
-}
-
-export async function runConnectionsDefaultsSet(
-  args: string[],
-  io: CliIo,
-): Promise<number> {
-  const [provider, connectionId, ...rest] = args;
-  const options = parseOptions(rest);
-  if (options.help) {
-    io.stdout(connectionsDefaultsSetHelpText());
-    return 0;
-  }
-  if (!provider || provider.startsWith("--")) {
-    io.stderr("provider is required");
-    return 2;
-  }
-  if (!connectionId || connectionId.startsWith("--")) {
-    io.stderr("connection id is required");
-    return 2;
-  }
-  try {
-    const response = await setOperatorDefault(provider, connectionId, options);
-    io.stdout(
-      formatOperatorDefaultSet(response, booleanOption(options, "json")),
-    );
-    return 0;
-  } catch (error) {
-    io.stderr(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
-}
-
-async function applyRequestedDefaults(
-  createResponse: unknown,
-  options: Record<string, string | boolean>,
-): Promise<void> {
-  const defaults = commaSeparatedOption(options, "default");
-  if (defaults.length === 0) return;
-  const connectionId = connectionIdFromResponse(createResponse);
-  for (const provider of defaults) {
-    await setOperatorDefault(provider, connectionId, options);
-  }
-}
-
-async function setOperatorDefault(
-  provider: string,
-  connectionId: string,
-  options: Record<string, string | boolean>,
-): Promise<unknown> {
-  return await requestDeployControlApi({
-    path: OPERATOR_DEFAULTS_PATH,
-    method: "PUT",
-    body: { provider, connectionId },
-    options,
-  });
-}
-
 async function requestDeployControlApi(input: {
   path: string;
   options: Record<string, string | boolean>;
@@ -249,7 +154,8 @@ async function requestDeployControlApi(input: {
   allowEmpty?: boolean;
 }): Promise<unknown> {
   const headers: Record<string, string> = { accept: "application/json" };
-  const token = optionalStringOption(input.options, "token") ??
+  const token =
+    optionalStringOption(input.options, "token") ??
     process.env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
   if (token) headers.authorization = `Bearer ${token}`;
   const init: RequestInit = { method: input.method ?? "GET", headers };
@@ -264,7 +170,9 @@ async function requestDeployControlApi(input: {
   const text = await response.text();
   const body = text.trim().length > 0 ? parseJson(text) : undefined;
   if (!response.ok) {
-    throw new Error(deployControlApiErrorMessage(body, `HTTP ${response.status}`));
+    throw new Error(
+      deployControlApiErrorMessage(body, `HTTP ${response.status}`),
+    );
   }
   if (body === undefined) {
     if (input.allowEmpty) return {};
@@ -276,7 +184,8 @@ async function requestDeployControlApi(input: {
 function deployControlApiBase(
   options: Record<string, string | boolean>,
 ): string {
-  const raw = optionalStringOption(options, "url") ??
+  const raw =
+    optionalStringOption(options, "url") ??
     optionalStringOption(options, "deployControlUrl") ??
     process.env.TAKOSUMI_DEPLOY_CONTROL_URL ??
     process.env.TAKOSUMI_ACCOUNTS_URL;
@@ -329,7 +238,9 @@ function connectionBody(
     throw new TypeError("operator CLI only accepts --scope operator");
   }
   if (optionalStringOption(options, "space")) {
-    throw new TypeError("operator CLI does not create Space-owned Connections");
+    throw new TypeError(
+      "operator CLI does not create Space-owned Provider Connection backing material",
+    );
   }
   const displayName = optionalStringOption(options, "displayName");
   const expiresAt = optionalStringOption(options, "expiresAt");
@@ -356,11 +267,14 @@ async function valuesFromOptions(
     ? optionalStringOption(options, single.singleFileOption)
     : undefined;
   if (valuesFile && singleFile) {
-    throw new TypeError("--values-file cannot be combined with provider token file options");
+    throw new TypeError(
+      "--values-file cannot be combined with provider token file options",
+    );
   }
   if (single && singleFile) {
     const value = (await readFile(singleFile, "utf8")).trim();
-    if (!value) throw new TypeError(`--${kebab(single.singleFileOption)} is empty`);
+    if (!value)
+      throw new TypeError(`--${kebab(single.singleFileOption)} is empty`);
     return { [single.singleEnvName]: value };
   }
   if (!valuesFile) {
@@ -371,11 +285,14 @@ async function valuesFromOptions(
     );
   }
   const parsed = parseJson(await readFile(valuesFile, "utf8"));
-  if (!isRecord(parsed)) throw new TypeError("--values-file must contain a JSON object");
+  if (!isRecord(parsed))
+    throw new TypeError("--values-file must contain a JSON object");
   const output: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (typeof value !== "string" || value.length === 0) {
-      throw new TypeError(`--values-file field ${key} must be a non-empty string`);
+      throw new TypeError(
+        `--values-file field ${key} must be a non-empty string`,
+      );
     }
     output[key] = value;
   }
@@ -385,19 +302,12 @@ async function valuesFromOptions(
   return output;
 }
 
-function connectionIdFromResponse(response: unknown): string {
-  if (isRecord(response) && isRecord(response.connection)) {
-    const id = stringValue(response.connection.id);
-    if (id) return id;
-  }
-  throw new Error("Connection create response did not include connection.id");
-}
-
 function formatConnectionsList(response: unknown, asJson: boolean): string {
   if (asJson) return JSON.stringify(response, null, 2);
-  const connections = isRecord(response) && Array.isArray(response.connections)
-    ? response.connections
-    : [];
+  const connections =
+    isRecord(response) && Array.isArray(response.connections)
+      ? response.connections
+      : [];
   if (connections.length === 0) return "No connections found.";
   const lines = ["Connections:"];
   for (const value of connections) {
@@ -431,61 +341,44 @@ function formatConnectionCreate(response: unknown, asJson: boolean): string {
 
 function formatConnectionTest(response: unknown, asJson: boolean): string {
   if (asJson) return JSON.stringify(response, null, 2);
-  if (!isRecord(response)) return "Connection test response is missing details.";
+  if (!isRecord(response))
+    return "Connection test response is missing details.";
   return [
     `Connection test: ${stringValue(response.status) ?? "unknown"}`,
-    ...(stringValue(response.detail) ? [`  detail: ${stringValue(response.detail)}`] : []),
+    ...(stringValue(response.detail)
+      ? [`  detail: ${stringValue(response.detail)}`]
+      : []),
   ].join("\n");
-}
-
-function formatOperatorDefaults(response: unknown, asJson: boolean): string {
-  if (asJson) return JSON.stringify(response, null, 2);
-  const defaults = isRecord(response) &&
-      Array.isArray(response.operatorConnectionDefaults)
-    ? response.operatorConnectionDefaults
-    : [];
-  if (defaults.length === 0) return "No operator connection defaults found.";
-  const lines = ["Operator connection defaults:"];
-  for (const value of defaults) {
-    if (!isRecord(value)) continue;
-    lines.push(
-      `  ${stringValue(value.provider) ?? "unknown-provider"}  ${
-        stringValue(value.provider) ?? "unknown-provider"
-      }  ${stringValue(value.connectionId) ?? "unknown-connection"}`,
-    );
-  }
-  return lines.join("\n");
-}
-
-function formatOperatorDefaultSet(response: unknown, asJson: boolean): string {
-  if (asJson) return JSON.stringify(response, null, 2);
-  if (!isRecord(response) || !isRecord(response.operatorConnectionDefault)) {
-    return "Operator default response is missing details.";
-  }
-  const value = response.operatorConnectionDefault;
-  return `Operator default ${stringValue(value.provider) ?? "unknown-provider"} -> ${
-    stringValue(value.connectionId) ?? "unknown-connection"
-  }`;
 }
 
 function envNames(connection: Record<string, unknown>): readonly string[] {
   return Array.isArray(connection.envNames)
-    ? connection.envNames.filter((value): value is string =>
-      typeof value === "string" && value.length > 0
-    )
+    ? connection.envNames.filter(
+        (value): value is string =>
+          typeof value === "string" && value.length > 0,
+      )
     : [];
 }
 
-function deployControlApiErrorMessage(value: unknown, fallback: string): string {
+function deployControlApiErrorMessage(
+  value: unknown,
+  fallback: string,
+): string {
   if (!isRecord(value)) return fallback;
   if (isRecord(value.error)) {
-    return stringValue(value.error.message) ??
+    return (
+      stringValue(value.error.message) ??
       stringValue(value.error_description) ??
       stringValue(value.error.code) ??
-      fallback;
+      fallback
+    );
   }
-  return stringValue(value.error_description) ?? stringValue(value.message) ??
-    stringValue(value.error) ?? fallback;
+  return (
+    stringValue(value.error_description) ??
+    stringValue(value.message) ??
+    stringValue(value.error) ??
+    fallback
+  );
 }
 
 function kebab(value: string): string {

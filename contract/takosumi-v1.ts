@@ -441,7 +441,7 @@ export interface CoreOutputDeclaration {
   /** `output:<group>/<name>` */
   address: ObjectAddress;
   producerGroupId: string;
-  /** Output contract id (e.g. output.mcp-server@v1). */
+  /** Output contract id (for example output.http-endpoint@v1). */
   contract: DescriptorId;
   /** Descriptor-defined source projection, e.g. exposure / path / lookup. */
   source: unknown;

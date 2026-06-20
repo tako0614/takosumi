@@ -97,9 +97,7 @@ export interface ServeHttpOptions {
   signal?: AbortSignal;
 }
 
-export type FetchHandler = (
-  request: Request,
-) => Response | Promise<Response>;
+export type FetchHandler = (request: Request) => Response | Promise<Response>;
 
 export interface RuntimeAdapter {
   readonly kind: RuntimeKind;
@@ -109,16 +107,13 @@ export interface RuntimeAdapter {
   /**
    * Absolute path to the runtime executable that is running this process
    * (Node/Bun `process.execPath`). Used by CLI commands that
-   * render supervisor templates (e.g. `takosumi server --detach`). Throws
+   * render supervisor templates for long-running operator processes. Throws
    * {@link UnavailableInRuntimeError} on Workers / unknown runtimes.
    */
   execPath(): string;
   exit(code: number): never;
   onSignal(signal: Signal, handler: () => void): void;
-  serveHttp(
-    handler: FetchHandler,
-    options?: ServeHttpOptions,
-  ): ServeHttpHandle;
+  serveHttp(handler: FetchHandler, options?: ServeHttpOptions): ServeHttpHandle;
 }
 
 export class UnavailableInRuntimeError extends Error {

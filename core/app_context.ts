@@ -25,9 +25,14 @@ import type {
 import type { AuditStore } from "./domains/audit/mod.ts";
 import type {
   ServiceEndpointStore,
-  ServiceGrantStore,
+  EndpointServiceGrantStore,
   ServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
+import type {
+  ServiceBindingStore,
+  ServiceExportStore,
+  ServiceGraphGrantStore,
+} from "./domains/service-graph/mod.ts";
 import {
   type ActorAdapter,
   type AuthPort,
@@ -59,7 +64,10 @@ import {
   MemoryEncryptedSecretStore,
   type SecretStorePort,
 } from "./adapters/secret-store/mod.ts";
-import { ImmutableSourceAdapter, type SourcePort } from "./adapters/source/mod.ts";
+import {
+  ImmutableSourceAdapter,
+  type SourcePort,
+} from "./adapters/source/mod.ts";
 import {
   MemoryStorageDriver,
   type StorageDriver,
@@ -104,15 +112,15 @@ export interface AppContextOptions {
   readonly loadRuntimeConfig?: boolean;
   readonly runtimeEnv?: Record<string, string | undefined>;
   /**
-   * Operator-injected managed-hosting service implementations. The Takosumi service
-   * ships none by default — a plain import constructs zero managed-hosting
+   * Operator-injected platform service implementations. The Takosumi service
+   * ships none by default — a plain import constructs zero platform
    * services. Operator distributions (takosumi) inject them here. Only
    * `entitlements` has a service consumer (the internal-mutation boundary gate);
    * usage / catalog-release / service-endpoint registries are owned and
    * consumed by the operator distribution, not the service, so they no longer
    * live on the service context at all.
    */
-  readonly managedHosting?: {
+  readonly platformServices?: {
     readonly entitlements?: EntitlementPolicyPort;
   };
   readonly implementations?: readonly OperatorImplementation[];
@@ -132,6 +140,7 @@ export interface AppStores {
   readonly registry: RegistryStores;
   readonly audit: AuditStores;
   readonly serviceEndpoints: ServiceEndpointStores;
+  readonly serviceGraph: ServiceGraphStores;
 }
 
 export interface RuntimeStores {
@@ -161,7 +170,13 @@ export interface AuditStores {
 export interface ServiceEndpointStores {
   readonly endpoints: ServiceEndpointStore;
   readonly trustRecords: ServiceTrustRecordStore;
-  readonly grants: ServiceGrantStore;
+  readonly grants: EndpointServiceGrantStore;
+}
+
+export interface ServiceGraphStores {
+  readonly exports: ServiceExportStore;
+  readonly bindings: ServiceBindingStore;
+  readonly grants: ServiceGraphGrantStore;
 }
 
 export interface AppAdapters {
@@ -294,7 +309,8 @@ export function createDefaultAppAdapters(
     options.adapters?.observability ?? new InMemoryObservabilitySink(),
     options.runtimeEnv,
   );
-  const runtimeAgent = options.adapters?.runtimeAgent ??
+  const runtimeAgent =
+    options.adapters?.runtimeAgent ??
     new InMemoryRuntimeAgentRegistry({
       clock: dateClock,
       idGenerator: uuidFactory,
@@ -303,24 +319,29 @@ export function createDefaultAppAdapters(
   return {
     actor,
     auth: options.adapters?.auth ?? localActor,
-    coordination: options.adapters?.coordination ??
+    coordination:
+      options.adapters?.coordination ??
       new MemoryCoordinationAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
-    notifications: options.adapters?.notifications ??
+    notifications:
+      options.adapters?.notifications ??
       new MemoryNotificationSink({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
-    operatorConfig: options.adapters?.operatorConfig ??
+    operatorConfig:
+      options.adapters?.operatorConfig ??
       new LocalOperatorConfig({ clock: dateClock }),
-    provider: options.adapters?.provider ??
+    provider:
+      options.adapters?.provider ??
       new NoopProviderMaterializer({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
-    secrets: options.adapters?.secrets ??
+    secrets:
+      options.adapters?.secrets ??
       new MemoryEncryptedSecretStore({
         clock: dateClock,
         idGenerator: uuidFactory,
@@ -329,24 +350,28 @@ export function createDefaultAppAdapters(
         // configured for production-like environments.
         ...(options.runtimeEnv ? { env: options.runtimeEnv } : {}),
       }),
-    source: options.adapters?.source ??
+    source:
+      options.adapters?.source ??
       new ImmutableSourceAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     storage,
-    kms: options.adapters?.kms ??
+    kms:
+      options.adapters?.kms ??
       new NoopTestKms({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
     observability,
-    queue: options.adapters?.queue ??
+    queue:
+      options.adapters?.queue ??
       new MemoryQueueAdapter({
         clock: dateClock,
         idGenerator: uuidFactory,
       }),
-    objectStorage: options.adapters?.objectStorage ??
+    objectStorage:
+      options.adapters?.objectStorage ??
       new MemoryObjectStorage({ clock: dateClock }),
     runtimeAgent,
   };
@@ -366,17 +391,18 @@ async function withOptionalRuntimeConfig(
 
 async function importRuntimeConfigModule(): Promise<
   | {
-    readonly loadRuntimeConfigFromEnv: (
-      options?: { readonly env?: Record<string, string | undefined> },
-    ) => Promise<AppRuntimeConfig>;
-  }
+      readonly loadRuntimeConfigFromEnv: (options?: {
+        readonly env?: Record<string, string | undefined>;
+      }) => Promise<AppRuntimeConfig>;
+    }
   | undefined
 > {
   try {
     return await import("./config/mod.ts");
   } catch (error) {
     if (
-      error instanceof TypeError || currentRuntime().fs.isNotFoundError(error)
+      error instanceof TypeError ||
+      currentRuntime().fs.isNotFoundError(error)
     ) {
       return undefined;
     }
@@ -392,8 +418,10 @@ async function importRuntimeConfigModule(): Promise<
 export function buildOperatorImplementationRegistry(
   options: AppContextOptions = {},
 ): OperatorImplementationRegistry {
-  return options.implementationRegistry ??
-    createOperatorImplementationRegistry(options.implementations ?? []);
+  return (
+    options.implementationRegistry ??
+    createOperatorImplementationRegistry(options.implementations ?? [])
+  );
 }
 
 function assertNoStrictRuntimeAdapterFallbacks(
@@ -415,7 +443,7 @@ function assertNoStrictRuntimeAdapterFallbacks(
 /**
  * Dev / local fallback warning. In non-strict environments the service will
  * silently activate in-memory implementations for any adapter the operator
- * did not configure. That makes "git clone && takosumi server" Just Work,
+ * did not configure. That makes "git clone && bun core/index.ts" Just Work,
  * but it also means an operator who forgot to wire Postgres won't notice
  * their state is volatile until first restart wipes the canonical store.
  *
@@ -443,7 +471,8 @@ function warnAboutDevAdapterFallbacks(options: AppContextOptions): void {
   if (fallbacks.length === 0) return;
   log.warn("service.boot.in_memory_fallbacks", {
     adapters: fallbacks,
-    hint: "pass `adapters` explicitly to persist state across restarts. " +
+    hint:
+      "pass `adapters` explicitly to persist state across restarts. " +
       "Set TAKOSUMI_LOG_LEVEL=warn to suppress this notice.",
   });
 }
@@ -463,7 +492,8 @@ export function createServiceContainer(
       materializer: new DefaultRuntimeMaterializer({ clock: dateClock }),
     },
     entitlements: {
-      policy: options.managedHosting?.entitlements ??
+      policy:
+        options.platformServices?.entitlements ??
         new EntitlementPolicyService({
           memberships: stores.space.memberships,
         }),

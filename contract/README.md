@@ -10,9 +10,10 @@ The public contract is centered on these concepts:
   Activity.
 - `Source` / `SourceSnapshot` - Git URL/ref/path registration and immutable
   commit-pinned source archive.
-- `Connection` / `ProviderBinding` - operator default or Space-scoped
-  external connection selection for source, compute, dns, storage, database, and
-  secrets capabilities.
+- `Connection` / `ProviderConnection` - Git credentials and provider
+  credentials. ProviderConnections are explicit per provider source and optional
+  alias; internal resolver rows remain vault/runner implementation details and
+  are not public `/api/v1` identifiers.
 - `OpenTofu Capsule` / `Installation` / `InstallConfig` - Git-hosted
   OpenTofu module-compatible configuration, normalized into a generated root
   and recorded as the Space-scoped Capsule + generated root + tfstate +
@@ -28,8 +29,8 @@ The public contract is centered on these concepts:
 - `Deployment` - immutable successful-apply record.
 - `Activity` - Space-scoped audit trail.
 
-The legacy `/v1` account-plane compatibility shapes remain internal and are not
-re-exported from the public contract facade.
+Account-plane workload compatibility shapes remain internal and are not
+re-exported from the public deploy-control contract facade.
 
 Repositories are plain OpenTofu modules. Repository metadata is inferred from
 Git URL, commit, module path, tags, and well-known OpenTofu outputs. The

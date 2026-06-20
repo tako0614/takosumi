@@ -59,7 +59,8 @@ export async function consumeOpenTofuRunBatch(
     markRetriesExhausted: markOpenTofuRunRetriesExhausted,
   },
 ): Promise<void> {
-  const isDeadLetter = typeof batch.queue === "string" &&
+  const isDeadLetter =
+    typeof batch.queue === "string" &&
     batch.queue.endsWith(OPENTOFU_RUN_DLQ_SUFFIX);
   if (typeof batch.queue === "string" && !isOpenTofuRunQueue(batch.queue)) {
     throw new Error("non-OpenTofu queue delivered to OpenTofu run consumer");
@@ -70,7 +71,9 @@ export async function consumeOpenTofuRunBatch(
       // A different queue's payload reached the OpenTofu run consumer. Do not
       // ack it: throwing makes the wiring bug visible instead of silently
       // dropping another subsystem's work.
-      throw new Error("non-OpenTofu message delivered to OpenTofu run consumer");
+      throw new Error(
+        "non-OpenTofu message delivered to OpenTofu run consumer",
+      );
     }
     if (parsed.kind === "invalid") {
       // Poison OpenTofu message: ack so it does not loop. (Never logged with body.)
@@ -96,7 +99,9 @@ export async function consumeOpenTofuRunBatch(
       // "retries-exhausted" branch. The run stays `queued` (no claim happened).
       if (error instanceof InstallationLeaseBusyError) {
         if (typeof message.retry === "function") {
-          message.retry({ delaySeconds: OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS });
+          message.retry({
+            delaySeconds: OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS,
+          });
         }
         continue;
       }
@@ -135,25 +140,25 @@ async function dispatchOpenTofuRun(
     case "plan":
     case "apply":
     case "source_sync":
+    case "restore":
       await dispatchToController(env, run.action, run.runId, run.spaceId);
       return;
     default:
-      // Fail-closed against any action the controller does not implement. The
-      // `restore` Run type is schema-reserved (contract runs.ts) but has
-      // no producer, no queue action, and no handler, so it never reaches here
-      // through the parser. This exhaustive default keeps the consumer
-      // fail-closed if a future change ever wires a destructive (e.g. state
-      // overwrite) action onto the queue before its handler exists. The unknown
-      // action is treated as a poison message: the caller marks the run failed
-      // on the final attempt instead of dispatching an unimplemented action.
-      throw new Error(`unsupported OpenTofu run action: ${assertNeverAction(run.action)}`);
+      // Fail-closed against any action the controller does not implement. This
+      // exhaustive default keeps the consumer closed if a future destructive
+      // action reaches the queue before its handler exists. The unknown action
+      // is treated as a poison message: the caller marks the run failed on the
+      // final attempt instead of dispatching an unsupported action.
+      throw new Error(
+        `unsupported OpenTofu run action: ${assertNeverAction(run.action)}`,
+      );
   }
 }
 
 /**
  * Compile-time exhaustiveness guard for {@link OpenTofuRunAction}. The `destroy`
  * / `backup` / `compatibility_check` actions are handled before this point, so
- * the only reachable values are the dispatchable trio. If a new action is added
+ * the only reachable values are the dispatchable run actions. If a new action is added
  * to `OpenTofuRunAction` without a dispatch branch, this stops compiling. At
  * runtime it returns the offending value for the fail-closed error message.
  */
@@ -163,7 +168,7 @@ function assertNeverAction(action: never): string {
 
 async function dispatchToController(
   env: CloudflareWorkerEnv,
-  action: "plan" | "apply" | "source_sync",
+  action: "plan" | "apply" | "source_sync" | "restore",
   runId: string,
   spaceId: string,
 ): Promise<void> {
@@ -193,11 +198,13 @@ async function markOpenTofuRunRetriesExhausted(
  * channel and marks it failed when not already terminal (DLQ backstop).
  */
 async function markRunFailedIfNotTerminal(
-  controller: { markRunFailed: (
-    action: "plan" | "apply",
-    runId: string,
-    reason: string,
-  ) => Promise<boolean> },
+  controller: {
+    markRunFailed: (
+      action: "plan" | "apply" | "restore",
+      runId: string,
+      reason: string,
+    ) => Promise<boolean>;
+  },
   run: OpenTofuRunQueueMessage,
   reason: string,
 ): Promise<void> {
@@ -210,7 +217,12 @@ async function markRunFailedIfNotTerminal(
   ) {
     return;
   }
-  const action = run.action === "plan" ? "plan" : "apply";
+  const action =
+    run.action === "plan"
+      ? "plan"
+      : run.action === "restore"
+        ? "restore"
+        : "apply";
   await controller.markRunFailed(action, run.runId, reason);
 }
 
@@ -225,10 +237,19 @@ function redactedDispatchError(error: unknown): Error {
 }
 
 function isOpenTofuRunQueue(queue: string): boolean {
-  return (
-    queue === OPENTOFU_RUN_QUEUE_NAME ||
-    queue === `${OPENTOFU_RUN_QUEUE_NAME}${OPENTOFU_RUN_DLQ_SUFFIX}`
-  );
+  if (queue === OPENTOFU_RUN_QUEUE_NAME) return true;
+  if (queue === `${OPENTOFU_RUN_QUEUE_NAME}${OPENTOFU_RUN_DLQ_SUFFIX}`) {
+    return true;
+  }
+  const environmentQueuePrefix = `${OPENTOFU_RUN_QUEUE_NAME}-`;
+  if (!queue.startsWith(environmentQueuePrefix)) return false;
+
+  const suffix = queue.slice(environmentQueuePrefix.length);
+  const environment = suffix.endsWith(OPENTOFU_RUN_DLQ_SUFFIX)
+    ? suffix.slice(0, -OPENTOFU_RUN_DLQ_SUFFIX.length)
+    : suffix;
+  if (environment === OPENTOFU_RUN_DLQ_SUFFIX.slice(1)) return false;
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(environment);
 }
 
 export type OpenTofuRunParseResult =
@@ -239,8 +260,7 @@ export type OpenTofuRunParseResult =
 /**
  * Exported for tests: classify a raw queue body as a dispatchable OpenTofu run
  * message, a poison/invalid message, or another subsystem's payload. A body
- * carrying an action outside {@link OpenTofuRunAction} (for example the
- * schema-reserved-but-unimplemented `restore` Run type) is `invalid`, so it is
+ * carrying an action outside {@link OpenTofuRunAction} is `invalid`, so it is
  * acked and dropped rather than dispatched.
  */
 export function safeParseOpenTofuRunQueueMessage(
@@ -264,9 +284,13 @@ function parseOpenTofuRunQueueMessage(
   if (record.kind !== "takosumi.opentofu-run@v1") return undefined;
   const action = record.action;
   if (
-    action !== "plan" && action !== "apply" && action !== "destroy" &&
-    action !== "source_sync" && action !== "compatibility_check" &&
-    action !== "backup"
+    action !== "plan" &&
+    action !== "apply" &&
+    action !== "destroy" &&
+    action !== "source_sync" &&
+    action !== "compatibility_check" &&
+    action !== "backup" &&
+    action !== "restore"
   ) {
     throw new Error("OpenTofu run queue message action is invalid");
   }

@@ -16,7 +16,7 @@ import {
   bearerChallenge,
   bearerToken,
   json,
- takosumiSubjectValue,
+  takosumiSubjectValue,
 } from "./http-helpers.ts";
 import {
   personalAccessTokenIntrospectionBody,
@@ -27,6 +27,7 @@ import type {
   OidcClientRegistration,
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
+import { requireAccountSession } from "./account-session.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
 // operator-configurable via env (mirroring how passkey/session TTLs are
@@ -111,7 +112,8 @@ async function resolveOidcClient(input: {
     return {
       clientId: staticClient.clientId,
       redirectUris: staticClient.redirectUris,
-      tokenEndpointAuthMethod: staticClient.tokenEndpointAuthMethod ??
+      tokenEndpointAuthMethod:
+        staticClient.tokenEndpointAuthMethod ??
         (staticClient.clientSecret ? "client_secret_post" : "none"),
       clientSecret: staticClient.clientSecret,
     };
@@ -219,32 +221,29 @@ async function authenticateOidcClient(input: {
 async function resolveOidcAuthorizationSubject(input: {
   client: ResolvedOidcClient | undefined;
   flow: OidcAuthorizationCodeFlow;
+  sessionSubject: TakosumiSubject;
   store: AccountsStore;
 }): Promise<
   | {
-    ok: true;
-    record: {
-      subject: string;
-     takosumiSubject?: TakosumiSubject;
-      installationId?: string;
-      appId?: string;
-      spaceId?: string;
-      role?: string;
-    };
-  }
+      ok: true;
+      record: {
+        subject: string;
+        takosumiSubject?: TakosumiSubject;
+        installationId?: string;
+        appId?: string;
+        spaceId?: string;
+        role?: string;
+      };
+    }
   | { ok: false; status: number; error: string; errorDescription: string }
 > {
   if (!input.client?.installationId) {
-    return { ok: true, record: { subject: input.flow.subject } };
-  }
-  const takosumiSubject = takosumiSubjectValue(input.flow.subject);
-  if (!takosumiSubject) {
     return {
-      ok: false,
-      status: 500,
-      error: "server_error",
-      errorDescription:
-        "per-installation OIDC clients require a Takosumi subject",
+      ok: true,
+      record: {
+        subject: input.sessionSubject,
+        takosumiSubject: input.sessionSubject,
+      },
     };
   }
   if (!input.flow.pairwiseSubjectSecret) {
@@ -269,21 +268,21 @@ async function resolveOidcAuthorizationSubject(input: {
   }
   const pairwiseSubject = await derivePairwiseSubject({
     secret: input.flow.pairwiseSubjectSecret,
-   takosumiSubject,
-    clientId:
-      `${installation.appId}:${installation.installationId}:${input.client.clientId}`,
+    takosumiSubject: input.sessionSubject,
+    clientId: `${installation.appId}:${installation.installationId}:${input.client.clientId}`,
   });
   return {
     ok: true,
     record: {
       subject: pairwiseSubject,
-     takosumiSubject,
+      takosumiSubject: input.sessionSubject,
       installationId: installation.installationId,
       appId: installation.appId,
       spaceId: installation.spaceId,
-      role: installation.createdBySubject === takosumiSubject
-        ? "owner"
-        : "member",
+      role:
+        installation.createdBySubject === input.sessionSubject
+          ? "owner"
+          : "member",
     },
   };
 }
@@ -298,6 +297,7 @@ function scopeIsAllowed(
 }
 
 export async function handleAuthorize(input: {
+  request: Request;
   url: URL;
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
@@ -307,11 +307,14 @@ export async function handleAuthorize(input: {
   const clientId = input.url.searchParams.get("client_id");
   const redirectUri = input.url.searchParams.get("redirect_uri");
   if (responseType !== "code" || !clientId || !redirectUri) {
-    return json({
-      error: "invalid_request",
-      error_description:
-        "response_type=code, client_id, and redirect_uri are required",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "response_type=code, client_id, and redirect_uri are required",
+      },
+      400,
+    );
   }
   const client = await resolveOidcClient({
     clientId,
@@ -325,10 +328,13 @@ export async function handleAuthorize(input: {
     return json({ error: "unauthorized_client" }, 400);
   }
   if (!client.redirectUris.includes(redirectUri)) {
-    return json({
-      error: "invalid_request",
-      error_description: "redirect_uri is not registered for this client",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "redirect_uri is not registered for this client",
+      },
+      400,
+    );
   }
   // PKCE is mandatory for the authorization-code flow per current OAuth 2.1 /
   // OIDC security profile. Only the S256 transformation is accepted; plain is
@@ -337,34 +343,52 @@ export async function handleAuthorize(input: {
   const codeChallengeMethod =
     input.url.searchParams.get("code_challenge_method") ?? "S256";
   if (!codeChallenge) {
-    return json({
-      error: "invalid_request",
-      error_description: "code_challenge is required (PKCE is mandatory)",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "code_challenge is required (PKCE is mandatory)",
+      },
+      400,
+    );
   }
   if (codeChallengeMethod !== "S256") {
-    return json({
-      error: "invalid_request",
-      error_description: "code_challenge_method must be S256",
-    }, 400);
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "code_challenge_method must be S256",
+      },
+      400,
+    );
   }
   const scope = input.url.searchParams.get("scope") ?? "openid";
   if (client?.allowedScopes && !scopeIsAllowed(scope, client.allowedScopes)) {
-    return json({
-      error: "invalid_scope",
-      error_description: "requested scope is outside the installation grant",
-    }, 400);
+    return json(
+      {
+        error: "invalid_scope",
+        error_description: "requested scope is outside the installation grant",
+      },
+      400,
+    );
   }
+  const session = await requireAccountSession({
+    request: input.request,
+    store: input.store,
+  });
+  if (!session.ok) return session.response;
   const subject = await resolveOidcAuthorizationSubject({
     client,
     flow: input.flow,
+    sessionSubject: session.subject,
     store: input.store,
   });
   if (!subject.ok) {
-    return json({
-      error: subject.error,
-      error_description: subject.errorDescription,
-    }, subject.status);
+    return json(
+      {
+        error: subject.error,
+        error_description: subject.errorDescription,
+      },
+      subject.status,
+    );
   }
 
   const code = crypto.randomUUID();
@@ -373,7 +397,7 @@ export async function handleAuthorize(input: {
     redirectUri,
     scope,
     subject: subject.record.subject,
-   takosumiSubject: subject.record.takosumiSubject,
+    takosumiSubject: subject.record.takosumiSubject,
     installationId: subject.record.installationId,
     appId: subject.record.appId,
     spaceId: subject.record.spaceId,
@@ -443,9 +467,7 @@ export async function handleToken(input: {
   if (input.clients.size > 0 && !client) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (
-    client && !(await validateOidcClientSecret(client, credentials.secret))
-  ) {
+  if (client && !(await validateOidcClientSecret(client, credentials.secret))) {
     return json({ error: "invalid_client" }, 401);
   }
   if (params.get("redirect_uri") !== record.redirectUri) {
@@ -467,7 +489,7 @@ export async function handleToken(input: {
       clientId: record.clientId,
       scope: record.scope,
       subject: record.subject,
-     takosumiSubject: record.takosumiSubject,
+      takosumiSubject: record.takosumiSubject,
       installationId: record.installationId,
       appId: record.appId,
       spaceId: record.spaceId,
@@ -486,7 +508,7 @@ export async function handleToken(input: {
     clientId: record.clientId,
     scope: record.scope,
     subject: record.subject,
-   takosumiSubject: record.takosumiSubject,
+    takosumiSubject: record.takosumiSubject,
     installationId: record.installationId,
     appId: record.appId,
     spaceId: record.spaceId,
@@ -547,9 +569,7 @@ async function handleRefreshToken(input: {
   if (input.clients.size > 0 && !client) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (
-    client && !(await validateOidcClientSecret(client, credentials.secret))
-  ) {
+  if (client && !(await validateOidcClientSecret(client, credentials.secret))) {
     return json({ error: "invalid_client" }, 401);
   }
 
@@ -582,7 +602,7 @@ async function handleRefreshToken(input: {
     clientId: record.clientId,
     scope: record.scope,
     subject: record.subject,
-   takosumiSubject: record.takosumiSubject,
+    takosumiSubject: record.takosumiSubject,
     installationId: record.installationId,
     appId: record.appId,
     spaceId: record.spaceId,
@@ -598,7 +618,7 @@ async function handleRefreshToken(input: {
     clientId: record.clientId,
     scope: record.scope,
     subject: record.subject,
-   takosumiSubject: record.takosumiSubject,
+    takosumiSubject: record.takosumiSubject,
     installationId: record.installationId,
     appId: record.appId,
     spaceId: record.spaceId,
@@ -626,7 +646,7 @@ async function issueTokenResponse(input: {
   clientId: string;
   scope: string;
   subject: string;
- takosumiSubject?: TakosumiSubject;
+  takosumiSubject?: TakosumiSubject;
   installationId?: string;
   appId?: string;
   spaceId?: string;
@@ -645,11 +665,11 @@ async function issueTokenResponse(input: {
     : undefined;
   const takosumiClaims = input.installationId
     ? {
-      installation_id: input.installationId,
-      ...(input.appId ? { app_id: input.appId } : {}),
-      ...(input.spaceId ? { space_id: input.spaceId } : {}),
-      ...(input.role ? { role: input.role } : {}),
-    }
+        installation_id: input.installationId,
+        ...(input.appId ? { app_id: input.appId } : {}),
+        ...(input.spaceId ? { space_id: input.spaceId } : {}),
+        ...(input.role ? { role: input.role } : {}),
+      }
     : undefined;
   // email_verified reflects the upstream identity provider's assertion,
   // carried onto the account record by `resolveUpstreamAccount`. When the
@@ -675,7 +695,7 @@ async function issueTokenResponse(input: {
     clientId: input.clientId,
     scope: input.scope,
     subject: input.subject,
-   takosumiSubject: input.takosumiSubject,
+    takosumiSubject: input.takosumiSubject,
     installationId: input.installationId,
     appId: input.appId,
     spaceId: input.spaceId,
@@ -966,9 +986,7 @@ async function isPkceVerifierValid(
   );
 }
 
-function introspectionBody(
-  record: TokenRecord,
-): Record<string, unknown> {
+function introspectionBody(record: TokenRecord): Record<string, unknown> {
   if (record.expiresAt < Date.now()) {
     return { active: false };
   }
@@ -979,13 +997,13 @@ function introspectionBody(
     scope: record.scope,
     ...(record.installationId
       ? {
-       takosumi: {
-          installation_id: record.installationId,
-          ...(record.appId ? { app_id: record.appId } : {}),
-          ...(record.spaceId ? { space_id: record.spaceId } : {}),
-          ...(record.role ? { role: record.role } : {}),
-        },
-      }
+          takosumi: {
+            installation_id: record.installationId,
+            ...(record.appId ? { app_id: record.appId } : {}),
+            ...(record.spaceId ? { space_id: record.spaceId } : {}),
+            ...(record.role ? { role: record.role } : {}),
+          },
+        }
       : {}),
     exp: Math.floor(record.expiresAt / 1000),
   };

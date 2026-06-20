@@ -89,8 +89,8 @@ export interface CreditReservation {
 
 export type UsageEventKind =
   | "runner_minute"
-  | "managed_compute"
-  | "managed_storage_gb_hour"
+  | "gateway_compute"
+  | "gateway_storage_gb_hour"
   | "artifact_storage_gb_hour"
   | "backup_storage_gb_hour"
   | "egress_gb"
@@ -115,12 +115,12 @@ export interface UsageEvent {
   readonly createdAt: string;
 }
 
-export interface ManagedResourceUsageMeter {
+export interface GatewayResourceUsageMeter {
   readonly installationId?: string;
   readonly kind: Extract<
     UsageEventKind,
-    | "managed_compute"
-    | "managed_storage_gb_hour"
+    | "gateway_compute"
+    | "gateway_storage_gb_hour"
     | "artifact_storage_gb_hour"
     | "backup_storage_gb_hour"
     | "egress_gb"

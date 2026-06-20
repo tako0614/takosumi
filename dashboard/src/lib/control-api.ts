@@ -1,24 +1,43 @@
 /**
- * Typed client for the account-plane `/api/v1/*` route family (spec §31 UI
- * backing surface, conformance M10).
+ * Typed client for the session-authenticated Takosumi control-plane
+ * `/api/v1/*` route family.
  *
- * The dashboard SPA authenticates with the ACCOUNTS-plane HttpOnly
- * `takosumi_session` cookie, NOT the operator deploy-control bearer. The §30
- * `/api` deploy-control surface stays operator-bearer-gated; this client talks
- * same-origin to the NEW session-authed `/api/v1/*` pass-through routes
- * (see packages/accounts-service/src/control-routes.ts), which call the
- * in-process operations facade and render the deploy-control contract types.
+ * The dashboard SPA authenticates with the Accounts HttpOnly `takosumi_session`
+ * cookie, not the operator deploy-control bearer. Accounts resolves the cookie
+ * into a scoped principal and then delegates to the in-process control facade;
+ * `/api/v1/*` remains the product control API for Spaces, Installations, Runs,
+ * Connections, and related resources.
  *
- * Unlike the legacy account-plane `/v1/app-installations` routes (snake_case wire
- * shape — see views/account/lib/installations.ts), the `/api/v1/*` routes
+ * Unlike the account-plane `/v1/installation-projections` routes (snake_case wire
+ * shape for identity/billing/export projections), the `/api/v1/*` routes
  * pass the deploy-control contract types through `JSON.stringify` UNCHANGED, so
- * the wire shape is the camelCase contract shape. The type mirrors below are a
- * local copy of the relevant contract fields: the dashboard build only aliases
- * `@takosjp/takosumi-accounts-contract`, not `takosumi-contract/*`, so we cannot
- * import the deploy-control contract types directly here. Keep these in sync
- * with contract/{spaces,installations,dependencies,runs,sources,
- * activity,deploy-control-api,provider-bindings}.ts.
+ * the wire shape is the camelCase contract shape. The exported DTOs below are
+ * the dashboard's local view-model mirrors of the deploy-control contract. The
+ * type-only assertions near the mirror definitions ensure contract response
+ * types remain assignable to the dashboard view models.
  */
+
+import type {
+  ActivityEvent as ContractActivityEvent,
+  BackupRecord as ContractBackupRecord,
+  Connection as ContractConnection,
+  CreditReservation as ContractCreditReservation,
+  Dependency as ContractDependency,
+  InstallConfig as ContractInstallConfig,
+  Installation as ContractInstallation,
+  InstallationProviderConnectionSet as ContractInstallationProviderConnectionSet,
+  OutputShare as ContractOutputShare,
+  ProviderCatalogEntry as ContractProviderCatalogEntry,
+  ProviderConnection as ContractProviderConnection,
+  PublicDeployment as ContractPublicDeployment,
+  Run as ContractRun,
+  RunCostInfo as ContractRunCostInfo,
+  RunLogsResponse as ContractRunLogsResponse,
+  Source as ContractSource,
+  SourceSnapshot as ContractSourceSnapshot,
+  Space as ContractSpace,
+  UsageEvent as ContractUsageEvent,
+} from "takosumi-contract";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -89,9 +108,13 @@ async function controlFetch<T>(
     : undefined;
 
   if (!res.ok) {
-    const deployControlError = (data as {
-      error?: { code?: string; message?: string };
-    } | undefined)?.error;
+    const deployControlError = (
+      data as
+        | {
+            error?: { code?: string; message?: string };
+          }
+        | undefined
+    )?.error;
     const legacyError = (data as { error?: string } | undefined)?.error;
     const code =
       typeof legacyError === "string" ? legacyError : deployControlError?.code;
@@ -128,7 +151,9 @@ function query(params: Record<string, string | number | undefined>): string {
  */
 async function fetchAllPages<T>(
   basePath: string,
-  extract: (body: { nextCursor?: string } & Record<string, unknown>) => readonly T[],
+  extract: (
+    body: { nextCursor?: string } & Record<string, unknown>,
+  ) => readonly T[],
 ): Promise<readonly T[]> {
   const all: T[] = [];
   let cursor: string | undefined;
@@ -239,8 +264,8 @@ export interface BackupRecord {
 
 export type UsageEventKind =
   | "runner_minute"
-  | "managed_compute"
-  | "managed_storage_gb_hour"
+  | "gateway_compute"
+  | "gateway_storage_gb_hour"
   | "artifact_storage_gb_hour"
   | "backup_storage_gb_hour"
   | "egress_gb"
@@ -279,12 +304,11 @@ export interface Installation {
   readonly spaceId: string;
   readonly name: string;
   readonly slug: string;
-  readonly sourceId: string;
+  readonly sourceId?: string;
   readonly installConfigId: string;
   readonly environment: string;
   readonly currentDeploymentId?: string;
   readonly currentStateGeneration: number;
-  readonly currentOutputSnapshotId?: string;
   readonly status: InstallationStatus;
   /**
    * Read-time DERIVED freshness relative to producer Dependencies (spec §24).
@@ -299,29 +323,22 @@ export interface Installation {
   readonly updatedAt: string;
 }
 
-export type ProviderBindingMode =
-  | "default"
-  | "connection"
-  | "manual"
-  | "disabled";
-
-export interface ProviderBinding {
+export interface InstallationProviderConnectionBinding {
   readonly provider: string;
   readonly alias?: string;
-  readonly mode: ProviderBindingMode;
-  readonly connectionId?: string;
+  readonly connectionId: string;
   readonly region?: string;
-  readonly values?: Readonly<Record<string, unknown>>;
 }
 
-export type ProviderBindings = readonly ProviderBinding[];
+export type InstallationProviderConnectionBindings =
+  readonly InstallationProviderConnectionBinding[];
 
-export interface DeploymentProfile {
+export interface InstallationProviderConnectionSet {
   readonly id: string;
   readonly spaceId: string;
   readonly installationId: string;
   readonly environment: string;
-  readonly bindings: ProviderBindings;
+  readonly connections: InstallationProviderConnectionBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -330,6 +347,7 @@ export interface InstallConfig {
   readonly id: string;
   readonly spaceId?: string;
   readonly name: string;
+  readonly sourceKind: "generic_capsule" | "first_party_capsule";
   readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
   readonly createdAt: string;
@@ -417,6 +435,7 @@ export interface Run {
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
   readonly policyStatus?: RunPolicyStatus;
+  readonly requiresApproval?: boolean;
   readonly errorCode?: string;
   readonly createdBy: string;
   readonly createdAt: string;
@@ -431,11 +450,16 @@ export interface RunDiagnostic {
 }
 
 export interface RunAuditEvent {
+  readonly id?: string;
   readonly type?: string;
   readonly at?: number;
+  readonly actor?: string;
   readonly message?: string;
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly detail?: unknown;
-  readonly [key: string]: unknown;
+  readonly metadata?: unknown;
+  readonly createdAt?: string;
+  readonly action?: string;
 }
 
 /** `GET /api/v1/runs/:id/logs` body (RunLogsResponse). */
@@ -501,9 +525,13 @@ export interface Source {
   readonly updatedAt: string;
 }
 
+export type SourceSnapshotOrigin = "git" | "upload";
+
 export interface SourceSnapshot {
   readonly id: string;
-  readonly sourceId: string;
+  readonly origin: SourceSnapshotOrigin;
+  readonly spaceId: string;
+  readonly sourceId?: string;
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
@@ -528,8 +556,7 @@ export type DeploymentStatus =
  * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
  * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
  * dashboard read never exposes a handle to the un-projected output envelope.
- * Mirror of the deploy-control `PublicDeployment` (Omit<Deployment,
- * "outputSnapshotId">) — keep in sync with contract/deployments.ts.
+ * Mirror of `takosumi-contract/deployments.PublicDeployment`.
  */
 export interface PublicDeployment {
   readonly id: string;
@@ -588,6 +615,7 @@ export interface Connection {
   readonly spaceId?: string;
   readonly provider: string;
   readonly kind?: string;
+  readonly credentialDriver?: string;
   readonly scope: ConnectionScopeKind;
   readonly authMethod: string;
   readonly displayName?: string;
@@ -599,44 +627,34 @@ export interface Connection {
   readonly expiresAt?: string;
 }
 
-/**
- * Session-surface projection of an instance-wide operator default connection.
- *
- * The `GET /operator-connection-defaults` session route is reachable by any
- * Space member, so it drops the operator-internal row `id` and the
- * `connectionId` it points at (those stay on the bearer-gated §30 surface). It
- * carries ONLY the provider a `default` binding covers plus its wiring
- * timestamps — no connection id / value / secret material.
- */
-export interface OperatorConnectionDefault {
-  readonly provider: string;
+export type ProviderEnvMaterialization = "oauth" | "secret";
+export type ProviderConnectionStatus =
+  | "ready"
+  | "needs_setup"
+  | "expired"
+  | "blocked";
+export type ProviderCredentialOwnership = "own_key";
+
+export interface ProviderConnection {
+  readonly id: string;
+  readonly spaceId?: string;
+  readonly providerSource: string;
+  readonly displayName: string;
+  readonly ownership: ProviderCredentialOwnership;
+  readonly status: ProviderConnectionStatus;
+  readonly requiredEnvNames: readonly string[];
+  readonly expiresAt?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
-/**
- * Non-secret projection of "can this instance's managed default (operator key)
- * cover an install with NO Space connection configured?" (spec §7.1
- * `takosumi_managed` default). `available` is true when the operator has wired
- * at least one default connection; `capabilities` lists ONLY the covered
- * provider source names. It carries NO connection id / value / secret — mirror
- * of the backend `ManagedDefaultStatus` (contract/provider-bindings).
- */
-export interface ManagedDefaultStatus {
-  readonly available: boolean;
-  readonly capabilities: readonly string[];
-}
-
-export type ProviderCredentialSource = "takosumi_managed" | "user_env_set";
-
-export interface ProviderTemplate {
+export interface ProviderCatalogEntry {
   readonly id: string;
   readonly providerSource: string;
   readonly displayName: string;
   readonly recommendedEnvNames: readonly string[];
   readonly helpers: readonly string[];
-  readonly credentialSources: readonly ProviderCredentialSource[];
-  readonly takosumiManagedAvailable: boolean;
+  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
   readonly allowedResources: readonly string[];
   readonly allowedDataSources: readonly string[];
   readonly policyPackId?: string;
@@ -658,14 +676,57 @@ export interface CapsuleCompatibilityDiagnostic {
   readonly detail?: string;
 }
 
+export interface CapsuleCompatibilityProvider {
+  readonly source: string;
+  readonly versionConstraint?: string;
+  readonly aliases: readonly string[];
+  readonly allowed: boolean;
+  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
+}
+
+export interface CapsuleCompatibilityResource {
+  readonly type: string;
+  readonly count?: number;
+  readonly allowed: boolean;
+}
+
 export interface CapsuleCompatibilityResult {
   readonly level: CapsuleCompatibilityLevel;
   readonly summary: string;
   readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
+  readonly providers: readonly CapsuleCompatibilityProvider[];
+  readonly resources: readonly CapsuleCompatibilityResource[];
   readonly installConfigId?: string;
   readonly sourceId?: string;
   readonly source?: "api";
 }
+
+type AssertAssignable<Expected, Actual extends Expected> = true;
+
+type _ContractResponseAssignableToDashboardMirrors = [
+  AssertAssignable<Space, ContractSpace>,
+  AssertAssignable<Installation, ContractInstallation>,
+  AssertAssignable<InstallConfig, ContractInstallConfig>,
+  AssertAssignable<Dependency, ContractDependency>,
+  AssertAssignable<Run, ContractRun>,
+  AssertAssignable<RunLogs, ContractRunLogsResponse>,
+  AssertAssignable<Source, ContractSource>,
+  AssertAssignable<SourceSnapshot, ContractSourceSnapshot>,
+  AssertAssignable<PublicDeployment, ContractPublicDeployment>,
+  AssertAssignable<OutputShare, ContractOutputShare>,
+  AssertAssignable<ActivityEvent, ContractActivityEvent>,
+  AssertAssignable<Connection, ContractConnection>,
+  AssertAssignable<ProviderConnection, ContractProviderConnection>,
+  AssertAssignable<ProviderCatalogEntry, ContractProviderCatalogEntry>,
+  AssertAssignable<CreditReservation, ContractCreditReservation>,
+  AssertAssignable<UsageEvent, ContractUsageEvent>,
+  AssertAssignable<RunCostInfo, ContractRunCostInfo>,
+  AssertAssignable<BackupRecord, ContractBackupRecord>,
+  AssertAssignable<
+    InstallationProviderConnectionSet,
+    ContractInstallationProviderConnectionSet
+  >,
+];
 
 // ===========================================================================
 // Typed methods (one per route the dashboard calls)
@@ -775,7 +836,7 @@ export async function listBillingPlans(): Promise<
 //
 // Backs the Members screen over the session-authed
 // `/api/v1/spaces/:id/members[/:subject]` routes (see
-// packages/accounts-service/src/control-routes.ts). The Space is resolved
+// accounts/service/src/control-routes.ts). The Space is resolved
 // server-side and the membership-ROLE gate is enforced by the backend
 // (list = any active member; add/invite = owner/admin; role change + remove =
 // owner-only with a last-owner guard). These client fns never send the spaceId
@@ -915,26 +976,28 @@ export async function createInstallation(input: {
   return body.installation;
 }
 
-export async function getDeploymentProfile(
+export async function getInstallationProviderConnectionSet(
   installationId: string,
-): Promise<DeploymentProfile | null> {
+): Promise<InstallationProviderConnectionSet | null> {
   const body = await controlFetch<{
-    deploymentProfile: DeploymentProfile | null;
+    providerConnectionSet: InstallationProviderConnectionSet | null;
   }>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/deployment-profile`,
+    `${BASE}/installations/${encodeURIComponent(installationId)}/provider-connections`,
   );
-  return body.deploymentProfile;
+  return body.providerConnectionSet;
 }
 
-export async function putDeploymentProfile(
+export async function putInstallationProviderConnectionSet(
   installationId: string,
-  bindings: ProviderBindings,
-): Promise<DeploymentProfile> {
-  const body = await controlFetch<{ deploymentProfile: DeploymentProfile }>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/deployment-profile`,
-    { method: "PUT", body: { bindings } },
+  connections: InstallationProviderConnectionBindings,
+): Promise<InstallationProviderConnectionSet> {
+  const body = await controlFetch<{
+    providerConnectionSet: InstallationProviderConnectionSet;
+  }>(
+    `${BASE}/installations/${encodeURIComponent(installationId)}/provider-connections`,
+    { method: "PUT", body: { connections } },
   );
-  return body.deploymentProfile;
+  return body.providerConnectionSet;
 }
 
 // --- InstallConfigs --------------------------------------------------------
@@ -976,6 +1039,13 @@ export async function checkCapsuleCompatibility(input: {
         readonly message?: string;
         readonly suggestion?: string;
       }[];
+      readonly providers?: readonly {
+        readonly source?: string;
+        readonly versionConstraint?: string;
+        readonly aliases?: readonly string[];
+        readonly allowed?: boolean;
+        readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
+      }[];
     };
   }>(`${BASE}/sources/${encodeURIComponent(source.id)}/compatibility-check`, {
     method: "POST",
@@ -994,13 +1064,28 @@ export async function checkCapsuleCompatibility(input: {
     message: finding.message ?? finding.code ?? "Compatibility finding",
     ...(finding.suggestion ? { detail: finding.suggestion } : {}),
   }));
+  const providers = (body.report.providers ?? [])
+    .filter((provider) => provider.source !== undefined)
+    .map((provider) => ({
+      source: provider.source!,
+      ...(provider.versionConstraint
+        ? { versionConstraint: provider.versionConstraint }
+        : {}),
+      aliases: provider.aliases ?? [],
+      allowed: provider.allowed ?? true,
+      ownershipOptions: provider.ownershipOptions ?? ["own_key"],
+    }));
   return {
     level: body.report.level,
     summary:
       diagnostics[0]?.message ??
       "Compatibility check completed for the synced SourceSnapshot.",
     diagnostics,
-    ...(input.installConfigId ? { installConfigId: input.installConfigId } : {}),
+    providers,
+    resources: [],
+    ...(input.installConfigId
+      ? { installConfigId: input.installConfigId }
+      : {}),
     sourceId: source.id,
     source: "api",
   };
@@ -1016,7 +1101,9 @@ export async function getSpaceGraph(spaceId: string): Promise<SpaceGraph> {
 
 // --- Backups ---------------------------------------------------------------
 
-export async function createSpaceBackup(spaceId: string): Promise<BackupRecord> {
+export async function createSpaceBackup(
+  spaceId: string,
+): Promise<BackupRecord> {
   const body = await controlFetch<{ backup: BackupRecord }>(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
     { method: "POST" },
@@ -1223,18 +1310,18 @@ export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
 }
 
 /**
- * Applies a reviewed plan run (§31 GUI deploy). `planRunId` is the id of the
- * `plan` Run shown in the Run detail view. The backend rebuilds the apply guard
- * from the reviewed plan and re-checks every precondition; pass
+ * Applies a reviewed plan Run through the unified Run surface. `planRunId` is
+ * the id of the `plan` Run shown in the Run detail view. The backend rebuilds
+ * the apply guard from the reviewed plan and re-checks every precondition; pass
  * `confirmDestructive: true` only after the operator has confirmed a destructive
- * plan. Returns the queued apply Run wrapper.
+ * plan. Returns the public Run wrapper.
  */
 export async function createApplyRun(
   planRunId: string,
   input: { readonly confirmDestructive?: boolean } = {},
-): Promise<{ readonly applyRun: { readonly id: string } }> {
-  return await controlFetch<{ applyRun: { id: string } }>(
-    `${BASE}/plan-runs/${encodeURIComponent(planRunId)}/apply`,
+): Promise<{ readonly run: Run }> {
+  return await controlFetch<{ run: Run }>(
+    `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
     {
       method: "POST",
       body: input.confirmDestructive ? { confirmDestructive: true } : {},
@@ -1279,8 +1366,8 @@ export async function getDeployment(
  * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
  * `POST /api/v1/deployments/:id/rollback-plan`): re-plans the Deployment's
  * Installation pinned to that Deployment's source snapshot. The plan then flows
- * through the normal approve → apply path, so the response is the plan-run
- * envelope (`{ planRun: { id, ... } }`) and the caller navigates to the Run
+ * through the normal approve -> apply path, so the response is the public Run
+ * envelope (`{ run: { id, ... } }`) and the caller navigates to the Run
  * screen (extract the id with {@link extractRunId}).
  */
 export async function createDeploymentRollbackPlan(
@@ -1327,38 +1414,13 @@ export async function listConnections(
   );
 }
 
-export async function listOperatorConnectionDefaults(
+export async function listProviderConnections(
   spaceId: string,
-): Promise<readonly OperatorConnectionDefault[]> {
+): Promise<readonly ProviderConnection[]> {
   const body = await controlFetch<{
-    operatorConnectionDefaults?: readonly OperatorConnectionDefault[];
-  }>(`${BASE}/operator-connection-defaults${query({ spaceId })}`);
-  return body.operatorConnectionDefaults ?? [];
-}
-
-/**
- * Reads whether THIS instance's managed default (operator key) can cover an
- * install with NO Space connection (`GET
- * /api/v1/spaces/:id/managed-defaults`, spec §7.1 `takosumi_managed`). The
- * install view uses it so a user is only nudged to "connect your own cloud
- * first" when the managed default is NOT available — by default `panpii` can
- * install → apply on the operator key with zero connection setup, and bringing
- * their own cloud (a Space connection / Provider Env Set) is an opt-in.
- *
- * The response is a credential-free `{ available, capabilities }` projection: it
- * carries NO operator-default connection id / value / secret material.
- */
-export async function getManagedDefaultStatus(
-  spaceId: string,
-): Promise<ManagedDefaultStatus> {
-  const body = await controlFetch<{
-    available?: boolean;
-    capabilities?: readonly string[];
-  }>(`${BASE}/spaces/${encodeURIComponent(spaceId)}/managed-defaults`);
-  return {
-    available: body.available === true,
-    capabilities: body.capabilities ?? [],
-  };
+    providerConnections?: readonly ProviderConnection[];
+  }>(`${BASE}/provider-connections${query({ spaceId })}`);
+  return body.providerConnections ?? [];
 }
 
 /**
@@ -1366,7 +1428,7 @@ export async function getManagedDefaultStatus(
  * write-only credential material (e.g. `{ CLOUDFLARE_API_TOKEN }`) and must be
  * cleared from caller memory immediately after this resolves; the returned
  * {@link Connection} projection carries no secret values. The backend forces
- * `scope: "space"`, so this can never create an operator-default connection.
+ * `scope: "space"`, so this creates only a Space-owned ProviderConnection.
  */
 export async function createConnection(input: {
   readonly spaceId: string;
@@ -1396,9 +1458,7 @@ export async function createConnection(input: {
  * (`POST /api/v1/connections/:id/test`). Returns the backend's verification
  * projection (status etc.); secret values never round-trip.
  */
-export async function testConnection(
-  connectionId: string,
-): Promise<unknown> {
+export async function testConnection(connectionId: string): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/connections/${encodeURIComponent(connectionId)}/test`,
     { method: "POST" },
@@ -1456,14 +1516,13 @@ export function isOAuthUnavailable(error: unknown): boolean {
 
 // --- Providers -------------------------------------------------------------
 
-export async function listProviderTemplates(): Promise<
-  readonly ProviderTemplate[]
+export async function listProviderCatalogEntries(): Promise<
+  readonly ProviderCatalogEntry[]
 > {
   const body = await controlFetch<{
-    providers?: readonly ProviderTemplate[];
-    providerTemplates?: readonly ProviderTemplate[];
+    providers?: readonly ProviderCatalogEntry[];
   }>(`${BASE}/providers`);
-  return body.providerTemplates ?? body.providers ?? [];
+  return body.providers ?? [];
 }
 
 // --- OutputShares ----------------------------------------------------------
@@ -1525,8 +1584,8 @@ export async function revokeOutputShare(id: string): Promise<OutputShare> {
 export function extractRunId(envelope: unknown): string | undefined {
   if (typeof envelope !== "object" || envelope === null) return undefined;
   const obj = envelope as Record<string, unknown>;
-  // Plan response: { planRun: { id } }; apply response: { applyRun: { id } };
-  // source sync: { run: { id } }; or a bare { id }.
+  // Current public response: { run: { id } }. Older/internal wrappers stay here
+  // for operator-only seams and tests; a bare { id } is accepted too.
   for (const wrap of ["planRun", "applyRun", "planPreview", "run"] as const) {
     const nested = obj[wrap];
     if (nested && typeof nested === "object") {

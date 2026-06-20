@@ -74,9 +74,7 @@ function describeEvent(event: ActivityEvent): {
       const env = metaString(m, "environment");
       return {
         title: t("notif.event.installCreated", { name }),
-        detail: env
-          ? t("notif.event.installCreatedEnv", { env })
-          : undefined,
+        detail: env ? t("notif.event.installCreatedEnv", { env }) : undefined,
       };
     }
     case "run.plan_created": {
@@ -188,7 +186,7 @@ function eventHref(event: ActivityEvent): string | undefined {
     return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "installation") {
-    return `/apps/${encodeURIComponent(event.targetId)}`;
+    return `/installations/${encodeURIComponent(event.targetId)}`;
   }
   return undefined;
 }

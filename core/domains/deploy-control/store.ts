@@ -3,7 +3,7 @@
  *
  * The logical schema is the Space-direct OpenTofu Capsule DAG model: spaces,
  * sources(+snapshots), connections(+secret blobs), install_configs,
- * installations (UNIQUE(space_id, name, environment)), deployment_profiles,
+ * installations (UNIQUE(space_id, name, environment)), provider_env_binding_sets,
  * a SINGLE `runs` table (internal PlanRun / ApplyRun / SourceSyncRun records
  * persist as rows discriminated by run kind; the public §19 Run is a
  * projection), state_snapshots, and deployments.
@@ -33,11 +33,11 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { Space } from "takosumi-contract/spaces";
-import type { OperatorConnectionDefault } from "takosumi-contract/provider-bindings";
 import type {
-  DeploymentProfile,
-  OutputAllowlistEntry,
-} from "takosumi-contract/installations";
+  InstallationProviderEnvBindingSet,
+  ProviderEnv,
+} from "takosumi-contract/provider-envs";
+import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import type {
   Dependency,
   DependencySnapshot,
@@ -73,7 +73,7 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderTemplate } from "takosumi-contract/providers";
+import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
@@ -456,20 +456,17 @@ export interface OpenTofuDeploymentStore {
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
 
-  // Operator default connections (spec §9 / §27 operator_connection_defaults).
-  putOperatorConnectionDefault(
-    record: OperatorConnectionDefault,
-  ): Promise<OperatorConnectionDefault>;
-  getOperatorConnectionDefault(
-    provider: string,
-  ): Promise<OperatorConnectionDefault | undefined>;
-  listOperatorConnectionDefaults(): Promise<
-    readonly OperatorConnectionDefault[]
-  >;
+  putProviderCatalogEntry(
+    entry: ProviderCatalogEntry,
+  ): Promise<ProviderCatalogEntry>;
+  getProviderCatalogEntry(
+    id: string,
+  ): Promise<ProviderCatalogEntry | undefined>;
+  listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]>;
 
-  putProviderTemplate(entry: ProviderTemplate): Promise<ProviderTemplate>;
-  getProviderTemplate(id: string): Promise<ProviderTemplate | undefined>;
-  listProviderTemplates(): Promise<readonly ProviderTemplate[]>;
+  putProviderEnv(env: ProviderEnv): Promise<ProviderEnv>;
+  getProviderEnv(id: string): Promise<ProviderEnv | undefined>;
+  listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
 
   // Source records (public fields + internal hook-secret hash / lastSeenCommit /
   // autoSync). The hook secret plaintext is NEVER stored.
@@ -516,14 +513,15 @@ export interface OpenTofuDeploymentStore {
     id: string,
   ): Promise<CapsuleCompatibilityReport | undefined>;
 
-  // Internal Installation provider-binding records. DeploymentProfile is a
-  // compatibility store type, not a public Takosumi concept; one row per
+  // Installation provider env binding records, one row per
   // (installation, environment), with that pair as the upsert key.
-  putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile>;
-  getDeploymentProfileByInstallation(
+  putInstallationProviderEnvBindingSet(
+    profile: InstallationProviderEnvBindingSet,
+  ): Promise<InstallationProviderEnvBindingSet>;
+  getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
-  ): Promise<DeploymentProfile | undefined>;
+  ): Promise<InstallationProviderEnvBindingSet | undefined>;
 
   // StateSnapshot records (spec §20). Immutable per-(installation, environment,
   // generation) metadata recorded after a successful apply/destroy state
@@ -544,9 +542,7 @@ export interface OpenTofuDeploymentStore {
    * the `space_id` column; the in-memory store filters. Spans all environments —
    * callers that need per-(installation, environment) grouping/order re-group.
    */
-  listStateSnapshotsBySpace(
-    spaceId: string,
-  ): Promise<readonly StateSnapshot[]>;
+  listStateSnapshotsBySpace(spaceId: string): Promise<readonly StateSnapshot[]>;
 
   // Dependency DAG edges (spec §14 / §15 / §27 installation_dependencies). A
   // Dependency connects a producer Installation's outputs to a consumer
@@ -710,6 +706,7 @@ export interface OpenTofuDeploymentStore {
   // live in object storage; only the pointer (objectKey / digest / sizeBytes)
   // enters the ledger. Listing orders newest first (createdAt desc, id desc).
   putBackupRecord(record: BackupRecord): Promise<BackupRecord>;
+  getBackupRecord(id: string): Promise<BackupRecord | undefined>;
   listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]>;
   /**
    * Keyset-paged control-backup listing for a Space (spec §30 pagination).
@@ -755,15 +752,18 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #deployments = new Map<string, Deployment>();
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
-  readonly #operatorDefaults = new Map<string, OperatorConnectionDefault>();
-  readonly #providerTemplates = new Map<string, ProviderTemplate>();
+  readonly #providerCatalog = new Map<string, ProviderCatalogEntry>();
+  readonly #providerEnvs = new Map<string, ProviderEnv>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
   readonly #capsuleCompatibilityReports = new Map<
     string,
     CapsuleCompatibilityReport
   >();
-  readonly #deploymentProfiles = new Map<string, DeploymentProfile>();
+  readonly #providerEnvBindingSets = new Map<
+    string,
+    InstallationProviderEnvBindingSet
+  >();
   readonly #stateSnapshots = new Map<string, StateSnapshot>();
   readonly #dependencies = new Map<string, Dependency>();
   readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
@@ -859,8 +859,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     }
     // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
     // explicit `heartbeatAt` wins, else the heartbeat carried on `run`.
-    const heartbeatAt =
-      input.heartbeatAt ?? input.run.heartbeatAt;
+    const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
     const persisted: PlanRun | ApplyRun = {
       ...input.run,
       ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
@@ -911,8 +910,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putBackupRun(run: Run): Promise<Run> {
-    if (run.type !== "backup") {
-      return Promise.reject(new Error("putBackupRun only accepts backup runs"));
+    if (run.type !== "backup" && run.type !== "restore") {
+      return Promise.reject(
+        new Error("putBackupRun only accepts backup/restore runs"),
+      );
     }
     this.#backupRuns.set(run.id, run);
     return Promise.resolve(run);
@@ -1239,55 +1240,49 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#secretBlobs.delete(connectionId));
   }
 
-  putOperatorConnectionDefault(
-    record: OperatorConnectionDefault,
-  ): Promise<OperatorConnectionDefault> {
-    // One default per provider: the provider source is the natural upsert key.
-    for (const [key, existing] of this.#operatorDefaults) {
-      if (existing.provider === record.provider && key !== record.id) {
-        this.#operatorDefaults.delete(key);
-      }
-    }
-    this.#operatorDefaults.set(record.id, record);
-    return Promise.resolve(record);
-  }
-
-  getOperatorConnectionDefault(
-    provider: string,
-  ): Promise<OperatorConnectionDefault | undefined> {
-    return Promise.resolve(
-      Array.from(this.#operatorDefaults.values()).find(
-        (row) => row.provider === provider,
-      ),
-    );
-  }
-
-  listOperatorConnectionDefaults(): Promise<
-    readonly OperatorConnectionDefault[]
-  > {
-    return Promise.resolve(
-      Array.from(this.#operatorDefaults.values()).sort((a, b) =>
-        a.provider.localeCompare(b.provider),
-      ),
-    );
-  }
-
-  putProviderTemplate(entry: ProviderTemplate): Promise<ProviderTemplate> {
-    this.#providerTemplates.set(entry.id, entry);
+  putProviderCatalogEntry(
+    entry: ProviderCatalogEntry,
+  ): Promise<ProviderCatalogEntry> {
+    this.#providerCatalog.set(entry.id, entry);
     return Promise.resolve(entry);
   }
 
-  getProviderTemplate(
+  getProviderCatalogEntry(
     id: string,
-  ): Promise<ProviderTemplate | undefined> {
-    return Promise.resolve(this.#providerTemplates.get(id));
+  ): Promise<ProviderCatalogEntry | undefined> {
+    return Promise.resolve(this.#providerCatalog.get(id));
   }
 
-  listProviderTemplates(): Promise<readonly ProviderTemplate[]> {
+  listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
     return Promise.resolve(
-      Array.from(this.#providerTemplates.values()).sort(
+      Array.from(this.#providerCatalog.values()).sort(
         (a, b) =>
-          a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id),
+          a.displayName.localeCompare(b.displayName) ||
+          a.id.localeCompare(b.id),
+      ),
+    );
+  }
+
+  putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
+    assertProviderEnvGlobalBoundary(env);
+    this.#providerEnvs.set(env.id, env);
+    return Promise.resolve(env);
+  }
+
+  getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
+    return Promise.resolve(this.#providerEnvs.get(id));
+  }
+
+  listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
+    const rows = Array.from(this.#providerEnvs.values()).filter(
+      (env) => (spaceId === undefined ? true : env.spaceId === spaceId),
+    );
+    return Promise.resolve(
+      rows.sort(
+        (a, b) =>
+          a.providerSource.localeCompare(b.providerSource) ||
+          a.displayName.localeCompare(b.displayName) ||
+          a.id.localeCompare(b.id),
       ),
     );
   }
@@ -1362,10 +1357,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     sourceId: string,
     params: PageParams,
   ): Promise<Page<SourceSnapshot>> {
-    return pageSortedBy(await this.listSourceSnapshots(sourceId), params, (s) => ({
-      createdAt: s.fetchedAt,
-      id: s.id,
-    }));
+    return pageSortedBy(
+      await this.listSourceSnapshots(sourceId),
+      params,
+      (s) => ({
+        createdAt: s.fetchedAt,
+        id: s.id,
+      }),
+    );
   }
 
   putCapsuleCompatibilityReport(
@@ -1381,28 +1380,30 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(this.#capsuleCompatibilityReports.get(id));
   }
 
-  putDeploymentProfile(profile: DeploymentProfile): Promise<DeploymentProfile> {
+  putInstallationProviderEnvBindingSet(
+    profile: InstallationProviderEnvBindingSet,
+  ): Promise<InstallationProviderEnvBindingSet> {
     // One profile per (installation, environment): drop a stale row under a
     // different id for the same pair.
-    for (const [key, existing] of this.#deploymentProfiles) {
+    for (const [key, existing] of this.#providerEnvBindingSets) {
       if (
         existing.installationId === profile.installationId &&
         existing.environment === profile.environment &&
         key !== profile.id
       ) {
-        this.#deploymentProfiles.delete(key);
+        this.#providerEnvBindingSets.delete(key);
       }
     }
-    this.#deploymentProfiles.set(profile.id, profile);
+    this.#providerEnvBindingSets.set(profile.id, profile);
     return Promise.resolve(profile);
   }
 
-  getDeploymentProfileByInstallation(
+  getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
-  ): Promise<DeploymentProfile | undefined> {
+  ): Promise<InstallationProviderEnvBindingSet | undefined> {
     return Promise.resolve(
-      Array.from(this.#deploymentProfiles.values()).find(
+      Array.from(this.#providerEnvBindingSets.values()).find(
         (row) =>
           row.installationId === installationId &&
           row.environment === environment,
@@ -1546,7 +1547,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(latest);
   }
 
-  listOutputSnapshots(installationId: string): Promise<readonly OutputSnapshot[]> {
+  listOutputSnapshots(
+    installationId: string,
+  ): Promise<readonly OutputSnapshot[]> {
     return Promise.resolve(
       Array.from(this.#outputSnapshots.values())
         .filter((row) => row.installationId === installationId)
@@ -1874,6 +1877,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(record);
   }
 
+  getBackupRecord(id: string): Promise<BackupRecord | undefined> {
+    return Promise.resolve(this.#backupRecords.get(id));
+  }
+
   listBackupRecords(spaceId: string): Promise<readonly BackupRecord[]> {
     return Promise.resolve(
       Array.from(this.#backupRecords.values())
@@ -1938,4 +1945,12 @@ function readEnvMap(): { get(name: string): string | undefined } | undefined {
     return undefined;
   }
   return runtime.env;
+}
+
+function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
+  if (env.spaceId === undefined) {
+    throw new Error(
+      "global provider resolver records are not supported in OSS Takosumi",
+    );
+  }
 }

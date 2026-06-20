@@ -1,6 +1,7 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { SourceArchiveWriter } from "./api/deploy_control_shared.ts";
+import { recordUploadArchive } from "./api/deploy_control_deploy_routes.ts";
 import { createConnectionOAuthHelpersFromEnv } from "./api/connection_oauth_helpers.ts";
 import {
   createConsoleApiRequestLogger,
@@ -42,9 +43,11 @@ import { SqlTakosumiDeploymentRecordStore } from "./domains/deploy-records/deplo
 import {
   type DependencyValueSealer,
   type EnqueueRun,
+  OpenTofuControllerError,
   OpenTofuDeploymentController,
+  type DeployControlActorContext,
   type ReconcileInvoiceUsageInput,
-  type RecordManagedResourceUsageInput,
+  type RecordGatewayResourceUsageInput,
   type OpenTofuRunner,
   type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
@@ -53,6 +56,7 @@ import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
+import { deployUpload } from "./domains/deploy-control/upload_deploy.ts";
 import { InstallationsService } from "./domains/installations/mod.ts";
 import { SpacesService } from "./domains/spaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
@@ -70,6 +74,7 @@ import {
   BackupsService,
   type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
+import { createStorageBackedServiceGraphService } from "./domains/service-graph/mod.ts";
 import { seedOfficialInstallConfigs } from "./domains/installations/official_seed.ts";
 import type {
   CreateSourceRequest,
@@ -80,11 +85,17 @@ import type {
   PatchSourceRequest,
   SourceResponse,
   SourceSyncRun,
+  SourceSnapshot,
 } from "takosumi-contract/sources";
+import type {
+  DeployResponse,
+  InternalDeployRequest,
+} from "takosumi-contract/deploy";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
   ApplyRunResponse,
   Connection,
@@ -103,7 +114,11 @@ import type {
   RunnerProfile,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
-import type { RunCostInfo, RunLogsResponse } from "takosumi-contract/runs";
+import type {
+  RunCostInfo,
+  RunEventsResponse,
+  RunLogsResponse,
+} from "takosumi-contract/runs";
 import type { PageParams } from "takosumi-contract/pagination";
 import {
   InMemoryOpenTofuDeploymentStore,
@@ -121,7 +136,7 @@ import type {
   InvoiceUsageReconciliation,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { ListProviderTemplatesResponse } from "takosumi-contract/providers";
+import type { ListProviderCatalogEntriesResponse } from "takosumi-contract/providers";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -276,12 +291,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuRunner?: OpenTofuRunner;
   /**
-   * Runner used only for non-managed provider env set executions.
-   * Hosted/reference Workers inject the same Cloudflare Container runner object
-   * but route it through this separate seam so user-supplied provider profiles
-   * cannot accidentally run on the default managed-provider path.
+   * Runner used only for own-key provider executions. Hosted/reference Workers
+   * inject the same Cloudflare Container runner object but route it through this
+   * separate seam so user-supplied provider profiles cannot accidentally run on
+   * a broader operator credential path.
    */
-  readonly userEnvSetProviderRunner?: OpenTofuRunner;
+  readonly ownKeyProviderRunner?: OpenTofuRunner;
   /**
    * Connection Vault used to mint run-scoped provider credentials for
    * plan/apply/destroy. Hosts that execute provider-using runs must inject this;
@@ -368,7 +383,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  * Typed in-process operation facade exposed on {@link CreatedTakosumiService.operations}.
  *
  * The facade delegates to the already-wired OpenTofu controller, the same
- * instance backing the public route surface. It does not duplicate controller
+ * instance backing the internal route seam. It does not duplicate controller
  * logic.
  */
 export interface TakosumiOperations {
@@ -381,7 +396,7 @@ export interface TakosumiOperations {
   readonly spaces: SpacesService;
   /**
    * Installations domain service (Core Specification §5 / §11): Installation /
-   * InstallConfig / DeploymentProfile over the same shared ledger.
+   * InstallConfig / InstallationProviderEnvBindingSet over the same shared ledger.
    */
   readonly installations: InstallationsService;
   /**
@@ -450,9 +465,9 @@ export interface TakosumiOperations {
     spaceId: string,
     input: RecordMeteredUsageInput,
   ): Promise<{ readonly usageEvent: UsageEvent }>;
-  recordManagedResourceUsage(
+  recordGatewayResourceUsage(
     spaceId: string,
-    input: RecordManagedResourceUsageInput,
+    input: RecordGatewayResourceUsageInput,
   ): Promise<{ readonly usageEvents: readonly UsageEvent[] }>;
   reconcileInvoiceUsage(
     spaceId: string,
@@ -485,6 +500,12 @@ export interface TakosumiOperations {
    * Space's control ledger as a sealed R2_BACKUPS bundle.
    */
   readonly backups: BackupsService;
+  recordUploadArchive(input: {
+    readonly spaceId: string;
+    readonly bytes: Uint8Array;
+    readonly path?: string;
+  }): Promise<SourceSnapshot>;
+  deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
@@ -529,6 +550,8 @@ export interface TakosumiOperations {
   getRun(id: string): Promise<Run>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
+  /** Reads a Run's run-level audit event trail (spec §30). */
+  getRunEvents(id: string): Promise<RunEventsResponse>;
   /**
    * Reads a plan / destroy_plan Run's public, non-secret cost projection (the
    * billing reservation values the controller already computed at plan time, so
@@ -551,8 +574,8 @@ export interface TakosumiOperations {
   /** Reads a Connection projection by id (no secret values). */
   getConnection(connectionId: string): Promise<Connection>;
   /**
-   * Registers a provider-credential Connection (§9). The dashboard control
-   * surface only ever builds Space-scoped `provider_env_set` /
+   * Registers a Provider Connection backing record (§9). The dashboard control
+   * surface only ever builds Space-scoped `generic_env_provider` /
    * `cloudflare_api_token` requests here; `values` are write-only and the
    * response is the public projection (no secret values).
    */
@@ -596,13 +619,16 @@ export interface TakosumiOperations {
    * idempotency guard, mints credentials, and drives the container dispatch.
    */
   dispatchQueuedRun(dispatch: {
-    action: "plan" | "apply" | "source_sync";
+    action: "plan" | "apply" | "source_sync" | "restore";
     runId: string;
     spaceId: string;
   }): Promise<void>;
   // --- Sources (Core Specification §6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
-  listSources(spaceId: string, params?: PageParams): Promise<ListSourcesResponse>;
+  listSources(
+    spaceId: string,
+    params?: PageParams,
+  ): Promise<ListSourcesResponse>;
   getSource(id: string): Promise<SourceResponse>;
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
@@ -613,9 +639,18 @@ export interface TakosumiOperations {
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
   ): Promise<CapsuleCompatibilityReportResponse>;
-  listProviderTemplates(): Promise<ListProviderTemplatesResponse>;
+  getCompatibilityReport(
+    reportId: string,
+  ): Promise<CapsuleCompatibilityReportResponse>;
+  listProviderCatalogEntries(): Promise<ListProviderCatalogEntriesResponse>;
   listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
+  createRestoreRun(
+    spaceId: string,
+    backupId: string,
+    request: CreateRestoreRequest,
+    context?: DeployControlActorContext,
+  ): Promise<Run>;
   /**
    * Verifies a per-source webhook bearer against the stored hook-secret hash.
    * Used by the platform worker's `/hooks/sources/:id` route.
@@ -753,7 +788,7 @@ export async function createTakosumiService(
     normalizedArtifactStorage: context.adapters.objectStorage,
   });
   // Spaces + Installations domains (Core Specification §4 / §5 / §11): Space /
-  // Installation / InstallConfig / DeploymentProfile over the SAME shared
+  // Installation / InstallConfig / InstallationProviderEnvBindingSet over the SAME shared
   // ledger as the controller and Source service.
   const spacesService = new SpacesService({ store: sharedOpenTofuStore });
   const connectionsService = new ConnectionsService({
@@ -783,17 +818,19 @@ export async function createTakosumiService(
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
-  // Seed built-in shared InstallConfigs from the first-party module registry
-  // (trustLevel "official"). Idempotent upsert keyed by the derived config id,
-  // so a restart re-seeds the same rows. Fire-and-forget: a seed failure must
-  // not block boot, and install read paths tolerate an empty seed set.
-  void seedOfficialInstallConfigsOrWarn(sharedOpenTofuStore);
+  const serviceGraphService = createStorageBackedServiceGraphService(
+    context.adapters.storage,
+  );
+  // Seed the required shared InstallConfigs before the service is exposed. The
+  // generic Capsule default powers the standard Git URL install flow, so a seed
+  // failure is a boot/readiness failure rather than a deferred dashboard error.
+  await seedOfficialInstallConfigs(sharedOpenTofuStore);
   const opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
-    ...(options.userEnvSetProviderRunner
-      ? { userEnvSetProviderRunner: options.userEnvSetProviderRunner }
+    ...(options.ownKeyProviderRunner
+      ? { ownKeyProviderRunner: options.ownKeyProviderRunner }
       : {}),
     ...(opentofuConnectionVault ? { vault: opentofuConnectionVault } : {}),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
@@ -813,19 +850,7 @@ export async function createTakosumiService(
     ...(options.dependencyValueSealer
       ? { dependencyValueSealer: options.dependencyValueSealer }
       : {}),
-    // Operator-economic guard (P2): a per-Space cumulative apply ceiling for runs
-    // on the managed (operator-key) default while billing is not `enforce`. Set
-    // by the hosted platform worker via env; absent on self-host (uncapped, since
-    // a self-hoster applies on their own infrastructure/Connection).
-    ...managedDefaultApplyCapFromEnv(runtimeEnv),
-    // cf-proxy scope-signing secret (managed Cloudflare hosting): lets the
-    // control plane sign the proxy base_url so the edge proxy can verify it.
-    // Sourced from the DEDICATED `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (decoupled
-    // from the deploy-control bearer; falls back to the bearer for one release).
-    // Absent on self-host (managed Cloudflare runs fail closed there, which is
-    // correct — self-host brings its own Connection and never uses the operator
-    // cf-proxy).
-    ...cfProxySigningSecretFromEnv(runtimeEnv),
+    serviceGraphService,
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
   // stale Installations and space_drift_check groups read-only drift checks.
@@ -861,6 +886,9 @@ export async function createTakosumiService(
     registerRuntimeAgentRoutes: role === "takosumi-runtime-agent",
     registerReadinessRoutes: true,
     registerOpenApiRoute: role === "takosumi-api",
+    ...(deployControlToken
+      ? { getOpenApiBearerToken: () => deployControlToken }
+      : {}),
     registerArtifactRoutes:
       role === "takosumi-api" &&
       Boolean(deployToken) &&
@@ -885,7 +913,7 @@ export async function createTakosumiService(
               : {}),
           }
         : undefined,
-    deployControlPublicRouteOptions: {
+    deployControlInternalRouteOptions: {
       controller: opentofuController,
       ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
       ...(options.mountInternalLedgerRoutes === true
@@ -895,6 +923,7 @@ export async function createTakosumiService(
       installationsService,
       connectionsService,
       dependenciesService,
+      serviceGraphService,
       outputSharesService,
       runGroupsService,
       activityService,
@@ -969,8 +998,8 @@ export async function createTakosumiService(
       opentofuController.listSpaceUsage(spaceId, params),
     recordMeteredUsage: (spaceId, input) =>
       opentofuController.recordMeteredUsage(spaceId, input),
-    recordManagedResourceUsage: (spaceId, input) =>
-      opentofuController.recordManagedResourceUsage(spaceId, input),
+    recordGatewayResourceUsage: (spaceId, input) =>
+      opentofuController.recordGatewayResourceUsage(spaceId, input),
     reconcileInvoiceUsage: (spaceId, input) =>
       opentofuController.reconcileInvoiceUsage(spaceId, input),
     listSpaceCreditReservations: (spaceId) =>
@@ -982,6 +1011,26 @@ export async function createTakosumiService(
     reconcileStripeSpaceSubscription: (spaceId, input) =>
       opentofuController.reconcileStripeSpaceSubscription(spaceId, input),
     backups: backupsService,
+    recordUploadArchive: async (input) => {
+      if (!options.writeSourceArchive) {
+        throw new OpenTofuControllerError(
+          "not_implemented",
+          "upload archive storage (R2_SOURCE) is not configured",
+        );
+      }
+      return await recordUploadArchive({
+        controller: opentofuController,
+        writeSourceArchive: options.writeSourceArchive,
+        spaceId: input.spaceId,
+        bytes: input.bytes,
+        ...(input.path ? { path: input.path } : {}),
+      });
+    },
+    deployUpload: (request) =>
+      deployUpload(
+        { controller: opentofuController, installations: installationsService },
+        request,
+      ),
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
     createInstallationPlan: (installationId) =>
@@ -1003,6 +1052,7 @@ export async function createTakosumiService(
       opentofuController.createDeploymentRollbackPlan(deploymentId),
     getRun: (id) => opentofuController.getRun(id),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
+    getRunEvents: (id) => opentofuController.getRunEvents(id),
     getRunCost: (id) => opentofuController.getRunCost(id),
     approveRun: (id, input) => opentofuController.approveRun(id, input ?? {}),
     cancelRun: (id) => opentofuController.cancelRun(id),
@@ -1011,8 +1061,7 @@ export async function createTakosumiService(
     listOperatorConnections: () => opentofuController.listOperatorConnections(),
     getConnection: (connectionId) =>
       opentofuController.getConnection(connectionId),
-    createConnection: (request) =>
-      opentofuController.createConnection(request),
+    createConnection: (request) => opentofuController.createConnection(request),
     testConnection: (connectionId) =>
       opentofuController.testConnection(connectionId),
     // Revoke + delete the sealed blob, mirroring the §30
@@ -1050,7 +1099,9 @@ export async function createTakosumiService(
               start: (input) =>
                 connectionOAuthHelpers.cloudflare!.start({
                   provider: "cloudflare",
-                  request: new Request("https://connection-oauth.internal/start"),
+                  request: new Request(
+                    "https://connection-oauth.internal/start",
+                  ),
                   principal: { actor: "dashboard-session" },
                   body: {
                     spaceId: input.spaceId,
@@ -1091,98 +1142,19 @@ export async function createTakosumiService(
       opentofuController.createSourceSync(sourceId, opts ?? {}),
     createSourceCompatibilityCheck: (sourceId, request) =>
       opentofuController.createSourceCompatibilityCheck(sourceId, request),
-    listProviderTemplates: () => opentofuController.listProviderTemplates(),
+    getCompatibilityReport: (reportId) =>
+      opentofuController.getCompatibilityReport(reportId),
+    listProviderCatalogEntries: () =>
+      opentofuController.listProviderCatalogEntries(),
     listSourceSnapshots: (sourceId) =>
       opentofuController.listSourceSnapshots(sourceId),
     getSourceSyncRun: (id) => opentofuController.getSourceSyncRun(id),
+    createRestoreRun: (spaceId, backupId, request, context) =>
+      opentofuController.createRestoreRun(spaceId, backupId, request, context),
     verifySourceHookSecret: (sourceId, presentedSecret) =>
       opentofuController.verifySourceHookSecret(sourceId, presentedSecret),
   };
   return { app, context, role, workerDaemon, operations };
-}
-
-/**
- * Seeds built-in shared InstallConfigs into the shared ledger. The config id is
- * derived from the template id so the upsert is idempotent across restarts.
- * Logs and swallows a seed failure so it never blocks service boot.
- */
-async function seedOfficialInstallConfigsOrWarn(
-  store: OpenTofuDeploymentStore,
-): Promise<void> {
-  try {
-    await seedOfficialInstallConfigs(store);
-  } catch (error) {
-    log.warn("service.installations.install_config_seed_failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-function managedDefaultApplyCapFromEnv(
-  env: Record<string, string | undefined>,
-): { managedDefaultApplyCap: number } | Record<string, never> {
-  const raw = env.TAKOSUMI_MANAGED_APPLY_CAP?.trim();
-  if (!raw) return {};
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return {};
-  return { managedDefaultApplyCap: Math.floor(parsed) };
-}
-
-/**
- * Resolves the PRIMARY cf-proxy scope-signing secret the control plane signs the
- * managed `base_url` with (see `signCfProxyScope`).
- *
- * Source of truth is the DEDICATED `TAKOSUMI_CF_PROXY_SIGNING_SECRET`, decoupled
- * from the deploy-control bearer (`TAKOSUMI_DEPLOY_CONTROL_TOKEN`) so rotating the
- * bearer no longer silently breaks managed-run signatures. The dedicated secret
- * has its own rotation companion `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS`,
- * threaded into the proxy's accepted-secret set (see {@link cfProxySigningSecretsFromEnv}).
- *
- * Fallback (ONE release only): if the dedicated secret is unset, the deploy-control
- * bearer is reused as before so existing operator configs do not hard-break on
- * upgrade. Operators should set `TAKOSUMI_CF_PROXY_SIGNING_SECRET` and this
- * fallback will be removed next release.
- */
-function cfProxySigningSecretFromEnv(
-  env: Record<string, string | undefined>,
-): { cfProxySigningSecret: string } | Record<string, never> {
-  const secret = cfProxySigningSecretsFromEnv(env)[0];
-  return secret ? { cfProxySigningSecret: secret } : {};
-}
-
-/**
- * Resolves the cf-proxy ACCEPTED signing secrets the edge proxy verifies a
- * scope signature against — the primary first, then any rotation/previous
- * secret. The control plane signs with the primary (`[0]`); the proxy admits a
- * signature minted by either, so an operator can rotate
- * `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (moving the old value to
- * `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS`) without breaking in-flight runs.
- *
- * Order:
- *   1. `TAKOSUMI_CF_PROXY_SIGNING_SECRET` (primary, dedicated)
- *   2. `TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS` (rotation, optional)
- *   3. `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (deprecated one-release fallback, used as
- *      primary ONLY when the dedicated secret is unset)
- *
- * Duplicates and empties are dropped. Returns `[]` when nothing is configured
- * (the proxy is then disabled — fail closed).
- */
-export function cfProxySigningSecretsFromEnv(
-  env: Record<string, string | undefined>,
-): readonly string[] {
-  const dedicated = env.TAKOSUMI_CF_PROXY_SIGNING_SECRET?.trim();
-  const previous = env.TAKOSUMI_CF_PROXY_SIGNING_SECRET_PREVIOUS?.trim();
-  const bearer = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN?.trim();
-  const ordered = dedicated
-    ? [dedicated, previous]
-    : // Deprecated fallback (one release): the deploy-control bearer stands in
-      // as the primary when no dedicated secret is configured.
-      [bearer];
-  const accepted: string[] = [];
-  for (const secret of ordered) {
-    if (secret && !accepted.includes(secret)) accepted.push(secret);
-  }
-  return accepted;
 }
 
 function shouldEmitHttpRequestLogs(

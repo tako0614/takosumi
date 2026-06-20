@@ -20,7 +20,10 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
-import { redactString } from "../../domains/observability/redaction.ts";
+import {
+  containsSecretLikeString,
+  redactString,
+} from "../observability/redaction.ts";
 
 export function deploymentOutputsFromOpenTofu(
   outputs: OpenTofuOutputEnvelope,
@@ -133,6 +136,15 @@ export function projectOutputAllowlistSpaceOutputs(
         "failed_precondition",
         `output ${spec.from} does not match declared projection type ${spec.type}`,
       );
+    }
+    if (!isPublishableDeploymentOutputValue(projectedName, spec.type, entry.value)) {
+      if (spec.required) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `required output ${spec.from} cannot be projected as ${projectedName}`,
+        );
+      }
+      continue;
     }
     result[projectedName] = entry.value;
   }
@@ -292,7 +304,10 @@ function isPublishableDeploymentOutputValue(
   value: JsonValue,
 ): boolean {
   if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
-  if (typeof value !== "string") return true;
+  if (typeof value !== "string") {
+    return !containsSecretLikeJsonValue(value);
+  }
+  if (containsSecretLikeString(value)) return false;
   if (!kind.endsWith("_url")) return !SECRET_QUERY_RE.test(value);
   let parsed: URL;
   try {
@@ -306,6 +321,34 @@ function isPublishableDeploymentOutputValue(
     if (SECRET_QUERY_RE.test(key)) return false;
   }
   return true;
+}
+
+function containsSecretLikeJsonValue(value: JsonValue): boolean {
+  const stack: JsonValue[] = [value];
+  let inspected = 0;
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    inspected += 1;
+    if (inspected > 1_000) return true;
+    if (typeof current === "string") {
+      if (SECRET_QUERY_RE.test(current) || containsSecretLikeString(current)) {
+        return true;
+      }
+      continue;
+    }
+    if (current === null || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    for (const [key, nested] of Object.entries(current)) {
+      if (SECRET_QUERY_RE.test(key) || SECRET_OUTPUT_NAME_RE.test(key)) {
+        return true;
+      }
+      stack.push(nested);
+    }
+  }
+  return false;
 }
 
 export function stateLockEvidence(

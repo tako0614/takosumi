@@ -112,8 +112,8 @@ export interface PlatformContext {
 }
 
 /**
- * A compatibility backend adapter implements one shape (`implements`) with a chosen
- * cloud / runtime backend. Operators register adapters via
+ * A runtime backend adapter implements one shape (`implements`) with a chosen
+ * cloud / runtime backend for internal cleanup and runtime-agent dispatch paths. Operators register adapters via
  * {@link registerProvider} and reference them from implementation-specific
  * `provider:` fields by `id`.
  *
@@ -121,14 +121,10 @@ export interface PlatformContext {
  * shape's published union (e.g. `WebServiceCapabilityTerm`). Adapters that
  * type-parameterize this generic catch capability typos at compile time;
  * untyped adapters fall back to `string`.
- *
- * @deprecated Compatibility bridge for the pre-OperatorImplementation provider surface.
- * The current reference adapter API is `OperatorImplementation` (or the
- * `Materializer = OperatorImplementation | InlineMaterializer` union) from
- * `src/contract/implementation.ts`. `ProviderAdapter` remains as a transitional
- * adapter wrapped by `operatorImplementationFromProviderAdapter()`; new code should
- * implement `OperatorImplementation` directly. First-party native kind implementations use
- * `operatorImplementationFromNativeKindOperations()` instead of this bridge.
+ * This is not the public OpenTofu Capsule or Service Graph authoring surface.
+ * First-party native kind implementations use `OperatorImplementation` /
+ * `NativeKindOperations`; ProviderAdapter stays scoped to internal runtime
+ * adapter lookup where a shape/provider selector is the right key.
  */
 export interface ProviderAdapter<
   Spec = JsonObject,
@@ -179,9 +175,9 @@ export function registerProvider(
   ) {
     console.warn(
       `[takosumi-registry] provider "${provider.id}" overwritten ` +
-        `(was ${describeProvider(previous)}, now ${
-          describeProvider(provider)
-        })`,
+        `(was ${describeProvider(previous)}, now ${describeProvider(
+          provider,
+        )})`,
     );
   }
   PROVIDER_REGISTRY.set(provider.id, provider);

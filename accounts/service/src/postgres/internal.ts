@@ -5,15 +5,18 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import type {
-  AppBindingRecord,
-  AppGrantRecord,
+  ServiceBindingMaterialRecord,
+  ServiceGrantMaterialRecord,
   InstallationEventRecord,
   InstallationRecord,
   LedgerAccountRecord,
   SpaceKind,
   SpaceRecord,
 } from "../ledger.ts";
-import { isAppGrantCapability } from "../ledger.ts";
+import {
+  isServiceBindingMaterialKind,
+  isServiceGrantMaterialCapability,
+} from "../ledger.ts";
 import type {
   AccountSessionRecord,
   AuthorizationCodeRecord,
@@ -290,18 +293,18 @@ export interface AppInstallationRow {
   updated_at: TimeValue;
 }
 
-export interface AppBindingRow {
+export interface ServiceBindingMaterialRow {
   binding_id: string;
   installation_id: string;
   name: string;
-  kind: AppBindingRecord["kind"];
+  kind: string;
   config_ref: string;
   secret_refs: string[];
   created_at: TimeValue;
   updated_at: TimeValue;
 }
 
-export interface AppGrantRow {
+export interface ServiceGrantMaterialRow {
   grant_id: string;
   installation_id: string;
   capability: string;
@@ -590,7 +593,14 @@ export function appInstallationFromRow(
   };
 }
 
-export function appBindingFromRow(row: AppBindingRow): AppBindingRecord {
+export function serviceBindingMaterialFromRow(
+  row: ServiceBindingMaterialRow,
+): ServiceBindingMaterialRecord {
+  if (!isServiceBindingMaterialKind(row.kind)) {
+    throw new TypeError(
+      `invalid ServiceBindingMaterial kind in database: ${row.kind}`,
+    );
+  }
   return {
     bindingId: row.binding_id,
     installationId: row.installation_id,
@@ -603,10 +613,12 @@ export function appBindingFromRow(row: AppBindingRow): AppBindingRecord {
   };
 }
 
-export function appGrantFromRow(row: AppGrantRow): AppGrantRecord {
-  if (!isAppGrantCapability(row.capability)) {
+export function serviceGrantMaterialFromRow(
+  row: ServiceGrantMaterialRow,
+): ServiceGrantMaterialRecord {
+  if (!isServiceGrantMaterialCapability(row.capability)) {
     throw new TypeError(
-      `invalid AppGrant capability in database: ${row.capability}`,
+      `invalid ServiceGrantMaterial capability in database: ${row.capability}`,
     );
   }
   return {
@@ -633,7 +645,7 @@ export function installationEventFromRow(
   };
 }
 
-// `appGrantSelect()` removed: Wave 6 dropped `installation_v1.app_grants`
+// `serviceGrantMaterialSelect()` removed: Wave 6 dropped `installation_v1.app_grants`
 // and Phase I converted all readers to no-op shims. The query builder
 // became unreachable dead code (Phase K audit K5).
 

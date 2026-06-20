@@ -22,7 +22,7 @@ export interface ProviderMaterializationReference {
   readonly createdByOperationId: string;
   /**
    * Phase 18.2: provider id (`aws`, `gcp`, `cloudflare`, `k8s`, ...) that
-   * carries this materialisation. Surfaces multi-cloud composites to the
+   * carries this materialization. Surfaces multi-cloud composites to the
    * status projector so per-provider outages can be projected independently.
    */
   readonly providerId?: string;
@@ -32,7 +32,7 @@ export interface ProviderMaterializationReference {
    */
   readonly optional?: boolean;
   /**
-   * Phase 18.2: ids of upstream providers this materialisation depends on
+   * Phase 18.2: ids of upstream providers this materialization depends on
    * (e.g. compute depends on database). The status projector walks this DAG
    * to mark dependents `degraded` when an upstream provider is `failed`.
    */

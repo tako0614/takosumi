@@ -93,9 +93,10 @@ export function createPasskeyRegistrationOptions(
     challenge: passkeyChallenge(input.challenge),
     rp: input.rp,
     user: {
-      id: typeof input.user.id === "string"
-        ? input.user.id
-        : base64UrlEncodeBytes(input.user.id),
+      id:
+        typeof input.user.id === "string"
+          ? input.user.id
+          : base64UrlEncodeBytes(input.user.id),
       name: input.user.name,
       displayName: input.user.displayName,
     },
@@ -243,9 +244,10 @@ function readCborMapHeader(
  * format gate and `authData` for the rpIdHash / user-present checks. Throws if
  * the input is not a CBOR map containing the requested fields.
  */
-function decodeAttestationObject(
-  attestationObject: Uint8Array,
-): { fmt: string; authData?: Uint8Array } {
+function decodeAttestationObject(attestationObject: Uint8Array): {
+  fmt: string;
+  authData?: Uint8Array;
+} {
   const header = readCborMapHeader(attestationObject, 0);
   let offset = header.offset;
   let fmt: string | undefined;
@@ -335,8 +337,11 @@ function readCborBstr(
     length = (input[offset]! << 8) | input[offset + 1]!;
     offset += 2;
   } else if (additionalInfo === 26) {
-    length = input[offset]! * 2 ** 24 + input[offset + 1]! * 2 ** 16 +
-      input[offset + 2]! * 2 ** 8 + input[offset + 3]!;
+    length =
+      input[offset]! * 2 ** 24 +
+      input[offset + 1]! * 2 ** 16 +
+      input[offset + 2]! * 2 ** 8 +
+      input[offset + 3]!;
     offset += 4;
   } else if (additionalInfo >= 27) {
     throw new TypeError("passkey attestationObject CBOR bytes are too large");
@@ -366,8 +371,11 @@ function skipCborItem(input: Uint8Array, offset: number): number {
     length = (input[offset]! << 8) | input[offset + 1]!;
     offset += 2;
   } else if (additionalInfo === 26) {
-    length = (input[offset]! << 24) | (input[offset + 1]! << 16) |
-      (input[offset + 2]! << 8) | input[offset + 3]!;
+    length =
+      (input[offset]! << 24) |
+      (input[offset + 1]! << 16) |
+      (input[offset + 2]! << 8) |
+      input[offset + 3]!;
     offset += 4;
   } else if (additionalInfo >= 27) {
     throw new TypeError("passkey attestationObject CBOR length is too large");
@@ -457,9 +465,7 @@ function passkeyChallenge(value?: string | Uint8Array): string {
 function parseClientData(clientDataJSON: Uint8Array): Record<string, unknown> {
   const decoded = new TextDecoder().decode(clientDataJSON);
   const parsed: unknown = JSON.parse(decoded);
-  if (
-    typeof parsed !== "object" || parsed === null || Array.isArray(parsed)
-  ) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new TypeError("passkey clientDataJSON is not a JSON object");
   }
   const record = parsed as Record<string, unknown>;
@@ -631,10 +637,10 @@ function timingSafeEqual(first: Uint8Array, second: Uint8Array): boolean {
 function base64UrlEncodeBytes(value: Uint8Array): string {
   let binary = "";
   for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 export interface PublicKeyCredentialCreationOptionsJSON {

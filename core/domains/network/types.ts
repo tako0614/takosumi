@@ -1,6 +1,6 @@
 export type RuntimeNetworkPolicyId = string;
 export type WorkloadIdentityId = string;
-export type ServiceGrantId = string;
+export type NetworkServiceGrantId = string;
 export type NetworkProtocol = "http" | "https" | "tcp" | "udp" | string;
 export type EgressDecision = "allowed" | "denied" | "unknown";
 
@@ -47,8 +47,8 @@ export interface WorkloadIdentity {
   readonly issuedAt: string;
 }
 
-export interface ServiceGrant {
-  readonly id: ServiceGrantId;
+export interface NetworkServiceGrant {
+  readonly id: NetworkServiceGrantId;
   readonly spaceId: string;
   readonly groupId: string;
   readonly fromIdentityId: WorkloadIdentityId;

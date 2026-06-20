@@ -9,12 +9,12 @@
  * column on the Installation (UNIQUE(space_id, name, environment)).
  *
  * This service owns Installation creation + lookup and InstallConfig /
- * ProviderBinding record passthroughs with validation. No secret material flows
+ * InstallationProviderEnvBinding record passthroughs with validation. No secret material flows
  * through it; bindings reference Connection ids only.
  */
 
 import type {
-  DeploymentProfile,
+  InstallationProviderEnvBindingSet,
   InstallConfig,
   Installation,
   InstallationStatus,
@@ -29,6 +29,7 @@ import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
+import { isRetiredOfficialInstallConfigId } from "./official_seed.ts";
 
 /**
  * Installation name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -109,6 +110,12 @@ export class InstallationsService {
       throw new OpenTofuControllerError(
         "invalid_argument",
         `installConfigId ${request.installConfigId} does not exist`,
+      );
+    }
+    if (isRetiredOfficialInstallConfigId(config.id)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `installConfigId ${request.installConfigId} is a retired built-in alias; use a Git URL Capsule config instead`,
       );
     }
     // A space-scoped InstallConfig may only be used by its owning Space; an
@@ -212,6 +219,12 @@ export class InstallationsService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
+    if (isRetiredOfficialInstallConfigId(config.id)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `install config ${config.id} is a retired built-in alias`,
+      );
+    }
     if (config.installType === "opentofu_root") {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -233,7 +246,7 @@ export class InstallationsService {
   async getInstallConfig(id: string): Promise<InstallConfig> {
     requireNonEmptyString(id, "id");
     const config = await this.#store.getInstallConfig(id);
-    if (!config) {
+    if (!config || isRetiredOfficialInstallConfigId(config.id)) {
       throw new OpenTofuControllerError(
         "not_found",
         `install config ${id} not found`,
@@ -245,14 +258,16 @@ export class InstallationsService {
   async listInstallConfigs(
     spaceId?: string,
   ): Promise<readonly InstallConfig[]> {
-    return await this.#store.listInstallConfigs(spaceId);
+    return (await this.#store.listInstallConfigs(spaceId)).filter(
+      (config) => !isRetiredOfficialInstallConfigId(config.id),
+    );
   }
 
-  // --- Internal ProviderBinding record --------------------------------------
+  // --- Installation provider env binding record ------------------------------
 
-  async putDeploymentProfile(
-    profile: DeploymentProfile,
-  ): Promise<DeploymentProfile> {
+  async putInstallationProviderEnvBindingSet(
+    profile: InstallationProviderEnvBindingSet,
+  ): Promise<InstallationProviderEnvBindingSet> {
     requireNonEmptyString(profile.id, "id");
     requireNonEmptyString(profile.installationId, "installationId");
     requireNonEmptyString(profile.environment, "environment");
@@ -262,20 +277,20 @@ export class InstallationsService {
     if (installation.spaceId !== profile.spaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `deployment profile spaceId ${profile.spaceId} does not match ` +
+        `provider env binding set spaceId ${profile.spaceId} does not match ` +
           `installation ${profile.installationId} space ${installation.spaceId}`,
       );
     }
-    return await this.#store.putDeploymentProfile(profile);
+    return await this.#store.putInstallationProviderEnvBindingSet(profile);
   }
 
-  async getDeploymentProfileByInstallation(
+  async getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
-  ): Promise<DeploymentProfile | undefined> {
+  ): Promise<InstallationProviderEnvBindingSet | undefined> {
     requireNonEmptyString(installationId, "installationId");
     requireNonEmptyString(environment, "environment");
-    return await this.#store.getDeploymentProfileByInstallation(
+    return await this.#store.getInstallationProviderEnvBindingSetByInstallation(
       installationId,
       environment,
     );

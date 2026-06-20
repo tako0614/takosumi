@@ -1,0 +1,418 @@
+import { expect, test } from "bun:test";
+
+import { InstallationsService } from "../../../../core/domains/installations/mod.ts";
+import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
+import type {
+  OpenTofuDeploymentStore,
+  StoredSource,
+} from "../../../../core/domains/deploy-control/store.ts";
+import type { InstallConfig } from "takosumi-contract/installations";
+import type { Space } from "takosumi-contract/spaces";
+
+function build() {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let counter = 0;
+  const newId = (prefix: string) =>
+    `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
+  const service = new InstallationsService({
+    store,
+    newId,
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  return { store, service };
+}
+
+async function seedSpace(
+  store: OpenTofuDeploymentStore,
+  over: Partial<Space> = {},
+): Promise<Space> {
+  const space: Space = {
+    id: "space_1",
+    handle: "shota",
+    displayName: "Shota",
+    type: "personal",
+    ownerUserId: "user_1",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    ...over,
+  };
+  await store.putSpace(space);
+  return space;
+}
+
+async function seedSource(
+  store: OpenTofuDeploymentStore,
+  over: Partial<StoredSource> = {},
+): Promise<StoredSource> {
+  const source: StoredSource = {
+    id: "src_1",
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "release",
+    defaultPath: "infra",
+    status: "active",
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    hookSecretHash: "hash",
+    autoSync: false,
+    ...over,
+  };
+  await store.putSource(source);
+  return source;
+}
+
+async function seedConfig(
+  store: OpenTofuDeploymentStore,
+  over: Partial<InstallConfig> = {},
+): Promise<InstallConfig> {
+  const config: InstallConfig = {
+    id: "cfg_1",
+    name: "config",
+    installType: "opentofu_module",
+    trustLevel: "official",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    ...over,
+  };
+  await store.putInstallConfig(config);
+  return config;
+}
+
+async function seedAll(store: OpenTofuDeploymentStore): Promise<void> {
+  await seedSpace(store);
+  await seedSource(store);
+  await seedConfig(store);
+}
+
+test("createInstallation persists with derived slug, generation 0, status pending", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  expect(installation.id).toBe("inst_test00000001");
+  expect(installation.slug).toBe("shop");
+  expect(installation.installType).toBe("opentofu_module");
+  expect(installation.currentStateGeneration).toBe(0);
+  expect(installation.status).toBe("pending");
+  expect(installation.createdAt).toBe("2026-06-06T00:00:00.000Z");
+  expect((await store.getInstallation(installation.id))?.name).toBe("shop");
+});
+
+test("createInstallation rejects a non-slug name", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "Shop Name",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_1",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createInstallation rejects a missing space", async () => {
+  const { store, service } = build();
+  await seedSource(store);
+  await seedConfig(store);
+  await expect(
+    service.createInstallation({
+      spaceId: "space_missing",
+      name: "shop",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_1",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createInstallation rejects a source from a different space", async () => {
+  const { store, service } = build();
+  await seedSpace(store);
+  await seedSource(store, { id: "src_other", spaceId: "space_other" });
+  await seedConfig(store);
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "shop",
+      environment: "production",
+      sourceId: "src_other",
+      installConfigId: "cfg_1",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createInstallation rejects a missing install config", async () => {
+  const { store, service } = build();
+  await seedSpace(store);
+  await seedSource(store);
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "shop",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_missing",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createInstallation rejects a space-scoped config owned by another space", async () => {
+  const { store, service } = build();
+  await seedSpace(store);
+  await seedSource(store);
+  await seedConfig(store, { id: "cfg_other", spaceId: "space_other" });
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "shop",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_other",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("createInstallation accepts a space-scoped config owned by the same space", async () => {
+  const { store, service } = build();
+  await seedSpace(store);
+  await seedSource(store);
+  await seedConfig(store, { id: "cfg_space", spaceId: "space_1" });
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_space",
+  });
+  expect(installation.installConfigId).toBe("cfg_space");
+});
+
+test("createInstallation enforces unique(space_id, name, environment)", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "shop",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: "cfg_1",
+    }),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("createInstallation allows the same name in a different environment", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  const preview = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "preview",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  expect(preview.environment).toBe("preview");
+});
+
+test("getInstallation throws not_found when missing", async () => {
+  const { service } = build();
+  await expect(service.getInstallation("inst_missing")).rejects.toMatchObject({
+    code: "not_found",
+  });
+});
+
+test("listInstallations filters by space", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  await seedSpace(store, { id: "space_2", handle: "other" });
+  await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  expect((await service.listInstallations("space_1")).length).toBe(1);
+  expect((await service.listInstallations("space_2")).length).toBe(0);
+});
+
+test("patchInstallationStatus updates status + timestamp", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  const updated = await service.patchInstallationStatus(
+    installation.id,
+    "active",
+  );
+  expect(updated.status).toBe("active");
+});
+
+test("putInstallConfig validates a referenced space exists", async () => {
+  const { service } = build();
+  await expect(
+    service.putInstallConfig({
+      id: "cfg_x",
+      spaceId: "space_missing",
+      name: "x",
+      installType: "opentofu_module",
+      trustLevel: "space",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});
+
+test("putInstallConfig rejects legacy opentofu_root configs for new writes", async () => {
+  const { service } = build();
+  await expect(
+    service.putInstallConfig({
+      id: "cfg_root",
+      name: "legacy root",
+      installType: "opentofu_root",
+      trustLevel: "raw",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("legacy direct-root"),
+  });
+});
+
+test("retired official aliases are hidden and fail closed for new use", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const retired: InstallConfig = {
+    id: "cfg-official-talk",
+    name: "talk",
+    installType: "opentofu_module",
+    trustLevel: "official",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putInstallConfig(retired);
+
+  await expect(service.getInstallConfig(retired.id)).rejects.toMatchObject({
+    code: "not_found",
+  });
+  expect((await service.listInstallConfigs()).map((c) => c.id)).not.toContain(
+    retired.id,
+  );
+  await expect(
+    service.createInstallation({
+      spaceId: "space_1",
+      name: "talk",
+      environment: "production",
+      sourceId: "src_1",
+      installConfigId: retired.id,
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("retired built-in alias"),
+  });
+  await expect(service.putInstallConfig(retired)).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("retired built-in alias"),
+  });
+});
+
+test("getInstallConfig / listInstallConfigs passthroughs work", async () => {
+  const { store, service } = build();
+  await seedConfig(store);
+  expect((await service.getInstallConfig("cfg_1")).name).toBe("config");
+  expect((await service.listInstallConfigs()).length).toBe(1);
+  await expect(service.getInstallConfig("cfg_missing")).rejects.toMatchObject({
+    code: "not_found",
+  });
+});
+
+test("putInstallationProviderEnvBindingSet validates the installation + matching space", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  const profile = await service.putInstallationProviderEnvBindingSet({
+    id: "dpf_1",
+    spaceId: "space_1",
+    installationId: installation.id,
+    environment: "production",
+    connections: [],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  expect(profile.id).toBe("dpf_1");
+  const fetched =
+    await service.getInstallationProviderEnvBindingSetByInstallation(
+      installation.id,
+      "production",
+    );
+  expect(fetched?.id).toBe("dpf_1");
+});
+
+test("putInstallationProviderEnvBindingSet rejects a spaceId mismatching the installation", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  await expect(
+    service.putInstallationProviderEnvBindingSet({
+      id: "dpf_bad",
+      spaceId: "space_other",
+      installationId: installation.id,
+      environment: "production",
+      connections: [],
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    }),
+  ).rejects.toMatchObject({ code: "invalid_argument" });
+});

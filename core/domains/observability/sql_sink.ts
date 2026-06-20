@@ -2,7 +2,7 @@ import type {
   ActorContext,
   JsonObject,
 } from "takosumi-contract/reference/compat";
-import type { AuditEvent } from "../../domains/audit/types.ts";
+import type { AuditEvent } from "../audit/types.ts";
 import type {
   SqlClient,
   SqlParameters,

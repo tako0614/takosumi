@@ -11,6 +11,11 @@ The handler is the same `createAccountsHandler` that ships in the Cloudflare wor
 | TLS     | Cloudflare edge         | Caddy automatic HTTPS                |
 | secrets | `wrangler secret put`   | `.env` file or operator secret store |
 
+Accounts is the backing layer for session cookies, upstream sign-in, billing checkout/portal, installed-service OIDC
+material, Installation projection ledgers, and export handoff. It is not a second control plane: product resources are
+created and read through `/api/v1/*`, while `/v1/installation-projections` only hands identity/billing/export/service-token
+projection material to installed services.
+
 ## Quick start
 
 ```bash
@@ -36,7 +41,7 @@ TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
 # "d" coordinate; the two pairwise secrets are independent 64-char random strings.
 TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK={"kty":"EC","crv":"P-256","d":"...","x":"...","y":"..."}
 TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=replace-me-with-a-64-char-random-string
-TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET=replace-me-with-another-64-char-random-string
+TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET=replace-me-with-another-64-char-random-placeholder
 ```
 
 ## Files
@@ -56,16 +61,19 @@ The Caddy site label and the Bun listener bind address are intentionally separat
 
 ## Installation export downloads
 
+Installation export downloads are portability/import artifacts owned by the account-plane projection flow. They are not
+the operator backup/restore mechanism for the Takosumi control ledger or state artifacts.
+
 To enable installation export downloads the operator must set, together:
 
 - `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET` — long-lived HMAC secret used to sign and verify the time-limited export download URLs. The export worker signs each emitted URL (`tk_exp` expiry + `tk_sig` HMAC-SHA256 query params), mirroring the Cloudflare profile.
 - `TAKOSUMI_ACCOUNTS_EXPORT_OUTPUT_DIR` — filesystem directory where `takos-export-<op>.tar.zst[.age]` archives are materialized.
-- `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL` — public URL prefix the signed download URLs are built under. Point it at this server (so the in-process route verifies the signature before serving) or at a static file server in front of `EXPORT_OUTPUT_DIR`.
+- `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL` — public URL prefix the signed download URLs are built under. Use an HTTPS URL in operator environments, or loopback `http://localhost` / `http://127.0.0.1` only for local development. Point it at this server so the in-process route verifies the signature before serving.
 - `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS` (optional) — TTL for the signed download URL. Defaults to 24h.
 
 The export worker writes archives to the local filesystem. The shipped `docker-compose.yml` mounts a writable `exports-data` named volume at the default `EXPORT_OUTPUT_DIR` (`/var/lib/takosumi-accounts/exports`) so the export worker can write under the container's `read_only: true` root filesystem. If you change `EXPORT_OUTPUT_DIR`, change that mount too (or bind-mount a writable host directory).
 
-When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service handles the download path itself and verifies the HMAC signature + expiry fail-closed (invalid signature → 403, expired → 410) before reading the archive off disk; a basename-only file resolution prevents path traversal. When it instead points at an external static server, the signature + expiry are still embedded in the URL (unguessable, time-limited) but enforcement is the static server's responsibility.
+When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service handles the download path itself and verifies the HMAC signature + expiry fail-closed (invalid signature → 403, expired → 410) before reading the archive off disk; a basename-only file resolution prevents path traversal. Do not point export downloads at an unauthenticated static directory: the service-owned verifier is the security boundary for export artifacts.
 
 ## Stripe billing
 
@@ -73,13 +81,14 @@ When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service ha
 
 ## Operator notes
 
-- Run `bun packages/cli/src/main.ts accounts migrate` against Postgres before first start, or use the docker-compose `migrations` init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
+- Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
+  init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
 - Secrets (`POSTGRES_PASSWORD`, OAuth client secrets) belong in your operator secret store, not in the compose file. Use Docker secrets, Kubernetes Secrets, or a `.env` file outside version control.
-- Managed offering access defaults to `closed`. Set `TAKOSUMI_ACCOUNTS_MANAGED_OFFERING_ACCESS=open` only after launch
+- hosted Takosumi access defaults to `closed`. Set `TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS=open` only after launch
   readiness evidence and production hardening evidence are in place. The node-postgres distribution mirrors the
   Cloudflare worker gate: open access requires the readiness digest, evidence/approval refs, reviewed public summary,
-  `TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce`, and the container / egress / provider-catalog / secret-boundary
-  evidence refs and digests.
+  `TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce`, and the container / layer-2 platform-control-plane smoke / egress /
+  restore rehearsal / provider-catalog / cost-attribution / secret-boundary evidence refs and digests.
 - The Caddyfile expects `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` to resolve to the host running the stack. Caddy will obtain a Let's Encrypt cert automatically on port 80/443. The Caddyfile pins TLS to 1.2 / 1.3, emits structured JSON logs, and sets a default-deny `Content-Security-Policy` (`default-src 'self'; frame-ancestors 'none'`); override this header with the exact source allowlist your dashboard payload needs rather than removing it.
 
 ## Container hardening defaults

@@ -5,9 +5,8 @@ export function formatAccountsTokensList(
   asJson: boolean,
 ): string {
   if (asJson) return JSON.stringify(response, null, 2);
-  const tokens = isRecord(response) && Array.isArray(response.tokens)
-    ? response.tokens
-    : [];
+  const tokens =
+    isRecord(response) && Array.isArray(response.tokens) ? response.tokens : [];
   if (tokens.length === 0) return "No personal access tokens found.";
   const lines = ["Personal access tokens:"];
   for (const value of tokens) {
@@ -79,7 +78,7 @@ export function formatInstallationsList(
     lines.push(
       `  ${stringValue(value.id) ?? "unknown"}  ${
         stringValue(value.status) ?? "unknown"
-      }  ${stringValue(value.app_id) ?? "unknown-app"}  ${
+      }  ${stringValue(value.capsule_id) ?? "unknown-capsule"}  ${
         stringValue(value.mode) ?? "unknown-mode"
       }`,
     );
@@ -100,7 +99,7 @@ export function formatInstallationInspect(
   const lines = [
     `Installation ${stringValue(installation.id) ?? "unknown"}`,
     `  status: ${stringValue(installation.status) ?? "unknown"}`,
-    `  app: ${stringValue(installation.app_id) ?? "unknown-app"}`,
+    `  capsule: ${stringValue(installation.capsule_id) ?? "unknown-capsule"}`,
     `  mode: ${stringValue(installation.mode) ?? "unknown-mode"}`,
     `  space: ${stringValue(installation.space_id) ?? "unknown-space"}`,
   ];
@@ -111,10 +110,12 @@ export function formatInstallationInspect(
       }`,
     );
   }
-  const useEdges = Array.isArray(response.use_edges) ? response.use_edges : [];
-  if (useEdges.length > 0) {
-    lines.push("Use edges:");
-    for (const value of useEdges) {
+  const serviceBindings = Array.isArray(response.service_bindings)
+    ? response.service_bindings
+    : [];
+  if (serviceBindings.length > 0) {
+    lines.push("Service bindings:");
+    for (const value of serviceBindings) {
       if (!isRecord(value)) continue;
       lines.push(
         `  ${stringValue(value.name) ?? "unknown"}  ${
@@ -128,24 +129,24 @@ export function formatInstallationInspect(
     lines.push(
       `  ${stringValue(response.oidc_client.client_id) ?? "unknown"}  ${
         stringValue(response.oidc_client.token_endpoint_auth_method) ??
-          "unknown-auth"
+        "unknown-auth"
       }`,
     );
     const redirectUris = Array.isArray(response.oidc_client.redirect_uris)
-      ? response.oidc_client.redirect_uris.filter((value) =>
-        typeof value === "string" && value.length > 0
-      )
+      ? response.oidc_client.redirect_uris.filter(
+          (value) => typeof value === "string" && value.length > 0,
+        )
       : [];
     if (redirectUris.length > 0) {
       lines.push(`  redirects: ${redirectUris.join(", ")}`);
     }
   }
-  const permissionScopes = Array.isArray(response.permission_scopes)
-    ? response.permission_scopes
+  const serviceGrants = Array.isArray(response.service_grants)
+    ? response.service_grants
     : [];
-  if (permissionScopes.length > 0) {
-    lines.push("Permission scopes:");
-    for (const value of permissionScopes) {
+  if (serviceGrants.length > 0) {
+    lines.push("Service grants:");
+    for (const value of serviceGrants) {
       if (!isRecord(value)) continue;
       lines.push(
         `  ${stringValue(value.capability) ?? "unknown"}  ${
@@ -181,15 +182,13 @@ export function formatInstallationUninstall(
     return "Installation uninstall response is missing installation details.";
   }
   const installation = response.installation;
-  const revokedPermissionScopes = Array.isArray(
-      response.revoked_permission_scopes,
-    )
-    ? response.revoked_permission_scopes
+  const revokedServiceGrants = Array.isArray(response.revoked_service_grants)
+    ? response.revoked_service_grants
     : [];
   const lines = [
     `Installation ${stringValue(installation.id) ?? "unknown"}`,
     `  status: ${stringValue(installation.status) ?? "unknown"}`,
-    `  revoked permission scopes: ${revokedPermissionScopes.length}`,
+    `  revoked service grants: ${revokedServiceGrants.length}`,
   ];
   if (isRecord(response.event)) {
     lines.push(`  event: ${stringValue(response.event.type) ?? "unknown"}`);

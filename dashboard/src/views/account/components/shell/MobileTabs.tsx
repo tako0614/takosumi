@@ -1,17 +1,11 @@
 /**
  * Mobile bottom bar — mirrors the sidebar's five destinations plus the
  * notifications feed (the desktop reaches it via the TopBar bell; on phones a
- * tab keeps it one tap away). Expert surfaces are inside app detail / Space
+ * tab keeps it one tap away). Expert surfaces are inside Installation detail / Space
  * settings, so nothing is nav-chrome-only on desktop.
  */
 import { A, useLocation } from "@solidjs/router";
-import {
-  Bell,
-  Home,
-  Plus,
-  Settings2,
-  UserCircle2,
-} from "lucide-solid";
+import { Bell, Home, Plus, Settings2, UserCircle2 } from "lucide-solid";
 import { t } from "../../../../i18n/index.ts";
 
 export default function MobileTabs() {
@@ -20,7 +14,11 @@ export default function MobileTabs() {
     { href: "/", label: () => t("nav.home"), icon: Home, end: true },
     { href: "/new", label: () => t("nav.add"), icon: Plus },
     { href: "/notifications", label: () => t("nav.notifications"), icon: Bell },
-    { href: "/space/settings", label: () => t("nav.spaceSettings"), icon: Settings2 },
+    {
+      href: "/space/settings",
+      label: () => t("nav.spaceSettings"),
+      icon: Settings2,
+    },
     { href: "/account", label: () => t("nav.account"), icon: UserCircle2 },
   ] as const;
   const isActive = (href: string, end?: boolean) =>
@@ -33,7 +31,9 @@ export default function MobileTabs() {
         <A
           href={tab.href}
           class="mobile-tab"
-          classList={{ active: isActive(tab.href, "end" in tab ? tab.end : false) }}
+          classList={{
+            active: isActive(tab.href, "end" in tab ? tab.end : false),
+          }}
         >
           <tab.icon size={20} />
           <span>{tab.label()}</span>

@@ -8,8 +8,9 @@ export const PRODUCTION_HARDENING_EVIDENCE_KIND =
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const GIT_REF_PATTERN = /^git\+[^#]+#[^#]+$/;
 const GIT_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}$/i;
-const REQUIRED_VERIFIED_SPACE_PROVIDERS = [
+const REQUIRED_PROVIDER_CATALOG_IDS = [
   "aws",
+  "cloudflare",
   "gcp",
   "github",
   "kubernetes",
@@ -21,9 +22,24 @@ const REQUIRED_SECRET_CLASSES = [
 ] as const;
 const REQUIRED_LEAK_TARGETS = [
   "runnerDiagnostics",
-  "failureAuditPayloads",
+  "apiPayloads",
+  "runPayloads",
+  "usagePayloads",
+  "hardeningGatePayloads",
+] as const;
+const REQUIRED_LAYER2_STEPS = [
+  "spaceScopedProviderConnection",
+  "scratchInstall",
+  "plan",
+  "apply",
+  "deploymentVerified",
+  "destroy",
+] as const;
+const REQUIRED_RESTORE_SCOPES = [
+  "controlLedger",
+  "stateSnapshots",
   "outputSnapshots",
-  "tenantWorkerBindings",
+  "auditChain",
 ] as const;
 
 export interface ProductionHardeningEvidenceManifest {
@@ -32,8 +48,11 @@ export interface ProductionHardeningEvidenceManifest {
   readonly environment: "staging" | "production";
   readonly checks: {
     readonly containerSmoke: ContainerSmokeEvidence;
+    readonly platformControlPlaneSmoke: PlatformControlPlaneSmokeEvidence;
     readonly egressEnforcement: EgressEnforcementEvidence;
-    readonly providerTemplates: ProviderTemplateEvidence;
+    readonly restoreRehearsal: RestoreRehearsalEvidence;
+    readonly providerCatalog: ProviderCatalogEvidence;
+    readonly costAttribution: CostAttributionEvidence;
     readonly secretBoundary: SecretBoundaryEvidence;
   };
 }
@@ -57,40 +76,79 @@ export interface ContainerSmokeEvidence extends BaseEvidence {
   };
 }
 
+export interface PlatformControlPlaneSmokeEvidence extends BaseEvidence {
+  readonly serviceUrl: string;
+  readonly scratchSpaceId: string;
+  readonly capsuleModule: "cloudflare-hello-worker";
+  readonly credentialPath: "space_scoped_provider_connection";
+  readonly steps: readonly string[];
+  readonly capsuleGateStatus: "passed";
+  readonly policyStatus: "passed";
+  readonly deploymentVerified: true;
+  readonly destroyVerified: true;
+}
+
 export interface EgressEnforcementEvidence extends BaseEvidence {
-  readonly dispatchNamespace: string;
-  readonly outboundWorkerConfigured: boolean;
-  readonly allowProbe: {
+  readonly runnerProfileId: string;
+  readonly runnerBoundary: "cloudflare-container";
+  readonly networkPolicyConfigured: boolean;
+  readonly providerAllowProbe: {
     readonly host: string;
     readonly result: "allowed";
+    readonly provider: string;
+    readonly runId: string;
+    readonly status: "succeeded";
   };
-  readonly denyProbe: {
+  readonly sourceDenyProbe: {
     readonly host: string;
     readonly result: "denied";
+    readonly statusCode: number;
+    readonly errorCode: string;
   };
 }
 
-export interface ProviderTemplateEvidence extends BaseEvidence {
-  readonly cloudflareManagedDefault: {
-    readonly primaryCredentialSource: "takosumi_managed";
-    readonly defaultEligible: true;
+export interface RestoreRehearsalEvidence extends BaseEvidence {
+  readonly target: "staging" | "isolated_recovery" | "production_smoke";
+  readonly backupId: string;
+  readonly restoreMode:
+    | "validate_only"
+    | "isolated_restore"
+    | "live_smoke_restore";
+  readonly scopesVerified: readonly string[];
+  readonly auditChainVerified: true;
+  readonly rtoMinutes: number;
+  readonly rpoMinutes: number;
+}
+
+export interface ProviderCatalogEvidence extends BaseEvidence {
+  readonly providers: readonly {
+    readonly id: string;
+    readonly ownershipOptions: readonly ["own_key"];
+  }[];
+  readonly cloudOnlyGatewayProjectionReturned: false;
+  readonly secretValuesReturned: false;
+}
+
+export interface CostAttributionEvidence extends BaseEvidence {
+  readonly usageLedger: {
+    readonly spaceId: string;
+    readonly eventCount: number;
+    readonly latestRunIds: readonly string[];
   };
-  readonly verifiedSpaceProviders: readonly string[];
-  readonly providerEnvSet: {
-    readonly providerPinRequired: true;
-    readonly egressPolicyRequired: true;
-    readonly customRunnerClassRequired: true;
-    readonly operatorDefaultAllowed: false;
-  };
+  readonly billingMode: "showback" | "enforce";
+  readonly billingProvider: "manual" | "stripe";
+  readonly freshSamples: true;
+  readonly publicBillingPlanCount: number;
 }
 
 export interface SecretBoundaryEvidence extends BaseEvidence {
   readonly forbiddenSecretClasses: readonly string[];
   readonly leakTargetsChecked: readonly string[];
   readonly diagnosticsRedacted: true;
-  readonly auditPayloadsRedacted: true;
-  readonly outputSnapshotsRedacted: true;
-  readonly tenantWorkerBindingsRedacted: true;
+  readonly apiPayloadsRedacted: true;
+  readonly runPayloadsRedacted: true;
+  readonly usagePayloadsRedacted: true;
+  readonly hardeningGatePayloadsRedacted: true;
 }
 
 export interface ProductionHardeningEvidenceValidation {
@@ -129,47 +187,109 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
           outputSnapshotId: "<output-snapshot-id>",
         },
       },
+      platformControlPlaneSmoke: {
+        evidenceRef: `${evidenceRefBase}#evidence/platform-control-plane-smoke.md`,
+        evidenceDigest: "sha256:<64-lowercase-hex>",
+        live: true,
+        summary:
+          "Layer-2 platform control-plane smoke installed, planned, applied, verified, and destroyed a scratch Cloudflare Worker Capsule through the platform API.",
+        serviceUrl: "https://app.takosumi.com",
+        scratchSpaceId: "<scratch-space-id>",
+        capsuleModule: "cloudflare-hello-worker",
+        credentialPath: "space_scoped_provider_connection",
+        steps: [
+          "spaceScopedProviderConnection",
+          "scratchInstall",
+          "plan",
+          "apply",
+          "deploymentVerified",
+          "destroy",
+        ],
+        capsuleGateStatus: "passed",
+        policyStatus: "passed",
+        deploymentVerified: true,
+        destroyVerified: true,
+      },
       egressEnforcement: {
         evidenceRef: `${evidenceRefBase}#evidence/egress.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Dispatch namespace outbound Worker allowed a policy host and denied a non-policy host.",
-        dispatchNamespace: "<dispatch-namespace>",
-        outboundWorkerConfigured: true,
-        allowProbe: {
+          "OpenTofu runner boundary allowed the required provider API host and denied a blocked metadata source host.",
+        runnerProfileId: "cloudflare-default",
+        runnerBoundary: "cloudflare-container",
+        networkPolicyConfigured: true,
+        providerAllowProbe: {
           host: "api.cloudflare.com",
           result: "allowed",
+          provider: "cloudflare",
+          runId: "<apply-run-id>",
+          status: "succeeded",
         },
-        denyProbe: {
+        sourceDenyProbe: {
           host: "metadata.google.internal",
           result: "denied",
+          statusCode: 400,
+          errorCode: "invalid_argument",
         },
       },
-      providerTemplates: {
+      restoreRehearsal: {
+        evidenceRef: `${evidenceRefBase}#evidence/restore-rehearsal.md`,
+        evidenceDigest: "sha256:<64-lowercase-hex>",
+        live: true,
+        summary:
+          "Latest platform control-plane backup was restored or validated in an isolated recovery target and the audit chain was verified.",
+        target: "production_smoke",
+        backupId: "<backup-id>",
+        restoreMode: "live_smoke_restore",
+        scopesVerified: [
+          "controlLedger",
+          "stateSnapshots",
+          "outputSnapshots",
+          "auditChain",
+        ],
+        auditChainVerified: true,
+        rtoMinutes: 30,
+        rpoMinutes: 15,
+      },
+      providerCatalog: {
         evidenceRef: `${evidenceRefBase}#evidence/provider-catalog.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Provider Template records Cloudflare as managed default and AWS/GCP/GitHub/Kubernetes as verified Space providers.",
-        cloudflareManagedDefault: {
-          primaryCredentialSource: "takosumi_managed",
-          defaultEligible: true,
+          "Production Provider Catalog returned only own-key provider metadata and no Cloud-only Gateway or secret projection.",
+        providers: [
+          { id: "aws", ownershipOptions: ["own_key"] },
+          { id: "cloudflare", ownershipOptions: ["own_key"] },
+          { id: "gcp", ownershipOptions: ["own_key"] },
+          { id: "github", ownershipOptions: ["own_key"] },
+          { id: "kubernetes", ownershipOptions: ["own_key"] },
+        ],
+        cloudOnlyGatewayProjectionReturned: false,
+        secretValuesReturned: false,
+      },
+      costAttribution: {
+        evidenceRef: `${evidenceRefBase}#evidence/cost-attribution.md`,
+        evidenceDigest: "sha256:<64-lowercase-hex>",
+        live: true,
+        summary:
+          "Production smoke Space has attributable runner-minute usage and showback billing enabled.",
+        usageLedger: {
+          spaceId: "<space-id>",
+          eventCount: 1,
+          latestRunIds: ["<run-id>"],
         },
-        verifiedSpaceProviders: ["aws", "gcp", "github", "kubernetes"],
-        providerEnvSet: {
-          providerPinRequired: true,
-          egressPolicyRequired: true,
-          customRunnerClassRequired: true,
-          operatorDefaultAllowed: false,
-        },
+        billingMode: "showback",
+        billingProvider: "manual",
+        freshSamples: true,
+        publicBillingPlanCount: 0,
       },
       secretBoundary: {
         evidenceRef: `${evidenceRefBase}#evidence/secret-boundary.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Live diagnostics, audit payloads, OutputSnapshots, and tenant Worker bindings were checked for operator secret leakage.",
+          "Live diagnostics, account API payloads, run payloads, usage payloads, and hardening gate payloads were checked for operator secret leakage.",
         forbiddenSecretClasses: [
           "providerCredentials",
           "deployControlTokens",
@@ -177,14 +297,16 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
         ],
         leakTargetsChecked: [
           "runnerDiagnostics",
-          "failureAuditPayloads",
-          "outputSnapshots",
-          "tenantWorkerBindings",
+          "apiPayloads",
+          "runPayloads",
+          "usagePayloads",
+          "hardeningGatePayloads",
         ],
         diagnosticsRedacted: true,
-        auditPayloadsRedacted: true,
-        outputSnapshotsRedacted: true,
-        tenantWorkerBindingsRedacted: true,
+        apiPayloadsRedacted: true,
+        runPayloadsRedacted: true,
+        usagePayloadsRedacted: true,
+        hardeningGatePayloadsRedacted: true,
       },
     },
   };
@@ -217,8 +339,11 @@ export async function updateProductionHardeningEvidenceDigestsFile(
 
   for (const name of [
     "containerSmoke",
+    "platformControlPlaneSmoke",
     "egressEnforcement",
-    "providerTemplates",
+    "restoreRehearsal",
+    "providerCatalog",
+    "costAttribution",
     "secretBoundary",
   ] as const) {
     const check = record(checks[name], `${name} evidence`);
@@ -267,14 +392,26 @@ function buildValidation(
         manifest.checks.containerSmoke.evidenceRef,
       TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST:
         manifest.checks.containerSmoke.evidenceDigest,
+      TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF:
+        manifest.checks.platformControlPlaneSmoke.evidenceRef,
+      TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_DIGEST:
+        manifest.checks.platformControlPlaneSmoke.evidenceDigest,
       TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF:
         manifest.checks.egressEnforcement.evidenceRef,
       TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST:
         manifest.checks.egressEnforcement.evidenceDigest,
+      TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
+        manifest.checks.restoreRehearsal.evidenceRef,
+      TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
+        manifest.checks.restoreRehearsal.evidenceDigest,
       TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
-        manifest.checks.providerTemplates.evidenceRef,
+        manifest.checks.providerCatalog.evidenceRef,
       TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST:
-        manifest.checks.providerTemplates.evidenceDigest,
+        manifest.checks.providerCatalog.evidenceDigest,
+      TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
+        manifest.checks.costAttribution.evidenceRef,
+      TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST:
+        manifest.checks.costAttribution.evidenceDigest,
       TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF:
         manifest.checks.secretBoundary.evidenceRef,
       TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST:
@@ -289,8 +426,11 @@ async function verifyEvidenceFileDigests(
 ): Promise<void> {
   for (const [name, evidence] of [
     ["containerSmoke", manifest.checks.containerSmoke],
+    ["platformControlPlaneSmoke", manifest.checks.platformControlPlaneSmoke],
     ["egressEnforcement", manifest.checks.egressEnforcement],
-    ["providerTemplates", manifest.checks.providerTemplates],
+    ["restoreRehearsal", manifest.checks.restoreRehearsal],
+    ["providerCatalog", manifest.checks.providerCatalog],
+    ["costAttribution", manifest.checks.costAttribution],
     ["secretBoundary", manifest.checks.secretBoundary],
   ] as const) {
     const evidencePath = evidencePathFromGitRef(
@@ -341,8 +481,13 @@ function readManifest(value: unknown): ProductionHardeningEvidenceManifest {
   }
   const checks = record(manifest.checks, "production hardening checks");
   const containerSmoke = readContainerSmoke(checks.containerSmoke);
+  const platformControlPlaneSmoke = readPlatformControlPlaneSmoke(
+    checks.platformControlPlaneSmoke,
+  );
   const egressEnforcement = readEgressEnforcement(checks.egressEnforcement);
-  const providerTemplates = readProviderTemplate(checks.providerTemplates);
+  const restoreRehearsal = readRestoreRehearsal(checks.restoreRehearsal);
+  const providerCatalog = readProviderCatalog(checks.providerCatalog);
+  const costAttribution = readCostAttribution(checks.costAttribution);
   const secretBoundary = readSecretBoundary(checks.secretBoundary);
   return {
     kind: PRODUCTION_HARDENING_EVIDENCE_KIND,
@@ -350,8 +495,11 @@ function readManifest(value: unknown): ProductionHardeningEvidenceManifest {
     environment: manifest.environment,
     checks: {
       containerSmoke,
+      platformControlPlaneSmoke,
       egressEnforcement,
-      providerTemplates,
+      restoreRehearsal,
+      providerCatalog,
+      costAttribution,
       secretBoundary,
     },
   };
@@ -401,85 +549,281 @@ function readContainerSmoke(value: unknown): ContainerSmokeEvidence {
   };
 }
 
-function readEgressEnforcement(value: unknown): EgressEnforcementEvidence {
-  const base = readBase(value, "egressEnforcement");
-  const row = record(value, "egressEnforcement evidence");
-  const allowProbe = record(row.allowProbe, "egressEnforcement allowProbe");
-  const denyProbe = record(row.denyProbe, "egressEnforcement denyProbe");
-  if (!nonEmptyString(row.dispatchNamespace)) {
-    throw new Error("egressEnforcement.dispatchNamespace is required");
+function readPlatformControlPlaneSmoke(
+  value: unknown,
+): PlatformControlPlaneSmokeEvidence {
+  const base = readBase(value, "platformControlPlaneSmoke");
+  const row = record(value, "platformControlPlaneSmoke evidence");
+  if (!nonEmptyString(row.serviceUrl)) {
+    throw new Error("platformControlPlaneSmoke.serviceUrl is required");
   }
-  if (row.outboundWorkerConfigured !== true) {
-    throw new Error("egressEnforcement.outboundWorkerConfigured must be true");
+  const serviceUrl = new URL(row.serviceUrl);
+  if (serviceUrl.protocol !== "https:" && serviceUrl.hostname !== "localhost") {
+    throw new Error("platformControlPlaneSmoke.serviceUrl must be https");
   }
-  if (!nonEmptyString(allowProbe.host) || allowProbe.result !== "allowed") {
-    throw new Error("egressEnforcement.allowProbe must show an allowed host");
+  if (!nonEmptyString(row.scratchSpaceId)) {
+    throw new Error("platformControlPlaneSmoke.scratchSpaceId is required");
   }
-  if (!nonEmptyString(denyProbe.host) || denyProbe.result !== "denied") {
-    throw new Error("egressEnforcement.denyProbe must show a denied host");
+  if (row.capsuleModule !== "cloudflare-hello-worker") {
+    throw new Error(
+      "platformControlPlaneSmoke.capsuleModule must be cloudflare-hello-worker",
+    );
+  }
+  if (row.credentialPath !== "space_scoped_provider_connection") {
+    throw new Error(
+      "platformControlPlaneSmoke.credentialPath must be space_scoped_provider_connection",
+    );
+  }
+  const steps = stringArray(row.steps, "platformControlPlaneSmoke.steps");
+  for (const step of REQUIRED_LAYER2_STEPS) {
+    if (!steps.includes(step)) {
+      throw new Error(`platformControlPlaneSmoke.steps is missing ${step}`);
+    }
+  }
+  if (row.capsuleGateStatus !== "passed") {
+    throw new Error(
+      "platformControlPlaneSmoke.capsuleGateStatus must be passed",
+    );
+  }
+  if (row.policyStatus !== "passed") {
+    throw new Error("platformControlPlaneSmoke.policyStatus must be passed");
+  }
+  if (row.deploymentVerified !== true) {
+    throw new Error(
+      "platformControlPlaneSmoke.deploymentVerified must be true",
+    );
+  }
+  if (row.destroyVerified !== true) {
+    throw new Error("platformControlPlaneSmoke.destroyVerified must be true");
   }
   return {
     ...base,
-    dispatchNamespace: row.dispatchNamespace,
-    outboundWorkerConfigured: true,
-    allowProbe: { host: allowProbe.host, result: "allowed" },
-    denyProbe: { host: denyProbe.host, result: "denied" },
+    serviceUrl: row.serviceUrl,
+    scratchSpaceId: row.scratchSpaceId,
+    capsuleModule: "cloudflare-hello-worker",
+    credentialPath: "space_scoped_provider_connection",
+    steps,
+    capsuleGateStatus: "passed",
+    policyStatus: "passed",
+    deploymentVerified: true,
+    destroyVerified: true,
   };
 }
 
-function readProviderTemplate(value: unknown): ProviderTemplateEvidence {
-  const base = readBase(value, "providerTemplates");
-  const row = record(value, "providerTemplates evidence");
-  const cloudflare = record(
-    row.cloudflareManagedDefault,
-    "providerTemplates cloudflareManagedDefault",
+function readEgressEnforcement(value: unknown): EgressEnforcementEvidence {
+  const base = readBase(value, "egressEnforcement");
+  const row = record(value, "egressEnforcement evidence");
+  const providerAllowProbe = record(
+    row.providerAllowProbe,
+    "egressEnforcement providerAllowProbe",
   );
-  const pack = record(
-    row.providerEnvSet,
-    "providerTemplates providerEnvSet",
+  const sourceDenyProbe = record(
+    row.sourceDenyProbe,
+    "egressEnforcement sourceDenyProbe",
   );
+  if (!nonEmptyString(row.runnerProfileId)) {
+    throw new Error("egressEnforcement.runnerProfileId is required");
+  }
+  if (row.runnerBoundary !== "cloudflare-container") {
+    throw new Error("egressEnforcement.runnerBoundary is invalid");
+  }
+  if (row.networkPolicyConfigured !== true) {
+    throw new Error("egressEnforcement.networkPolicyConfigured must be true");
+  }
   if (
-    cloudflare.primaryCredentialSource !== "takosumi_managed" ||
-    cloudflare.defaultEligible !== true
+    !nonEmptyString(providerAllowProbe.host) ||
+    providerAllowProbe.result !== "allowed" ||
+    !nonEmptyString(providerAllowProbe.provider) ||
+    !nonEmptyString(providerAllowProbe.runId) ||
+    providerAllowProbe.status !== "succeeded"
   ) {
     throw new Error(
-      "providerTemplates.cloudflareManagedDefault must be takosumi_managed and defaultEligible",
+      "egressEnforcement.providerAllowProbe must show a succeeded provider API allow probe",
     );
   }
-  const verifiedSpaceProviders = stringArray(
-    row.verifiedSpaceProviders,
-    "providerTemplates.verifiedSpaceProviders",
-  );
-  for (const provider of REQUIRED_VERIFIED_SPACE_PROVIDERS) {
-    if (!verifiedSpaceProviders.includes(provider)) {
-      throw new Error(
-        `providerTemplates.verifiedSpaceProviders is missing ${provider}`,
-      );
-    }
-  }
-  for (const [key, expected] of [
-    ["providerPinRequired", true],
-    ["egressPolicyRequired", true],
-    ["customRunnerClassRequired", true],
-    ["operatorDefaultAllowed", false],
-  ] as const) {
-    if (pack[key] !== expected) {
-      throw new Error(`providerTemplates.providerEnvSet.${key} drifted`);
-    }
+  if (
+    !nonEmptyString(sourceDenyProbe.host) ||
+    sourceDenyProbe.result !== "denied" ||
+    !Number.isSafeInteger(sourceDenyProbe.statusCode) ||
+    sourceDenyProbe.statusCode < 400 ||
+    !nonEmptyString(sourceDenyProbe.errorCode)
+  ) {
+    throw new Error(
+      "egressEnforcement.sourceDenyProbe must show a denied source host",
+    );
   }
   return {
     ...base,
-    cloudflareManagedDefault: {
-      primaryCredentialSource: "takosumi_managed",
-      defaultEligible: true,
+    runnerProfileId: row.runnerProfileId,
+    runnerBoundary: "cloudflare-container",
+    networkPolicyConfigured: true,
+    providerAllowProbe: {
+      host: providerAllowProbe.host,
+      result: "allowed",
+      provider: providerAllowProbe.provider,
+      runId: providerAllowProbe.runId,
+      status: "succeeded",
     },
-    verifiedSpaceProviders,
-    providerEnvSet: {
-      providerPinRequired: true,
-      egressPolicyRequired: true,
-      customRunnerClassRequired: true,
-      operatorDefaultAllowed: false,
+    sourceDenyProbe: {
+      host: sourceDenyProbe.host,
+      result: "denied",
+      statusCode: sourceDenyProbe.statusCode,
+      errorCode: sourceDenyProbe.errorCode,
     },
+  };
+}
+
+function readRestoreRehearsal(value: unknown): RestoreRehearsalEvidence {
+  const base = readBase(value, "restoreRehearsal");
+  const row = record(value, "restoreRehearsal evidence");
+  if (
+    row.target !== "staging" &&
+    row.target !== "isolated_recovery" &&
+    row.target !== "production_smoke"
+  ) {
+    throw new Error("restoreRehearsal.target is invalid");
+  }
+  if (!nonEmptyString(row.backupId)) {
+    throw new Error("restoreRehearsal.backupId is required");
+  }
+  if (
+    row.restoreMode !== "validate_only" &&
+    row.restoreMode !== "isolated_restore" &&
+    row.restoreMode !== "live_smoke_restore"
+  ) {
+    throw new Error("restoreRehearsal.restoreMode is invalid");
+  }
+  const scopesVerified = stringArray(
+    row.scopesVerified,
+    "restoreRehearsal.scopesVerified",
+  );
+  for (const scope of REQUIRED_RESTORE_SCOPES) {
+    if (!scopesVerified.includes(scope)) {
+      throw new Error(`restoreRehearsal.scopesVerified is missing ${scope}`);
+    }
+  }
+  if (row.auditChainVerified !== true) {
+    throw new Error("restoreRehearsal.auditChainVerified must be true");
+  }
+  if (!positiveNumber(row.rtoMinutes)) {
+    throw new Error("restoreRehearsal.rtoMinutes must be positive");
+  }
+  if (!positiveNumber(row.rpoMinutes)) {
+    throw new Error("restoreRehearsal.rpoMinutes must be positive");
+  }
+  return {
+    ...base,
+    target: row.target,
+    backupId: row.backupId,
+    restoreMode: row.restoreMode,
+    scopesVerified,
+    auditChainVerified: true,
+    rtoMinutes: row.rtoMinutes,
+    rpoMinutes: row.rpoMinutes,
+  };
+}
+
+function readProviderCatalog(value: unknown): ProviderCatalogEvidence {
+  const base = readBase(value, "providerCatalog");
+  const row = record(value, "providerCatalog evidence");
+  const providersRaw = array(
+    row.providers,
+    "providerCatalog.providers",
+  );
+  const providers = providersRaw.map((item, index) => {
+    const provider = record(item, `providerCatalog.providers[${index}]`);
+    if (!nonEmptyString(provider.id)) {
+      throw new Error(`providerCatalog.providers[${index}].id is required`);
+    }
+    const ownershipOptions = stringArray(
+      provider.ownershipOptions,
+      `providerCatalog.providers[${index}].ownershipOptions`,
+    );
+    requireSameMembers(
+      ownershipOptions,
+      ["own_key"],
+      `providerCatalog.providers[${index}].ownershipOptions`,
+    );
+    return {
+      id: provider.id,
+      ownershipOptions: ["own_key"] as const,
+    };
+  });
+  const providerIds = providers.map((provider) => provider.id);
+  for (const provider of REQUIRED_PROVIDER_CATALOG_IDS) {
+    if (!providerIds.includes(provider)) {
+      throw new Error(`providerCatalog.providers is missing ${provider}`);
+    }
+  }
+  if (row.cloudOnlyGatewayProjectionReturned !== false) {
+    throw new Error(
+      "providerCatalog.cloudOnlyGatewayProjectionReturned must be false",
+    );
+  }
+  if (row.secretValuesReturned !== false) {
+    throw new Error("providerCatalog.secretValuesReturned must be false");
+  }
+  return {
+    ...base,
+    providers,
+    cloudOnlyGatewayProjectionReturned: false,
+    secretValuesReturned: false,
+  };
+}
+
+function readCostAttribution(value: unknown): CostAttributionEvidence {
+  const base = readBase(value, "costAttribution");
+  const row = record(value, "costAttribution evidence");
+  const usageLedger = record(
+    row.usageLedger,
+    "costAttribution.usageLedger",
+  );
+  if (!nonEmptyString(usageLedger.spaceId)) {
+    throw new Error("costAttribution.usageLedger.spaceId is required");
+  }
+  if (
+    typeof usageLedger.eventCount !== "number" ||
+    !Number.isSafeInteger(usageLedger.eventCount) ||
+    usageLedger.eventCount < 1
+  ) {
+    throw new Error("costAttribution.usageLedger.eventCount must be positive");
+  }
+  const latestRunIds = stringArray(
+    usageLedger.latestRunIds,
+    "costAttribution.usageLedger.latestRunIds",
+  );
+  if (latestRunIds.length === 0) {
+    throw new Error(
+      "costAttribution.usageLedger.latestRunIds must include at least one run",
+    );
+  }
+  if (row.billingMode !== "showback" && row.billingMode !== "enforce") {
+    throw new Error("costAttribution.billingMode must be showback or enforce");
+  }
+  if (row.billingProvider !== "manual" && row.billingProvider !== "stripe") {
+    throw new Error("costAttribution.billingProvider must be manual or stripe");
+  }
+  if (row.freshSamples !== true) {
+    throw new Error("costAttribution.freshSamples must be true");
+  }
+  if (
+    typeof row.publicBillingPlanCount !== "number" ||
+    !Number.isSafeInteger(row.publicBillingPlanCount) ||
+    row.publicBillingPlanCount < 0
+  ) {
+    throw new Error("costAttribution.publicBillingPlanCount must be >= 0");
+  }
+  return {
+    ...base,
+    usageLedger: {
+      spaceId: usageLedger.spaceId,
+      eventCount: usageLedger.eventCount,
+      latestRunIds,
+    },
+    billingMode: row.billingMode,
+    billingProvider: row.billingProvider,
+    freshSamples: true,
+    publicBillingPlanCount: row.publicBillingPlanCount,
   };
 }
 
@@ -508,9 +852,10 @@ function readSecretBoundary(value: unknown): SecretBoundaryEvidence {
   }
   for (const key of [
     "diagnosticsRedacted",
-    "auditPayloadsRedacted",
-    "outputSnapshotsRedacted",
-    "tenantWorkerBindingsRedacted",
+    "apiPayloadsRedacted",
+    "runPayloadsRedacted",
+    "usagePayloadsRedacted",
+    "hardeningGatePayloadsRedacted",
   ] as const) {
     if (row[key] !== true) {
       throw new Error(`secretBoundary.${key} must be true`);
@@ -521,9 +866,10 @@ function readSecretBoundary(value: unknown): SecretBoundaryEvidence {
     forbiddenSecretClasses,
     leakTargetsChecked,
     diagnosticsRedacted: true,
-    auditPayloadsRedacted: true,
-    outputSnapshotsRedacted: true,
-    tenantWorkerBindingsRedacted: true,
+    apiPayloadsRedacted: true,
+    runPayloadsRedacted: true,
+    usagePayloadsRedacted: true,
+    hardeningGatePayloadsRedacted: true,
   };
 }
 
@@ -579,6 +925,13 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function array(value: unknown, name: string): readonly unknown[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${name} must be a non-empty array`);
+  }
+  return value;
+}
+
 function stringArray(value: unknown, name: string): readonly string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty string array`);
@@ -589,6 +942,20 @@ function stringArray(value: unknown, name: string): readonly string[] {
   return value;
 }
 
+function requireSameMembers(
+  actual: readonly string[],
+  expected: readonly string[],
+  name: string,
+): void {
+  for (const item of expected) {
+    if (!actual.includes(item)) throw new Error(`${name} is missing ${item}`);
+  }
+  for (const item of actual) {
+    if (!expected.includes(item))
+      throw new Error(`${name} has unknown ${item}`);
+  }
+}
+
 function nonEmpty(value: unknown, name: string): string {
   if (!nonEmptyString(value)) throw new Error(`${name} is required`);
   return value;
@@ -596,6 +963,10 @@ function nonEmpty(value: unknown, name: string): string {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function positiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function validIsoDate(value: unknown): value is string {

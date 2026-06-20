@@ -2,8 +2,9 @@
  * First-party starter Capsule module: cloudflare-hello-worker.
  *
  * A runnable Cloudflare Worker with NO build step — the Worker source is baked
- * inline in `module/main.tf`, so `tofu apply` alone produces a reachable
- * workers.dev page (the `url` output). The "5 minutes to a live thing" starter.
+ * inline in `module/main.tf`, so `tofu apply` creates a real Worker script.
+ * Public ingress is projected by the dispatcher/custom-route layer, not by this
+ * module.
  * Keep this object in sync with `module/main.tf`.
  */
 
@@ -14,7 +15,7 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   name: "Hello Worker (starter)",
   version: "1.0.0",
   description:
-    "Deploys a tiny inline Cloudflare Worker (no build) that serves a page on workers.dev — install, plan, apply, open the URL.",
+    "Deploys a tiny inline Cloudflare Worker (no build). It reports the Worker name and accepts an optional projected public URL.",
   source: {
     localModulePath: "/app/templates/cloudflare-hello-worker/module",
   },
@@ -29,14 +30,14 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
       type: "string",
       title: "Worker name",
       required: false,
-      description: "Script name; also the label in the workers.dev URL.",
+      description: "Script name.",
     },
-    accountSubdomain: {
+    publicUrl: {
       type: "string",
-      title: "workers.dev subdomain",
+      title: "Public URL",
       required: false,
       description:
-        "The account's <this>.workers.dev label, used to render the public URL output.",
+        "Optional URL projected by dispatcher/custom-route configuration after apply.",
     },
   },
   outputs: {
@@ -47,10 +48,7 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   },
   policy: {
     allowedProviders: ["cloudflare/cloudflare"],
-    allowedResourceTypes: [
-      "cloudflare_workers_script",
-      "cloudflare_workers_script_subdomain",
-    ],
+    allowedResourceTypes: ["cloudflare_workers_script"],
     destructiveChanges: { requireExplicitConfirmation: true },
   },
 };

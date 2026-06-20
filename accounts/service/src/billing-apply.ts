@@ -56,14 +56,14 @@ export interface ApplyStripeBillingEventInput {
 
 export type ApplyStripeBillingEventResult =
   | {
-    applied: true;
-    billingAccount: BillingAccountRecord;
-    entitlementReconciliation: BillingEntitlementReconciliationResult;
-  }
+      applied: true;
+      billingAccount: BillingAccountRecord;
+      entitlementReconciliation: BillingEntitlementReconciliationResult;
+    }
   | {
-    applied: false;
-    reason: string;
-  };
+      applied: false;
+      reason: string;
+    };
 
 export interface BillingEntitlementReconciliationResult {
   billingAccountId: string;
@@ -143,8 +143,8 @@ export async function applyStripeBillingEvent(
       mutate: (existing): BillingAccountRecord => ({
         ...existing,
         stripeCustomerId: customerId,
-        stripeSubscriptionId: normalized.subscriptionId ??
-          existing.stripeSubscriptionId,
+        stripeSubscriptionId:
+          normalized.subscriptionId ?? existing.stripeSubscriptionId,
         stripePriceId: normalized.stripePriceId ?? existing.stripePriceId,
         planCode: normalized.planCode ?? existing.planCode,
         status: checkoutStatus(normalized),
@@ -225,8 +225,8 @@ function customerKeyedMutation(
       lastTaxEventId: normalized.eventId,
       taxPolicyRef: normalized.taxPolicyRef ?? existing.taxPolicyRef,
       taxJurisdiction: normalized.taxJurisdiction ?? existing.taxJurisdiction,
-      taxAutomaticStatus: normalized.taxAutomaticStatus ??
-        existing.taxAutomaticStatus,
+      taxAutomaticStatus:
+        normalized.taxAutomaticStatus ?? existing.taxAutomaticStatus,
       updatedAt: now,
     });
   }
@@ -236,10 +236,10 @@ function customerKeyedMutation(
       ...existing,
       lastInvoiceId: normalized.invoiceId ?? existing.lastInvoiceId,
       dunningStartedAt: existing.dunningStartedAt ?? now,
-      nextPaymentAttemptUnix: normalized.nextPaymentAttemptUnix ??
-        existing.nextPaymentAttemptUnix,
-      dunningAttemptCount: normalized.attemptCount ??
-        existing.dunningAttemptCount,
+      nextPaymentAttemptUnix:
+        normalized.nextPaymentAttemptUnix ?? existing.nextPaymentAttemptUnix,
+      dunningAttemptCount:
+        normalized.attemptCount ?? existing.dunningAttemptCount,
       dunningAction: "retry_scheduled",
       updatedAt: now,
     });
@@ -252,9 +252,10 @@ function customerKeyedMutation(
     // `disputed` status is treated as suspend-worthy by `shouldSuspendForBilling`.
     return (existing) => ({
       ...existing,
-      preDisputeStatus: existing.status === "disputed"
-        ? existing.preDisputeStatus
-        : existing.status,
+      preDisputeStatus:
+        existing.status === "disputed"
+          ? existing.preDisputeStatus
+          : existing.status,
       activeDispute: {
         disputeId: normalized.disputeId,
         chargeId: normalized.chargeId,
@@ -281,16 +282,17 @@ function customerKeyedMutation(
       ...existing,
       activeDispute: existing.activeDispute
         ? {
-          ...existing.activeDispute,
-          status: outcome ?? existing.activeDispute.status,
-          closedAt: normalized.closedAtUnix
-            ? normalized.closedAtUnix * 1000
-            : now,
-        }
+            ...existing.activeDispute,
+            status: outcome ?? existing.activeDispute.status,
+            closedAt: normalized.closedAtUnix
+              ? normalized.closedAtUnix * 1000
+              : now,
+          }
         : undefined,
-      status: restorable && existing.preDisputeStatus
-        ? existing.preDisputeStatus
-        : existing.status,
+      status:
+        restorable && existing.preDisputeStatus
+          ? existing.preDisputeStatus
+          : existing.status,
       preDisputeStatus: restorable ? undefined : existing.preDisputeStatus,
       updatedAt: now,
     });
@@ -305,85 +307,99 @@ function customerKeyedMutation(
     // `customer.subscription.updated` without us applying a separate
     // `invoice.paid`; without this an account would show `active` while still
     // carrying stale `dunningAction: 'retry_scheduled'` / `dunningStartedAt`.
-    const clearsDunning = subscriptionLike.kind === "invoice_paid" ||
+    const clearsDunning =
+      subscriptionLike.kind === "invoice_paid" ||
       (subscriptionLike.kind === "subscription_updated" &&
         (nextStatus === "active" || nextStatus === "trialing"));
-    const planTransition = subscriptionLike.kind === "subscription_updated" &&
-        subscriptionLike.planCode && existing.planCode &&
-        subscriptionLike.planCode !== existing.planCode
-      ? {
-        lastPlanTransitionEventId: subscriptionLike.eventId,
-        lastPlanFromCode: existing.planCode,
-        lastPlanToCode: subscriptionLike.planCode,
-        lastPlanTransitionedAt: now,
-      }
-      : {};
+    const planTransition =
+      subscriptionLike.kind === "subscription_updated" &&
+      subscriptionLike.planCode &&
+      existing.planCode &&
+      subscriptionLike.planCode !== existing.planCode
+        ? {
+            lastPlanTransitionEventId: subscriptionLike.eventId,
+            lastPlanFromCode: existing.planCode,
+            lastPlanToCode: subscriptionLike.planCode,
+            lastPlanTransitionedAt: now,
+          }
+        : {};
     return {
       ...existing,
       ...planTransition,
       status: nextStatus,
-      currentPeriodEndUnix: subscriptionLike.kind === "invoice_paid" ||
-          subscriptionLike.kind === "subscription_updated"
-        ? subscriptionLike.currentPeriodEndUnix ?? existing.currentPeriodEndUnix
-        : subscriptionLike.kind === "subscription_canceled"
-        ? undefined
-        : existing.currentPeriodEndUnix,
-      lastInvoiceId: subscriptionLike.kind === "invoice_paid" ||
-          subscriptionLike.kind === "invoice_payment_failed" ||
-          subscriptionLike.kind === "invoice_marked_uncollectible"
-        ? subscriptionLike.invoiceId ?? existing.lastInvoiceId
-        : existing.lastInvoiceId,
-      dunningStartedAt: subscriptionLike.kind === "invoice_payment_failed"
-        ? existing.dunningStartedAt ?? now
-        : subscriptionLike.kind === "invoice_marked_uncollectible"
-        ? existing.dunningStartedAt ?? now
-        : clearsDunning
-        ? undefined
-        : existing.dunningStartedAt,
-      nextPaymentAttemptUnix: subscriptionLike.kind === "invoice_payment_failed"
-        ? subscriptionLike.nextPaymentAttemptUnix ??
-          existing.nextPaymentAttemptUnix
-        : subscriptionLike.kind === "invoice_marked_uncollectible"
-        ? undefined
-        : clearsDunning
-        ? undefined
-        : existing.nextPaymentAttemptUnix,
-      dunningAttemptCount: subscriptionLike.kind === "invoice_payment_failed"
-        ? subscriptionLike.attemptCount ?? existing.dunningAttemptCount
-        : clearsDunning
-        ? undefined
-        : existing.dunningAttemptCount,
-      dunningAction: subscriptionLike.kind === "invoice_payment_failed"
-        ? "retry_scheduled"
-        : subscriptionLike.kind === "invoice_marked_uncollectible"
-        ? "marked_uncollectible"
-        : clearsDunning
-        ? undefined
-        : existing.dunningAction,
+      currentPeriodEndUnix:
+        subscriptionLike.kind === "invoice_paid" ||
+        subscriptionLike.kind === "subscription_updated"
+          ? (subscriptionLike.currentPeriodEndUnix ??
+            existing.currentPeriodEndUnix)
+          : subscriptionLike.kind === "subscription_canceled"
+            ? undefined
+            : existing.currentPeriodEndUnix,
+      lastInvoiceId:
+        subscriptionLike.kind === "invoice_paid" ||
+        subscriptionLike.kind === "invoice_payment_failed" ||
+        subscriptionLike.kind === "invoice_marked_uncollectible"
+          ? (subscriptionLike.invoiceId ?? existing.lastInvoiceId)
+          : existing.lastInvoiceId,
+      dunningStartedAt:
+        subscriptionLike.kind === "invoice_payment_failed"
+          ? (existing.dunningStartedAt ?? now)
+          : subscriptionLike.kind === "invoice_marked_uncollectible"
+            ? (existing.dunningStartedAt ?? now)
+            : clearsDunning
+              ? undefined
+              : existing.dunningStartedAt,
+      nextPaymentAttemptUnix:
+        subscriptionLike.kind === "invoice_payment_failed"
+          ? (subscriptionLike.nextPaymentAttemptUnix ??
+            existing.nextPaymentAttemptUnix)
+          : subscriptionLike.kind === "invoice_marked_uncollectible"
+            ? undefined
+            : clearsDunning
+              ? undefined
+              : existing.nextPaymentAttemptUnix,
+      dunningAttemptCount:
+        subscriptionLike.kind === "invoice_payment_failed"
+          ? (subscriptionLike.attemptCount ?? existing.dunningAttemptCount)
+          : clearsDunning
+            ? undefined
+            : existing.dunningAttemptCount,
+      dunningAction:
+        subscriptionLike.kind === "invoice_payment_failed"
+          ? "retry_scheduled"
+          : subscriptionLike.kind === "invoice_marked_uncollectible"
+            ? "marked_uncollectible"
+            : clearsDunning
+              ? undefined
+              : existing.dunningAction,
       dunningExhaustedAt:
         subscriptionLike.kind === "invoice_marked_uncollectible"
           ? now
           : clearsDunning
+            ? undefined
+            : existing.dunningExhaustedAt,
+      stripeSubscriptionId:
+        subscriptionLike.kind === "subscription_canceled"
           ? undefined
-          : existing.dunningExhaustedAt,
-      stripeSubscriptionId: subscriptionLike.kind === "subscription_canceled"
-        ? undefined
-        : existing.stripeSubscriptionId,
-      stripePriceId: subscriptionLike.kind === "subscription_updated"
-        ? subscriptionLike.stripePriceId ?? existing.stripePriceId
-        : subscriptionLike.kind === "subscription_canceled"
-        ? undefined
-        : existing.stripePriceId,
-      planCode: subscriptionLike.kind === "subscription_updated"
-        ? subscriptionLike.planCode ?? existing.planCode
-        : subscriptionLike.kind === "subscription_canceled"
-        ? undefined
-        : existing.planCode,
-      lastCancellation: subscriptionLike.kind === "subscription_canceled"
-        ? (subscriptionLike.cancellation ?? {
-          canceledAt: now,
-        })
-        : existing.lastCancellation,
+          : existing.stripeSubscriptionId,
+      stripePriceId:
+        subscriptionLike.kind === "subscription_updated"
+          ? (subscriptionLike.stripePriceId ?? existing.stripePriceId)
+          : subscriptionLike.kind === "subscription_canceled"
+            ? undefined
+            : existing.stripePriceId,
+      planCode:
+        subscriptionLike.kind === "subscription_updated"
+          ? (subscriptionLike.planCode ?? existing.planCode)
+          : subscriptionLike.kind === "subscription_canceled"
+            ? undefined
+            : existing.planCode,
+      lastCancellation:
+        subscriptionLike.kind === "subscription_canceled"
+          ? (subscriptionLike.cancellation ?? {
+              canceledAt: now,
+            })
+          : existing.lastCancellation,
       updatedAt: now,
     };
   };
@@ -396,19 +412,17 @@ function customerKeyedMutation(
  * (CAS returns `false`), the loop re-reads the fresh record and re-applies the
  * SAME mutation so neither writer's field updates are lost.
  */
-type ApplyBillingMutationInput =
-  & {
-    store: AccountsStore;
-    now: number;
-    read: () =>
-      | Promise<BillingAccountRecord | undefined>
-      | (BillingAccountRecord | undefined);
-    mutate: BillingAccountMutation;
-  }
-  & (
-    | { onMissing: "create"; newRecord: () => BillingAccountRecord }
-    | { onMissing: "unknown_customer"; newRecord?: undefined }
-  );
+type ApplyBillingMutationInput = {
+  store: AccountsStore;
+  now: number;
+  read: () =>
+    | Promise<BillingAccountRecord | undefined>
+    | (BillingAccountRecord | undefined);
+  mutate: BillingAccountMutation;
+} & (
+  | { onMissing: "create"; newRecord: () => BillingAccountRecord }
+  | { onMissing: "unknown_customer"; newRecord?: undefined }
+);
 
 async function applyBillingMutation(
   input: ApplyBillingMutationInput,
@@ -548,14 +562,16 @@ export async function reconcileBillingEntitlements(input: {
 }
 
 function shouldSuspendForBilling(status: BillingAccountStatus): boolean {
-  return status === "incomplete" ||
+  return (
+    status === "incomplete" ||
     status === "incomplete_expired" ||
     status === "past_due" ||
     status === "unpaid" ||
     status === "canceled" ||
     status === "paused" ||
     // Chargebacks freeze entitlements until the dispute resolves.
-    status === "disputed";
+    status === "disputed"
+  );
 }
 
 function canRestoreForBilling(status: BillingAccountStatus): boolean {
@@ -605,9 +621,9 @@ async function appendInstallationEvent(
     now: number;
   },
 ): Promise<InstallationEventRecord> {
-  const previousEventHash =
-    (await store.listInstallationEvents(input.installationId)).at(-1)
-      ?.eventHash;
+  const previousEventHash = (
+    await store.listInstallationEvents(input.installationId)
+  ).at(-1)?.eventHash;
   const event = await buildInstallationEvent({
     installationId: input.installationId,
     eventType: input.eventType,
@@ -622,12 +638,14 @@ async function appendInstallationEvent(
 function wasSuspendedByBilling(
   events: readonly InstallationEventRecord[],
 ): boolean {
-  const lastStatusChange = [...events].reverse().find((event) =>
-    event.eventType === "installation.status_changed"
-  );
-  return lastStatusChange?.payload.to === "suspended" &&
+  const lastStatusChange = [...events]
+    .reverse()
+    .find((event) => event.eventType === "installation.status_changed");
+  return (
+    lastStatusChange?.payload.to === "suspended" &&
     typeof lastStatusChange.payload.reason === "string" &&
-    lastStatusChange.payload.reason.startsWith("billing:");
+    lastStatusChange.payload.reason.startsWith("billing:")
+  );
 }
 
 function checkoutStatus(

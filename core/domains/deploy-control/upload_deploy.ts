@@ -13,16 +13,22 @@
  * policy.
  */
 
-import type { DeployRequest, DeployResponse } from "takosumi-contract/deploy";
+import type {
+  DeployResponse,
+  InternalDeployRequest,
+} from "takosumi-contract/deploy";
 import type {
   InstallConfig,
   Installation,
   PublicInstallation,
 } from "takosumi-contract/installations";
+import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
 import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
+import { applyExpectedGuardFromPlanRun } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { InstallationsService } from "../installations/mod.ts";
+import { validateInstallationProviderEnvBindings } from "../connections/mod.ts";
 
 const DEFAULT_ENVIRONMENT = "production";
 
@@ -35,7 +41,7 @@ export interface DeployUploadDependencies {
 
 export async function deployUpload(
   deps: DeployUploadDependencies,
-  request: DeployRequest,
+  request: InternalDeployRequest,
   context: DeployControlActorContext = {},
 ): Promise<DeployResponse> {
   requireNonEmptyString(request.spaceId, "spaceId");
@@ -44,6 +50,10 @@ export async function deployUpload(
   const newId = deps.newId ?? defaultId;
   const now = deps.now ?? (() => new Date());
   const environment = nonEmpty(request.environment) ?? DEFAULT_ENVIRONMENT;
+  const providerEnvBindings =
+    request.providerEnvBindings !== undefined
+      ? validateInstallationProviderEnvBindings(request.providerEnvBindings)
+      : undefined;
 
   // 1. The upload snapshot must exist, be upload-origin, and live in the Space.
   const snapshot = await deps.controller.getSourceSnapshot(request.snapshotId);
@@ -92,23 +102,132 @@ export async function deployUpload(
     installConfigId = config.id;
     created = true;
   }
+  try {
+    if (providerEnvBindings !== undefined) {
+      await putProviderConnections({
+        deps,
+        installation,
+        connections: providerEnvBindings,
+        id: newId("ipcset"),
+        now,
+      });
+    }
 
-  // 3. Plan Run pinned to the upload snapshot. The controller's installation
-  //    plan path is upload-aware (synthesizes an in-memory Source from the
-  //    snapshot) and gates the Capsule before the run.
-  const planResponse = await deps.controller.createInstallationPlan(
-    installation.id,
-    context,
-    { sourceSnapshotId: snapshot.id },
-  );
-  const run = await deps.controller.getRun(planResponse.planRun.id);
+    // 3. Plan Run pinned to the upload snapshot. The controller's installation
+    //    plan path is upload-aware (synthesizes an in-memory Source from the
+    //    snapshot) and gates the Capsule before the run.
+    const planResponse = await deps.controller.createInstallationPlan(
+      installation.id,
+      context,
+      { sourceSnapshotId: snapshot.id },
+    );
+    const run = await deps.controller.getRun(planResponse.planRun.id);
+    let applyRun: DeployResponse["applyRun"];
+    if (
+      !request.planOnly &&
+      request.autoApprove !== false &&
+      run.status === "succeeded"
+    ) {
+      const apply = await deps.controller.createApplyRun(
+        {
+          planRunId: planResponse.planRun.id,
+          expected: applyExpectedGuardFromPlanRun(planResponse.planRun),
+        },
+        context,
+      );
+      applyRun = await deps.controller.getRun(apply.applyRun.id);
+    }
 
-  return {
-    installation: toPublicInstallation(installation),
-    installConfigId,
-    run,
-    created,
-  };
+    const status = deployStatus(run, applyRun);
+    installation = await reconcileUploadInstallationStatus({
+      deps,
+      installation,
+      created,
+      status,
+      applyRun,
+    });
+
+    return {
+      installation: toPublicInstallation(installation),
+      installConfigId,
+      run,
+      planRun: run,
+      ...(applyRun ? { applyRun } : {}),
+      status,
+      created,
+    };
+  } catch (error) {
+    if (created) {
+      await markCreatedUploadInstallationError(deps, installation);
+    }
+    throw error;
+  }
+}
+
+async function putProviderConnections(input: {
+  readonly deps: DeployUploadDependencies;
+  readonly installation: Installation;
+  readonly connections: InstallationProviderEnvBindings;
+  readonly id: string;
+  readonly now: () => Date;
+}): Promise<void> {
+  const nowIso = input.now().toISOString();
+  await input.deps.installations.putInstallationProviderEnvBindingSet({
+    id: input.id,
+    spaceId: input.installation.spaceId,
+    installationId: input.installation.id,
+    environment: input.installation.environment,
+    bindings: input.connections,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  });
+}
+
+function deployStatus(
+  planRun: DeployResponse["run"],
+  applyRun: DeployResponse["applyRun"],
+): NonNullable<DeployResponse["status"]> {
+  if (applyRun) {
+    if (applyRun.status === "succeeded") return "applied";
+    if (applyRun.status === "failed") return "failed";
+    return "applying";
+  }
+  if (planRun.status === "waiting_approval") return "waiting_approval";
+  if (planRun.status === "failed") return "failed";
+  return "planned";
+}
+
+async function reconcileUploadInstallationStatus(input: {
+  readonly deps: DeployUploadDependencies;
+  readonly installation: Installation;
+  readonly created: boolean;
+  readonly status: NonNullable<DeployResponse["status"]>;
+  readonly applyRun: DeployResponse["applyRun"];
+}): Promise<Installation> {
+  if (input.created && input.status === "failed") {
+    return await input.deps.installations.patchInstallationStatus(
+      input.installation.id,
+      "error",
+    );
+  }
+  if (input.applyRun?.status === "succeeded") {
+    return await input.deps.installations.getInstallation(
+      input.installation.id,
+    );
+  }
+  return input.installation;
+}
+
+async function markCreatedUploadInstallationError(
+  deps: DeployUploadDependencies,
+  installation: Installation,
+): Promise<void> {
+  try {
+    await deps.installations.patchInstallationStatus(installation.id, "error");
+  } catch {
+    // Preserve the original deploy failure. A later status probe can still see
+    // the failed run or the pending orphan that triggered this best-effort path.
+  }
 }
 
 async function refreshInstallConfigVars(

@@ -1,14 +1,14 @@
 import type {
   NetworkPeer,
   NetworkProtocol,
+  NetworkServiceGrant,
+  NetworkServiceGrantStore,
   RuntimeNetworkPolicy,
   RuntimeNetworkPolicyStore,
-  ServiceGrant,
-  ServiceGrantStore,
   WorkloadIdentity,
   WorkloadIdentityId,
   WorkloadIdentityStore,
-} from "../../domains/network/mod.ts";
+} from "../network/mod.ts";
 import { permissionDenied } from "../../shared/errors.ts";
 import {
   assertHostNotBlocked,
@@ -17,7 +17,7 @@ import {
 
 export interface WorkerAuthzStores {
   readonly workloadIdentities: WorkloadIdentityStore;
-  readonly serviceGrants: ServiceGrantStore;
+  readonly serviceGrants: NetworkServiceGrantStore;
   readonly runtimeNetworkPolicies: RuntimeNetworkPolicyStore;
 }
 
@@ -37,7 +37,7 @@ export interface AuthorizeInternalServiceCallInput {
 export interface AuthorizeInternalServiceCallResult {
   readonly allowed: true;
   readonly identity: WorkloadIdentity;
-  readonly grant: ServiceGrant;
+  readonly grant: NetworkServiceGrant;
 }
 
 export interface DecideRuntimeEgressInput {
@@ -104,14 +104,16 @@ export class WorkerAuthzService {
     }
 
     const now = this.#clock();
-    const grant = (await this.#stores.serviceGrants.listByIdentity(identity.id))
-      .find((candidate) =>
+    const grant = (
+      await this.#stores.serviceGrants.listByIdentity(identity.id)
+    ).find(
+      (candidate) =>
         candidate.spaceId === identity.spaceId &&
         candidate.groupId === identity.groupId &&
         candidate.toService === input.targetService &&
         candidate.permissions.includes(input.permission) &&
-        !isExpired(candidate, now)
-      );
+        !isExpired(candidate, now),
+    );
 
     if (!grant) {
       throw permissionDenied("Service grant is required", {
@@ -130,21 +132,27 @@ export class WorkerAuthzService {
     const identity = await this.#resolveEgressIdentity(input);
     const componentName = input.sourceComponentName ?? identity?.componentName;
     const activationId = input.activationId ?? identity?.activationId;
-    const policies = (await this.#stores.runtimeNetworkPolicies.listByGroup(
-      input.spaceId,
-      input.groupId,
-    )).filter((policy) =>
-      (!policy.activationId || policy.activationId === activationId) &&
-      (!componentName || selectorMatchesComponent(policy, componentName))
+    const policies = (
+      await this.#stores.runtimeNetworkPolicies.listByGroup(
+        input.spaceId,
+        input.groupId,
+      )
+    ).filter(
+      (policy) =>
+        (!policy.activationId || policy.activationId === activationId) &&
+        (!componentName || selectorMatchesComponent(policy, componentName)),
     );
 
     for (const policy of policies) {
-      const matchingRule = policy.egress.find((rule) =>
-        (!rule.protocol || !input.protocol ||
-          rule.protocol === input.protocol) &&
-        (!rule.ports || input.port === undefined ||
-          rule.ports.includes(input.port)) &&
-        rule.peers.some((peer) => peerMatchesDestination(peer, input))
+      const matchingRule = policy.egress.find(
+        (rule) =>
+          (!rule.protocol ||
+            !input.protocol ||
+            rule.protocol === input.protocol) &&
+          (!rule.ports ||
+            input.port === undefined ||
+            rule.ports.includes(input.port)) &&
+          rule.peers.some((peer) => peerMatchesDestination(peer, input)),
       );
       if (matchingRule) {
         return Object.freeze({
@@ -156,8 +164,8 @@ export class WorkerAuthzService {
       }
     }
 
-    const denyingPolicy = policies.find((policy) =>
-      policy.defaultEgress === "denied"
+    const denyingPolicy = policies.find(
+      (policy) => policy.defaultEgress === "denied",
     );
     if (denyingPolicy) {
       if (input.enforcement === "advisory") {
@@ -179,8 +187,8 @@ export class WorkerAuthzService {
       });
     }
 
-    const allowingPolicy = policies.find((policy) =>
-      policy.defaultEgress === "allowed"
+    const allowingPolicy = policies.find(
+      (policy) => policy.defaultEgress === "allowed",
     );
     if (allowingPolicy) {
       return Object.freeze({
@@ -208,7 +216,8 @@ export class WorkerAuthzService {
       if (
         identity?.spaceId === input.spaceId &&
         identity.groupId === input.groupId &&
-        (!input.activationId || !identity.activationId ||
+        (!input.activationId ||
+          !identity.activationId ||
           identity.activationId === input.activationId)
       ) {
         return identity;
@@ -226,9 +235,11 @@ export class WorkerAuthzService {
   }
 }
 
-function isExpired(grant: ServiceGrant, now: Date): boolean {
-  return grant.expiresAt !== undefined &&
-    Date.parse(grant.expiresAt) <= now.getTime();
+function isExpired(grant: NetworkServiceGrant, now: Date): boolean {
+  return (
+    grant.expiresAt !== undefined &&
+    Date.parse(grant.expiresAt) <= now.getTime()
+  );
 }
 
 function selectorMatchesComponent(

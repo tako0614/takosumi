@@ -12,12 +12,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git unzip openssh-client zstd \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL \
-    "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_amd64.zip" \
-    -o /tmp/tofu.zip \
-    && unzip /tmp/tofu.zip -d /usr/local/bin \
-    && rm /tmp/tofu.zip \
-    && tofu version
+RUN set -eux; \
+    asset="tofu_${OPENTOFU_VERSION}_linux_amd64.zip"; \
+    base="https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}"; \
+    curl -fsSL "${base}/${asset}" -o "/tmp/${asset}"; \
+    curl -fsSL "${base}/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+      -o /tmp/tofu_SHA256SUMS; \
+    grep " ${asset}$" /tmp/tofu_SHA256SUMS > /tmp/tofu_SHA256SUM; \
+    (cd /tmp && sha256sum -c /tmp/tofu_SHA256SUM); \
+    unzip "/tmp/${asset}" -d /usr/local/bin; \
+    rm "/tmp/${asset}" /tmp/tofu_SHA256SUM /tmp/tofu_SHA256SUMS; \
+    tofu version
 
 # ---------------------------------------------------------------------------
 # Provider mirror (baked, offline plan/apply).
@@ -86,9 +91,12 @@ COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
 COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
 COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
+COPY runner/start.sh ./runner/start.sh
+RUN chmod 0755 ./runner/start.sh
 
 ENV PORT=8080
 ENV TOFU_WORK_DIR=/workspace
+ENV TAKOSUMI_RUNNER_START_SERVER=1
 
 EXPOSE 8080
-CMD ["bun", "run", "./runner/entrypoint.ts"]
+ENTRYPOINT ["/app/runner/start.sh"]

@@ -1,16 +1,15 @@
-// Internal compatibility umbrella for Takosumi reference implementation code.
+// Internal reference-runtime umbrella for Takosumi implementation code.
 //
 // The Takosumi v1 Deploy Control API contract is owned by the package root
 // (`takosumi-contract`) and the focused `deploy-control-api` source-module subpath.
 // This file is intentionally not exported from package.json; it exists for
-// service-local compatibility imports while legacy implementation modules are
-// being retired behind RunnerProfile/OpenTofu execution.
+// service-local imports used by private runtime and implementation seams.
 //
 // Scope: the re-export list is an explicit allowlist of reference helpers:
 // JSON value scalars, condition / reason enums, internal API headers, runtime
-// agent contracts. This file deliberately
-// avoids re-exporting the retired takosumi-v1 component / descriptor / binding
-// surface or reference materializer API as a public umbrella.
+// agent contracts. This file deliberately avoids re-exporting component /
+// descriptor / binding surfaces or reference materializer APIs as a public
+// umbrella.
 //
 // New consumers must import directly from `takosumi-contract` or
 // `@takosumi/internal/deploy-control-api`.
@@ -35,7 +34,7 @@ export type {
   ServiceEndpoint,
   ServiceEndpointProtocol,
   ServiceEndpointTrust,
-  ServiceGrant,
+  ReferenceServiceGrant,
   SpaceCreateRequest,
   SpaceSummary,
   SpaceUpdateRequest,

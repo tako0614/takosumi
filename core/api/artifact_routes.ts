@@ -63,7 +63,7 @@ import type { ApiEndpoint } from "./route_families.ts";
  * accordingly, or move to presigned-URL uploads at the storage backend.
  */
 export const TAKOSUMI_ARTIFACTS_PATH = ARTIFACTS_BASE_PATH;
-export const TAKOSUMI_ARTIFACTS_BUCKET = "takosumi-artifacts" as const;
+export const TAKOSUMI_ARTIFACTS_BUCKET = "takos-artifacts" as const;
 
 /**
  * Endpoint inventory for the `artifact` family, co-located with the mount calls
@@ -239,7 +239,8 @@ export function registerArtifactRoutes(
   if (!initialToken) {
     log.warn("service.api.artifacts_disabled_no_token", {
       path: TAKOSUMI_ARTIFACTS_PATH,
-      hint: "TAKOSUMI_DEPLOY_TOKEN unset; artifact routes will return 404 " +
+      hint:
+        "TAKOSUMI_DEPLOY_TOKEN unset; artifact routes will return 404 " +
         "until configured.",
     });
   }
@@ -404,7 +405,7 @@ export function registerArtifactRoutes(
       ...(cursor ? { cursor } : {}),
     });
     const artifacts: ArtifactStored[] = list.objects.map((o) =>
-      headToStored(o.digest, o.metadata, o.contentLength)
+      headToStored(o.digest, o.metadata, o.contentLength),
     );
     return c.json(
       list.nextCursor
@@ -429,7 +430,8 @@ export function registerArtifactRoutes(
   app.post(`${TAKOSUMI_ARTIFACTS_PATH}/gc`, async (c) => {
     const auth = checkAuth(c, getToken);
     if (auth.kind === "fail") return auth.response;
-    const dryRun = isTruthyQuery(c.req.query("dryRun")) ||
+    const dryRun =
+      isTruthyQuery(c.req.query("dryRun")) ||
       isTruthyQuery(c.req.query("dry_run"));
     if (!recordStore) {
       const all = await listAllArtifacts(storage, bucket);
@@ -567,9 +569,8 @@ function headToStored(
 
 async function sha256Digest(bytes: Uint8Array): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
-  const hex = Array.from(
-    new Uint8Array(buf),
-    (b) => b.toString(16).padStart(2, "0"),
+  const hex = Array.from(new Uint8Array(buf), (b) =>
+    b.toString(16).padStart(2, "0"),
   ).join("");
   return `sha256:${hex}`;
 }
@@ -647,9 +648,7 @@ function isTruthyQuery(value: string | undefined): boolean {
 }
 
 function resolveMaxBytes(option: number | undefined): number {
-  if (
-    typeof option === "number" && Number.isInteger(option) && option > 0
-  ) {
+  if (typeof option === "number" && Number.isInteger(option) && option > 0) {
     return option;
   }
   return TAKOSUMI_ARTIFACT_MAX_BYTES_DEFAULT;

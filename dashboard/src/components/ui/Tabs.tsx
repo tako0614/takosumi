@@ -20,7 +20,10 @@ interface Props {
  */
 export default function Tabs(props: Props): JSX.Element {
   return (
-    <nav class={`tg-tabs ${props.class ?? ""}`} aria-label={props["aria-label"]}>
+    <nav
+      class={`tg-tabs ${props.class ?? ""}`}
+      aria-label={props["aria-label"]}
+    >
       <For each={props.items}>
         {(t) => (
           <A href={t.href} class="tg-tab" end={t.end} activeClass="active">

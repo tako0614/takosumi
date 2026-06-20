@@ -12,7 +12,8 @@ bash scripts/up.sh
 bash scripts/up.sh --profile postgres
 
 # Workers profile: Accounts Worker on D1/R2 + Takosumi service Worker on
-# D1/R2/Queue/DO. In this profile service.takosumi.test is the Worker endpoint.
+# D1/R2/Queue/DO. app.takosumi.test remains the canonical platform host;
+# service*.takosumi.test is local-only worker probe ingress.
 bash scripts/up.sh --profile workers
 
 # 停止 (volume は残る)
@@ -79,11 +80,9 @@ curl -sk https://127.0.0.1:15000/dir
 # CoreDNS 経由の wildcard 解決
 dig random-name.takosumi.test @127.0.0.1 +short
 
-# Postgres profile service + Worker mirror
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/health
+# Postgres profile local-only worker probe
 curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service-worker.takosumi.test/healthz
 
-# Workers profile service Worker
+# Workers profile local-only worker probes
 curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/healthz
-curl -sk --cacert caddy/runtime/pebble-issuance-root.pem https://service.takosumi.test/storage/healthz
 ```

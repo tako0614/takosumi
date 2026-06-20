@@ -1,7 +1,7 @@
 import type {
   ResourceInstance,
   ResourceInstanceId,
-} from "../../domains/resources/mod.ts";
+} from "./mod.ts";
 import { conflict } from "../../shared/errors.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
 
@@ -73,7 +73,7 @@ export function assertRestoreAllowed(
   }
   if (!resource.provider || !resource.providerResourceId) {
     throw conflict(
-      "Provider-native restore requires managed provider identity",
+      "Provider-native restore requires provider runtime identity",
       {
         resourceInstanceId: resource.id,
         provider: resource.provider,

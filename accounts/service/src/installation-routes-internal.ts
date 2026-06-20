@@ -4,11 +4,11 @@
  *
  * - OIDC value validators (`oidcRedirectUrisValue`, `oidcIssuerUrlValue`,
  *   `oidcClientAuthMethodValue`, etc.) are sibling-package internals shared
- *   between the install-lifecycle handlers and Takos start handoff route.
+ *   by install-lifecycle handlers and the internal app launch-token flow.
  * - `handleIssueLaunchToken` and its support helpers
  *   (`launchRedirectUrl`, `resolveLaunchTokenPairwiseSubject`,
  *   `opaqueLaunchToken`, `launchTokenConsumeError`) back the in-package
- *   `/start` issue flow. Token issue is not a
+ *   internal installation launch flow. Token issue is not a
  *   public app route; token consume remains public so installed apps can
  *   redeem the one-shot launch token.
  * - `requireInstallationAccessTokenCapability` gates internal bearer-token
@@ -20,7 +20,10 @@ import {
   normalizeIssuer,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import type { AppGrantCapability, InstallationRecord } from "./ledger.ts";
+import type {
+  ServiceGrantMaterialCapability,
+  InstallationRecord,
+} from "./ledger.ts";
 import type {
   AccountsStore,
   OidcClientAuthMethod,
@@ -31,9 +34,9 @@ import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
 import { appendLedgerEvent } from "./installation-helpers.ts";
 import { includesScope } from "./oidc-routes.ts";
 import {
-  isCurrentWorkloadServiceAccessToken,
-  isWorkloadServiceAccessTokenRecord,
-} from "./workload-service-tokens.ts";
+  isCurrentServiceGraphServiceAccessToken,
+  isServiceGraphServiceAccessTokenRecord,
+} from "./service-graph-service-tokens.ts";
 import {
   errorJson,
   bearerChallenge,
@@ -49,9 +52,9 @@ import type { LaunchTokenOptions } from "./mod.ts";
 /**
  * Internal launch-token issuer. Wave 6 removed
  * `POST /v1/installations/{id}/launch-token` from the public surface; this
- * helper is now only reachable from the internal `/start` route that drives
- * the install→launch handshake from the
- * operator-controlled dashboard. Do not export over HTTP.
+ * helper is now only reachable from internal routes that drive
+ * app launch-token bootstrap from the operator-controlled dashboard. Do not
+ * export over HTTP.
  */
 export async function handleIssueLaunchToken(input: {
   installationId: string;
@@ -63,9 +66,14 @@ export async function handleIssueLaunchToken(input: {
   const installation = await input.store.findAppInstallation(
     input.installationId,
   );
-  if (!installation) return errorJson("installation_not_found", "installation not found", 404);
+  if (!installation)
+    return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
-    return errorJson("state_conflict", "launch tokens can only be issued for ready installations", 409);
+    return errorJson(
+      "state_conflict",
+      "launch tokens can only be issued for ready installations",
+      409,
+    );
   }
 
   const body = await readJsonObject(input.request);
@@ -74,18 +82,24 @@ export async function handleIssueLaunchToken(input: {
     body.purpose === "install-bootstrap" || body.purpose === "re-launch"
       ? body.purpose
       : "install-bootstrap";
-  const requestedTtlSeconds = numberValue(body.max_lifetime_seconds) ??
-    numberValue(body.maxLifetimeSeconds) ?? numberValue(body.ttlSeconds) ??
+  const requestedTtlSeconds =
+    numberValue(body.max_lifetime_seconds) ??
+    numberValue(body.maxLifetimeSeconds) ??
+    numberValue(body.ttlSeconds) ??
     300;
   const ttlSeconds = Math.min(Math.max(requestedTtlSeconds, 1), 300);
-  const redirectUri = stringValue(body.redirect_uri) ??
-    stringValue(body.redirectUri);
+  const redirectUri =
+    stringValue(body.redirect_uri) ?? stringValue(body.redirectUri);
   if (!redirectUri) {
     return errorJson("invalid_request", "redirect_uri is required", 400);
   }
   const redirect = launchRedirectUrl(redirectUri);
   if (!redirect) {
-    return errorJson("invalid_request", "redirectUri must be an absolute /_takosumi/launch URL", 400);
+    return errorJson(
+      "invalid_request",
+      "redirectUri must be an absolute /_takosumi/launch URL",
+      400,
+    );
   }
 
   const now = Date.now();
@@ -150,11 +164,19 @@ export async function handleConsumeLaunchToken(input: {
   const token = stringValue(body.token ?? body.launch_token);
   const redirectUri = stringValue(body.redirect_uri ?? body.redirectUri);
   if (!token || !redirectUri) {
-    return errorJson("invalid_request", "token and redirect_uri are required", 400);
+    return errorJson(
+      "invalid_request",
+      "token and redirect_uri are required",
+      400,
+    );
   }
   const redirect = launchRedirectUrl(redirectUri);
   if (!redirect) {
-    return errorJson("invalid_request", "redirectUri must be an absolute /_takosumi/launch URL", 400);
+    return errorJson(
+      "invalid_request",
+      "redirectUri must be an absolute /_takosumi/launch URL",
+      400,
+    );
   }
 
   const now = Date.now();
@@ -165,14 +187,18 @@ export async function handleConsumeLaunchToken(input: {
     consumedAt: now,
   });
   if (!result.ok) {
-    const status = result.reason === "not_found"
-      ? 404
-      : result.reason === "expired" || result.reason === "used"
-      ? 409
-      : 400;
-    return json({
-      error: launchTokenConsumeError(result.reason),
-    }, status);
+    const status =
+      result.reason === "not_found"
+        ? 404
+        : result.reason === "expired" || result.reason === "used"
+          ? 409
+          : 400;
+    return json(
+      {
+        error: launchTokenConsumeError(result.reason),
+      },
+      status,
+    );
   }
   const record = result.record;
   await appendLedgerEvent(input.store, {
@@ -218,25 +244,29 @@ export async function resolveLaunchTokenPairwiseSubject(input: {
   launchTokens: LaunchTokenOptions;
 }): Promise<TakosumiSubject | Response> {
   if (!input.launchTokens.pairwiseSubjectSecret) {
-    return errorJson("feature_unavailable", "App launch is temporarily unavailable.", 503);
+    return errorJson(
+      "feature_unavailable",
+      "App launch is temporarily unavailable.",
+      503,
+    );
   }
   const oidcClient = await input.store.findOidcClientForInstallation(
     input.installation.installationId,
   );
   const clientId = oidcClient
     ? [
-      input.installation.appId,
-      input.installation.installationId,
-      oidcClient.clientId,
-    ].join(":")
+        input.installation.appId,
+        input.installation.installationId,
+        oidcClient.clientId,
+      ].join(":")
     : [
-      input.installation.appId,
-      input.installation.installationId,
-      "launch-token",
-    ].join(":");
+        input.installation.appId,
+        input.installation.installationId,
+        "launch-token",
+      ].join(":");
   return await derivePairwiseSubject({
     secret: input.launchTokens.pairwiseSubjectSecret,
-   takosumiSubject: input.installation.createdBySubject,
+    takosumiSubject: input.installation.createdBySubject,
     clientId,
   });
 }
@@ -245,10 +275,9 @@ export async function requireInstallationAccessTokenCapability(input: {
   request: Request;
   store: AccountsStore;
   installationId: string;
-  capability: AppGrantCapability;
+  capability: ServiceGrantMaterialCapability;
 }): Promise<
-  | { ok: true; record: TokenRecord }
-  | { ok: false; response: Response }
+  { ok: true; record: TokenRecord } | { ok: false; response: Response }
 > {
   const accessToken = bearerToken(input.request.headers.get("authorization"));
   if (!accessToken) {
@@ -265,14 +294,19 @@ export async function requireInstallationAccessTokenCapability(input: {
   if (!includesScope(record.scope, input.capability)) {
     return {
       ok: false,
-      response: errorJson("insufficient_scope", "insufficient scope", 403, undefined, {
-        "www-authenticate":
-          `Bearer error="insufficient_scope", scope="${input.capability}"`,
-      }),
+      response: errorJson(
+        "insufficient_scope",
+        "insufficient scope",
+        403,
+        undefined,
+        {
+          "www-authenticate": `Bearer error="insufficient_scope", scope="${input.capability}"`,
+        },
+      ),
     };
   }
   if (
-    await isCurrentWorkloadServiceAccessToken({
+    await isCurrentServiceGraphServiceAccessToken({
       store: input.store,
       token: accessToken,
       record,
@@ -281,7 +315,7 @@ export async function requireInstallationAccessTokenCapability(input: {
   ) {
     return { ok: true, record };
   }
-  if (isWorkloadServiceAccessTokenRecord(record)) {
+  if (isServiceGraphServiceAccessTokenRecord(record)) {
     await input.store.deleteToken(accessToken);
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
@@ -292,7 +326,8 @@ export function launchRedirectUrl(value: string): URL | undefined {
   try {
     const url = new URL(value);
     const isHttps = url.protocol === "https:";
-    const isLocalHttp = url.protocol === "http:" &&
+    const isLocalHttp =
+      url.protocol === "http:" &&
       (url.hostname === "localhost" || url.hostname === "127.0.0.1");
     if (!isHttps && !isLocalHttp) return undefined;
     if (url.pathname !== "/_takosumi/launch") return undefined;
@@ -332,8 +367,9 @@ export function oidcNamespacePathValue(value: unknown): string | undefined {
 export function hasRemovedOidcNamespaceAlias(
   value: Record<string, unknown>,
 ): boolean {
-  return Object.hasOwn(value, "serviceId") ||
-    Object.hasOwn(value, "service_id");
+  return (
+    Object.hasOwn(value, "serviceId") || Object.hasOwn(value, "service_id")
+  );
 }
 
 export function oidcIssuerUrlValue(value: unknown): string | undefined {
@@ -343,8 +379,8 @@ export function oidcIssuerUrlValue(value: unknown): string | undefined {
     const normalized = normalizeIssuer(issuerUrl);
     const parsed = new URL(normalized);
     return parsed.protocol === "https:" ||
-        (parsed.protocol === "http:" &&
-          (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"))
+      (parsed.protocol === "http:" &&
+        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1"))
       ? normalized
       : undefined;
   } catch {
@@ -371,9 +407,12 @@ export const oidcScopeTokenPattern = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 export function isAllowedOidcRedirectUri(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.hash === "" && (url.protocol === "https:" ||
-      (url.protocol === "http:" &&
-        (url.hostname === "localhost" || url.hostname === "127.0.0.1")));
+    return (
+      url.hash === "" &&
+      (url.protocol === "https:" ||
+        (url.protocol === "http:" &&
+          (url.hostname === "localhost" || url.hostname === "127.0.0.1")))
+    );
   } catch {
     return false;
   }
@@ -383,8 +422,8 @@ export function oidcClientAuthMethodValue(
   value: unknown,
 ): OidcClientAuthMethod | undefined {
   return value === "client_secret_basic" ||
-      value === "client_secret_post" ||
-      value === "none"
+    value === "client_secret_post" ||
+    value === "none"
     ? value
     : undefined;
 }

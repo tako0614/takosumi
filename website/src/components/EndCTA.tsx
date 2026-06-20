@@ -1,5 +1,5 @@
-import CodeBlock from "./CodeBlock";
-import SplatField from "./SplatField";
+import CodeBlock from "./CodeBlock.tsx";
+import SplatField from "./SplatField.tsx";
 
 export default function EndCTA() {
   return (
@@ -8,20 +8,26 @@ export default function EndCTA() {
       <div class="container">
         <h2>5 分で始める。</h2>
         <p class="lede" style="margin-left: auto; margin-right: auto;">
-          module を install して、reviewed plan を apply。cloud、VM、cluster
-          のどれでも、同じ台帳で。
+          Git URL を登録して、ProviderConnection を選んで、reviewed plan を apply。
+          OSS は既存 provider をそのまま動かし、Cloud だけが compatibility gateway と
+          managed resources を追加します。
         </p>
         <CodeBlock terminal class="terminal">
           <span class="k">$</span> open
           https://app.takosumi.com/install?git=https://git.example.com/acme/api.git
           {"\n"}
-          <span class="c">{"  "}→ 取得元が入力済みで開く（追加は確認してから）</span>
-          {"\n"}
-          <span class="k">$</span> POST /api/installations/ins_api/plan{"\n"}
-          <span class="k">$</span> POST /api/runs/run_plan/approve{"\n"}
           <span class="c">
-            {"  "}→ Deployment live · OutputSnapshot recorded
+            {"  "}→ 取得元が入力済みで開く（追加は確認してから）
           </span>
+          {"\n"}
+          <span class="k">$</span> choose ProviderConnection → cloudflare-prod
+          {"\n"}
+          <span class="k">$</span> review plan → apply{"\n"}
+          <span class="c">
+            {"  "}→ approve は destructive / destroy などの gated run だけ
+          </span>
+          {"\n"}
+          <span class="c">{"  "}→ StateVersion · Outputs · AuditEvent recorded</span>
         </CodeBlock>
         <div class="cta-row" style="justify-content: center;">
           <a
@@ -36,7 +42,7 @@ export default function EndCTA() {
             href="https://app.takosumi.com/"
             rel="noopener"
           >
-            App を開く
+            Dashboard を開く
           </a>
           <a class="btn btn-secondary" href="/docs/" rel="external">
             ドキュメント

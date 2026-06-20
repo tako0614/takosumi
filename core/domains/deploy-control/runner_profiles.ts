@@ -10,7 +10,7 @@ import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import { providerById } from "@takosumi/providers";
 import { log } from "../../shared/log.ts";
 
-// Per-provider egress policy is owned by the managed-provider registry (single
+// Per-provider egress policy is owned by the provider runtime registry (single
 // source of truth); a runner profile owns only its presentation + runtime. `id`
 // is the provider id (e.g. "cloudflare"), not the runner profile id.
 function networkFor(id: string): NonNullable<RunnerProfile["networkPolicy"]> {
@@ -28,7 +28,7 @@ function providerAddressesFor(id: string): readonly string[] {
 function requireProvider(id: string) {
   const provider = providerById(id);
   if (!provider) {
-    throw new Error(`no managed provider registered for "${id}"`);
+    throw new Error(`no provider runtime registered for "${id}"`);
   }
   return provider;
 }
@@ -36,12 +36,12 @@ function requireProvider(id: string) {
 /**
  * Resolve the operator-curated set of enabled runner profiles from a CSV env
  * value (`TAKOSUMI_ENABLED_RUNNER_PROFILES`, e.g.
- * `"cloudflare-default,aws-template,gcp-template"`).
+ * `"cloudflare-default,aws-provider-env-candidate,gcp-reserved"`).
  *
  * The returned list is the operator-curated provider surface: only the listed
  * profile ids appear (so `/v1/runner-profiles` and policy evaluation never see
  * an unlisted seed), and each listed profile is returned with
- * `labels["takosumi.com/profile-enabled"] = "true"` merged in so a template
+ * `labels["takosumi.com/profile-enabled"] = "true"` merged in so a candidate
  * seed passes the policy gate once the operator opts it in.
  *
  * Behavior:
@@ -54,6 +54,7 @@ function requireProvider(id: string) {
 export function resolveEnabledRunnerProfiles(
   allProfiles: readonly RunnerProfile[],
   envValue: string | undefined,
+  options: RunnerProfileEnablementOptions = {},
 ): readonly RunnerProfile[] {
   const byId = new Map(allProfiles.map((profile) => [profile.id, profile]));
   const requestedIds = parseEnabledRunnerProfileIds(envValue);
@@ -65,7 +66,7 @@ export function resolveEnabledRunnerProfiles(
       unknownIds.push(id);
       continue;
     }
-    enabled.push(withProfileEnabledLabel(profile));
+    enabled.push(withProfileEnabledLabel(profile, options));
   }
   if (unknownIds.length > 0) {
     log.warn("service.runner_profiles.unknown_enabled_ids", {
@@ -74,6 +75,12 @@ export function resolveEnabledRunnerProfiles(
     });
   }
   return enabled;
+}
+
+export interface RunnerProfileEnablementOptions {
+  readonly requireGatewayEgressEvidence?: boolean;
+  readonly egressEnforcementEvidenceRef?: string;
+  readonly egressEnforcementEvidenceDigest?: string;
 }
 
 /**
@@ -102,7 +109,11 @@ export function parseEnabledRunnerProfileIds(
 
 const DEFAULT_ENABLED_RUNNER_PROFILE_ID = "cloudflare-default";
 
-function withProfileEnabledLabel(profile: RunnerProfile): RunnerProfile {
+function withProfileEnabledLabel(
+  profile: RunnerProfile,
+  _options: RunnerProfileEnablementOptions,
+): RunnerProfile {
+  assertRunnerProfileAvailable(profile);
   return {
     ...profile,
     labels: {
@@ -123,78 +134,62 @@ export function createDefaultRunnerProfiles(
         "Reference Cloudflare Container runner for OpenTofu modules that use Cloudflare resources.",
       allowedProviders: providerAddressesFor("cloudflare"),
       networkPolicy: networkFor("cloudflare"),
-      cloudflareWorkersForPlatforms: {
-        dispatchNamespace: providerById("cloudflare")!.hosting!.dispatchNamespace,
-        dispatchWorkerBinding: "TAKOSUMI_TENANT_DISPATCH",
-        outboundWorker: {
-          serviceBinding: "TAKOSUMI_OUTBOUND_WORKER",
-          enforceNetworkPolicy: true,
-        },
-        userWorkerBindings: {
-          mode: "tenant-scoped-only",
-          allowedBindingKinds: [
-            "kv_namespace",
-            "durable_object_namespace",
-            "queue",
-            "r2_bucket",
-            "d1_database",
-          ],
-        },
-        apiProxy: providerById("cloudflare")!.hosting!.apiProxy,
-      },
+      labels: providerRunnerProfileLabels(),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "aws-template",
-      name: "AWS verified-space template",
+      id: "aws-provider-env-candidate",
+      name: "AWS Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
       allowedProviders: providerAddressesFor("aws"),
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("aws"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "gcp-template",
-      name: "GCP verified-space template",
+      id: "gcp-reserved",
+      name: "GCP reserved",
       description:
-        "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources.",
+        "Reserved Cloudflare Container runner profile for Google Cloud modules until live verify/mint drivers are wired.",
       allowedProviders: providerAddressesFor("gcp"),
-      labels: templateRunnerProfileLabels(),
+      labels: reservedRunnerProfileLabels(
+        "gcp verify/mint drivers are not wired",
+      ),
       networkPolicy: networkFor("gcp"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "azure-template",
-      name: "Azure template",
+      id: "azure-provider-env-candidate",
+      name: "Azure Provider Env candidate",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
       allowedProviders: providerAddressesFor("azure"),
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("azure"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "kubernetes-template",
-      name: "Kubernetes verified-space template",
+      id: "kubernetes-provider-env-candidate",
+      name: "Kubernetes Provider Env candidate",
       description:
         "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
       allowedProviders: providerAddressesFor("kubernetes"),
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("kubernetes"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "github-template",
-      name: "GitHub verified-space template",
+      id: "github-provider-env-candidate",
+      name: "GitHub Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
       allowedProviders: providerAddressesFor("github"),
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("github"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "digitalocean-template",
-      name: "DigitalOcean template",
+      id: "digitalocean-provider-env-candidate",
+      name: "DigitalOcean Provider Env candidate",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
       allowedProviders: providerAddressesFor("digitalocean"),
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("digitalocean"),
     }),
     defaultProviderRunnerProfile(now, {
@@ -202,14 +197,20 @@ export function createDefaultRunnerProfiles(
       name: "Docker custom example",
       substrate: "local",
       description:
-        "Provider env set example runner profile for OpenTofu modules that use a host Docker daemon.",
+        "Generic-env provider example runner profile for OpenTofu modules that use a host Docker daemon.",
       allowedProviders: providerAddressesFor("docker"),
       credentialRefs: [],
       cloudflareContainer: false,
-      labels: templateRunnerProfileLabels(),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("docker"),
     }),
   ];
+}
+
+function providerRunnerProfileLabels(): Readonly<Record<string, string>> {
+  return {
+    "takosumi.com/provider-runner": "true",
+  };
 }
 
 interface DefaultProviderRunnerProfileOptions {
@@ -220,7 +221,6 @@ interface DefaultProviderRunnerProfileOptions {
   readonly substrate?: string;
   readonly credentialRefs?: RunnerProfile["credentialRefs"];
   readonly cloudflareContainer?: RunnerProfile["cloudflareContainer"] | false;
-  readonly cloudflareWorkersForPlatforms?: RunnerProfile["cloudflareWorkersForPlatforms"];
   readonly networkPolicy: NonNullable<RunnerProfile["networkPolicy"]>;
   readonly labels?: RunnerProfile["labels"];
 }
@@ -284,19 +284,34 @@ function defaultProviderRunnerProfile(
             options.cloudflareContainer ??
             DEFAULT_CLOUDFLARE_CONTAINER_EXECUTION,
         }),
-    ...(options.cloudflareWorkersForPlatforms
-      ? { cloudflareWorkersForPlatforms: options.cloudflareWorkersForPlatforms }
-      : {}),
     secretExposurePolicy: DEFAULT_SECRET_EXPOSURE_POLICY,
     ...(options.labels ? { labels: options.labels } : {}),
     createdAt: now,
   };
 }
 
-function templateRunnerProfileLabels(): Readonly<Record<string, string>> {
+function candidateRunnerProfileLabels(): Readonly<Record<string, string>> {
   return {
-    "takosumi.com/profile-state": "template",
+    "takosumi.com/profile-state": "candidate",
   };
+}
+
+function reservedRunnerProfileLabels(
+  reason: string,
+): Readonly<Record<string, string>> {
+  return {
+    "takosumi.com/profile-state": "reserved",
+    "takosumi.com/profile-reserved-reason": reason,
+  };
+}
+
+function assertRunnerProfileAvailable(profile: RunnerProfile): void {
+  if (profile.labels?.["takosumi.com/profile-state"] !== "reserved") return;
+  const reason = profile.labels["takosumi.com/profile-reserved-reason"];
+  throw new Error(
+    `runner profile ${profile.id} is reserved and cannot be enabled` +
+      (reason ? `: ${reason}` : ""),
+  );
 }
 
 function credentialRefsForProfile(

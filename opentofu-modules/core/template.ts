@@ -18,7 +18,7 @@ export const coreTemplate: TemplateDefinition = {
   name: "Takos Core (base installation)",
   version: "1.0.0",
   description:
-    "Base installation under a Space: derives the canonical Takos service origins from a base domain. No cloud resources.",
+    "Base installation under a Space: derives generic service origins from a base domain. No cloud resources.",
   source: {
     localModulePath: "/app/templates/core/module",
   },

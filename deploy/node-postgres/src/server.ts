@@ -12,20 +12,22 @@ import type {
   AccountsHandler,
   AccountsJsonWebKey,
   AppInstallationExportWorker,
-  DeployControlProxyOptions,
+  DeployControlFacadeOptions,
   JsonWebKeySet,
   PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
 import {
   createAccountsHandler,
   createEphemeralAccountsHandler,
-  createHttpDirectoryInstallationExportArchiveUploader,
-  createMetadataOnlyInstallationExportWorker,
   PostgresAccountsStore,
   signEs256Jwt,
   signExportDownloadUrl,
   verifyExportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
+import {
+  createHttpDirectoryInstallationExportArchiveUploader,
+  createMetadataOnlyInstallationExportWorker,
+} from "../../../accounts/service/src/export-archive.ts";
 import pgModule from "pg";
 import {
   type NodeAccountsExportDownloadConfig,
@@ -88,9 +90,10 @@ const healthzTimeoutMs = 1000;
  */
 const SENSITIVE_KEY_RE =
   /password|secret|token|apikey|api_key|credential|private|cookie|authorization/i;
-const SENSITIVE_STRING_PATTERNS: ReadonlyArray<
-  { pattern: RegExp; replacement: string }
-> = [
+const SENSITIVE_STRING_PATTERNS: ReadonlyArray<{
+  pattern: RegExp;
+  replacement: string;
+}> = [
   {
     pattern:
       /\beyJ[A-Za-z0-9_-]{1,2048}\.eyJ[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{1,512}/g,
@@ -156,12 +159,14 @@ function structuredLog(
  * Operator-supplied overrides forwarded into the embedded service via
  * {@link buildComposedApp}. The published reference distribution passes none
  * (so `main()` behaves exactly as before); a composer that wants to attach
-   * native adapter implementation bindings or a durable SQL ledger — e.g. the
+ * native adapter implementation bindings or a durable SQL ledger — e.g. the
  * local-substrate `cloud` wrapper — supplies them here without duplicating the
  * pool / store / accounts-handler / serve plumbing.
  */
 export interface ComposedServerOverrides {
-  readonly implementations?: Parameters<typeof buildComposedApp>[0]["implementations"];
+  readonly implementations?: Parameters<
+    typeof buildComposedApp
+  >[0]["implementations"];
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
 }
 
@@ -185,7 +190,7 @@ export async function buildComposedServer(
     // Surface it loudly rather than silently degrading to API-only.
     structuredLog(
       "error",
-      "dashboard SPA build not found; static asset serving disabled (set TAKOSUMI_ACCOUNTS_STATIC_DIR or build packages/dashboard-ui)",
+      "dashboard SPA build not found; static asset serving disabled (set TAKOSUMI_ACCOUNTS_STATIC_DIR or build dashboard)",
       { event: "assets.resolution.failed" },
     );
   }
@@ -198,7 +203,9 @@ export async function buildComposedServer(
     preHandle: (req) =>
       preHandleNonServiceRequest(req, pool, config.exportDownload),
     ...(staticAssets ? { staticAssets } : {}),
-    ...(overrides.implementations ? { implementations: overrides.implementations } : {}),
+    ...(overrides.implementations
+      ? { implementations: overrides.implementations }
+      : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
 
@@ -209,10 +216,7 @@ export async function buildComposedServer(
     hostname,
     port,
   });
-  await serveOnAnyRuntime(
-    (req) => app.fetch(req),
-    { port, hostname },
-  );
+  await serveOnAnyRuntime((req) => app.fetch(req), { port, hostname });
 }
 
 async function main(): Promise<void> {
@@ -239,16 +243,16 @@ async function preHandleNonServiceRequest(
 async function buildAccountsHandler(
   config: NodeAccountsServerConfig,
   store: PostgresAccountsStore,
-  deployControl?: DeployControlProxyOptions,
+  deployControl?: DeployControlFacadeOptions,
 ): Promise<AccountsHandler> {
   const exportWorker = buildExportWorker(config.exportDownload);
   const commonOptions = {
     issuer: config.issuer,
     store,
     ...(config.clients ? { clients: config.clients } : {}),
-    managedOfferingAccess: config.managedOfferingAccess,
-    ...(config.workloadPlatformServices
-      ? { workloadPlatformServices: config.workloadPlatformServices }
+    platformAccess: config.platformAccess,
+    ...(config.serviceGraphMaterialResolver
+      ? { serviceGraphMaterialResolver: config.serviceGraphMaterialResolver }
       : {}),
     ...(config.stripeBilling ? { stripeBilling: config.stripeBilling } : {}),
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
@@ -320,16 +324,16 @@ async function buildStableOidc(
   options: NodeAccountsStableOidcConfig | undefined,
 ): Promise<
   | {
-    readonly jwks: JsonWebKeySet;
-    readonly oidcFlow: {
-      readonly subject: string;
-      readonly pairwiseSubjectSecret: string;
-      readonly issueIdToken: (
-        claims: Record<string, unknown>,
-      ) => Promise<string>;
-    };
-    readonly launchTokens: { readonly pairwiseSubjectSecret: string };
-  }
+      readonly jwks: JsonWebKeySet;
+      readonly oidcFlow: {
+        readonly subject: string;
+        readonly pairwiseSubjectSecret: string;
+        readonly issueIdToken: (
+          claims: Record<string, unknown>,
+        ) => Promise<string>;
+      };
+      readonly launchTokens: { readonly pairwiseSubjectSecret: string };
+    }
   | undefined
 > {
   if (!options) return undefined;
@@ -414,29 +418,44 @@ async function maybeHandleExportDownload(
     // signature is a client error (400), a wrong signature is forbidden
     // (403), and an expired-but-well-formed URL is gone (410).
     if (verdict.reason === "expired") {
-      return Response.json({ error: "export_download_expired" }, {
-        status: 410,
-      });
+      return Response.json(
+        { error: "export_download_expired" },
+        {
+          status: 410,
+        },
+      );
     }
     if (verdict.reason === "missing") {
-      return Response.json({ error: "invalid_export_download_url" }, {
-        status: 400,
-      });
+      return Response.json(
+        { error: "invalid_export_download_url" },
+        {
+          status: 400,
+        },
+      );
     }
-    return Response.json({ error: "invalid_export_download_signature" }, {
-      status: 403,
-    });
+    return Response.json(
+      { error: "invalid_export_download_signature" },
+      {
+        status: 403,
+      },
+    );
   }
   // Resolve the file by basename only so a `..`/absolute path in the request
   // cannot escape the export output directory.
   const requestedName = posixBasename(decodeURIComponent(url.pathname));
   if (
-    !requestedName || requestedName === "." || requestedName === ".." ||
-    requestedName.includes("/") || requestedName.includes("\\")
+    !requestedName ||
+    requestedName === "." ||
+    requestedName === ".." ||
+    requestedName.includes("/") ||
+    requestedName.includes("\\")
   ) {
-    return Response.json({ error: "invalid_export_download_url" }, {
-      status: 400,
-    });
+    return Response.json(
+      { error: "invalid_export_download_url" },
+      {
+        status: 400,
+      },
+    );
   }
   const dir = config.outputDirectory.endsWith("/")
     ? config.outputDirectory.slice(0, -1)
@@ -444,9 +463,12 @@ async function maybeHandleExportDownload(
   const filePath = `${dir}/${requestedName}`;
   const file = Bun.file(filePath);
   if (!(await file.exists())) {
-    return Response.json({ error: "export_artifact_not_found" }, {
-      status: 404,
-    });
+    return Response.json(
+      { error: "export_artifact_not_found" },
+      {
+        status: 404,
+      },
+    );
   }
   const headers = new Headers({
     "content-type": "application/zstd",
@@ -471,16 +493,13 @@ async function handleHealthz(pool: PgPool): Promise<Response> {
   const timer = setTimeout(() => controller.abort(), healthzTimeoutMs);
   try {
     await runPoolPing(pool, controller.signal);
-    return new Response(
-      JSON.stringify({ ok: true, database: "ok" }),
-      {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        },
+    return new Response(JSON.stringify({ ok: true, database: "ok" }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
       },
-    );
+    });
   } catch (error) {
     return new Response(
       JSON.stringify({
@@ -525,13 +544,13 @@ async function serveOnAnyRuntime(
   handler: (req: Request) => Promise<Response> | Response,
   options: ServerConfig,
 ): Promise<void> {
-  const bunGlobal = (globalThis as {
-    Bun?: {
-      serve: (
-        opts: ServerConfig & { fetch: typeof handler },
-      ) => unknown;
-    };
-  }).Bun;
+  const bunGlobal = (
+    globalThis as {
+      Bun?: {
+        serve: (opts: ServerConfig & { fetch: typeof handler }) => unknown;
+      };
+    }
+  ).Bun;
   if (bunGlobal?.serve) {
     bunGlobal.serve({ ...options, fetch: handler });
     return;
@@ -546,15 +565,16 @@ async function serveOnAnyRuntime(
       else if (Array.isArray(v)) headers.set(k, v.join(","));
     }
     const method = req.method ?? "GET";
-    const body = method !== "GET" && method !== "HEAD"
-      ? new ReadableStream<Uint8Array>({
-        start(controller) {
-          req.on("data", (chunk: Uint8Array) => controller.enqueue(chunk));
-          req.on("end", () => controller.close());
-          req.on("error", (err: Error) => controller.error(err));
-        },
-      })
-      : null;
+    const body =
+      method !== "GET" && method !== "HEAD"
+        ? new ReadableStream<Uint8Array>({
+            start(controller) {
+              req.on("data", (chunk: Uint8Array) => controller.enqueue(chunk));
+              req.on("end", () => controller.close());
+              req.on("error", (err: Error) => controller.error(err));
+            },
+          })
+        : null;
     try {
       const requestInit = { method, headers, body } as RequestInit & {
         duplex?: "half";
@@ -582,14 +602,14 @@ async function serveOnAnyRuntime(
     }
   });
   await new Promise<void>((resolve) =>
-    server.listen(options.port, options.hostname, () => resolve())
+    server.listen(options.port, options.hostname, () => resolve()),
   );
 }
 
 function readEnv(): Record<string, string | undefined> {
-  const proc =
-    (globalThis as { process?: { env?: Record<string, string | undefined> } })
-      .process;
+  const proc = (
+    globalThis as { process?: { env?: Record<string, string | undefined> } }
+  ).process;
   if (proc?.env) return proc.env;
   return {};
 }
@@ -611,8 +631,7 @@ function createPostgresPool(config: NodeAccountsServerConfig): PgPool {
     connectionString: config.databaseUrl,
     max: parsePoolSize(env),
     idleTimeoutMillis:
-      parseInteger(env, "TAKOSUMI_ACCOUNTS_PG_IDLE_TIMEOUT_MS") ??
-        30000,
+      parseInteger(env, "TAKOSUMI_ACCOUNTS_PG_IDLE_TIMEOUT_MS") ?? 30000,
     connectionTimeoutMillis:
       parseInteger(env, "TAKOSUMI_ACCOUNTS_PG_CONNECT_TIMEOUT_MS") ?? 5000,
     statement_timeout:
@@ -715,8 +734,8 @@ function parseInteger(
 function parseSslConfig(
   env: Record<string, string | undefined>,
 ): false | { rejectUnauthorized: boolean; ca?: string } {
-  const mode = env.TAKOSUMI_ACCOUNTS_PG_SSL_MODE?.trim().toLowerCase() ??
-    "disable";
+  const mode =
+    env.TAKOSUMI_ACCOUNTS_PG_SSL_MODE?.trim().toLowerCase() ?? "disable";
   if (mode === "" || mode === "disable" || mode === "off") return false;
   const ca = env.TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT?.trim();
   if (mode === "require") {
@@ -738,8 +757,8 @@ if (import.meta.main || isNodeMain()) {
       event: "server.fatal",
       error: error instanceof Error ? error : { message: String(error) },
     });
-    const proc =
-      (globalThis as { process?: { exit(code: number): void } }).process;
+    const proc = (globalThis as { process?: { exit(code: number): void } })
+      .process;
     if (proc?.exit) proc.exit(1);
     else throw error;
   });
@@ -748,8 +767,8 @@ if (import.meta.main || isNodeMain()) {
 function isNodeMain(): boolean {
   // Heuristic for Node ESM entry points where `import.meta.main` is
   // unavailable. The bundle wrapper sets `process.env.TAKOSUMI_ACCOUNTS_MAIN=1`.
-  const proc =
-    (globalThis as { process?: { env: Record<string, string | undefined> } })
-      .process;
+  const proc = (
+    globalThis as { process?: { env: Record<string, string | undefined> } }
+  ).process;
   return proc?.env?.TAKOSUMI_ACCOUNTS_MAIN === "1";
 }

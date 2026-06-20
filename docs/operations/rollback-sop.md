@@ -46,12 +46,12 @@ forward fix は rollback 不可、または小規模 reviewed fix のほうが�
 
 ## Rollback Paths
 
-| Surface                                | Primary rollback                                                                                                                                                                                                                         | Evidence                                                                                                   |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Takosumi platform worker on Cloudflare | redeploy previous build via `platform-worker-deploy.md` / Cloudflare worker version rollback                                                                                                                                             | Cloudflare version id, route, smoke URL                                                                    |
+| Surface                                | Primary rollback                                                                                                                                                                                                                            | Evidence                                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Takosumi platform worker on Cloudflare | redeploy previous build via `platform-worker-deploy.md` / Cloudflare worker version rollback                                                                                                                                                | Cloudflare version id, route, smoke URL                                                                     |
 | Capsule Installation rollback          | create a rollback plan for a retained `Deployment` with `POST /api/v1/deployments/:deploymentId/rollback-plan`, review the generated plan, then use the normal approval/apply flow. Rollback must create a new Run/Deployment ledger entry. | installationId, target deployment id, rollback plan run id, apply run id, resulting state/output generation |
-| Source release                         | one-click revert PR or revert commit in the source repository, followed by a normal Takosumi source sync / compatibility check / plan / apply flow                                                                                      | revert PR URL, commit SHA, source snapshot id                                                              |
-| DB / ledger migration                  | use an expand/backfill forward repair by default; use restore only when the migration safety note explicitly declares that restore is safer than forward repair                                                                           | migration id, backup id, forward-repair or restore plan                                                    |
+| Source release                         | one-click revert PR or revert commit in the source repository, followed by a normal Takosumi source sync / compatibility check / plan / apply flow                                                                                          | revert PR URL, commit SHA, source snapshot id                                                               |
+| DB / ledger migration                  | use an expand/backfill forward repair by default; use restore only when the migration safety note explicitly declares that restore is safer than forward repair                                                                             | migration id, backup id, forward-repair or restore plan                                                     |
 
 rollback コマンドは明示的な deployment id / version id / image digest / tag /
 commit SHA を target にすること。`latest` のような mutable tag
@@ -86,7 +86,7 @@ DR 宣言の評価を依頼します。
 
 ## Staging Rehearsal
 
-Hosted Takosumi launch readiness は、staging rollback rehearsal を 1 回要求します。evidence
+hosted Takosumi launch readiness は、staging rollback rehearsal を 1 回要求します。evidence
 には以下を含めます:
 
 - staging release candidate の commit SHA

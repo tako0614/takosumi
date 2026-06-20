@@ -21,11 +21,11 @@ services:
     environment:
       POSTGRES_USER: takos
       POSTGRES_PASSWORD: takos
-      POSTGRES_DB: takos_app
+      POSTGRES_DB: takosumi_app
     volumes:
       - substrate-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U takos -d takos_app"]
+      test: ["CMD-SHELL", "pg_isready -U takos -d takosumi_app"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -46,11 +46,11 @@ services:
       - /bin/sh
       - -c
       - |
-          for db in takosumi takosumi_accounts; do
-            psql -h postgres -U takos -d takos_app -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" \
-              | grep -q 1 \
-              || psql -h postgres -U takos -d takos_app -c "CREATE DATABASE $$db"
-          done
+        for db in takosumi takosumi_accounts; do
+          psql -h postgres -U takos -d takosumi_app -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" \
+            | grep -q 1 \
+            || psql -h postgres -U takos -d takosumi_app -c "CREATE DATABASE $$db"
+        done
     networks:
       - takos-local-internal
 
@@ -98,9 +98,9 @@ services:
       - /bin/sh
       - -c
       - |
-          until mc alias set takos http://minio:9000 \
-            "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done
-          mc mb --ignore-existing takos/takosumi
+        until mc alias set takos http://minio:9000 \
+          "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 1; done
+        mc mb --ignore-existing takos/takosumi
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-takos}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-takos-minio-pw}
@@ -120,8 +120,8 @@ services:
       - sh
       - -c
       - |
-          bun accounts/cli/src/main.ts accounts migrate \
-            --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+        bun accounts/cli/src/main.ts accounts migrate \
+          --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
     env_file:
       - env/cloud.env
     volumes:
@@ -235,11 +235,11 @@ services:
       - sh
       - -c
       - |
-          mkdir -p deploy/cloudflare/.wrangler/dist
-          bun build \
-            --target browser \
-            worker/src/index.ts \
-            --outfile deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
+        mkdir -p deploy/cloudflare/.wrangler/dist
+        bun build \
+          --target browser \
+          worker/src/index.ts \
+          --outfile deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
     volumes:
       - ../../../takosumi:/work
 
@@ -286,10 +286,10 @@ services:
       - sh
       - -c
       - |
-          if [ ! -d node_modules ]; then
-            npm install --no-fund --no-audit
-          fi
-          npm run build
+        if [ ! -d node_modules ]; then
+          npm install --no-fund --no-audit
+        fi
+        npm run build
     volumes:
       - ../../../takosumi/website:/website
 
@@ -305,18 +305,18 @@ services:
       - sh
       - -c
       - |
-          # vitepress needs git for lastUpdated metadata, and may need
-          # rebuilt native modules if the host's node_modules were from a
-          # different libc.
-          apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates >/dev/null
-          if [ -f node_modules/rollup/dist/native.js ] && \
-             ! ldd node_modules/rollup/dist/native.js >/dev/null 2>&1; then
-            rm -rf node_modules
-          fi
-          if [ ! -d node_modules ]; then
-            npm install --no-fund --no-audit
-          fi
-          npm run build
+        # vitepress needs git for lastUpdated metadata, and may need
+        # rebuilt native modules if the host's node_modules were from a
+        # different libc.
+        apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates >/dev/null
+        if [ -f node_modules/rollup/dist/native.js ] && \
+           ! ldd node_modules/rollup/dist/native.js >/dev/null 2>&1; then
+          rm -rf node_modules
+        fi
+        if [ ! -d node_modules ]; then
+          npm install --no-fund --no-audit
+        fi
+        npm run build
     volumes:
       - ../../../takosumi/docs:/docs
 
@@ -371,10 +371,10 @@ services:
         aliases:
           - mailpit
 
-  # ---- oauth-mock (stands in for accounts.google.com + github.com) ----
+  # ---- oauth-mock (stands in for accounts.google.com) ----
   # Auto-approves /authorize and returns deterministic /userinfo so the
-  # cloud sign-in flow (Google / GitHub button) completes without external
-  # network. Reachable from browser + worker via Caddy at oauth-mock.test.
+  # cloud sign-in flow (Google button) completes without external network.
+  # Reachable from browser + worker via Caddy at oauth-mock.test.
   oauth-mock:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
@@ -390,24 +390,24 @@ services:
   # ---- takosumi dashboard SPA (mirrors app.takosumi.com root) ----
   takosumi-dashboard-build:
     profiles: ["postgres", "workers"]
-    image: node:22-slim
+    image: oven/bun:1
     restart: "no"
     working_dir: /dashboard
     command:
       - sh
       - -c
       - |
-          if [ ! -d node_modules ]; then
-            npm install --no-fund --no-audit
-          fi
-          export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
-          export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_accounts_local"
-          export VITE_TAKOSUMI_DASHBOARD_DEV_SESSION_ID="sess_local_substrate"
-          export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
-          export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
-          npm run build
+        if [ ! -d node_modules ]; then
+          bun install --frozen-lockfile
+        fi
+        export VITE_TAKOSUMI_DASHBOARD_DEV_SIGN_IN="true"
+        export VITE_TAKOSUMI_DASHBOARD_DEV_SUBJECT="tsub_takosumi_accounts_local"
+        export VITE_TAKOSUMI_DASHBOARD_DEV_SESSION_ID="sess_local_substrate"
+        export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
+        export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
+        bun run build
     volumes:
-      - ../../../takosumi/packages/dashboard-ui:/dashboard
+      - ../../../takosumi/dashboard:/dashboard
 
   # ---- takosumi Worker (mirrors app.takosumi.com on Cloudflare Workers) ----
   takosumi-worker-build:
@@ -419,11 +419,11 @@ services:
       - sh
       - -c
       - |
-          mkdir -p deploy/cloudflare/.wrangler/dist
-          bun build \
-            --target browser \
-            worker/src/index.ts \
-            --outfile deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
+        mkdir -p deploy/cloudflare/.wrangler/dist
+        bun build \
+          --target browser \
+          worker/src/index.ts \
+          --outfile deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
     volumes:
       - ../../../takosumi:/work
 

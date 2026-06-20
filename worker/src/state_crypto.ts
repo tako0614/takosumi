@@ -4,7 +4,7 @@
 // This module does NOT implement a new crypto primitive. It reuses the existing
 // secret-store AES-GCM boundary crypto (selectSecretBoundaryCrypto /
 // MultiCloudSecretBoundaryCrypto in
-// src/service/adapters/secret-store/memory.ts), which derives an AES-GCM key
+// core/adapters/secret-store/memory.ts), which derives an AES-GCM key
 // from TAKOSUMI_SECRET_STORE_PASSPHRASE (an already-pushed production secret).
 //
 // The secret-store crypto's seal/open operate on UTF-8 STRINGS. tfstate is JSON
@@ -105,11 +105,9 @@ export class StateArtifactCrypto {
 
 export async function digestBytes(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes));
-  return `sha256:${
-    Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -31,6 +31,13 @@ export interface Deployment {
 }
 
 /**
+ * Public Deployment projection returned by the edge/session API. The raw
+ * `outputSnapshotId` handle stays on the internal ledger shape; public reads use
+ * the allowlisted `outputsPublic` projection or explicit OutputShare flows.
+ */
+export type PublicDeployment = Omit<Deployment, "outputSnapshotId">;
+
+/**
  * One tfstate generation. The encrypted object lives in R2_STATE
  * under `spaces/{spaceId}/installations/{installationId}/envs/{environment}/
  * states/{generation(8 digits)}.tfstate.enc` with an atomic `current.json`.

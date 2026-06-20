@@ -1,3 +1,9 @@
+/**
+ * Accounts OIDC is a same-origin identity-material surface for installed
+ * services and operator-managed sign-in flows. Do not present it as a generic
+ * public login/consent platform unless a full client registry and consent UX
+ * are wired.
+ */
 export const TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH =
   "/.well-known/openid-configuration";
 export const TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH = "/oauth/authorize";
@@ -9,8 +15,7 @@ export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
 export const TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH =
   "/v1/billing/stripe/checkout";
-export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH =
-  "/v1/billing/stripe/portal";
+export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH = "/v1/billing/stripe/portal";
 export const TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH =
   "/v1/billing/stripe/webhook";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
@@ -35,104 +40,117 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
 /**
- * Base path of the takos-product AppInstallation surface. Renamed from
- * `/v1/installations` to `/v1/app-installations` to end the same-name
- * confusion with the DIFFERENT deploy-control Installation resource served at
- * `/api/v1/installations`. All AppInstallation sub-paths build from this const.
+ * Base path of the accounts Installation projection surface.
+ *
+ * This is a distribution-internal/supporting account-plane projection, not the
+ * Takosumi deploy-control Installation resource served at `/api/v1/installations`.
+ * It exists so installed services can receive identity metadata, billing usage
+ * endpoints, export handoff, and service-token projections from the account
+ * plane without competing with the public `/api/v1` control API or
+ * reintroducing an app-store vocabulary.
  */
-const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH = "/v1/app-installations";
-export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH =
-  `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
+const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH =
+  "/v1/installation-projections";
+export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH =
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH;
-export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH =
-  `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/import`;
-export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH =
-  "/v1/workload-services";
+export const TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH =
+  "/v1/service-graph/services";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =
   "takosumi.accounts.installation-export-bundle@v1";
 
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC =
-  "identity.primary.oidc";
+  "takosumi.identity.oidc";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT =
-  "billing.primary.default";
+  "takosumi.billing.usage";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP =
-  "deployment.outputs.http";
+  "takosumi.deployment.outputs";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT =
-  "events.webhook.default";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE =
-  "takosumi.control.space";
+  "takosumi.events.webhook";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API =
+  "takosumi.control.api";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY =
+  "takosumi.ai.gateway";
 
-export const TAKOSUMI_ACCOUNTS_MATERIAL_IDENTITY_OIDC_V1 =
-  "identity.oidc@v1";
-export const TAKOSUMI_ACCOUNTS_MATERIAL_BILLING_PORT_V1 =
-  "billing.port@v1";
-export const TAKOSUMI_ACCOUNTS_MATERIAL_DEPLOYMENT_OUTPUTS_HTTP_V1 =
-  "deployment.outputs.http@v1";
-export const TAKOSUMI_ACCOUNTS_MATERIAL_EVENTS_WEBHOOK_V1 =
-  "events.webhook@v1";
-export const TAKOSUMI_ACCOUNTS_MATERIAL_TAKOSUMI_CONTROL_V1 =
-  "takosumi.control@v1";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC =
+  "identity.oidc";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE =
+  "billing.usage";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_DEPLOYMENT_OUTPUTS =
+  "deployment.outputs";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_EVENTS_WEBHOOK =
+  "events.webhook";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_CONTROL_API = "control.api";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL = "ai.model";
+export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_EMBEDDING_MODEL =
+  "ai.embedding_model";
 
-export const TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICE_IDS = [
+export const TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS = [
+  "installations.list.same-space",
+  "installations.read.same-space",
+  "installations.events.read.same-space",
+  "installations.outputs.read.same-space",
+  "billing.usage.report.same-space",
+] as const;
+
+export type TakosumiAccountsControlApiPermission =
+  (typeof TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS)[number];
+
+export const TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICE_IDS = [
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOSUMI_CONTROL_SPACE,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
 ] as const;
 
-export type TakosumiAccountsWorkloadServiceId =
-  typeof TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICE_IDS[number];
+export type TakosumiAccountsServiceGraphServiceId =
+  (typeof TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICE_IDS)[number];
 
-export type TakosumiAccountsWorkloadServiceStatus =
+export type TakosumiAccountsServiceGraphServiceStatus =
   | "ready"
   | "not_configured"
   | "unavailable";
 
-export interface TakosumiAccountsWorkloadServiceDescriptor {
-  readonly id: TakosumiAccountsWorkloadServiceId;
-  readonly material_kind: string;
+export interface TakosumiAccountsServiceGraphServiceDescriptor {
+  readonly id: TakosumiAccountsServiceGraphServiceId;
+  readonly capability: string;
   readonly title: string;
   readonly description: string;
   readonly secret_backed: boolean;
 }
 
-export interface TakosumiAccountsWorkloadServiceProjection {
-  readonly id: TakosumiAccountsWorkloadServiceId;
-  readonly material_kind: string;
-  readonly status: TakosumiAccountsWorkloadServiceStatus;
+export interface TakosumiAccountsServiceGraphServiceProjection {
+  readonly id: TakosumiAccountsServiceGraphServiceId;
+  readonly capability: string;
+  readonly status: TakosumiAccountsServiceGraphServiceStatus;
   readonly endpoint?: string;
   readonly material?: Record<string, unknown>;
-  readonly secret_ref?: string;
   readonly token_expires_at?: string;
   readonly rotate_token_url?: string;
 }
 
-export interface TakosumiAccountsListWorkloadServicesResponse {
-  readonly services: readonly TakosumiAccountsWorkloadServiceDescriptor[];
+export interface TakosumiAccountsListServiceGraphServicesResponse {
+  readonly services: readonly TakosumiAccountsServiceGraphServiceDescriptor[];
 }
 
 export interface TakosumiAccountsListInstallationServicesResponse {
   readonly installation_id: string;
-  readonly services: readonly TakosumiAccountsWorkloadServiceProjection[];
+  readonly services: readonly TakosumiAccountsServiceGraphServiceProjection[];
 }
 
 export interface TakosumiAccountsRotateInstallationServiceTokenResponse {
   readonly token: string;
   readonly token_type: "Bearer";
   readonly expires_at: string;
-  readonly service: TakosumiAccountsWorkloadServiceProjection;
+  readonly service: TakosumiAccountsServiceGraphServiceProjection;
 }
 
-export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = [
-  "read",
-  "write",
-  "admin",
-] as const;
+export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 
 export type TakosumiAccountsPatScope =
-  typeof TAKOSUMI_ACCOUNTS_PAT_SCOPES[number];
+  (typeof TAKOSUMI_ACCOUNTS_PAT_SCOPES)[number];
 
 export interface TakosumiAccountsPatMetadata {
   id: string;
@@ -173,25 +191,23 @@ export function takosumiAccountsInstallationPlanRunsPath(): string {
 export function takosumiAccountsAccountTokenRevokePath(
   tokenId: string,
 ): string {
-  return `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/${
-    pathSegment(tokenId, "tokenId")
-  }/revoke`;
+  return `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/${pathSegment(
+    tokenId,
+    "tokenId",
+  )}/revoke`;
 }
 
 export function takosumiAccountsInstallationPath(
   installationId: string,
 ): string {
-  return `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/${
-    pathSegment(installationId, "installationId")
-  }`;
+  return `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/${pathSegment(
+    installationId,
+    "installationId",
+  )}`;
 }
 
-export function takosumiAccountsInstallationsImportPath(): string {
-  return TAKOSUMI_ACCOUNTS_INSTALLATIONS_IMPORT_PATH;
-}
-
-export function takosumiAccountsWorkloadServicesPath(): string {
-  return TAKOSUMI_ACCOUNTS_WORKLOAD_SERVICES_PATH;
+export function takosumiAccountsServiceGraphServicesPath(): string {
+  return TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH;
 }
 
 export function takosumiAccountsInstallationStatusPath(
@@ -209,9 +225,9 @@ export function takosumiAccountsInstallationDeploymentsPath(
 export function takosumiAccountsInstallationDeploymentPlanRunsPath(
   installationId: string,
 ): string {
-  return `${
-   takosumiAccountsInstallationDeploymentsPath(installationId)
-  }/plan-runs`;
+  return `${takosumiAccountsInstallationDeploymentsPath(
+    installationId,
+  )}/plan-runs`;
 }
 
 export function takosumiAccountsInstallationRollbackPath(
@@ -236,21 +252,20 @@ export function takosumiAccountsInstallationExportOperationPath(
   installationId: string,
   operationId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/exports/${
-    pathSegment(operationId, "operationId")
-  }`;
+  return `${takosumiAccountsInstallationPath(installationId)}/exports/${pathSegment(
+    operationId,
+    "operationId",
+  )}`;
 }
 
 export function takosumiAccountsInstallationExportDownloadPath(
   installationId: string,
   operationId: string,
 ): string {
-  return `${
-   takosumiAccountsInstallationExportOperationPath(
-      installationId,
-      operationId,
-    )
-  }/download`;
+  return `${takosumiAccountsInstallationExportOperationPath(
+    installationId,
+    operationId,
+  )}/download`;
 }
 
 export function takosumiAccountsInstallationEventsPath(
@@ -275,29 +290,30 @@ export function takosumiAccountsInstallationServiceRotateTokenPath(
   installationId: string,
   serviceId: string,
 ): string {
-  return `${takosumiAccountsInstallationServicesPath(installationId)}/${
-    pathSegment(serviceId, "serviceId")
-  }/rotate-token`;
+  return `${takosumiAccountsInstallationServicesPath(installationId)}/${pathSegment(
+    serviceId,
+    "serviceId",
+  )}/rotate-token`;
 }
 
 export function takosumiAccountsInstallationBillingUsageReportsPath(
   installationId: string,
 ): string {
-  return `${
-   takosumiAccountsInstallationPath(installationId)
-  }/billing/usage-reports`;
+  return `${takosumiAccountsInstallationPath(
+    installationId,
+  )}/billing/usage-reports`;
 }
 
 export type TakosumiSubject = `tsub_${string}`;
 
-export type TakosumiAppInstallationStatus =
+export type TakosumiInstallationProjectionStatus =
   | "installing"
   | "ready"
   | "failed"
   | "suspended"
   | "exported";
 
-export type TakosumiAppInstallationMode =
+export type TakosumiInstallationProjectionMode =
   | "shared-cell"
   | "dedicated"
   | "self-hosted";
@@ -308,7 +324,7 @@ export interface TakosumiAccountsConfig {
 
 /**
  * A single sign-in method as reported by `GET /v1/auth/providers`. `id` is the
- * upstream provider id (`"google"`, `"github"`, a custom OIDC provider id) or
+ * upstream provider id (`"google"`, a custom OIDC provider id) or
  * `"passkey"`; `enabled` reflects whether the operator has configured it on
  * this worker. Never carries credentials — only the id + flag the sign-in
  * screen needs to enable/disable its button.
@@ -377,9 +393,7 @@ function pathSegment(value: string, name: string): string {
   return encodeURIComponent(value);
 }
 
-export function normalizeIssuer(
-  issuer?: string,
-): string {
+export function normalizeIssuer(issuer?: string): string {
   if (issuer === undefined || issuer === "") {
     throw new TypeError(
       "operator-selected issuer required: pass an explicit issuer URL " +
@@ -409,11 +423,10 @@ export function canonicalJson(value: unknown): string {
   }
   if (typeof value === "object" && value !== null) {
     const record = value as Record<string, unknown>;
-    return `{${
-      Object.keys(record).sort().map((key) =>
-        `${JSON.stringify(key)}:${canonicalJson(record[key])}`
-      ).join(",")
-    }}`;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value ?? null);
 }
@@ -424,11 +437,9 @@ export async function sha256HexText(value: string): Promise<string> {
     "SHA-256",
     new TextEncoder().encode(value),
   );
-  return `sha256:${
-    [...new Uint8Array(digest)].map((byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-  }`;
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 export interface TakosumiAccountsInstallationMaterializeDigestInput {
@@ -448,14 +459,16 @@ export interface TakosumiAccountsInstallationMaterializeDigestInput {
 export function takosumiAccountsInstallationMaterializeDigest(
   input: TakosumiAccountsInstallationMaterializeDigestInput,
 ): Promise<string> {
-  return sha256HexText(canonicalJson({
-    operation: "materialize",
-    installationId: input.installationId,
-    mode: input.mode,
-    region: input.region,
-    plan: input.plan,
-    cutover: input.cutover,
-  }));
+  return sha256HexText(
+    canonicalJson({
+      operation: "materialize",
+      installationId: input.installationId,
+      mode: input.mode,
+      region: input.region,
+      plan: input.plan,
+      cutover: input.cutover,
+    }),
+  );
 }
 
 export function buildOidcDiscoveryDocument(

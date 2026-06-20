@@ -55,8 +55,9 @@ export class CoordinationObject {
           return Response.json({ error: "not found" }, { status: 404 });
       }
     } catch (error) {
+      void error;
       return Response.json(
-        { error: error instanceof Error ? error.message : String(error) },
+        { error: "invalid coordination request" },
         { status: 400 },
       );
     }

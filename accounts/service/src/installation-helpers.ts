@@ -1,12 +1,13 @@
 import {
- canonicalJson,
- takosumiAccountsInstallationEventsPath,
- takosumiAccountsInstallationMaterializeDigest,
+  canonicalJson,
+  takosumiAccountsInstallationEventsPath,
+  takosumiAccountsInstallationExportDownloadPath,
+  takosumiAccountsInstallationMaterializeDigest,
 } from "@takosjp/takosumi-accounts-contract";
 import {
-  type AppBindingKind,
-  type AppBindingRecord,
-  type AppGrantRecord,
+  type ServiceBindingMaterialKind,
+  type ServiceBindingMaterialRecord,
+  type ServiceGrantMaterialRecord,
   buildInstallationEvent,
   type InstallationEventRecord,
   type InstallationRecord,
@@ -20,11 +21,8 @@ import type {
 } from "./store.ts";
 import { sha256HexText, sha256Text } from "./encoding.ts";
 import { errorJson, isRecord, json, stringValue } from "./http-helpers.ts";
-import type {
-  AppInstallationImportDataEntry,
-  AppInstallationImportDataManifest,
-  AppInstallationImportDataManifestFile,
-} from "./mod.ts";
+import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
+import { redactPublicRecord } from "./public-redaction.ts";
 
 export const installationMaterializeRequestedEvent =
   "installation.materialize-requested";
@@ -83,17 +81,19 @@ export async function sha256HexBytes(value: Uint8Array): Promise<string> {
   // BufferSource (avoids SharedArrayBuffer/offset typing pitfalls).
   const bytes = new Uint8Array(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return `sha256:${
-    [...new Uint8Array(digest)].map((byte) =>
-      byte.toString(16).padStart(2, "0")
-    ).join("")
-  }`;
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
-export function isMeteredBindingKind(kind: AppBindingKind): boolean {
-  return kind === "database.postgres@v1" ||
-    kind === "object-store.s3-compatible@v1" ||
-    kind === "domain.http@v1";
+export function isMeteredBindingKind(
+  kind: ServiceBindingMaterialKind,
+): boolean {
+  return (
+    kind === "storage.sql" ||
+    kind === "storage.object" ||
+    kind === "protocol.http.api"
+  );
 }
 
 // `canonicalJson` is owned by the accounts contract (imported above) so the
@@ -112,8 +112,8 @@ export function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-export function appBindingApprovalPayload(
-  binding: AppBindingRecord,
+export function serviceBindingMaterialApprovalPayload(
+  binding: ServiceBindingMaterialRecord,
 ): Record<string, unknown> {
   return {
     name: binding.name,
@@ -123,8 +123,8 @@ export function appBindingApprovalPayload(
   };
 }
 
-export function appGrantApprovalPayload(
-  grant: AppGrantRecord,
+export function serviceGrantMaterialApprovalPayload(
+  grant: ServiceGrantMaterialRecord,
 ): Record<string, unknown> {
   return {
     capability: grant.capability,
@@ -133,13 +133,17 @@ export function appGrantApprovalPayload(
 }
 
 export async function appInstallationPermissionDigest(input: {
-  bindings: readonly AppBindingRecord[];
-  grants: readonly AppGrantRecord[];
+  bindings: readonly ServiceBindingMaterialRecord[];
+  grants: readonly ServiceGrantMaterialRecord[];
 }): Promise<string> {
-  return await sha256HexText(canonicalJson({
-    useEdgeKinds: input.bindings.map((binding) => binding.kind).sort(),
-    permissionScopes: input.grants.map((grant) => grant.capability).sort(),
-  }));
+  return await sha256HexText(
+    canonicalJson({
+      serviceBindingKinds: input.bindings.map((binding) => binding.kind).sort(),
+      serviceGrantCapabilities: input.grants
+        .map((grant) => grant.capability)
+        .sort(),
+    }),
+  );
 }
 
 export function appInstallationMaterializeDigest(input: {
@@ -211,8 +215,8 @@ export async function appendLedgerEvent(
   for (let attempt = 0; attempt < APPEND_LEDGER_EVENT_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Capped exponential backoff: 10ms, 20ms, 40ms.
-      const backoffMs = APPEND_LEDGER_EVENT_BASE_BACKOFF_MS *
-        (2 ** (attempt - 1));
+      const backoffMs =
+        APPEND_LEDGER_EVENT_BASE_BACKOFF_MS * 2 ** (attempt - 1);
       await sleep(backoffMs);
     }
     const events = await store.listInstallationEvents(input.installationId);
@@ -241,9 +245,10 @@ export async function appendLedgerEvent(
     // tail ordering is ambiguous and would yield spurious fork errors.
     const refreshed = await store.listInstallationEvents(input.installationId);
     const ours = refreshed.find((e) => e.eventId === event.eventId);
-    const sibling = refreshed.find((e) =>
-      e.eventId !== event.eventId &&
-      e.previousEventHash === event.previousEventHash
+    const sibling = refreshed.find(
+      (e) =>
+        e.eventId !== event.eventId &&
+        e.previousEventHash === event.previousEventHash,
     );
     if (ours && !sibling) {
       return event;
@@ -255,10 +260,12 @@ export async function appendLedgerEvent(
           : `event ${event.eventId} was not observed after write`),
     );
   }
-  throw lastError ??
+  throw (
+    lastError ??
     new Error(
       `failed to append installation event after ${APPEND_LEDGER_EVENT_MAX_RETRIES} attempts`,
-    );
+    )
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -307,7 +314,8 @@ function activatedHttpDomainProjectionFromPayload(
   payload: Record<string, unknown>,
 ): ActivatedHttpDomainProjection | undefined {
   const url = stringValue(payload.url);
-  const canonicalOrigin = stringValue(payload.canonicalOrigin) ??
+  const canonicalOrigin =
+    stringValue(payload.canonicalOrigin) ??
     stringValue(payload.canonical_origin) ??
     canonicalHttpOrigin(url);
   if (!url || !canonicalOrigin) return undefined;
@@ -315,19 +323,21 @@ function activatedHttpDomainProjectionFromPayload(
   return {
     url,
     canonicalOrigin,
-    exposureId: stringValue(payload.exposureId) ??
-      stringValue(payload.exposure_id),
-    deploymentOutputRef: stringValue(payload.deploymentOutputRef) ??
+    exposureId:
+      stringValue(payload.exposureId) ?? stringValue(payload.exposure_id),
+    deploymentOutputRef:
+      stringValue(payload.deploymentOutputRef) ??
       stringValue(payload.deployment_output_ref),
-    activationEvidenceId: stringValue(payload.activationEvidenceId) ??
+    activationEvidenceId:
+      stringValue(payload.activationEvidenceId) ??
       stringValue(payload.activation_evidence_id),
     component: stringValue(payload.component),
     host: stringValue(payload.host),
     scheme: stringValue(payload.scheme),
     listener: stringValue(payload.listener),
     state,
-    verifiedAt: stringValue(payload.verifiedAt) ??
-      stringValue(payload.verified_at),
+    verifiedAt:
+      stringValue(payload.verifiedAt) ?? stringValue(payload.verified_at),
   };
 }
 
@@ -335,9 +345,9 @@ function activatedHttpDomainStateValue(
   value: unknown,
 ): "pending" | "active" | "failed" | "inactive" | undefined {
   return value === "pending" ||
-      value === "active" ||
-      value === "failed" ||
-      value === "inactive"
+    value === "active" ||
+    value === "failed" ||
+    value === "inactive"
     ? value
     : undefined;
 }
@@ -358,7 +368,11 @@ function canonicalHttpOrigin(url: string | undefined): string | undefined {
 export function requiredIdempotencyKey(request: Request): string | Response {
   const value = request.headers.get("idempotency-key")?.trim();
   if (!value || value.length > 200) {
-    return errorJson("invalid_request", "Idempotency-Key header is required and must be 1-200 characters", 400);
+    return errorJson(
+      "invalid_request",
+      "Idempotency-Key header is required and must be 1-200 characters",
+      400,
+    );
   }
   return value;
 }
@@ -385,9 +399,10 @@ export function findIdempotentOperationEvent(input: {
   eventType: string;
   idempotencyKey: string;
 }): InstallationEventRecord | undefined {
-  return input.events.find((event) =>
-    event.eventType === input.eventType &&
-    event.payload.idempotencyKey === input.idempotencyKey
+  return input.events.find(
+    (event) =>
+      event.eventType === input.eventType &&
+      event.payload.idempotencyKey === input.idempotencyKey,
   );
 }
 
@@ -403,7 +418,13 @@ export function idempotencyRequestConflict(
   // prior operation as if it matched — that would let a different body reuse
   // the key. Treat an unverifiable digest as a conflict. Newly written events
   // always carry a requestDigest, so this only affects pre-existing events.
-  return errorJson("idempotency_key_conflict", existingDigest ? "Idempotency-Key was already used with a different request body" : "Idempotency-Key was already used by an operation whose request body cannot be verified", 409);
+  return errorJson(
+    "idempotency_key_conflict",
+    existingDigest
+      ? "Idempotency-Key was already used with a different request body"
+      : "Idempotency-Key was already used by an operation whose request body cannot be verified",
+    409,
+  );
 }
 
 export function findInFlightInstallationOperation(
@@ -424,21 +445,25 @@ export function isInstallationOperationClosed(
   const operationId = stringValue(requestEvent.payload.operationId);
   if (!operationId) return false;
   if (requestEvent.eventType === installationMaterializeRequestedEvent) {
-    return findOperationEvent({
-      events,
-      operationId,
-      eventTypes: [
-        installationMaterializeSucceededEvent,
-        installationMaterializeFailedEvent,
-      ],
-    }) !== undefined;
+    return (
+      findOperationEvent({
+        events,
+        operationId,
+        eventTypes: [
+          installationMaterializeSucceededEvent,
+          installationMaterializeFailedEvent,
+        ],
+      }) !== undefined
+    );
   }
   if (requestEvent.eventType === installationExportRequestedEvent) {
-    return findOperationEvent({
-      events,
-      operationId,
-      eventTypes: [installationExportedEvent, installationExportFailedEvent],
-    }) !== undefined;
+    return (
+      findOperationEvent({
+        events,
+        operationId,
+        eventTypes: [installationExportedEvent, installationExportFailedEvent],
+      }) !== undefined
+    );
   }
   return false;
 }
@@ -449,9 +474,10 @@ export function findOperationEvent(input: {
   eventTypes: readonly string[];
 }): InstallationEventRecord | undefined {
   const eventTypes = new Set(input.eventTypes);
-  return input.events.find((event) =>
-    eventTypes.has(event.eventType) &&
-    event.payload.operationId === input.operationId
+  return input.events.find(
+    (event) =>
+      eventTypes.has(event.eventType) &&
+      event.payload.operationId === input.operationId,
   );
 }
 
@@ -468,9 +494,9 @@ export function operationClosedEventTypes(
 ): readonly string[] {
   return operation === "materialize"
     ? [
-      installationMaterializeSucceededEvent,
-      installationMaterializeFailedEvent,
-    ]
+        installationMaterializeSucceededEvent,
+        installationMaterializeFailedEvent,
+      ]
     : [installationExportedEvent, installationExportFailedEvent];
 }
 
@@ -478,9 +504,9 @@ export function installationEventsTrackingUrl(
   installationId: string,
   eventTypes: readonly string[],
 ): string {
-  return `${takosumiAccountsInstallationEventsPath(installationId)}?types=${
-    eventTypes.map(encodeURIComponent).join(",")
-  }`;
+  return `${takosumiAccountsInstallationEventsPath(installationId)}?types=${eventTypes
+    .map(encodeURIComponent)
+    .join(",")}`;
 }
 
 export function exportOperationBody(
@@ -493,15 +519,22 @@ export function exportOperationBody(
     error?: string;
   } = {},
 ): Record<string, unknown> {
+  const status = options.status ?? "preparing";
   return {
     operationId,
-    status: options.status ?? "preparing",
+    status,
     trackingUrl: installationEventsTrackingUrl(installationId, [
       installationExportRequestedEvent,
       installationExportedEvent,
       installationExportFailedEvent,
     ]),
-    downloadUrl: options.downloadUrl ?? null,
+    downloadUrl:
+      status === "exported" && options.downloadUrl
+        ? takosumiAccountsInstallationExportDownloadPath(
+            installationId,
+            operationId,
+          )
+        : null,
     downloadExpiresAt: options.downloadExpiresAt ?? null,
     ...(options.error ? { error: options.error } : {}),
   };
@@ -521,8 +554,8 @@ export function exportOperationBodyFromEvents(input: {
     return exportOperationBody(input.installationId, input.operationId, {
       status: "exported",
       downloadUrl: stringValue(completed.payload.downloadUrl) ?? null,
-      downloadExpiresAt: stringValue(completed.payload.downloadExpiresAt) ??
-        null,
+      downloadExpiresAt:
+        stringValue(completed.payload.downloadExpiresAt) ?? null,
     });
   }
   const failed = findOperationEvent({
@@ -535,7 +568,10 @@ export function exportOperationBodyFromEvents(input: {
       status: "failed",
       downloadUrl: null,
       downloadExpiresAt: null,
-      error: stringValue(failed.payload.error) ?? "export failed",
+      error: publicInstallationOperationErrorMessage(
+        failed.payload.error,
+        "export failed",
+      ),
     });
   }
   return exportOperationBody(input.installationId, input.operationId);
@@ -621,53 +657,16 @@ export async function appendExportOperationFailure(input: {
   });
 }
 
-export async function appendImportDataRestoreFailure(input: {
-  store: AccountsStore;
-  installation: InstallationRecord;
-  error: string;
-}): Promise<InstallationEventRecord> {
-  const now = Date.now();
-  const updated = transitionAppInstallationStatus(
-    input.installation,
-    "failed",
-    now,
-  );
-  await input.store.saveAppInstallation(updated);
-  if (updated.status !== input.installation.status) {
-    await appendLedgerEvent(input.store, {
-      installationId: input.installation.installationId,
-      eventType: "installation.status_changed",
-      payload: {
-        from: input.installation.status,
-        to: updated.status,
-        reason: input.error,
-      },
-      now,
-    });
-  }
-  return await appendLedgerEvent(input.store, {
-    installationId: input.installation.installationId,
-    eventType: "installation.import-data-restore-failed",
-    payload: {
-      from: input.installation.status,
-      to: updated.status,
-      reason: input.error,
-      error: input.error,
-    },
-    now,
-  });
-}
-
 export function installationEnvelope(input: {
   installation: InstallationRecord;
-  // Wave 6 (Phase E SQL drift fix): AppBinding / AppGrant / RuntimeBinding
+  // Wave 6 (Phase E SQL drift fix): ServiceBindingMaterial / ServiceGrantMaterial / RuntimeBinding
   // are no longer public concepts and the backing tables were dropped.
   // The fields below are accepted for caller-API compatibility but are
   // no longer surfaced in the response envelope. The materialize /
   // lifecycle routes that depend on these fields render
   // their own payloads via the per-field `serialize*` helpers.
-  bindings?: readonly AppBindingRecord[];
-  grants?: readonly AppGrantRecord[];
+  bindings?: readonly ServiceBindingMaterialRecord[];
+  grants?: readonly ServiceGrantMaterialRecord[];
   oidcClient?: OidcClientRecord;
   runtimeBinding?: RuntimeBindingRecord;
   activatedHttpDomain?: ActivatedHttpDomainProjection;
@@ -680,19 +679,22 @@ export function installationEnvelope(input: {
     ? serializeActivatedHttpDomainProjection(input.activatedHttpDomain)
     : null;
   const deploymentOutputs = input.activatedHttpDomain
-    ? [{
-      name: "launch_url",
-      kind: "launch_url",
-      value: input.activatedHttpDomain.url,
-      sensitive: false,
-      ...(input.activatedHttpDomain.deploymentOutputRef
-        ? {
-          labels: {
-            deploymentOutputRef: input.activatedHttpDomain.deploymentOutputRef,
-          },
-        }
-        : {}),
-    }]
+    ? [
+        {
+          name: "launch_url",
+          kind: "launch_url",
+          value: input.activatedHttpDomain.url,
+          sensitive: false,
+          ...(input.activatedHttpDomain.deploymentOutputRef
+            ? {
+                labels: {
+                  deploymentOutputRef:
+                    input.activatedHttpDomain.deploymentOutputRef,
+                },
+              }
+            : {}),
+        },
+      ]
     : [];
   return {
     installation: {
@@ -719,7 +721,7 @@ export function serializeAppInstallation(
     id: installation.installationId,
     account_id: installation.accountId,
     space_id: installation.spaceId,
-    app_id: installation.appId,
+    capsule_id: installation.appId,
     source: {
       type: "git",
       url: installation.sourceGitUrl,
@@ -771,8 +773,8 @@ export function serializeOidcClient(
   };
 }
 
-export function serializeAppBinding(
-  binding: AppBindingRecord,
+export function serializeServiceBindingMaterial(
+  binding: ServiceBindingMaterialRecord,
 ): Record<string, unknown> {
   return {
     id: binding.bindingId,
@@ -780,20 +782,20 @@ export function serializeAppBinding(
     name: binding.name,
     kind: binding.kind,
     config_ref: binding.configRef,
-    secret_refs: binding.secretRefs,
+    secret_ref_count: binding.secretRefs.length,
     created_at: new Date(binding.createdAt).toISOString(),
     updated_at: new Date(binding.updatedAt).toISOString(),
   };
 }
 
-export function serializeAppGrant(
-  grant: AppGrantRecord,
+export function serializeServiceGrantMaterial(
+  grant: ServiceGrantMaterialRecord,
 ): Record<string, unknown> {
   return {
     id: grant.grantId,
     installation_id: grant.installationId,
     capability: grant.capability,
-    scope: grant.scope,
+    scope: redactPublicRecord(grant.scope),
     granted_at: new Date(grant.grantedAt).toISOString(),
     revoked_at: grant.revokedAt
       ? new Date(grant.revokedAt).toISOString()
@@ -811,12 +813,14 @@ export function serializeBillingUsageRecord(
     meter: record.meter,
     quantity: record.quantity,
     unit: record.unit,
-    period_start: record.periodStart === undefined
-      ? null
-      : new Date(record.periodStart).toISOString(),
-    period_end: record.periodEnd === undefined
-      ? null
-      : new Date(record.periodEnd).toISOString(),
+    period_start:
+      record.periodStart === undefined
+        ? null
+        : new Date(record.periodStart).toISOString(),
+    period_end:
+      record.periodEnd === undefined
+        ? null
+        : new Date(record.periodEnd).toISOString(),
     idempotency_key: record.idempotencyKey ?? null,
     metadata: record.metadata,
     reported_by_subject: record.reportedBySubject ?? null,
@@ -842,195 +846,50 @@ export function serializeInstallationEvent(
 function serializeInstallationEventPayload(
   event: InstallationEventRecord,
 ): Record<string, unknown> {
-  if (event.eventType !== "workload_service.token_rotated") {
-    return event.payload;
-  }
-  const { tokenHash: _tokenHash, token_hash: _tokenHashSnake, ...safe } =
-    event.payload;
-  return safe;
-}
-
-export async function parseAppInstallationImportData(
-  value: unknown,
-): Promise<
-  | {
-    readonly manifest?: AppInstallationImportDataManifest;
-    readonly entries: readonly AppInstallationImportDataEntry[];
-  }
-  | undefined
-> {
-  if (value === undefined || value === null) return undefined;
-  if (!isRecord(value)) {
-    throw new TypeError("data must be an object when provided");
-  }
-  const entries = Array.isArray(value.entries)
-    ? await Promise.all(value.entries.map(parseAppInstallationImportDataEntry))
-    : undefined;
-  if (!entries || entries.length === 0) {
-    throw new TypeError("data.entries must contain at least one entry");
-  }
-  assertUniqueImportDataEntries(entries);
-  const manifest = value.manifest === undefined
-    ? undefined
-    : parseAppInstallationImportDataManifest(value.manifest);
-  if (manifest) validateImportDataManifestEntries(manifest, entries);
-  return {
-    ...(manifest ? { manifest } : {}),
-    entries,
-  };
-}
-
-export function parseAppInstallationImportDataManifest(
-  value: unknown,
-): AppInstallationImportDataManifest {
-  if (!isRecord(value)) {
-    throw new TypeError("data.manifest must be an object");
-  }
-  if (
-    value.kind !==
-      "takosumi.accounts.installation-export-data-manifest@v1" ||
-    value.version !== "v1" ||
-    !Array.isArray(value.files)
-  ) {
-    throw new TypeError("data.manifest must be a v1 export data manifest");
-  }
-  return {
-    kind: "takosumi.accounts.installation-export-data-manifest@v1",
-    version: "v1",
-    files: value.files.map(parseAppInstallationImportDataManifestFile),
-  };
-}
-
-export async function parseAppInstallationImportDataEntry(
-  value: unknown,
-): Promise<AppInstallationImportDataEntry> {
-  if (!isRecord(value)) {
-    throw new TypeError("data.entries[] must be an object");
-  }
-  const file = parseAppInstallationImportDataManifestFile(value);
-  const contentBase64 = stringValue(value.contentBase64);
-  if (!contentBase64) {
-    throw new TypeError("data.entries[].contentBase64 is required");
-  }
-  const content = decodeBase64Bytes(contentBase64);
-  if (content.byteLength !== file.byteLength) {
-    throw new TypeError(
-      `data entry byteLength mismatch for ${file.path}`,
-    );
-  }
-  const actualDigest = await sha256HexBytes(content);
-  if (actualDigest !== file.contentDigest) {
-    throw new TypeError(
-      `data entry contentDigest mismatch for ${file.path}`,
-    );
-  }
-  return {
-    ...file,
-    content,
-  };
-}
-
-export function parseAppInstallationImportDataManifestFile(
-  value: unknown,
-): AppInstallationImportDataManifestFile {
-  if (!isRecord(value)) {
-    throw new TypeError("data manifest file entries must be objects");
-  }
-  const path = normalizeImportDataPath(stringValue(value.path));
-  const byteLength = Number(value.byteLength);
-  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
-    throw new TypeError(`invalid data byteLength for ${path}`);
-  }
-  const mediaType = stringValue(value.mediaType);
-  const contentDigest = stringValue(value.contentDigest);
-  if (!contentDigest || !isSha256HexDigest(contentDigest)) {
-    throw new TypeError(
-      `data manifest file requires a sha256 contentDigest for ${path}`,
-    );
-  }
-  return {
-    path,
-    ...(mediaType ? { mediaType } : {}),
-    byteLength,
-    contentDigest,
-  };
-}
-
-export function validateImportDataManifestEntries(
-  manifest: AppInstallationImportDataManifest,
-  entries: readonly AppInstallationImportDataEntry[],
-): void {
-  const entryByPath = new Map(entries.map((entry) => [entry.path, entry]));
-  for (const file of manifest.files) {
-    const entry = entryByPath.get(file.path);
-    if (!entry) {
-      throw new TypeError(`missing data entry for manifest file ${file.path}`);
-    }
-    if (entry.byteLength !== file.byteLength) {
-      throw new TypeError(`manifest byteLength mismatch for ${file.path}`);
-    }
-    if (entry.contentDigest !== file.contentDigest) {
-      throw new TypeError(`manifest contentDigest mismatch for ${file.path}`);
-    }
-    if (
-      file.mediaType && entry.mediaType && file.mediaType !== entry.mediaType
-    ) {
-      throw new TypeError(`manifest mediaType mismatch for ${file.path}`);
+  const payload = omitPublicEventSecretReferenceKeys(
+    redactPublicRecord(event.payload),
+  ) as Record<string, unknown>;
+  if (event.eventType === installationExportedEvent) {
+    const operationId = stringValue(event.payload.operationId);
+    if (operationId) {
+      payload.downloadUrl = takosumiAccountsInstallationExportDownloadPath(
+        event.installationId,
+        operationId,
+      );
+    } else if ("downloadUrl" in payload) {
+      payload.downloadUrl = null;
     }
   }
-  const manifestPaths = new Set(manifest.files.map((file) => file.path));
-  for (const entry of entries) {
-    if (!manifestPaths.has(entry.path)) {
-      throw new TypeError(`data entry missing from manifest: ${entry.path}`);
-    }
-  }
+  return payload;
 }
 
-export function assertUniqueImportDataEntries(
-  entries: readonly AppInstallationImportDataEntry[],
-): void {
-  const paths = new Set<string>();
-  for (const entry of entries) {
-    if (paths.has(entry.path)) {
-      throw new TypeError("data.entries must not contain duplicate paths");
-    }
-    paths.add(entry.path);
-  }
-}
+const PUBLIC_EVENT_SECRET_KEYS = new Set([
+  "accessToken",
+  "access_token",
+  "clientSecret",
+  "client_secret",
+  "privateKey",
+  "private_key",
+  "refreshToken",
+  "refresh_token",
+  "secretRef",
+  "secret_ref",
+  "secretRefs",
+  "secret_refs",
+  "token",
+  "tokenHash",
+  "token_hash",
+]);
 
-export function normalizeImportDataPath(value: string | undefined): string {
-  if (!value) throw new TypeError("data entry path is required");
-  const normalized = value.replaceAll("\\", "/");
-  if (
-    !normalized.startsWith("takos-export/data/") ||
-    normalized.startsWith("/") ||
-    normalized.includes("/../") ||
-    normalized.includes("/./") ||
-    normalized.endsWith("/..") ||
-    normalized.endsWith("/.")
-  ) {
-    throw new TypeError(
-      `data entry path must stay under takos-export/data: ${value}`,
-    );
+function omitPublicEventSecretReferenceKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => omitPublicEventSecretReferenceKeys(entry));
   }
-  if (
-    normalized === "takos-export/data/manifest.json" ||
-    normalized === "takos-export/data/README.md"
-  ) {
-    throw new TypeError(`data entry path is reserved: ${normalized}`);
+  if (value === null || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (PUBLIC_EVENT_SECRET_KEYS.has(key)) continue;
+    output[key] = omitPublicEventSecretReferenceKeys(child);
   }
-  return normalized;
-}
-
-export function decodeBase64Bytes(value: string): Uint8Array {
-  try {
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-  } catch {
-    throw new TypeError("data.entries[].contentBase64 must be valid base64");
-  }
+  return output;
 }

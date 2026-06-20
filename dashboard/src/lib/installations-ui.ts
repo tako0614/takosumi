@@ -1,5 +1,5 @@
 /**
- * Shared Installation-presentation helpers (app list + app detail).
+ * Shared Installation-presentation helpers (list + detail).
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { ActivityEvent } from "./control-api.ts";

@@ -97,9 +97,11 @@ export interface OperatorImplementation {
    * Materialize a component into a concrete resource on the target
    * runtime. Called by `DeployControlPipeline` during `apply` in connect
    * topological order. Resolved input materials are made available via
-   * `inputMaterials` (`listenedMaterials` is kept as a compatibility alias).
+   * `inputMaterials`.
    */
-  apply(ctx: OperatorImplementationApplyContext): Promise<OperatorImplementationApplyResult>;
+  apply(
+    ctx: OperatorImplementationApplyContext,
+  ): Promise<OperatorImplementationApplyResult>;
 
   /**
    * Destroy a previously-materialized component. Called on Installation
@@ -113,7 +115,9 @@ export interface OperatorImplementation {
    * cheaply read backend state return a normalized status for operator
    * dashboards and repair loops.
    */
-  status?(ctx: OperatorImplementationStatusContext): Promise<OperatorImplementationResourceStatus>;
+  status?(
+    ctx: OperatorImplementationStatusContext,
+  ): Promise<OperatorImplementationResourceStatus>;
 
   /**
    * Compute the {@link OutputMaterial} for a component output slot.
@@ -124,19 +128,7 @@ export interface OperatorImplementation {
    * Optional — kinds that do not expose output material (e.g. pure
    * consumers) may omit this hook.
    */
-  materializeOutput?(
-    ctx: OutputMaterialContext,
-  ): Promise<OutputMaterial>;
-
-  /**
-   * @deprecated Renamed to `materializeOutput`. The deployControl reads
-   * `materializeOutput ?? publishMaterial`, so this alias only exists to accept
-   * pre-rename implementations. Remove once no operator implementation defines
-   * `publishMaterial`.
-   */
-  publishMaterial?(
-    ctx: OutputMaterialContext,
-  ): Promise<OutputMaterial>;
+  materializeOutput?(ctx: OutputMaterialContext): Promise<OutputMaterial>;
 
   /**
    * Surface a connected or listened {@link OutputMaterial} into the
@@ -149,26 +141,27 @@ export interface OperatorImplementation {
    */
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 
-  /**
-   * @deprecated Renamed to `applyBinding`. The deployControl reads
-   * `applyBinding ?? applyListen`. Remove once no operator implementation
-   * and no service binding handler defines `applyListen`.
-   */
-  applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
-
   // ---------------------------------------------------------------------
   // Lifecycle hooks — Vite-style optional callbacks. All are awaited
   // serially across the implementation array in registration order.
   // ---------------------------------------------------------------------
 
   /** Fires before the first Deployment of a brand-new Installation. */
-  onInstallStart?(ctx: OperatorImplementationInstallationContext): Promise<void>;
+  onInstallStart?(
+    ctx: OperatorImplementationInstallationContext,
+  ): Promise<void>;
   /** Fires after the first Deployment of a brand-new Installation succeeds. */
-  onInstallComplete?(ctx: OperatorImplementationInstallationContext): Promise<void>;
+  onInstallComplete?(
+    ctx: OperatorImplementationInstallationContext,
+  ): Promise<void>;
   /** Fires before every Deployment apply (including the first one). */
-  onDeploymentStart?(ctx: OperatorImplementationDeploymentContext): Promise<void>;
+  onDeploymentStart?(
+    ctx: OperatorImplementationDeploymentContext,
+  ): Promise<void>;
   /** Fires after every successful Deployment apply. */
-  onDeploymentComplete?(ctx: OperatorImplementationDeploymentContext): Promise<void>;
+  onDeploymentComplete?(
+    ctx: OperatorImplementationDeploymentContext,
+  ): Promise<void>;
 }
 
 /**
@@ -192,24 +185,14 @@ export interface InlineMaterializer {
   /** Optional short-name aliases supplied by operator tooling / alias maps. */
   readonly aliases?: readonly string[];
   validateComponent?(component: Component): void | Promise<void>;
-  apply(ctx: OperatorImplementationApplyContext): Promise<OperatorImplementationApplyResult>;
-  status?(ctx: OperatorImplementationStatusContext): Promise<OperatorImplementationResourceStatus>;
-  materializeOutput?(
-    ctx: OutputMaterialContext,
-  ): Promise<OutputMaterial>;
-  /**
-   * @deprecated Renamed to `materializeOutput`; kept for pre-rename inline
-   * materializers. Remove together with `OperatorImplementation.publishMaterial`.
-   */
-  publishMaterial?(
-    ctx: OutputMaterialContext,
-  ): Promise<OutputMaterial>;
+  apply(
+    ctx: OperatorImplementationApplyContext,
+  ): Promise<OperatorImplementationApplyResult>;
+  status?(
+    ctx: OperatorImplementationStatusContext,
+  ): Promise<OperatorImplementationResourceStatus>;
+  materializeOutput?(ctx: OutputMaterialContext): Promise<OutputMaterial>;
   applyBinding?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
-  /**
-   * @deprecated Renamed to `applyBinding`; kept for pre-rename inline
-   * materializers. Remove together with `OperatorImplementation.applyListen`.
-   */
-  applyListen?(ctx: ApplyInputBindingContext): Promise<EnvInjection>;
 }
 
 /**
@@ -227,12 +210,6 @@ export type OutputMaterial = Readonly<
 >;
 
 /**
- * @deprecated Renamed to {@link OutputMaterial}. Remove once no consumer in
- * operator implementation imports `PublicationMaterial`.
- */
-export type PublicationMaterial = OutputMaterial;
-
-/**
  * Result of `applyBinding()`: the env / mount / target descriptor the
  * deployControl should attach to the consuming component runtime.
  *
@@ -246,9 +223,7 @@ export type PublicationMaterial = OutputMaterial;
  * (the deployControl will treat it as "this listener took no action").
  */
 export interface EnvInjection {
-  readonly env?: Readonly<
-    Record<string, EnvValue>
-  >;
+  readonly env?: Readonly<Record<string, EnvValue>>;
   readonly mounts?: Readonly<
     Record<string, string | { readonly secretRef: string }>
   >;
@@ -266,9 +241,7 @@ export interface ResolvedInputBinding {
   readonly bindingName: BindingName;
   readonly sourceRef: ListenSourceRef;
   readonly options: BindingOptions;
-  readonly envInjections: Readonly<
-    Record<string, EnvValue>
-  >;
+  readonly envInjections: Readonly<Record<string, EnvValue>>;
   readonly mounts?: Readonly<
     Record<string, string | { readonly secretRef: string }>
   >;
@@ -276,12 +249,6 @@ export interface ResolvedInputBinding {
   /** The raw material payload resolved from the source reference. */
   readonly material: OutputMaterial;
 }
-
-/**
- * @deprecated Renamed to {@link ResolvedInputBinding}. Remove once no consumer
- * operator implementation imports `ResolvedListenBinding`.
- */
-export type ResolvedListenBinding = ResolvedInputBinding;
 
 export interface OperatorImplementationApplyContext {
   readonly installationId: string;
@@ -303,18 +270,7 @@ export interface OperatorImplementationApplyContext {
    * This map is for implementations that need access to the raw material payload
    * (e.g. to inspect specific fields beyond what `applyBinding` emitted).
    */
-  readonly inputMaterials?: Readonly<
-    Record<BindingName, OutputMaterial>
-  >;
-  /**
-   * @deprecated Renamed to `inputMaterials`. The deployControl still populates this
-   * field with the same map, so it is required for now. Make it optional and
-   * then remove once no service binding code or operator implementation reads
-   * `ctx.listenedMaterials`.
-   */
-  readonly listenedMaterials: Readonly<
-    Record<BindingName, OutputMaterial>
-  >;
+  readonly inputMaterials?: Readonly<Record<BindingName, OutputMaterial>>;
   /**
    * Env / mount / target descriptors produced by `applyBinding` for each input
    * edge. Native OperatorImplementation implementations should use this field
@@ -364,12 +320,6 @@ export interface ApplyInputBindingContext {
   /** Material payload resolved from the source reference. */
   readonly material: OutputMaterial;
 }
-
-/**
- * @deprecated Renamed to {@link ApplyInputBindingContext}. Remove once no
- * consumer imports `ApplyListenContext`.
- */
-export type ApplyListenContext = ApplyInputBindingContext;
 
 export interface OperatorImplementationDestroyContext {
   readonly installationId: string;
@@ -421,7 +371,8 @@ export interface NativeKindApplyResult<Outputs = JsonObject> {
   readonly diagnostics?: readonly NativeKindApplyDiagnostic[];
 }
 
-export type NativeKindResourceStatusKind = OperatorImplementationResourceStatusKind;
+export type NativeKindResourceStatusKind =
+  OperatorImplementationResourceStatusKind;
 
 export interface NativeKindSpecValidationIssue {
   readonly path: string;
@@ -435,14 +386,12 @@ export interface NativeKindResourceStatus<Outputs = JsonObject> {
   readonly observedAt: string;
 }
 
-export type NativeKindOutputMaterialContext<Outputs = JsonObject> =
-  & Omit<
-    OutputMaterialContext,
-    "outputs"
-  >
-  & {
-    readonly outputs: Outputs;
-  };
+export type NativeKindOutputMaterialContext<Outputs = JsonObject> = Omit<
+  OutputMaterialContext,
+  "outputs"
+> & {
+  readonly outputs: Outputs;
+};
 
 /**
  * Operations for a native kind implementation that wants the reference implementation binding shape
@@ -452,9 +401,7 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
   readonly id: string;
   readonly version: string;
   readonly capabilities?: readonly string[];
-  validateSpec?(
-    value: unknown,
-  ): readonly NativeKindSpecValidationIssue[];
+  validateSpec?(value: unknown): readonly NativeKindSpecValidationIssue[];
   validateComponent?(component: Component): void | Promise<void>;
   /**
    * Receives the reference component spec unchanged. Runtime inputs
@@ -476,16 +423,6 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
   materializeOutput?(
     ctx: NativeKindOutputMaterialContext<Outputs>,
   ): Promise<OutputMaterial> | OutputMaterial;
-  /**
-   * @deprecated Renamed to `materializeOutput`;
-   * `operatorImplementationFromNativeKindOperations` reads
-   * `materializeOutput ?? publishMaterial`. Remove once the cloudflare D1 /
-   * KV / queue / vectorize provider implementations define
-   * `materializeOutput` instead of `publishMaterial`.
-   */
-  publishMaterial?(
-    ctx: NativeKindOutputMaterialContext<Outputs>,
-  ): Promise<OutputMaterial> | OutputMaterial;
 }
 
 /**
@@ -494,23 +431,23 @@ export interface NativeKindOperations<Spec = JsonObject, Outputs = JsonObject> {
  * owns backend-specific operations, while the reference service still receives a
  * Vite-style plain-array `OperatorImplementation`.
  */
-export function operatorImplementationFromNativeKindOperations<Spec, Outputs>(
-  opts: {
-    readonly operations: NativeKindOperations<Spec, Outputs>;
-    readonly kindUri: string;
-    readonly name?: string;
-    readonly version?: string;
-    readonly capabilities?: readonly string[];
-  },
-): OperatorImplementation {
+export function operatorImplementationFromNativeKindOperations<
+  Spec,
+  Outputs,
+>(opts: {
+  readonly operations: NativeKindOperations<Spec, Outputs>;
+  readonly kindUri: string;
+  readonly name?: string;
+  readonly version?: string;
+  readonly capabilities?: readonly string[];
+}): OperatorImplementation {
   const operations = opts.operations;
   const capabilities = opts.capabilities ?? operations.capabilities;
   const materializeOutput = async (
     ctx: OutputMaterialContext,
   ): Promise<OutputMaterial> => {
     const materialKind = ctx.options?.kind;
-    const operation = operations.materializeOutput ??
-      operations.publishMaterial;
+    const operation = operations.materializeOutput;
     if (operation) {
       return validatePublishedOutputMaterial(
         materialKind,
@@ -532,9 +469,9 @@ export function operatorImplementationFromNativeKindOperations<Spec, Outputs>(
       const issues = operations.validateSpec?.(spec) ?? [];
       if (issues.length > 0) {
         throw new Error(
-          `component spec invalid for ${opts.kindUri}: ${
-            issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-          }`,
+          `component spec invalid for ${opts.kindUri}: ${issues
+            .map((issue) => `${issue.path} ${issue.message}`)
+            .join("; ")}`,
         );
       }
       return operations.validateComponent?.(component);
@@ -544,9 +481,9 @@ export function operatorImplementationFromNativeKindOperations<Spec, Outputs>(
       const issues = operations.validateSpec?.(spec) ?? [];
       if (issues.length > 0) {
         throw new Error(
-          `component ${ctx.componentName} spec invalid for ${opts.kindUri}: ${
-            issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-          }`,
+          `component ${ctx.componentName} spec invalid for ${opts.kindUri}: ${issues
+            .map((issue) => `${issue.path} ${issue.message}`)
+            .join("; ")}`,
         );
       }
       const result = await operations.apply(spec, ctx);
@@ -561,20 +498,22 @@ export function operatorImplementationFromNativeKindOperations<Spec, Outputs>(
     },
     ...(operations.status
       ? {
-        async status(ctx) {
-          const result = await operations.status!(ctx.resourceHandle, ctx);
-          return {
-            kind: result.kind,
-            ...(result.outputs
-              ? {
-                outputs: result.outputs as Readonly<Record<string, JsonValue>>,
-              }
-              : {}),
-            ...(result.reason ? { reason: result.reason } : {}),
-            observedAt: result.observedAt,
-          };
-        },
-      }
+          async status(ctx) {
+            const result = await operations.status!(ctx.resourceHandle, ctx);
+            return {
+              kind: result.kind,
+              ...(result.outputs
+                ? {
+                    outputs: result.outputs as Readonly<
+                      Record<string, JsonValue>
+                    >,
+                  }
+                : {}),
+              ...(result.reason ? { reason: result.reason } : {}),
+              observedAt: result.observedAt,
+            };
+          },
+        }
       : {}),
   };
 }
@@ -589,9 +528,9 @@ function validatePublishedOutputMaterial(
   const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
-      `implementation produced invalid ${contract} output material: ${
-        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-      }`,
+      `implementation produced invalid ${contract} output material: ${issues
+        .map((issue) => `${issue.path} ${issue.message}`)
+        .join("; ")}`,
     );
   }
   return material;
@@ -609,9 +548,9 @@ export function outputsToOutputMaterial(
   const issues = validateOfficialMaterial(contract, material);
   if (issues.length > 0) {
     throw new Error(
-      `implementation outputs cannot be projected to ${contract} material: ${
-        issues.map((issue) => `${issue.path} ${issue.message}`).join("; ")
-      }`,
+      `implementation outputs cannot be projected to ${contract} material: ${issues
+        .map((issue) => `${issue.path} ${issue.message}`)
+        .join("; ")}`,
     );
   }
   return material;
@@ -643,9 +582,7 @@ function projectOfficialMaterial(
   }
 }
 
-function projectHttpEndpointMaterial(
-  material: OutputMaterial,
-): OutputMaterial {
+function projectHttpEndpointMaterial(material: OutputMaterial): OutputMaterial {
   if (Array.isArray(material.targets) || Array.isArray(material.endpoints)) {
     return material;
   }
@@ -709,12 +646,13 @@ function projectServiceBindingMaterial(
   if (database) out.database = database;
   const username = readString(material.username);
   if (username) out.username = username;
-  const connectionUrl = readString(material.connectionUrl) ??
-    readString(material.connectionString);
+  const connectionUrl =
+    readString(material.connectionUrl) ?? readString(material.connectionString);
   if (connectionUrl) out.connectionUrl = connectionUrl;
   const caCertRef = readString(material.caCertRef);
   if (caCertRef) out.caCertRef = caCertRef;
-  const passwordRef = readSecretReference(material.passwordRef) ??
+  const passwordRef =
+    readSecretReference(material.passwordRef) ??
     readSecretReference(material.passwordSecretRef);
   if (passwordRef) out.passwordRef = passwordRef;
   const tokenRef = readSecretReference(material.tokenRef);
@@ -723,14 +661,13 @@ function projectServiceBindingMaterial(
   return out;
 }
 
-function projectObjectStoreMaterial(
-  material: OutputMaterial,
-): OutputMaterial {
+function projectObjectStoreMaterial(material: OutputMaterial): OutputMaterial {
   const bucket = readString(material.bucket);
   const endpoint = readString(material.endpoint);
   if (!bucket || !endpoint) return material;
   if (
-    material.accessKeyRef !== undefined || material.secretKeyRef !== undefined
+    material.accessKeyRef !== undefined ||
+    material.secretKeyRef !== undefined
   ) {
     return material;
   }
@@ -756,12 +693,13 @@ function projectObjectStoreMaterial(
 }
 
 function inferServiceProtocol(material: OutputMaterial): string {
-  const connection = readString(material.connectionString) ??
-    readString(material.connectionUrl);
+  const connection =
+    readString(material.connectionString) ?? readString(material.connectionUrl);
   if (connection?.startsWith("postgres://")) return "postgresql";
   if (connection?.startsWith("postgresql://")) return "postgresql";
   if (
-    material.database !== undefined || material.passwordSecretRef !== undefined
+    material.database !== undefined ||
+    material.passwordSecretRef !== undefined
   ) {
     return "postgresql";
   }
@@ -850,9 +788,7 @@ function collectEnvBindings(
   for (const binding of bindings) {
     for (const [key, value] of Object.entries(binding.envInjections)) {
       if (out[key] !== undefined && !sameEnvValue(out[key], value)) {
-        throw new Error(
-          `binding-derived env ${key} is defined more than once`,
-        );
+        throw new Error(`binding-derived env ${key} is defined more than once`);
       }
       out[key] = value;
     }

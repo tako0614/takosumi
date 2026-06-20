@@ -1,4 +1,10 @@
 import { CORE_CONDITION_REASONS } from "takosumi-contract/reference/compat";
+import { PUBLIC_PROVIDER_RESOLUTION_STATUSES } from "takosumi-contract/provider-resolution";
+import { PROVIDER_CREDENTIAL_OWNERSHIPS } from "takosumi-contract/connections";
+import {
+  PROVIDER_ENV_MATERIALIZATIONS,
+  PROVIDER_ENV_STATUSES,
+} from "takosumi-contract/provider-envs";
 import {
   type ApiEndpoint,
   endpointTag,
@@ -44,6 +50,10 @@ export interface OpenApiDocument {
   readonly [extension: `x-${string}`]: unknown;
 }
 
+type OpenApiSchema = Record<string, unknown> & {
+  readonly properties?: Record<string, OpenApiSchema>;
+};
+
 export type OpenApiPathItem = Partial<
   Record<OpenApiHttpMethod, OpenApiOperation>
 >;
@@ -60,7 +70,7 @@ export interface OpenApiOperation {
 }
 
 export interface CreateTakosumiOpenApiDocumentOptions {
-  readonly deployControlPublicRoutesMounted?: boolean;
+  readonly deployControlInternalRoutesMounted?: boolean;
   readonly artifactRoutesMounted?: boolean;
   readonly runtimeAgentRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
@@ -95,10 +105,10 @@ export function createTakosumiOpenApiDocument(
   const document: OpenApiDocument = {
     openapi: "3.1.0",
     info: {
-      title: "Takosumi API",
+      title: "Takosumi process route inventory",
       version: TAKOSUMI_OPENAPI_VERSION,
       description:
-        "Dependency-free OpenAPI-ish description for mounted Takosumi process, deployControl, runtime-agent, readiness, and status route families.",
+        "Dependency-free OpenAPI-ish inventory for mounted Takosumi process route families. Host-internal /internal/v1 callback seams are omitted even when mounted; external integrations should use the documented /api/v1 surface.",
     },
     servers,
     "x-takos-service": "takosumi",
@@ -135,6 +145,12 @@ export function createTakosumiOpenApiDocument(
           description:
             "DeployControl bearer from TAKOSUMI_DEPLOY_CONTROL_TOKEN for OpenTofu plan/apply/destroy routes.",
         },
+        inventoryBearer: {
+          type: "http",
+          scheme: "bearer",
+          description:
+            "Operator inventory bearer used to fetch /capabilities and /openapi.json process inventories.",
+        },
       },
       schemas: createSchemas(),
     },
@@ -165,7 +181,39 @@ function filterMountedRouteFamilies(
     paths,
     components: {
       ...document.components,
-      schemas: filterReferencedSchemas(document.components.schemas, paths),
+      schemas: filterReferencedSchemas(
+        narrowApiEndpointAuthEnum(document.components.schemas, paths),
+        paths,
+      ),
+    },
+  };
+}
+
+function narrowApiEndpointAuthEnum(
+  schemas: Record<string, OpenApiSchema>,
+  paths: Record<string, OpenApiPathItem>,
+): Record<string, OpenApiSchema> {
+  const authValues = new Set<string>();
+  for (const item of Object.values(paths)) {
+    for (const operation of Object.values(item)) {
+      const auth = operation["x-takos-auth"];
+      if (typeof auth === "string") authValues.add(auth);
+    }
+  }
+  const endpoint = schemas.ApiEndpointDescription;
+  const auth = endpoint?.properties?.auth;
+  if (!endpoint || !auth || authValues.size === 0) return schemas;
+  return {
+    ...schemas,
+    ApiEndpointDescription: {
+      ...endpoint,
+      properties: {
+        ...endpoint.properties,
+        auth: {
+          ...auth,
+          enum: [...authValues].sort(),
+        },
+      },
     },
   };
 }
@@ -177,7 +225,7 @@ function toOpenApiPath(path: string): string {
 /**
  * Maps each {@link ApiEndpoint} to its owning family `id` (used for the primary
  * OpenAPI tag fallback and the `x-takos-mounted-path` extension which the
- * original document set only on the deployControl-public + artifact families).
+ * original document set only on the deployControl-internal + artifact families).
  */
 function endpointFamilyIndex(): Map<ApiEndpoint, string> {
   const index = new Map<ApiEndpoint, string>();
@@ -191,7 +239,7 @@ function endpointFamilyIndex(): Map<ApiEndpoint, string> {
  * Families that historically surfaced an `x-takos-mounted-path` extension on
  * each operation. Preserved verbatim to keep the document byte-shape stable.
  */
-const MOUNTED_PATH_FAMILIES = new Set(["deployControl-public", "artifact"]);
+const MOUNTED_PATH_FAMILIES = new Set(["deployControl-internal", "artifact"]);
 
 /**
  * Derives the full OpenAPI `paths` object from the single-source endpoint
@@ -257,6 +305,7 @@ function operation(input: {
     | "none"
     | "deploy-token"
     | "artifact-read"
+    | "inventory-bearer"
     | "deploy-control-token"
     | "internal-service"
     | "metrics-scrape";
@@ -291,7 +340,7 @@ function operation(input: {
       ...(input.requestSchema || input.requestBody
         ? { "400": errorResponse() }
         : {}),
-      ...(input.tag === "deployControl-public"
+      ...(input.tag === "deployControl-internal"
         ? {
             "403": errorResponse(),
             "404": errorResponse(),
@@ -313,10 +362,12 @@ function securityRequirements(
     | "actor"
     | "deploy-token"
     | "artifact-read"
+    | "inventory-bearer"
     | "deploy-control-token"
     | "internal-service"
     | "metrics-scrape",
 ): readonly Record<string, readonly string[]>[] {
+  if (auth === "inventory-bearer") return [{ inventoryBearer: [] }];
   if (auth === "deploy-token") return [{ deployBearer: [] }];
   if (auth === "deploy-control-token") return [{ deployControlBearer: [] }];
   if (auth === "metrics-scrape") return [{ metricsBearer: [] }];
@@ -450,13 +501,16 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...runnerSchemas(),
     ...installationSchemas(),
     ...capsuleSchemas(),
-    ...providerTemplateSchemas(),
+    ...providerCatalogSchemas(),
+    ...providerResolutionSchemas(),
     ...outputSchemas(),
     ...connectionSchemas(),
     ...sourceSchemas(),
+    ...deploySchemas(),
     ...artifactSchemas(),
     ...billingSchemas(),
     ...dependencySchemas(),
+    ...serviceGraphSchemas(),
     ...spaceSchemas(),
     ...runSchemas(),
     ...activitySchemas(),
@@ -499,7 +553,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         auth: {
           enum: [
             "none",
-            "internal-service",
+            "inventory-bearer",
             "deploy-token",
             "artifact-read",
             "deploy-control-token",
@@ -676,34 +730,6 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    CloudflareWorkersForPlatformsExecution: {
-      type: "object",
-      required: ["dispatchNamespace"],
-      properties: {
-        dispatchNamespace: { type: "string" },
-        dispatchWorkerBinding: { type: "string" },
-        outboundWorker: ref("CloudflareOutboundWorkerPolicy"),
-        userWorkerBindings: ref("CloudflareUserWorkerBindingPolicy"),
-      },
-      additionalProperties: false,
-    },
-    CloudflareOutboundWorkerPolicy: {
-      type: "object",
-      properties: {
-        serviceBinding: { type: "string" },
-        enforceNetworkPolicy: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    CloudflareUserWorkerBindingPolicy: {
-      type: "object",
-      required: ["mode"],
-      properties: {
-        mode: { type: "string" },
-        allowedBindingKinds: { type: "array", items: { type: "string" } },
-      },
-      additionalProperties: false,
-    },
     RunnerSecretExposurePolicy: {
       type: "object",
       required: ["providerCredentials", "tenantWorkerOperatorSecrets"],
@@ -804,7 +830,6 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         currentDeploymentId: { type: "string" },
         currentStateGeneration: { type: "number" },
-        currentOutputSnapshotId: { type: "string" },
         compatibilityStatus: {
           enum: ["ready", "auto_capsulized", "needs_patch", "unsupported"],
         },
@@ -828,6 +853,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "id",
         "name",
+        "sourceKind",
         "trustLevel",
         "variableMapping",
         "outputAllowlist",
@@ -839,6 +865,9 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         spaceId: { type: "string" },
         name: { type: "string" },
+        sourceKind: {
+          enum: ["generic_capsule", "first_party_capsule"],
+        },
         trustLevel: {
           enum: ["official", "trusted", "space", "raw"],
         },
@@ -944,9 +973,9 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
         versionConstraint: { type: "string" },
         aliases: { type: "array", items: { type: "string" } },
         allowed: { type: "boolean" },
-        credentialSources: {
+        ownershipOptions: {
           type: "array",
-          items: ref("ProviderCredentialSource"),
+          items: ref("ProviderCredentialOwnership"),
         },
       },
       additionalProperties: false,
@@ -1020,6 +1049,14 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           items: ref("CapsuleProvisionerRequirement"),
         },
+        providerRequirements: {
+          type: "array",
+          items: ref("ProviderRequirement"),
+        },
+        providerResolutions: {
+          type: "array",
+          items: ref("ProviderResolution"),
+        },
         normalizedObjectKey: { type: "string" },
         normalizedDigest: { type: "string" },
         createdAt: { type: "string" },
@@ -1029,15 +1066,116 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
+function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
+  return {
+    ProviderEnvMaterialization: { enum: [...PROVIDER_ENV_MATERIALIZATIONS] },
+    ProviderCredentialOwnership: { enum: [...PROVIDER_CREDENTIAL_OWNERSHIPS] },
+    ProviderResolutionStatus: {
+      enum: [...PUBLIC_PROVIDER_RESOLUTION_STATUSES],
+    },
+    ProviderRequirement: {
+      type: "object",
+      required: [
+        "providerSource",
+        "providerName",
+        "modulePath",
+        "discoveredFrom",
+        "requiredForPhases",
+      ],
+      properties: {
+        providerSource: { type: "string" },
+        providerName: { type: "string" },
+        alias: { type: "string" },
+        versionConstraint: { type: "string" },
+        modulePath: { type: "string" },
+        discoveredFrom: {
+          enum: ["required_providers", "provider_block", "generated_root"],
+        },
+        requiredForPhases: {
+          type: "array",
+          items: {
+            enum: ["init", "plan", "apply", "destroy", "drift_check"],
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+    ProviderResolution: {
+      type: "object",
+      required: ["requirement", "status", "evidence"],
+      properties: {
+        requirement: ref("ProviderRequirement"),
+        status: ref("ProviderResolutionStatus"),
+        connectionId: { type: "string" },
+        ownership: ref("ProviderCredentialOwnership"),
+        blockedReason: { type: "string" },
+        evidence: ref("ProviderResolutionEvidence"),
+      },
+      additionalProperties: false,
+    },
+    ProviderResolutionEvidence: {
+      oneOf: [
+        ref("ProviderConnectionResolutionEvidence"),
+        ref("BlockedProviderResolutionEvidence"),
+      ],
+    },
+    ProviderConnectionResolutionEvidence: {
+      type: "object",
+      required: [
+        "kind",
+        "provider",
+        "connectionId",
+        "ownership",
+        "requiredEnvNames",
+      ],
+      properties: {
+        kind: { const: "provider_connection" },
+        provider: { type: "string" },
+        connectionId: { type: "string" },
+        ownership: { const: "own_key" },
+        requiredEnvNames: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    BlockedProviderResolutionEvidence: {
+      type: "object",
+      required: ["kind", "provider", "reason"],
+      properties: {
+        kind: { const: "blocked" },
+        provider: { type: "string" },
+        reason: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    RuntimeGrantProjection: {
+      type: "object",
+      required: [
+        "grantId",
+        "serviceExportId",
+        "serviceBindingId",
+        "installationId",
+        "capability",
+      ],
+      properties: {
+        grantId: { type: "string" },
+        serviceExportId: { type: "string" },
+        serviceBindingId: { type: "string" },
+        installationId: { type: "string" },
+        capability: { type: "string" },
+        expiresAt: { type: "string", format: "date-time" },
+        rotationPolicyId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
 /**
- * Provider Templates catalog (credential sources / helpers / template records)
+ * Provider catalog (ownership options / helpers / catalog records)
  * plus the compatibility-check request/response wrappers that bind to it.
  */
-function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
+function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
   return {
-    ProviderCredentialSource: {
-      enum: ["takosumi_managed", "user_env_set"],
-    },
     ProviderCredentialHelper: {
       enum: [
         "cloudflare_api_token",
@@ -1048,7 +1186,7 @@ function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
         "generic_env",
       ],
     },
-    ProviderTemplate: {
+    ProviderCatalogEntry: {
       type: "object",
       required: [
         "id",
@@ -1056,8 +1194,7 @@ function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
         "displayName",
         "recommendedEnvNames",
         "helpers",
-        "credentialSources",
-        "takosumiManagedAvailable",
+        "ownershipOptions",
         "allowedResources",
         "allowedDataSources",
         "policyPackId",
@@ -1070,11 +1207,10 @@ function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
         displayName: { type: "string" },
         recommendedEnvNames: { type: "array", items: { type: "string" } },
         helpers: { type: "array", items: ref("ProviderCredentialHelper") },
-        credentialSources: {
+        ownershipOptions: {
           type: "array",
-          items: ref("ProviderCredentialSource"),
+          items: ref("ProviderCredentialOwnership"),
         },
-        takosumiManagedAvailable: { type: "boolean" },
         allowedResources: { type: "array", items: { type: "string" } },
         allowedDataSources: { type: "array", items: { type: "string" } },
         policyPackId: { type: "string" },
@@ -1085,17 +1221,73 @@ function providerTemplateSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    ProviderTemplateResponse: {
+    ProviderEnvStatus: { enum: [...PROVIDER_ENV_STATUSES] },
+    ProviderEnv: {
       type: "object",
-      required: ["provider"],
-      properties: { provider: ref("ProviderTemplate") },
+      required: [
+        "id",
+        "providerSource",
+        "displayName",
+        "materialization",
+        "status",
+        "requiredEnvNames",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        spaceId: { type: "string" },
+        providerSource: { type: "string" },
+        displayName: { type: "string" },
+        materialization: ref("ProviderEnvMaterialization"),
+        status: ref("ProviderEnvStatus"),
+        requiredEnvNames: { type: "array", items: { type: "string" } },
+        expiresAt: { type: "string", format: "date-time" },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+      },
       additionalProperties: false,
     },
-    ListProviderTemplatesResponse: {
+    PutProviderEnvRequest: {
+      type: "object",
+      required: ["providerSource", "displayName", "materialization"],
+      properties: {
+        spaceId: { type: "string" },
+        providerSource: { type: "string" },
+        displayName: { type: "string" },
+        materialization: ref("ProviderEnvMaterialization"),
+        status: ref("ProviderEnvStatus"),
+        requiredEnvNames: { type: "array", items: { type: "string" } },
+        secretRef: { type: "string" },
+        expiresAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    ProviderEnvResponse: {
+      type: "object",
+      required: ["providerEnv"],
+      properties: { providerEnv: ref("ProviderEnv") },
+      additionalProperties: false,
+    },
+    ListProviderEnvsResponse: {
+      type: "object",
+      required: ["providerEnvs"],
+      properties: {
+        providerEnvs: { type: "array", items: ref("ProviderEnv") },
+      },
+      additionalProperties: false,
+    },
+    ProviderCatalogEntryResponse: {
+      type: "object",
+      required: ["provider"],
+      properties: { provider: ref("ProviderCatalogEntry") },
+      additionalProperties: false,
+    },
+    ListProviderCatalogEntriesResponse: {
       type: "object",
       required: ["providers"],
       properties: {
-        providers: { type: "array", items: ref("ProviderTemplate") },
+        providers: { type: "array", items: ref("ProviderCatalogEntry") },
       },
       additionalProperties: false,
     },
@@ -1125,13 +1317,12 @@ function outputSchemas(): Record<string, Record<string, unknown>> {
     OutputSnapshot: {
       type: "object",
       description:
-        "Projected tofu output generation. Raw output JSON remains an encrypted artifact; publicOutputs and spaceOutputs are allowlisted non-secret projections.",
+        "Public tofu output generation projection. Raw output JSON remains an encrypted artifact on the internal ledger and is not exposed on this schema; publicOutputs and spaceOutputs are allowlisted non-secret projections.",
       required: [
         "id",
         "spaceId",
         "installationId",
         "stateGeneration",
-        "rawOutputArtifactKey",
         "publicOutputs",
         "spaceOutputs",
         "outputDigest",
@@ -1142,7 +1333,6 @@ function outputSchemas(): Record<string, Record<string, unknown>> {
         spaceId: { type: "string" },
         installationId: { type: "string" },
         stateGeneration: { type: "number" },
-        rawOutputArtifactKey: { type: "string" },
         publicOutputs: { type: "object", additionalProperties: true },
         spaceOutputs: { type: "object", additionalProperties: true },
         outputDigest: { type: "string" },
@@ -1172,12 +1362,6 @@ function outputSchemas(): Record<string, Record<string, unknown>> {
         sourceSnapshotId: { type: "string" },
         dependencySnapshotId: { type: "string" },
         stateGeneration: { type: "number" },
-        outputSnapshotId: {
-          type: "string",
-          description:
-            "Pointer to the OutputSnapshot generated by this Deployment.",
-          "x-takos-related-schema": ref("OutputSnapshot"),
-        },
         outputsPublic: { type: "object", additionalProperties: true },
         status: { enum: ["active", "superseded", "rolled_back", "destroyed"] },
         createdAt: { type: "string" },
@@ -1204,8 +1388,8 @@ function outputSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /**
- * Connection records, operator default bindings, and the credential creation /
- * OAuth / impersonation / test helper request+response shapes.
+ * Connection records, internal provider resolver records, and the credential
+ * creation / OAuth / impersonation / test helper request+response shapes.
  */
 function connectionSchemas(): Record<string, Record<string, unknown>> {
   return {
@@ -1296,10 +1480,11 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
             "gcp_oauth_bootstrap",
             "gcp_service_account_impersonation",
             "static_secret",
-            "provider_env_set",
+            "generic_env_provider",
             "manual",
           ],
         },
+        credentialDriver: ref("ConnectionCredentialDriver"),
         scope: { enum: ["operator", "space"] },
         authMethod: {
           enum: [
@@ -1342,10 +1527,11 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
             "gcp_oauth_bootstrap",
             "gcp_service_account_impersonation",
             "static_secret",
-            "provider_env_set",
+            "generic_env_provider",
             "manual",
           ],
         },
+        credentialDriver: ref("ConnectionCredentialDriver"),
         authMethod: {
           enum: [
             "static_secret",
@@ -1371,6 +1557,18 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    ConnectionCredentialDriver: {
+      enum: [
+        "cloudflare_oauth",
+        "cloudflare_api_token",
+        "aws_assume_role",
+        "gcp_oauth_bootstrap",
+        "gcp_service_account_impersonation",
+        "generic_env",
+        "static_secret",
+        "manual",
+      ],
+    },
     ConnectionResponse: {
       type: "object",
       required: ["connection"],
@@ -1384,46 +1582,6 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       required: ["connections"],
       properties: {
         connections: { type: "array", items: ref("Connection") },
-      },
-      additionalProperties: false,
-    },
-    OperatorConnectionDefault: {
-      type: "object",
-      required: ["id", "provider", "connectionId", "createdAt", "updatedAt"],
-      properties: {
-        id: { type: "string" },
-        provider: { type: "string" },
-        connectionId: { type: "string" },
-        createdAt: { type: "string", format: "date-time" },
-        updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    PutOperatorConnectionDefaultRequest: {
-      type: "object",
-      required: ["connectionId"],
-      properties: {
-        provider: { type: "string" },
-        connectionId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    OperatorConnectionDefaultResponse: {
-      type: "object",
-      required: ["operatorConnectionDefault"],
-      properties: {
-        operatorConnectionDefault: ref("OperatorConnectionDefault"),
-      },
-      additionalProperties: false,
-    },
-    ListOperatorConnectionDefaultsResponse: {
-      type: "object",
-      required: ["operatorConnectionDefaults"],
-      properties: {
-        operatorConnectionDefaults: {
-          type: "array",
-          items: ref("OperatorConnectionDefault"),
-        },
       },
       additionalProperties: false,
     },
@@ -1533,7 +1691,8 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "id",
-        "sourceId",
+        "origin",
+        "spaceId",
         "url",
         "ref",
         "resolvedCommit",
@@ -1546,6 +1705,8 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
+        origin: { enum: ["git", "upload"] },
+        spaceId: { type: "string" },
         sourceId: { type: "string" },
         url: { type: "string" },
         ref: { type: "string" },
@@ -1656,6 +1817,105 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       required: ["snapshots"],
       properties: {
         snapshots: { type: "array", items: ref("SourceSnapshot") },
+      },
+      additionalProperties: false,
+    },
+    UploadSnapshotResponse: {
+      type: "object",
+      required: ["snapshot"],
+      properties: { snapshot: ref("SourceSnapshot") },
+      additionalProperties: false,
+    },
+  };
+}
+
+/** Direct upload deploy entry point shapes. */
+function deploySchemas(): Record<string, Record<string, unknown>> {
+  const installationProviderConnectionBinding = {
+    type: "object",
+    required: ["provider", "connectionId"],
+    properties: {
+      provider: { type: "string" },
+      alias: { type: "string" },
+      connectionId: { type: "string" },
+      region: { type: "string" },
+    },
+    additionalProperties: false,
+  };
+  const internalProviderResolverBinding = {
+    type: "object",
+    required: ["provider", "envId"],
+    properties: {
+      provider: { type: "string" },
+      alias: { type: "string" },
+      envId: { type: "string" },
+      region: { type: "string" },
+    },
+    additionalProperties: false,
+  };
+  return {
+    DeployRequest: {
+      type: "object",
+      required: ["spaceId", "name", "snapshotId"],
+      properties: {
+        spaceId: { type: "string" },
+        name: { type: "string" },
+        environment: { type: "string" },
+        snapshotId: { type: "string" },
+        vars: {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
+        providerConnections: {
+          type: "array",
+          items: installationProviderConnectionBinding,
+        },
+        planOnly: { type: "boolean" },
+        autoApprove: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    DeployUploadSnapshotRequest: {
+      type: "object",
+      required: ["spaceId", "name", "snapshotId"],
+      properties: {
+        spaceId: { type: "string" },
+        name: { type: "string" },
+        environment: { type: "string" },
+        snapshotId: { type: "string" },
+        vars: {
+          type: "object",
+          additionalProperties: { type: "string" },
+        },
+        providerEnvBindings: {
+          type: "array",
+          items: internalProviderResolverBinding,
+        },
+        planOnly: { type: "boolean" },
+        autoApprove: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    DeployResponse: {
+      type: "object",
+      required: ["installation", "installConfigId", "run", "created"],
+      properties: {
+        installation: ref("Installation"),
+        installConfigId: { type: "string" },
+        run: ref("Run"),
+        planRun: ref("Run"),
+        applyRun: ref("Run"),
+        status: {
+          enum: [
+            "planned",
+            "applying",
+            "applied",
+            "waiting_approval",
+            "failed",
+          ],
+        },
+        runGroupId: { type: "string" },
+        created: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -2080,6 +2340,262 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
+/** Service Graph v1 support records: export, binding, and grant. */
+function serviceGraphSchemas(): Record<string, Record<string, unknown>> {
+  const capabilityArray = {
+    type: "array",
+    minItems: 1,
+    items: {
+      type: "string",
+      pattern: "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+    },
+  };
+  return {
+    ServiceGraphEndpoint: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        url: { type: "string" },
+        protocol: { type: "string" },
+        host: { type: "string" },
+        port: { type: "integer", minimum: 1 },
+        pathPrefix: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ServiceGraphAuth: {
+      type: "object",
+      required: ["scheme"],
+      properties: {
+        scheme: { enum: ["none", "bearer", "oidc", "signed_webhook"] },
+        audience: { type: "array", items: { type: "string" } },
+        scopes: { type: "array", items: { type: "string" } },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    ServiceExport: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "producerCapsuleId",
+        "name",
+        "capabilities",
+        "visibility",
+        "status",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        workspaceId: { type: "string" },
+        producerCapsuleId: { type: "string" },
+        applyRunId: { type: "string" },
+        stateVersionId: { type: "string" },
+        outputId: { type: "string" },
+        outputGeneration: { type: "integer" },
+        name: { type: "string" },
+        capabilities: capabilityArray,
+        visibility: { enum: ["private", "space", "public", "shared"] },
+        status: { enum: ["ready", "unavailable", "revoked", "stale"] },
+        endpoints: {
+          type: "array",
+          items: ref("ServiceGraphEndpoint"),
+        },
+        auth: { type: "array", items: ref("ServiceGraphAuth") },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+        metadata: jsonObject,
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+        revokedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateServiceExportRequest: {
+      type: "object",
+      required: ["producerCapsuleId", "name", "capabilities"],
+      properties: {
+        id: { type: "string" },
+        producerCapsuleId: { type: "string" },
+        applyRunId: { type: "string" },
+        stateVersionId: { type: "string" },
+        outputId: { type: "string" },
+        outputGeneration: { type: "integer" },
+        name: { type: "string" },
+        capabilities: capabilityArray,
+        visibility: { enum: ["private", "space", "public", "shared"] },
+        status: { enum: ["ready", "unavailable", "revoked", "stale"] },
+        endpoints: {
+          type: "array",
+          items: ref("ServiceGraphEndpoint"),
+        },
+        auth: { type: "array", items: ref("ServiceGraphAuth") },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    ServiceBindingSelector: {
+      type: "object",
+      required: ["capabilities"],
+      properties: {
+        capabilities: capabilityArray,
+        producerCapsuleId: { type: "string" },
+        serviceExportId: { type: "string" },
+        name: { type: "string" },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    ServiceBindingTarget: {
+      type: "object",
+      required: ["kind"],
+      properties: {
+        kind: { enum: ["generated_root", "workload", "runtime"] },
+        name: { type: "string" },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    ServiceGrantRequest: {
+      type: "object",
+      required: ["scopes"],
+      properties: {
+        scopes: { type: "array", items: { type: "string" } },
+        audience: { type: "array", items: { type: "string" } },
+        env: { type: "array", items: { type: "string" } },
+        ttlSeconds: { type: "integer", minimum: 1 },
+        metadata: jsonObject,
+      },
+      additionalProperties: false,
+    },
+    ServiceBinding: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "consumerCapsuleId",
+        "target",
+        "selector",
+        "dependencyMode",
+        "grantRequest",
+        "status",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        workspaceId: { type: "string" },
+        consumerCapsuleId: { type: "string" },
+        target: ref("ServiceBindingTarget"),
+        selector: ref("ServiceBindingSelector"),
+        selectedServiceExportId: { type: "string" },
+        dependencySnapshotId: { type: "string" },
+        dependencyMode: {
+          enum: ["variable_injection", "remote_state", "published_output"],
+        },
+        grantRequest: ref("ServiceGrantRequest"),
+        status: { enum: ["pending", "bound", "blocked", "stale", "revoked"] },
+        createdAt: { type: "string", format: "date-time" },
+        updatedAt: { type: "string", format: "date-time" },
+        revokedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateServiceBindingRequest: {
+      type: "object",
+      required: ["target", "selector", "grantRequest"],
+      properties: {
+        id: { type: "string" },
+        target: ref("ServiceBindingTarget"),
+        selector: ref("ServiceBindingSelector"),
+        dependencyMode: {
+          enum: ["variable_injection", "remote_state", "published_output"],
+        },
+        grantRequest: ref("ServiceGrantRequest"),
+        dependencySnapshotId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ServiceGrant: {
+      type: "object",
+      required: [
+        "id",
+        "workspaceId",
+        "bindingId",
+        "serviceExportId",
+        "consumerCapsuleId",
+        "scopes",
+        "audience",
+        "material",
+        "status",
+        "createdAt",
+      ],
+      properties: {
+        id: { type: "string" },
+        workspaceId: { type: "string" },
+        bindingId: { type: "string" },
+        serviceExportId: { type: "string" },
+        consumerCapsuleId: { type: "string" },
+        scopes: { type: "array", items: { type: "string" } },
+        audience: { type: "array", items: { type: "string" } },
+        material: jsonObject,
+        status: { enum: ["active", "expired", "revoked", "superseded"] },
+        createdAt: { type: "string", format: "date-time" },
+        rotatedAt: { type: "string", format: "date-time" },
+        expiresAt: { type: "string", format: "date-time" },
+        revokedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateServiceGrantRequest: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        material: jsonObject,
+        expiresAt: { type: "string", format: "date-time" },
+        rotatedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    ServiceExportResponse: {
+      type: "object",
+      required: ["serviceExport"],
+      properties: { serviceExport: ref("ServiceExport") },
+      additionalProperties: false,
+    },
+    ServiceExportsResponse: {
+      type: "object",
+      required: ["serviceExports"],
+      properties: {
+        serviceExports: { type: "array", items: ref("ServiceExport") },
+      },
+      additionalProperties: false,
+    },
+    ServiceBindingResponse: {
+      type: "object",
+      required: ["serviceBinding"],
+      properties: { serviceBinding: ref("ServiceBinding") },
+      additionalProperties: false,
+    },
+    ServiceBindingsResponse: {
+      type: "object",
+      required: ["serviceBindings"],
+      properties: {
+        serviceBindings: { type: "array", items: ref("ServiceBinding") },
+      },
+      additionalProperties: false,
+    },
+    ServiceGrantResponse: {
+      type: "object",
+      required: ["serviceGrant"],
+      properties: { serviceGrant: ref("ServiceGrant") },
+      additionalProperties: false,
+    },
+  };
+}
+
 /**
  * Space records plus the Installation create/patch/read wrappers and
  * InstallConfig list/read responses that hang off a Space.
@@ -2206,7 +2722,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         type: {
           description:
-            "Run type. `restore` is reserved but NOT YET IMPLEMENTED: no producer, queue action, handler, or route creates a restore Run. It is retained in the enum to keep the schema forward-compatible with the reserved RunType, but restore Runs are never returned. See core-conformance Future Extensions.",
+            "Run type. `restore` is a destructive Backup-backed state restore that is created waiting_approval and dispatches only after approval.",
           enum: [
             "source_sync",
             "compatibility_check",
@@ -2237,6 +2753,16 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         planDigest: { type: "string" },
         planArtifactKey: { type: "string" },
         policyStatus: { enum: ["pass", "warn", "deny"] },
+        providerResolutions: {
+          type: "array",
+          items: ref("ProviderResolution"),
+        },
+        runEnvironmentEvidenceDigest: { type: "string" },
+        redactionProfileId: { type: "string" },
+        backupId: { type: "string" },
+        restoreStateGeneration: { type: "integer" },
+        restoredStateSnapshotId: { type: "string" },
+        restoredFromStateSnapshotId: { type: "string" },
         errorCode: { type: "string" },
         createdBy: { type: "string" },
         createdAt: { type: "string", format: "date-time" },
@@ -2249,6 +2775,33 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["run"],
       properties: { run: ref("Run") },
+      additionalProperties: false,
+    },
+    RunCostInfo: {
+      type: "object",
+      required: [
+        "runId",
+        "billingMode",
+        "estimatedCredits",
+        "blocked",
+        "reasons",
+      ],
+      properties: {
+        runId: { type: "string" },
+        billingMode: { enum: ["disabled", "showback", "enforce"] },
+        estimatedCredits: { type: "number" },
+        availableCredits: { type: "number" },
+        reservationStatus: { enum: ["reserved", "insufficient_credits"] },
+        creditShortfall: { type: "number" },
+        blocked: { type: "boolean" },
+        reasons: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+    RunCostResponse: {
+      type: "object",
+      required: ["cost"],
+      properties: { cost: ref("RunCostInfo") },
       additionalProperties: false,
     },
     RunLogsResponse: {
@@ -2281,7 +2834,6 @@ function runSchemas(): Record<string, Record<string, unknown>> {
             "installation_install",
             "installation_update",
             "installation_destroy",
-            "migration",
           ],
         },
         status: {
@@ -2302,8 +2854,11 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     },
     RunGroupResponse: {
       type: "object",
-      required: ["runGroup"],
-      properties: { runGroup: ref("RunGroup") },
+      required: ["runGroup", "runs"],
+      properties: {
+        runGroup: ref("RunGroup"),
+        runs: { type: "array", items: ref("Run") },
+      },
       additionalProperties: false,
     },
   };
@@ -2413,6 +2968,12 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["backup"],
       properties: { backup: ref("BackupRecord") },
+      additionalProperties: false,
+    },
+    CreateRestoreResponse: {
+      type: "object",
+      required: ["run"],
+      properties: { run: ref("Run") },
       additionalProperties: false,
     },
     ListBackupsResponse: {
@@ -2543,7 +3104,7 @@ function outputShareSchemas(): Record<string, Record<string, unknown>> {
 
 /**
  * Runtime-agent enrollment / lease / heartbeat / report shapes and the gateway
- * manifest contract for external (non-managed) runners.
+ * manifest contract for external runners outside the configured Takosumi runner policy.
  */
 function runtimeAgentSchemas(): Record<string, Record<string, unknown>> {
   return {

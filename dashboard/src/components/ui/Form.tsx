@@ -17,7 +17,9 @@ export function FormField(props: FieldProps): JSX.Element {
         <span class="tg-field-label">
           {props.label}
           <Show when={props.required}>
-            <span class="tg-field-required" aria-hidden="true">*</span>
+            <span class="tg-field-required" aria-hidden="true">
+              *
+            </span>
           </Show>
         </span>
       </Show>
@@ -26,7 +28,9 @@ export function FormField(props: FieldProps): JSX.Element {
         <span class="tg-field-hint">{props.hint}</span>
       </Show>
       <Show when={props.error}>
-        <span class="tg-field-error" role="alert">{props.error}</span>
+        <span class="tg-field-error" role="alert">
+          {props.error}
+        </span>
       </Show>
     </label>
   );

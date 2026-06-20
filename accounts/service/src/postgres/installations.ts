@@ -1,11 +1,11 @@
-// AppInstallation ledger: ledger accounts, spaces, installations, runtime
-// bindings, app bindings, app grants, and the append-only event log. Free
-// functions delegating raw queries to a PostgresQueryClient. Behaviour
-// preserved verbatim from the original PostgresAccountsStore.
+// AppInstallation ledger: ledger accounts, spaces, installations, internal
+// service binding material records, compatibility grant validation shims, and
+// the append-only event log. Free functions delegate raw queries to a
+// PostgresQueryClient.
 
 import type {
-  AppBindingRecord,
-  AppGrantRecord,
+  ServiceBindingMaterialRecord,
+  ServiceGrantMaterialRecord,
   InstallationEventRecord,
   InstallationRecord,
   LedgerAccountRecord,
@@ -15,11 +15,13 @@ import type {
 import { and, asc, eq, sql } from "drizzle-orm";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import {
-  assertValidAppBindingRecord,
-  assertValidAppGrantRecord,
+  assertValidServiceBindingMaterialRecord,
+  assertValidServiceGrantMaterialRecord,
 } from "../ledger.ts";
 import { LedgerAccountOwnershipConflictError } from "../store.ts";
 import {
+  serviceBindingMaterialFromRow,
+  type ServiceBindingMaterialRow,
   appInstallationFromRow,
   type AppInstallationRow,
   installationEventFromRow,
@@ -72,6 +74,20 @@ const appInstallations = installation.table("app_installations", {
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
 });
 
+const serviceBindingMaterials = installation.table(
+  "service_binding_materials",
+  {
+    bindingId: text("binding_id").primaryKey(),
+    installationId: text("installation_id").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    configRef: text("config_ref").notNull(),
+    secretRefs: text("secret_refs").array().notNull(),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
+  },
+);
+
 const installationEventChainLocks = installation.table(
   "installation_event_chain_locks",
   {
@@ -94,6 +110,7 @@ const installationSchema = {
   ledgerAccounts,
   spaces,
   appInstallations,
+  serviceBindingMaterials,
   installationEventChainLocks,
   installationEvents,
 };
@@ -222,8 +239,8 @@ export async function saveAppInstallation(
   // Wave 6 dropped the `runtime_binding_id` column from
   // `installation_v1.app_installations`. The write path no longer
   // references it. `InstallationRecord.runtimeBindingId` is silently
-  // ignored when persisting (in-memory store still tracks it for
-  // backward compatibility with the materialize helpers).
+  // ignored when persisting; the in-memory store still tracks it for
+  // materialize helper state that has not crossed the Postgres boundary.
   const values = appInstallationValues(record);
   await postgresDrizzle(client, installationSchema)
     .insert(appInstallations)
@@ -298,7 +315,7 @@ export function saveRuntimeBinding(
   // live orchestration entity (shared-cell warm-pool, materialize continuity,
   // dashboard render) but is no longer persisted; INSERT against the dropped
   // table raised "relation does not exist" (production-blocking SQL drift).
-  // No-op shim mirrors the Phase E precedent in `listAppBindingsForInstallation`.
+  // No-op shim mirrors the Phase E precedent in `listServiceBindingMaterialsForInstallation`.
   void client;
   void record;
   return Promise.resolve();
@@ -318,49 +335,60 @@ export function findRuntimeBinding(
   return Promise.resolve(undefined);
 }
 
-export function saveAppBinding(
+export function saveServiceBindingMaterial(
   client: PostgresQueryClient,
-  record: AppBindingRecord,
+  record: ServiceBindingMaterialRecord,
 ): Promise<void> {
-  // Wave 6 dropped `installation_v1.app_bindings`. Validation invariants are
-  // still enforced (callers depend on TypeError-as-rejection for malformed
-  // records); only the SQL INSERT is removed. Mirrors the Phase E no-op
-  // precedent in `listAppBindingsForInstallation`. Validation throws are
-  // converted to promise rejections so `assertRejects` tests pass.
   try {
-    assertValidAppBindingRecord(record);
+    assertValidServiceBindingMaterialRecord(record);
   } catch (error) {
     return Promise.reject(error);
   }
-  void client;
-  return Promise.resolve();
+  const values = serviceBindingMaterialValues(record);
+  return postgresDrizzle(client, installationSchema)
+    .insert(serviceBindingMaterials)
+    .values(values)
+    .onConflictDoUpdate({
+      target: serviceBindingMaterials.bindingId,
+      set: {
+        installationId: values.installationId,
+        name: values.name,
+        kind: values.kind,
+        configRef: values.configRef,
+        secretRefs: values.secretRefs,
+        updatedAt: values.updatedAt,
+      },
+    })
+    .then(() => {});
 }
 
-export function listAppBindingsForInstallation(
+export function listServiceBindingMaterialsForInstallation(
   client: PostgresQueryClient,
   installationId: string,
-): Promise<readonly AppBindingRecord[]> {
-  // Wave 6 dropped `installation_v1.app_bindings`. AppBinding is no
-  // longer a public concept; the table no longer exists in production
-  // schema. Selecting against it raised "relation does not exist"
-  // (production-blocking SQL drift). We now return an empty array so
-  // account-plane callers (= envelope serialization, dashboard render path)
-  // remain compatible without touching the database.
-  void client;
-  void installationId;
-  return Promise.resolve([]);
+): Promise<readonly ServiceBindingMaterialRecord[]> {
+  return postgresDrizzle(client, installationSchema)
+    .select(serviceBindingMaterialColumns)
+    .from(serviceBindingMaterials)
+    .where(eq(serviceBindingMaterials.installationId, installationId))
+    .orderBy(
+      asc(serviceBindingMaterials.createdAt),
+      asc(serviceBindingMaterials.bindingId),
+    )
+    .then((rows) =>
+      (rows as ServiceBindingMaterialRow[]).map(serviceBindingMaterialFromRow),
+    );
 }
 
-export function saveAppGrant(
+export function saveServiceGrantMaterial(
   client: PostgresQueryClient,
-  record: AppGrantRecord,
+  record: ServiceGrantMaterialRecord,
 ): Promise<void> {
   // Wave 6 dropped `installation_v1.app_grants`. Validation invariants are
   // still enforced; only the SQL INSERT is removed. Mirrors the Phase E
-  // no-op precedent in `listAppGrantsForInstallation`. Validation throws
+  // no-op precedent in `listServiceGrantMaterialsForInstallation`. Validation throws
   // are converted to promise rejections so `assertRejects` tests pass.
   try {
-    assertValidAppGrantRecord(record);
+    assertValidServiceGrantMaterialRecord(record);
   } catch (error) {
     return Promise.reject(error);
   }
@@ -368,10 +396,10 @@ export function saveAppGrant(
   return Promise.resolve();
 }
 
-export function findAppGrant(
+export function findServiceGrantMaterial(
   client: PostgresQueryClient,
   grantId: string,
-): Promise<AppGrantRecord | undefined> {
+): Promise<ServiceGrantMaterialRecord | undefined> {
   // Wave 6 dropped `installation_v1.app_grants`. Returning undefined matches
   // the Phase E SELECT precedent.
   void client;
@@ -379,11 +407,11 @@ export function findAppGrant(
   return Promise.resolve(undefined);
 }
 
-export function listAppGrantsForInstallation(
+export function listServiceGrantMaterialsForInstallation(
   client: PostgresQueryClient,
   installationId: string,
-): Promise<readonly AppGrantRecord[]> {
-  // Wave 6 dropped `installation_v1.app_grants`. AppGrant is no longer
+): Promise<readonly ServiceGrantMaterialRecord[]> {
+  // Wave 6 dropped `installation_v1.app_grants`. ServiceGrantMaterial is no longer
   // a public concept; the table no longer exists in production schema.
   // Selecting against it raised "relation does not exist"
   // (production-blocking SQL drift). We now return an empty array so
@@ -504,6 +532,17 @@ const appInstallationColumns = {
   updated_at: appInstallations.updatedAt,
 };
 
+const serviceBindingMaterialColumns = {
+  binding_id: serviceBindingMaterials.bindingId,
+  installation_id: serviceBindingMaterials.installationId,
+  name: serviceBindingMaterials.name,
+  kind: serviceBindingMaterials.kind,
+  config_ref: serviceBindingMaterials.configRef,
+  secret_refs: serviceBindingMaterials.secretRefs,
+  created_at: serviceBindingMaterials.createdAt,
+  updated_at: serviceBindingMaterials.updatedAt,
+};
+
 const installationEventColumns = {
   event_id: installationEvents.eventId,
   installation_id: installationEvents.installationId,
@@ -550,6 +589,19 @@ function appInstallationValues(record: InstallationRecord) {
     billingAccountId: record.billingAccountId ?? null,
     status: record.status,
     createdBySubject: record.createdBySubject,
+    createdAt: toDate(record.createdAt),
+    updatedAt: toDate(record.updatedAt),
+  };
+}
+
+function serviceBindingMaterialValues(record: ServiceBindingMaterialRecord) {
+  return {
+    bindingId: record.bindingId,
+    installationId: record.installationId,
+    name: record.name,
+    kind: record.kind,
+    configRef: record.configRef,
+    secretRefs: [...record.secretRefs],
     createdAt: toDate(record.createdAt),
     updatedAt: toDate(record.updatedAt),
   };

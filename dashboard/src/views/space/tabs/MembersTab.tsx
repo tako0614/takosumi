@@ -111,7 +111,10 @@ export default function MembersTab(props: {
   const invite = createAction(async () => {
     const account = inviteAccount().trim();
     if (!account) throw new Error(t("members.invite.accountRequired"));
-    await inviteMember(props.spaceId, { accountId: account, role: inviteRole() });
+    await inviteMember(props.spaceId, {
+      accountId: account,
+      role: inviteRole(),
+    });
     setInviteAccount("");
     setInviteRole("member");
     await refetch();
@@ -149,7 +152,9 @@ export default function MembersTab(props: {
           <>
             <code class="wb-mono">{member.accountId}</code>
             <Show when={member.accountId === callerSubject()}>
-              <Badge tone="info" class="wb-you-tag">{t("members.you")}</Badge>
+              <Badge tone="info" class="wb-you-tag">
+                {t("members.you")}
+              </Badge>
             </Show>
           </>
         ),
@@ -189,7 +194,8 @@ export default function MembersTab(props: {
                       void changeRole.run(
                         member,
                         e.currentTarget.value as ControlSpaceRole,
-                      )}
+                      )
+                    }
                     title={
                       isLastOwner(member)
                         ? t("members.lastOwnerDemote")
@@ -256,7 +262,8 @@ export default function MembersTab(props: {
                 <Select
                   value={inviteRole()}
                   onChange={(e) =>
-                    setInviteRole(e.currentTarget.value as ControlSpaceRole)}
+                    setInviteRole(e.currentTarget.value as ControlSpaceRole)
+                  }
                 >
                   <For each={ROLE_ORDER}>
                     {(role) => (
@@ -279,17 +286,29 @@ export default function MembersTab(props: {
               </Button>
             </form>
             <Show when={invite.error()}>
-              {(m) => <p class="wb-error" role="alert">{m()}</p>}
+              {(m) => (
+                <p class="wb-error" role="alert">
+                  {m()}
+                </p>
+              )}
             </Show>
           </CardSection>
         </Card>
       </Show>
 
       <Show when={changeRole.error()}>
-        {(m) => <p class="wb-error" role="alert">{m()}</p>}
+        {(m) => (
+          <p class="wb-error" role="alert">
+            {m()}
+          </p>
+        )}
       </Show>
       <Show when={remove.error()}>
-        {(m) => <p class="wb-error" role="alert">{m()}</p>}
+        {(m) => (
+          <p class="wb-error" role="alert">
+            {m()}
+          </p>
+        )}
       </Show>
 
       <Switch>

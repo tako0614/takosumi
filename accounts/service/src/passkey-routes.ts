@@ -16,7 +16,7 @@ import {
   readJsonObject,
   stringArrayValue,
   stringValue,
- takosumiSubjectValue,
+  takosumiSubjectValue,
 } from "./http-helpers.ts";
 import {
   extractAccountSessionId,
@@ -27,6 +27,7 @@ import {
   type PasskeyChallengeIntent,
   passkeyChallengeKey,
 } from "./passkey-challenge-store.ts";
+import { consoleErrorRedacted } from "./redacted-log.ts";
 
 /**
  * Server-minted passkey challenge handling. Browsers must NOT pick their own
@@ -52,10 +53,10 @@ function mintChallenge(): string {
   crypto.getRandomValues(bytes);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(
-    /=+$/,
-    "",
-  );
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 async function issueChallenge(input: {
@@ -121,21 +122,24 @@ export async function handlePasskeyRegisterOptions(input: {
     sessionId,
     intent: "register",
   });
-  return json(createPasskeyRegistrationOptions({
-    rp: {
-      id: input.passkeys.rpId,
-      name: input.passkeys.rpName,
-    },
-    user: {
-      id: subject,
-      name: stringValue(body.userName) ?? account.email ?? subject,
-      displayName: stringValue(body.displayName) ??
-        account.displayName ??
-        account.email ??
-        subject,
-    },
-    challenge,
-  }));
+  return json(
+    createPasskeyRegistrationOptions({
+      rp: {
+        id: input.passkeys.rpId,
+        name: input.passkeys.rpName,
+      },
+      user: {
+        id: subject,
+        name: stringValue(body.userName) ?? account.email ?? subject,
+        displayName:
+          stringValue(body.displayName) ??
+          account.displayName ??
+          account.email ??
+          subject,
+      },
+      challenge,
+    }),
+  );
 }
 
 export async function handlePasskeyRegisterComplete(input: {
@@ -164,7 +168,7 @@ export async function handlePasskeyRegisterComplete(input: {
   const subject = takosumiSubjectValue(body.subject);
   const credentialId = stringValue(body.credentialId);
   const publicKeyJwk = isRecord(body.publicKeyJwk)
-    ? body.publicKeyJwk as JsonWebKey
+    ? (body.publicKeyJwk as JsonWebKey)
     : undefined;
   // Agent 6 item 2 + 4 (fail-closed): the registration ceremony fields are
   // MANDATORY, symmetric with authenticate/complete. Previously they were
@@ -205,7 +209,11 @@ export async function handlePasskeyRegisterComplete(input: {
       presented: presentedChallenge,
     });
     if (!consumed.ok) {
-      return errorJson(consumed.error, consumed.error.replaceAll("_", " "), 400);
+      return errorJson(
+        consumed.error,
+        consumed.error.replaceAll("_", " "),
+        400,
+      );
     }
     // Agent 6 item 4: verify the registration ceremony matches the issued
     // challenge / origin / attestation policy. These checks are now always
@@ -217,11 +225,12 @@ export async function handlePasskeyRegisterComplete(input: {
         clientDataJSON,
       });
     } catch (error) {
-      console.error(
-        "passkey_registration_clientdata_failed",
-        error instanceof Error ? error.stack ?? error.message : String(error),
+      consoleErrorRedacted("passkey_registration_clientdata_failed", error);
+      return errorJson(
+        "passkey_registration_failed",
+        "passkey registration verification failed",
+        400,
       );
-      return errorJson("passkey_registration_failed", "passkey registration verification failed", 400);
     }
     try {
       await verifyPasskeyAttestationFormat({
@@ -230,11 +239,12 @@ export async function handlePasskeyRegisterComplete(input: {
         rpId: input.passkeys.rpId,
       });
     } catch (error) {
-      console.error(
-        "passkey_registration_attestation_failed",
-        error instanceof Error ? error.stack ?? error.message : String(error),
+      consoleErrorRedacted("passkey_registration_attestation_failed", error);
+      return errorJson(
+        "passkey_registration_failed",
+        "passkey registration verification failed",
+        400,
       );
-      return errorJson("passkey_registration_failed", "passkey registration verification failed", 400);
     }
   }
 
@@ -253,11 +263,12 @@ export async function handlePasskeyRegisterComplete(input: {
       sign_count: credential.signCount,
     });
   } catch (error) {
-    console.error(
+    consoleErrorRedacted("passkey_registration_failed", error);
+    return errorJson(
       "passkey_registration_failed",
-      error instanceof Error ? error.stack ?? error.message : String(error),
+      "passkey registration failed",
+      400,
     );
-    return errorJson("passkey_registration_failed", "passkey registration failed", 400);
   }
 }
 
@@ -273,9 +284,8 @@ export async function handlePasskeyAuthenticateOptions(input: {
   const account = await input.store.findAccount(subject);
   if (!account) return errorJson("account_not_found", "account not found", 404);
 
-  const credentials = await input.store.listPasskeyCredentialsForSubject(
-    subject,
-  );
+  const credentials =
+    await input.store.listPasskeyCredentialsForSubject(subject);
 
   // Agent 6 item 2 + 3: server-mint challenge keyed by (subject,
   // sessionId, intent). For authenticate, sessionId is normally null
@@ -288,20 +298,23 @@ export async function handlePasskeyAuthenticateOptions(input: {
     sessionId,
     intent: "authenticate",
   });
-  return json(createPasskeyAuthenticationOptions({
-    rpId: input.passkeys.rpId,
-    challenge,
-    allowCredentials: credentials.map((credential) => ({
-      id: credential.credentialId,
-      type: "public-key" as const,
-    })),
-  }));
+  return json(
+    createPasskeyAuthenticationOptions({
+      rpId: input.passkeys.rpId,
+      challenge,
+      allowCredentials: credentials.map((credential) => ({
+        id: credential.credentialId,
+        type: "public-key" as const,
+      })),
+    }),
+  );
 }
 
 export async function handlePasskeyAuthenticateComplete(input: {
   request: Request;
   store: AccountsStore;
   passkeys: PasskeyHttpOptions;
+  secureCookie: boolean;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -325,11 +338,14 @@ export async function handlePasskeyAuthenticateComplete(input: {
   // yet (we'll know after authenticatePasskey resolves it from the
   // credentialId); use the credential subject after lookup. To support
   // pre-login (no session) the consume key is the same as issue.
-  const existingCredential = await input.store.findPasskeyCredential(
-    credentialId,
-  );
+  const existingCredential =
+    await input.store.findPasskeyCredential(credentialId);
   if (!existingCredential) {
-    return errorJson("passkey_authentication_failed", "passkey credential is not registered", 401);
+    return errorJson(
+      "passkey_authentication_failed",
+      "passkey credential is not registered",
+      401,
+    );
   }
   const presentingSessionId = extractAccountSessionId(input.request);
   const consumed = await consumeChallenge({
@@ -373,7 +389,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
     // (CLI / Tauri) should send the Authorization bearer themselves and
     // are not the primary user of this endpoint.
     const cookie = serializeAccountSessionCookie(rotated.sessionId, {
-      secure: new URL(input.request.url).protocol === "https:",
+      secure: input.secureCookie,
       maxAgeSeconds: Math.max(1, Math.floor(ttlMs / 1000)),
     });
     return json(
@@ -388,10 +404,11 @@ export async function handlePasskeyAuthenticateComplete(input: {
       },
     );
   } catch (error) {
-    console.error(
+    consoleErrorRedacted("passkey_authentication_failed", error);
+    return errorJson(
       "passkey_authentication_failed",
-      error instanceof Error ? error.stack ?? error.message : String(error),
+      "passkey authentication failed",
+      401,
     );
-    return errorJson("passkey_authentication_failed", "passkey authentication failed", 401);
   }
 }

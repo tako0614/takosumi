@@ -39,7 +39,9 @@ export function ConfirmDialogRenderer() {
             class="tg-confirm-icon"
             classList={{ danger: Boolean(state().danger) }}
           >
-            <Icons.AlertTriangle style={{ width: "1.25rem", height: "1.25rem" }} />
+            <Icons.AlertTriangle
+              style={{ width: "1.25rem", height: "1.25rem" }}
+            />
           </div>
           <h3 class="tg-confirm-title">{state().title}</h3>
           <p class="tg-confirm-message">{state().message}</p>

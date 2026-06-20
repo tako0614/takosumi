@@ -4,17 +4,13 @@
  * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
  * Space subscription mutation methods, the per-plan credit-reservation
  * evaluation, the apply-time reserve / capture / release / expire ceremony, the
- * monthly-credit reconciliation, and the per-Space managed-default apply cap.
+ * monthly-credit reconciliation, and basic billing reservation.
  * The controller holds one instance, re-exposes `changeSpaceSubscription` /
  * `reconcileStripeSpaceSubscription` on its public API unchanged, and the
  * run-engine call sites delegate to `this.#billing.<method>`.
  *
- * Two seams stay on the controller and are injected as ports rather than moved:
- *   - `requireSpace` — the shared Space-existence guard (used by many non-billing
- *     controller methods too);
- *   - `resolveRunProviderBindings` — the run-scoped provider-binding resolution
- *     that the managed-default cap consults to tell operator-default credential
- *     usage apart from a Space's own Connections.
+ * The shared `requireSpace` guard stays on the controller and is injected as a
+ * port rather than moved.
  */
 
 import type { JsonValue } from "takosumi-contract";
@@ -33,7 +29,6 @@ import type {
 import { billingReservationRequired } from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
 import { evaluateQuotaPolicy } from "takosumi-policy";
-import type { ResolvedProviderBinding } from "../connections/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { OpenTofuPlanResult } from "./mod.ts";
@@ -257,10 +252,9 @@ export interface ReconcileStripeSpaceSubscriptionInput {
 }
 
 /**
- * Ports the controller injects into {@link BillingService}. The two seams that
- * stay on the controller (`requireSpace` / `resolveRunProviderBindings`) are
- * passed as callbacks rather than moved; `store` / `newId` / `now` mirror the
- * controller's own handles so timestamps and ids line up across both surfaces.
+ * Ports the controller injects into {@link BillingService}. The Space guard is
+ * passed as a callback; `store` / `newId` / `now` mirror the controller's own
+ * handles so timestamps and ids line up across both surfaces.
  */
 export interface BillingServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
@@ -268,41 +262,28 @@ export interface BillingServiceDependencies {
   readonly now: () => number;
   /** Operator/self-host billing default (§28); Space.billingSettings overrides it. */
   readonly defaultBillingSettings: BillingSettings;
-  /** Per-Space cumulative write-apply ceiling on the operator-default credential. */
-  readonly managedDefaultApplyCap?: number;
   /** Shared Space-existence guard (used by many non-billing controller methods too). */
   readonly requireSpace: (spaceId: string) => Promise<Space>;
-  /** Run-scoped provider-binding resolution (the managed-default cap consults it). */
-  readonly resolveRunProviderBindings: (
-    planRun: PlanRun,
-  ) => Promise<readonly ResolvedProviderBinding[] | undefined>;
 }
 
 /**
  * Collaborator owning the Space billing subsystem: subscription mutation, the
  * per-plan credit reservation, the apply-time reserve / capture / release /
- * expire ceremony, monthly-credit reconciliation, and the managed-default apply
- * cap. Behavior is identical to the prior inline controller methods.
+ * expire ceremony, and monthly-credit reconciliation.
  */
 export class BillingService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #defaultBillingSettings: BillingSettings;
-  readonly #managedDefaultApplyCap?: number;
   readonly #requireSpace: (spaceId: string) => Promise<Space>;
-  readonly #resolveRunProviderBindings: (
-    planRun: PlanRun,
-  ) => Promise<readonly ResolvedProviderBinding[] | undefined>;
 
   constructor(dependencies: BillingServiceDependencies) {
     this.#store = dependencies.store;
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
     this.#defaultBillingSettings = dependencies.defaultBillingSettings;
-    this.#managedDefaultApplyCap = dependencies.managedDefaultApplyCap;
     this.#requireSpace = dependencies.requireSpace;
-    this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
   }
 
   async changeSpaceSubscription(
@@ -445,66 +426,6 @@ export class BillingService {
       periodStartIso: new Date(periodStartMs).toISOString(),
       updatedAt: nowIso,
     });
-  }
-
-  /**
-   * Per-Space cumulative write-apply ceiling on the managed (operator-key)
-   * default (P2 operator-economic guard). Apply on the `enforce`-mode hosted
-   * SaaS path is already gated by credit reservation; a free/default Space is
-   * NOT in `enforce` mode, so on the operator-pays managed key there is
-   * otherwise no in-code ceiling on how much a Space can spend by repeatedly
-   * applying. This gate fail-closes the unbounded hole, but ONLY when:
-   *   1. the operator configured a cap (`managedDefaultApplyCap`) — omitted on
-   *      the self-host build target, which is uncapped;
-   *   2. billing is NOT `enforce` (the credit path already covers `enforce`);
-   *   3. the run actually resolves to an operator-default credential (a
-   *      `default`-mode binding backed by an operator-scoped Connection) — so a
-   *      self-hoster (or any Space) applying on its OWN Connection is never
-   *      capped. The cap protects the OPERATOR'S key, not billing mode alone.
-   * The cumulative count is the Space's total successful write-applies, derived
-   * from the per-Installation `currentStateGeneration` (bumped +1 by every
-   * create / update / destroy_apply), so no new ledger write is introduced.
-   */
-  async assertManagedDefaultApplyCap(planRun: PlanRun): Promise<void> {
-    const cap = this.#managedDefaultApplyCap;
-    if (cap === undefined) return;
-    // A destroy is the way to STOP spending on the operator key, so it must
-    // never be blocked by the spend cap — capping teardown would trap a Space
-    // at its ceiling with no way to reclaim the operator's resources.
-    if (planRun.operation === "destroy") return;
-    const settings = await this.billingSettingsForSpace(planRun.spaceId);
-    if (settings.mode === "enforce") return;
-    if (!(await this.#runUsesOperatorDefaultCredential(planRun))) return;
-    const installations = await this.#store.listInstallations(planRun.spaceId);
-    const appliedCount = installations.reduce(
-      (total, installation) => total + (installation.currentStateGeneration ?? 0),
-      0,
-    );
-    if (appliedCount >= cap) {
-      throw new OpenTofuControllerError(
-        "resource_exhausted",
-        `managed_apply_cap_reached: space ${planRun.spaceId} has reached the ` +
-          `operator-default apply cap (${appliedCount}/${cap}); connect your own ` +
-          `provider Connection or enable enforce-mode billing to continue`,
-      );
-    }
-  }
-
-  /**
-   * True when a run's provider bindings resolve to an operator-default
-   * credential: a `default`-mode binding that fell through to an OPERATOR-scoped
-   * Connection (the managed key). A run that binds only the Space's own
-   * Connections (mode `connection`), `manual`, or `disabled` returns false, so
-   * self-host on an owned Connection is never treated as managed usage. A run
-   * without installation context (no resolvable bindings) also returns false.
-   */
-  async #runUsesOperatorDefaultCredential(planRun: PlanRun): Promise<boolean> {
-    const resolved = await this.#resolveRunProviderBindings(planRun);
-    if (!resolved) return false;
-    return resolved.some(
-      (entry) =>
-        entry.mode === "default" && entry.connection?.scope === "operator",
-    );
   }
 
   async evaluatePlanBillingReservation(input: {

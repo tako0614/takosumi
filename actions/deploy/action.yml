@@ -1,22 +1,22 @@
 name: Takosumi Deploy
-description: Plan or apply a plain OpenTofu module through the Takosumi Deploy Control API.
+description: Upload a local OpenTofu Capsule to Takosumi and create a plan/apply Run.
 
 inputs:
   source:
-    description: OpenTofu module source input (git URL, prepared source URL, or local path).
+    description: Local OpenTofu Capsule directory checked out in this workflow.
     required: true
     default: .
   space:
     description: Target Takosumi Space id.
     required: true
   remote-url:
-    description: Base URL of the Takosumi Deploy Control HTTP server.
+    description: Takosumi platform origin or deploy-control API base URL.
     required: true
   token:
-    description: Deploy Control bearer for /v1/plan-runs and /v1/apply-runs.
+    description: Takosumi API bearer for /api/v1 upload, deploy, and run reads.
     required: true
   providers:
-    description: Comma-separated OpenTofu provider source addresses reviewed for this module.
+    description: Comma-separated provider connection bindings, e.g. cloudflare=pcn_cf or cloudflare=takos_provided.
     required: true
   mode:
     description: apply or plan.
@@ -53,7 +53,7 @@ runs:
 
         case "$TAKOSUMI_ACTION_MODE" in
           apply)
-            subcommand=(install "$TAKOSUMI_ACTION_SOURCE")
+            subcommand=(deploy "$TAKOSUMI_ACTION_SOURCE")
             ;;
           plan)
             subcommand=(plan "$TAKOSUMI_ACTION_SOURCE")

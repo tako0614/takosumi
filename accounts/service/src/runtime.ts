@@ -52,11 +52,13 @@ export class InMemorySharedCellWarmPool {
     input: SharedCellRuntimeAllocationInput,
   ): RuntimeBindingRecord | undefined {
     const existing = this.#slots.find((slot) =>
-      slot.assignedInstallations.has(input.installationId)
+      slot.assignedInstallations.has(input.installationId),
     );
-    const slot = existing ??
-      this.#slots.find((candidate) =>
-        candidate.assignedInstallations.size < candidate.capacity
+    const slot =
+      existing ??
+      this.#slots.find(
+        (candidate) =>
+          candidate.assignedInstallations.size < candidate.capacity,
       );
     if (!slot) return undefined;
     slot.assignedInstallations.add(input.installationId);
@@ -91,8 +93,7 @@ export function sharedCellRuntimeBinding(input: {
     installationId: input.installationId,
     mode: "shared-cell",
     targetType: "shared-cell",
-    targetId:
-      `shared-cell://${input.cellId}/namespaces/${input.installationId}`,
+    targetId: `shared-cell://${input.cellId}/namespaces/${input.installationId}`,
     createdAt: input.now,
     updatedAt: input.now,
   };

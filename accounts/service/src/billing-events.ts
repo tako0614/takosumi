@@ -16,108 +16,108 @@ export interface StripeWebhookEvent {
 
 export type StripeBillingEvent =
   | {
-    kind: "checkout_completed";
-    eventId: string;
-    subject?: TakosumiSubject;
-    customerId?: string;
-    subscriptionId?: string;
-    stripePriceId?: string;
-    planCode?: string;
-    paymentStatus?: string;
-  }
+      kind: "checkout_completed";
+      eventId: string;
+      subject?: TakosumiSubject;
+      customerId?: string;
+      subscriptionId?: string;
+      stripePriceId?: string;
+      planCode?: string;
+      paymentStatus?: string;
+    }
   | {
-    kind: "invoice_paid";
-    eventId: string;
-    customerId: string;
-    invoiceId?: string;
-    currentPeriodEndUnix?: number;
-  }
+      kind: "invoice_paid";
+      eventId: string;
+      customerId: string;
+      invoiceId?: string;
+      currentPeriodEndUnix?: number;
+    }
   | {
-    kind: "invoice_payment_failed";
-    eventId: string;
-    customerId: string;
-    invoiceId?: string;
-    nextPaymentAttemptUnix?: number;
-    attemptCount?: number;
-  }
+      kind: "invoice_payment_failed";
+      eventId: string;
+      customerId: string;
+      invoiceId?: string;
+      nextPaymentAttemptUnix?: number;
+      attemptCount?: number;
+    }
   | {
-    kind: "invoice_dunning_updated";
-    eventId: string;
-    customerId: string;
-    invoiceId?: string;
-    nextPaymentAttemptUnix?: number;
-    attemptCount?: number;
-  }
+      kind: "invoice_dunning_updated";
+      eventId: string;
+      customerId: string;
+      invoiceId?: string;
+      nextPaymentAttemptUnix?: number;
+      attemptCount?: number;
+    }
   | {
-    kind: "invoice_marked_uncollectible";
-    eventId: string;
-    customerId: string;
-    invoiceId?: string;
-  }
+      kind: "invoice_marked_uncollectible";
+      eventId: string;
+      customerId: string;
+      invoiceId?: string;
+    }
   | {
-    kind: "subscription_updated";
-    eventId: string;
-    customerId: string;
-    status: BillingAccountStatus;
-    stripePriceId?: string;
-    planCode?: string;
-    currentPeriodEndUnix?: number;
-  }
+      kind: "subscription_updated";
+      eventId: string;
+      customerId: string;
+      status: BillingAccountStatus;
+      stripePriceId?: string;
+      planCode?: string;
+      currentPeriodEndUnix?: number;
+    }
   | {
-    kind: "tax_policy_recorded";
-    eventId: string;
-    customerId: string;
-    invoiceId?: string;
-    taxPolicyRef?: string;
-    taxJurisdiction?: string;
-    taxAutomaticStatus?: string;
-  }
+      kind: "tax_policy_recorded";
+      eventId: string;
+      customerId: string;
+      invoiceId?: string;
+      taxPolicyRef?: string;
+      taxJurisdiction?: string;
+      taxAutomaticStatus?: string;
+    }
   | {
-    kind: "subscription_canceled";
-    eventId: string;
-    customerId: string;
-    cancellation?: BillingCancellationRecord;
-  }
+      kind: "subscription_canceled";
+      eventId: string;
+      customerId: string;
+      cancellation?: BillingCancellationRecord;
+    }
   | {
-    kind: "dispute_opened";
-    eventId: string;
-    // Real Stripe Dispute webhook payloads carry NO top-level `customer`; the
-    // owner is resolved later (in apply) from the `charge` / `payment_intent`
-    // string id. `customerId` is only populated on the rare path where Stripe
-    // already inlined it.
-    customerId?: string;
-    disputeId: string;
-    chargeId?: string;
-    paymentIntentId?: string;
-    reason?: string;
-    status?: string;
-    openedAtUnix?: number;
-  }
+      kind: "dispute_opened";
+      eventId: string;
+      // Real Stripe Dispute webhook payloads carry NO top-level `customer`; the
+      // owner is resolved later (in apply) from the `charge` / `payment_intent`
+      // string id. `customerId` is only populated on the rare path where Stripe
+      // already inlined it.
+      customerId?: string;
+      disputeId: string;
+      chargeId?: string;
+      paymentIntentId?: string;
+      reason?: string;
+      status?: string;
+      openedAtUnix?: number;
+    }
   | {
-    kind: "dispute_closed";
-    eventId: string;
-    customerId?: string;
-    disputeId: string;
-    chargeId?: string;
-    paymentIntentId?: string;
-    reason?: string;
-    status?: string;
-    closedAtUnix?: number;
-  }
+      kind: "dispute_closed";
+      eventId: string;
+      customerId?: string;
+      disputeId: string;
+      chargeId?: string;
+      paymentIntentId?: string;
+      reason?: string;
+      status?: string;
+      closedAtUnix?: number;
+    }
   | {
-    kind: "credit_recorded";
-    eventId: string;
-    customerId: string;
-    creditKind: "refund" | "credit_note";
-    creditId: string;
-    amount?: number;
-    currency?: string;
-  }
+      kind: "credit_recorded";
+      eventId: string;
+      customerId: string;
+      creditKind: "refund" | "credit_note";
+      creditId: string;
+      amount?: number;
+      currency?: string;
+    }
   | {
-    kind: "unhandled";
-    eventId: string;
-    eventType: string;
-  };
+      kind: "unhandled";
+      eventId: string;
+      eventType: string;
+    };
 
 export function normalizeStripeBillingEvent(
   event: StripeWebhookEvent,
@@ -133,9 +133,10 @@ export function normalizeStripeBillingEvent(
         subscriptionId: stripeId(object.subscription),
         stripePriceId: stripePriceIdFromObject(object),
         planCode: planCodeFromMetadata(object.metadata),
-        paymentStatus: typeof object.payment_status === "string"
-          ? object.payment_status
-          : undefined,
+        paymentStatus:
+          typeof object.payment_status === "string"
+            ? object.payment_status
+            : undefined,
       };
     case "invoice.paid": {
       const customerId = stripeId(object.customer);
@@ -152,62 +153,62 @@ export function normalizeStripeBillingEvent(
       const customerId = stripeId(object.customer);
       return customerId
         ? {
-          kind: "invoice_payment_failed",
-          eventId: event.id,
-          customerId,
-          invoiceId: stripeId(object.id),
-          nextPaymentAttemptUnix: typeof object.next_payment_attempt ===
-              "number"
-            ? object.next_payment_attempt
-            : undefined,
-          attemptCount: positiveInteger(object.attempt_count),
-        }
+            kind: "invoice_payment_failed",
+            eventId: event.id,
+            customerId,
+            invoiceId: stripeId(object.id),
+            nextPaymentAttemptUnix:
+              typeof object.next_payment_attempt === "number"
+                ? object.next_payment_attempt
+                : undefined,
+            attemptCount: positiveInteger(object.attempt_count),
+          }
         : unhandled(event);
     }
     case "invoice.updated": {
       const customerId = stripeId(object.customer);
       return customerId &&
-          hasInvoiceDunningSignal(object, event.data.previous_attributes)
+        hasInvoiceDunningSignal(object, event.data.previous_attributes)
         ? {
-          kind: "invoice_dunning_updated",
-          eventId: event.id,
-          customerId,
-          invoiceId: stripeId(object.id),
-          nextPaymentAttemptUnix: typeof object.next_payment_attempt ===
-              "number"
-            ? object.next_payment_attempt
-            : undefined,
-          attemptCount: positiveInteger(object.attempt_count),
-        }
+            kind: "invoice_dunning_updated",
+            eventId: event.id,
+            customerId,
+            invoiceId: stripeId(object.id),
+            nextPaymentAttemptUnix:
+              typeof object.next_payment_attempt === "number"
+                ? object.next_payment_attempt
+                : undefined,
+            attemptCount: positiveInteger(object.attempt_count),
+          }
         : unhandled(event);
     }
     case "invoice.marked_uncollectible": {
       const customerId = stripeId(object.customer);
       return customerId
         ? {
-          kind: "invoice_marked_uncollectible",
-          eventId: event.id,
-          customerId,
-          invoiceId: stripeId(object.id),
-        }
+            kind: "invoice_marked_uncollectible",
+            eventId: event.id,
+            customerId,
+            invoiceId: stripeId(object.id),
+          }
         : unhandled(event);
     }
     case "invoice.finalized": {
       const customerId = stripeId(object.customer);
       return customerId
         ? {
-          kind: "tax_policy_recorded",
-          eventId: event.id,
-          customerId,
-          invoiceId: stripeId(object.id),
-          taxPolicyRef: stringFromMetadata(
-            object.metadata,
-            "tax_policy_ref",
-            "taxPolicyRef",
-          ),
-          taxJurisdiction: taxJurisdictionFromInvoice(object),
-          taxAutomaticStatus: taxAutomaticStatusFromObject(object),
-        }
+            kind: "tax_policy_recorded",
+            eventId: event.id,
+            customerId,
+            invoiceId: stripeId(object.id),
+            taxPolicyRef: stringFromMetadata(
+              object.metadata,
+              "tax_policy_ref",
+              "taxPolicyRef",
+            ),
+            taxJurisdiction: taxJurisdictionFromInvoice(object),
+            taxAutomaticStatus: taxAutomaticStatusFromObject(object),
+          }
         : unhandled(event);
     }
     // Stripe sends `customer.subscription.created` when a subscription is
@@ -231,9 +232,10 @@ export function normalizeStripeBillingEvent(
           JSON.stringify({
             eventId: event.id,
             eventType: event.type,
-            status: typeof object.status === "string"
-              ? object.status
-              : typeof object.status,
+            status:
+              typeof object.status === "string"
+                ? object.status
+                : typeof object.status,
           }),
         );
         return unhandled(event);
@@ -265,8 +267,8 @@ export function normalizeStripeBillingEvent(
       // payment_intent id) and let the apply layer resolve the owner. We only
       // need a `disputeId` plus *some* link to proceed; without any link the
       // event genuinely cannot be associated with an account.
-      const customerId = stripeId(object.customer) ??
-        chargeCustomerIdFromDispute(object);
+      const customerId =
+        stripeId(object.customer) ?? chargeCustomerIdFromDispute(object);
       const disputeId = stripeId(object.id);
       const chargeId = stripeId(object.charge);
       const paymentIntentId = stripeId(object.payment_intent);
@@ -286,8 +288,8 @@ export function normalizeStripeBillingEvent(
       };
     }
     case "charge.dispute.closed": {
-      const customerId = stripeId(object.customer) ??
-        chargeCustomerIdFromDispute(object);
+      const customerId =
+        stripeId(object.customer) ?? chargeCustomerIdFromDispute(object);
       const disputeId = stripeId(object.id);
       const chargeId = stripeId(object.charge);
       const paymentIntentId = stripeId(object.payment_intent);
@@ -311,14 +313,14 @@ export function normalizeStripeBillingEvent(
       const creditId = stripeId(object.id);
       return customerId && creditId
         ? {
-          kind: "credit_recorded",
-          eventId: event.id,
-          customerId,
-          creditKind: "credit_note",
-          creditId,
-          amount: positiveInteger(object.amount),
-          currency: lowercaseString(object.currency),
-        }
+            kind: "credit_recorded",
+            eventId: event.id,
+            customerId,
+            creditKind: "credit_note",
+            creditId,
+            amount: positiveInteger(object.amount),
+            currency: lowercaseString(object.currency),
+          }
         : unhandled(event);
     }
     case "charge.refunded": {
@@ -327,34 +329,37 @@ export function normalizeStripeBillingEvent(
       const creditId = stripeId(refund?.id) ?? stripeId(object.id);
       return customerId && creditId
         ? {
-          kind: "credit_recorded",
-          eventId: event.id,
-          customerId,
-          creditKind: "refund",
-          creditId,
-          amount: positiveInteger(object.amount_refunded) ??
-            positiveInteger(refund?.amount),
-          currency: lowercaseString(object.currency) ??
-            lowercaseString(refund?.currency),
-        }
+            kind: "credit_recorded",
+            eventId: event.id,
+            customerId,
+            creditKind: "refund",
+            creditId,
+            amount:
+              positiveInteger(object.amount_refunded) ??
+              positiveInteger(refund?.amount),
+            currency:
+              lowercaseString(object.currency) ??
+              lowercaseString(refund?.currency),
+          }
         : unhandled(event);
     }
     case "refund.created": {
-      const customerId = stripeId(object.customer) ??
+      const customerId =
+        stripeId(object.customer) ??
         (isRecord(object.charge)
           ? stripeId(object.charge.customer)
           : undefined);
       const creditId = stripeId(object.id);
       return customerId && creditId
         ? {
-          kind: "credit_recorded",
-          eventId: event.id,
-          customerId,
-          creditKind: "refund",
-          creditId,
-          amount: positiveInteger(object.amount),
-          currency: lowercaseString(object.currency),
-        }
+            kind: "credit_recorded",
+            eventId: event.id,
+            customerId,
+            creditKind: "refund",
+            creditId,
+            amount: positiveInteger(object.amount),
+            currency: lowercaseString(object.currency),
+          }
         : unhandled(event);
     }
     default:
@@ -430,17 +435,20 @@ function subscriptionCancellationFromObject(
   const details = isRecord(object.cancellation_details)
     ? object.cancellation_details
     : undefined;
-  const reason = typeof object.cancellation_reason === "string"
-    ? object.cancellation_reason
-    : (details && typeof details.reason === "string"
-      ? details.reason
-      : undefined);
-  const feedback = details && typeof details.feedback === "string"
-    ? details.feedback
-    : undefined;
-  const comment = details && typeof details.comment === "string"
-    ? details.comment
-    : undefined;
+  const reason =
+    typeof object.cancellation_reason === "string"
+      ? object.cancellation_reason
+      : details && typeof details.reason === "string"
+        ? details.reason
+        : undefined;
+  const feedback =
+    details && typeof details.feedback === "string"
+      ? details.feedback
+      : undefined;
+  const comment =
+    details && typeof details.comment === "string"
+      ? details.comment
+      : undefined;
   if (
     canceledAt === undefined &&
     reason === undefined &&
@@ -479,8 +487,10 @@ function hasInvoiceDunningSignal(
 ): boolean {
   if (typeof object.next_payment_attempt === "number") return true;
   if (!isRecord(previousAttributes)) return false;
-  return "next_payment_attempt" in previousAttributes ||
-    "attempt_count" in previousAttributes;
+  return (
+    "next_payment_attempt" in previousAttributes ||
+    "attempt_count" in previousAttributes
+  );
 }
 
 function lowercaseString(value: unknown): string | undefined {
@@ -495,7 +505,7 @@ function takosumiSubjectFromMetadata(
   if (!isRecord(value)) return undefined;
   const subject = value.takosumi_subject;
   return typeof subject === "string" && subject.startsWith("tsub_")
-    ? subject as TakosumiSubject
+    ? (subject as TakosumiSubject)
     : undefined;
 }
 
@@ -531,9 +541,9 @@ function stringFromMetadata(
   ...keys: readonly string[]
 ): string | undefined {
   if (!isRecord(value)) return undefined;
-  const found = keys.map((key) => value[key]).find((item) =>
-    typeof item === "string" && item.trim().length > 0
-  );
+  const found = keys
+    .map((key) => value[key])
+    .find((item) => typeof item === "string" && item.trim().length > 0);
   return typeof found === "string" ? found.trim() : undefined;
 }
 
@@ -553,11 +563,14 @@ function taxAutomaticStatusFromObject(
   const automaticTax = isRecord(object.automatic_tax)
     ? object.automatic_tax
     : undefined;
-  const status = typeof automaticTax?.status === "string"
-    ? automaticTax.status
-    : typeof automaticTax?.enabled === "boolean"
-    ? automaticTax.enabled ? "enabled" : "disabled"
-    : undefined;
+  const status =
+    typeof automaticTax?.status === "string"
+      ? automaticTax.status
+      : typeof automaticTax?.enabled === "boolean"
+        ? automaticTax.enabled
+          ? "enabled"
+          : "disabled"
+        : undefined;
   return status && /^[a-z_]+$/.test(status) ? status : undefined;
 }
 

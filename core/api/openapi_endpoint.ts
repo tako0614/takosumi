@@ -14,30 +14,40 @@ export const OPENAPI_ENDPOINTS: readonly ApiEndpoint[] = [
     method: "GET",
     path: "/openapi.json",
     summary:
-      "Returns the OpenAPI 3.1 document describing the current service surface (this document).",
-    auth: "none",
+      "Returns the operator-gated process OpenAPI 3.1 inventory for the currently mounted route families.",
+    auth: "inventory-bearer",
     operationId: "getOpenApi",
     tag: "openapi",
     openapi: {
       okSchema: "EmptyResponse",
       customOperation: {
         tags: ["openapi"],
+        security: [{ inventoryBearer: [] }],
         responses: {
           "200": {
-            description: "OpenAPI 3.1 document.",
+            description:
+              "Process OpenAPI 3.1 inventory for the mounted service route families.",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   description:
-                    "OpenAPI 3.1 document; clients should treat its shape as opaque except for the standard OpenAPI fields.",
+                    "Customer-safe process OpenAPI 3.1 inventory. Host-internal /internal/v1 route families are mounted separately and intentionally omitted.",
                   additionalProperties: true,
                 },
               },
             },
           },
+          "401": {
+            description: "JSON response",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ErrorResponse" },
+              },
+            },
+          },
         },
-        "x-takos-auth": "none",
+        "x-takos-auth": "inventory-bearer",
         "x-takos-mounted-path": "/openapi.json",
       },
     },

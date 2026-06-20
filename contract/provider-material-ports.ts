@@ -6,7 +6,7 @@
  * Extracted from the now-removed `implementation-sdk.ts` reference SDK. That
  * module also carried in-memory reference *implementations* of these ports, but
  * those classes were an independent parallel-universe copy of the live
- * `src/service/` runtime and prone to silent drift. Only the port *contracts*
+ * `core/` runtime and prone to silent drift. Only the port *contracts*
  * below are consumed by the contract layer, so only the contracts live here.
  */
 import type { ActorContext, JsonObject } from "./types.ts";

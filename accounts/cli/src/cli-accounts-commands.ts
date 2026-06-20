@@ -1,15 +1,15 @@
 import {
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
- takosumiAccountsAccountTokenRevokePath,
+  takosumiAccountsAccountTokenRevokePath,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   createEphemeralAccountsHandler,
-  createMetadataOnlyInstallationExportWorker,
   InMemoryAccountsStore,
   InMemorySharedCellWarmPool,
 } from "@takosjp/takosumi-accounts-service";
+import { createMetadataOnlyInstallationExportWorker } from "../../service/src/export-archive.ts";
 import {
   accountsLaunchTokensCleanupHelpText,
   accountsMigrateD1HelpText,
@@ -48,22 +48,20 @@ import {
 import {
   bindingMaterializerPlan,
   buildHttpMaterializeWorkerConfig,
-  buildDeployControlProxyOptions,
-  buildManagedOfferingAccessConfig,
+  buildDeployControlDiagnosticConfig,
+  buildPlatformReadinessAccessConfig,
   buildMetadataExportWorkerConfig,
   buildPasskeyOptions,
   buildSharedCellScaleOutPolicyConfig,
   buildSharedCellWarmPoolConfig,
   buildStaticBindingMaterializerConfig,
-  buildStaticImportDataRestorerConfig,
   buildStripeBillingOptions,
   buildUpstreamOAuthOptions,
-  buildWorkloadPlatformServiceResolverConfig,
+  buildServiceGraphMaterialResolverConfig,
   composeBindingMaterializers,
   httpMaterializeWorker,
   staticBindingMaterializer,
   staticExportDataProvider,
-  staticImportDataRestorer,
 } from "./cli-serve-runtime.ts";
 import {
   formatAccountsTokenCreate,
@@ -147,9 +145,7 @@ export async function runAccountsMigrate(
       databaseConfig as AccountsDatabaseConfig,
       migrations,
     );
-    io.stdout(
-      `Takosumi Accounts migrations applied: ${result.applied.length}`,
-    );
+    io.stdout(`Takosumi Accounts migrations applied: ${result.applied.length}`);
     if (result.skipped.length > 0) {
       io.stdout(
         `Takosumi Accounts migrations skipped: ${result.skipped.length}`,
@@ -170,10 +166,12 @@ export async function runAccountsMigrate(
  * Run the `accounts migrate-d1` subcommand.
  *
  * Translates CLI flags (`--database-id`, `--account-id`, `--dry-run`,
- * `--json`) into an `applyD1AccountsMigrations` call. Tests can substitute a
- * different `D1ExecuteCommand` through the optional second argument to keep
- * the suite hermetic (the production code path shells out to
- * `npx wrangler d1 execute`, which would hit the real Cloudflare API).
+ * `--json`) into an `applyD1AccountsMigrations` call. The option name is
+ * historical; Wrangler 4's `d1 execute` positional is a database name or
+ * binding. Tests can substitute a different `D1ExecuteCommand` through the
+ * optional second argument to keep the suite hermetic (the production code path
+ * shells out to `npx wrangler d1 execute`, which would hit the real Cloudflare
+ * API).
  *
  * Exit codes:
  *   - 0 on success.
@@ -358,7 +356,7 @@ export async function runAccountsServe(
   }
   let deployControl;
   try {
-    deployControl = await buildDeployControlProxyOptions(options);
+    deployControl = await buildDeployControlDiagnosticConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -366,9 +364,7 @@ export async function runAccountsServe(
   let staticBindingMaterializerConfig;
   try {
     staticBindingMaterializerConfig =
-      await buildStaticBindingMaterializerConfig(
-        options,
-      );
+      await buildStaticBindingMaterializerConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -382,9 +378,8 @@ export async function runAccountsServe(
   }
   let sharedCellScaleOutPolicyConfig;
   try {
-    sharedCellScaleOutPolicyConfig = await buildSharedCellScaleOutPolicyConfig(
-      options,
-    );
+    sharedCellScaleOutPolicyConfig =
+      await buildSharedCellScaleOutPolicyConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -400,10 +395,10 @@ export async function runAccountsServe(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
   }
-  let workloadPlatformServiceResolverConfig;
+  let serviceGraphMaterialResolverConfig;
   try {
-    workloadPlatformServiceResolverConfig =
-      await buildWorkloadPlatformServiceResolverConfig(options);
+    serviceGraphMaterialResolverConfig =
+      await buildServiceGraphMaterialResolverConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -411,15 +406,6 @@ export async function runAccountsServe(
   let exportWorkerConfig;
   try {
     exportWorkerConfig = await buildMetadataExportWorkerConfig(options);
-  } catch (error) {
-    io.stderr(error instanceof Error ? error.message : String(error));
-    return 2;
-  }
-  let importDataRestorerConfig;
-  try {
-    importDataRestorerConfig = await buildStaticImportDataRestorerConfig(
-      options,
-    );
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -442,9 +428,9 @@ export async function runAccountsServe(
     );
     return 2;
   }
-  let managedOfferingAccess;
+  let platformAccess;
   try {
-    managedOfferingAccess = await buildManagedOfferingAccessConfig(options);
+    platformAccess = await buildPlatformReadinessAccessConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -458,73 +444,70 @@ export async function runAccountsServe(
     oidcClient: seedPlan.oidcClient,
     stripeBilling: stripeBilling
       ? {
-        configured: true,
-        stripeApiBase: stripeBilling.stripeApiBase,
-        webhookToleranceSeconds: stripeBilling.webhookToleranceSeconds,
-      }
+          configured: true,
+          stripeApiBase: stripeBilling.stripeApiBase,
+          webhookToleranceSeconds: stripeBilling.webhookToleranceSeconds,
+        }
       : { configured: false },
     upstreamOAuth: upstreamOAuth
       ? {
-        configured: true,
-        providers: upstreamOAuth.providers.map((provider) =>
-          provider.providerId
-        ),
-        sessionTtlMs: upstreamOAuth.sessionTtlMs,
-      }
+          configured: true,
+          providers: upstreamOAuth.providers.map(
+            (provider) => provider.providerId,
+          ),
+          sessionTtlMs: upstreamOAuth.sessionTtlMs,
+        }
       : { configured: false },
     passkeys: passkeys
       ? {
-        configured: true,
-        rpId: passkeys.rpId,
-        rpName: passkeys.rpName,
-        origin: passkeys.origin,
-        sessionTtlMs: passkeys.sessionTtlMs,
-      }
+          configured: true,
+          rpId: passkeys.rpId,
+          rpName: passkeys.rpName,
+          origin: passkeys.origin,
+          sessionTtlMs: passkeys.sessionTtlMs,
+        }
       : { configured: false },
     deployControl: deployControl
       ? {
-        configured: true,
-        url: deployControl.url,
-        tokenConfigured: Boolean(deployControl.token),
-      }
+          configured: true,
+          url: deployControl.url,
+          tokenConfigured: Boolean(deployControl.token),
+        }
       : { configured: false },
     bindingMaterializer: bindingMaterializerPlan({
       staticConfig: staticBindingMaterializerConfig,
     }),
     sharedCellRuntime: sharedCellWarmPoolConfig
       ? {
-        configured: true,
-        source: sharedCellWarmPoolConfig.source,
-        slots: sharedCellWarmPoolConfig.slots,
-        scaleOutPolicy: sharedCellScaleOutPolicyConfig
-          ? {
-            source: sharedCellScaleOutPolicyConfig.source,
-            policy: sharedCellScaleOutPolicyConfig.policy,
-          }
-          : undefined,
-      }
+          configured: true,
+          source: sharedCellWarmPoolConfig.source,
+          slots: sharedCellWarmPoolConfig.slots,
+          scaleOutPolicy: sharedCellScaleOutPolicyConfig
+            ? {
+                source: sharedCellScaleOutPolicyConfig.source,
+                policy: sharedCellScaleOutPolicyConfig.policy,
+              }
+            : undefined,
+        }
       : { configured: false },
     materializeWorker: materializeWorkerConfig
       ? {
-        configured: true,
-        source: materializeWorkerConfig.source,
-        url: materializeWorkerConfig.url,
-        tokenConfigured: Boolean(materializeWorkerConfig.token),
-      }
-      : { configured: false },
-    workloadPlatformServices: {
-      paths: [
-        "identity.primary.oidc",
-        "billing.primary.default",
-      ],
-      resolver: workloadPlatformServiceResolverConfig
-        ? {
           configured: true,
-          source: workloadPlatformServiceResolverConfig.source,
-          tokenConfigured: true,
-          billingPortalUrl:
-            workloadPlatformServiceResolverConfig.billingPortalUrl,
+          source: materializeWorkerConfig.source,
+          url: materializeWorkerConfig.url,
+          tokenConfigured: Boolean(materializeWorkerConfig.token),
         }
+      : { configured: false },
+    serviceGraphMaterialResolver: {
+      paths: ["takosumi.identity.oidc", "takosumi.billing.usage"],
+      resolver: serviceGraphMaterialResolverConfig
+        ? {
+            configured: true,
+            source: serviceGraphMaterialResolverConfig.source,
+            tokenConfigured: true,
+            billingPortalUrl:
+              serviceGraphMaterialResolverConfig.billingPortalUrl,
+          }
         : { configured: false },
     },
     accountPlaneFacades: [
@@ -533,51 +516,44 @@ export async function runAccountsServe(
     ],
     exportWorker: exportWorkerConfig
       ? {
-        configured: true,
-        source: exportWorkerConfig.source,
-        outputDirectory: exportWorkerConfig.outputDirectory,
-        downloadBaseUrl: exportWorkerConfig.downloadBaseUrl,
-        dataDirectory: exportWorkerConfig.dataDirectory,
-        ttlMs: exportWorkerConfig.ttlMs,
-      }
-      : { configured: false },
-    importDataRestorer: importDataRestorerConfig
-      ? {
-        configured: true,
-        source: importDataRestorerConfig.source,
-        outputDirectory: importDataRestorerConfig.outputDirectory,
-      }
+          configured: true,
+          source: exportWorkerConfig.source,
+          outputDirectory: exportWorkerConfig.outputDirectory,
+          downloadBaseUrl: exportWorkerConfig.downloadBaseUrl,
+          dataDirectory: exportWorkerConfig.dataDirectory,
+          ttlMs: exportWorkerConfig.ttlMs,
+        }
       : { configured: false },
     persistence: databaseConfig
       ? {
-        configured: true,
-        driver: "postgres",
-        source: databaseConfig.source,
-      }
+          configured: true,
+          driver: "postgres",
+          source: databaseConfig.source,
+        }
       : {
-        configured: false,
-        driver: "memory",
-      },
+          configured: false,
+          driver: "memory",
+        },
     devSession: {
       configured: Boolean(devSessionId),
     },
-    managedOfferingAccess: {
-      status: managedOfferingAccess.status,
-      source: managedOfferingAccess.source,
-      ...(managedOfferingAccess.readinessFile
-        ? { readinessFile: managedOfferingAccess.readinessFile }
+    platformAccess: {
+      status: platformAccess.status,
+      source: platformAccess.source,
+      ...(platformAccess.readinessFile
+        ? { readinessFile: platformAccess.readinessFile }
         : {}),
-      ...(managedOfferingAccess.readinessDigest
-        ? { readinessDigest: managedOfferingAccess.readinessDigest }
+      ...(platformAccess.readinessDigest
+        ? { readinessDigest: platformAccess.readinessDigest }
         : {}),
-      ...(managedOfferingAccess.evidenceRef
-        ? { evidenceRef: managedOfferingAccess.evidenceRef }
+      ...(platformAccess.evidenceRef
+        ? { evidenceRef: platformAccess.evidenceRef }
         : {}),
-      ...(managedOfferingAccess.approvalRef
-        ? { approvalRef: managedOfferingAccess.approvalRef }
+      ...(platformAccess.approvalRef
+        ? { approvalRef: platformAccess.approvalRef }
         : {}),
-      ...(managedOfferingAccess.publicSummary
-        ? { publicSummary: managedOfferingAccess.publicSummary }
+      ...(platformAccess.publicSummary
+        ? { publicSummary: platformAccess.publicSummary }
         : {}),
     },
   };
@@ -625,25 +601,27 @@ export async function runAccountsServe(
       // opt out of the fail-closed ephemeral-key guard. Production wiring uses
       // the Cloudflare / node-postgres distributions with a stable JWK.
       allowEphemeralKeyOnHttpsIssuer: true,
-      clients: [{
-        clientId: seedPlan.oidcClient.clientId,
-        redirectUris: seedPlan.oidcClient.redirectUris,
-      }],
+      clients: [
+        {
+          clientId: seedPlan.oidcClient.clientId,
+          redirectUris: seedPlan.oidcClient.redirectUris,
+        },
+      ],
       store: accountsStore,
       stripeBilling,
       upstreamOAuth,
       passkeys,
-      // The account-plane deploy-control proxy is in-process only (it dispatches
+      // The account-plane deploy-control path is in-process only (it dispatches
       // through the injected typed `operations` facade). The standalone CLI serve
-      // has no operations to inject, so it wires no live proxy; the parsed
+      // has no operations to inject; the parsed
       // `--deploy-control-*` config is used only for the dry-run diagnostic.
       bindingMaterializer: composeBindingMaterializers([
         ...(staticBindingMaterializerConfig
           ? [
-            staticBindingMaterializer(
-              staticBindingMaterializerConfig.materials,
-            ),
-          ]
+              staticBindingMaterializer(
+                staticBindingMaterializerConfig.materials,
+              ),
+            ]
           : []),
       ]),
       sharedCellRuntime: sharedCellWarmPool
@@ -652,31 +630,28 @@ export async function runAccountsServe(
       materializeWorker: materializeWorkerConfig
         ? httpMaterializeWorker(materializeWorkerConfig)
         : undefined,
-      workloadPlatformServices: workloadPlatformServiceResolverConfig,
+      serviceGraphMaterialResolver: serviceGraphMaterialResolverConfig,
       exportWorker: exportWorkerConfig
         ? createMetadataOnlyInstallationExportWorker({
-          ...exportWorkerConfig,
-          ...(exportWorkerConfig.dataDirectory
-            ? {
-              dataProvider: staticExportDataProvider(
-                exportWorkerConfig.dataDirectory,
-              ),
-            }
-            : {}),
-        })
+            ...exportWorkerConfig,
+            ...(exportWorkerConfig.dataDirectory
+              ? {
+                  dataProvider: staticExportDataProvider(
+                    exportWorkerConfig.dataDirectory,
+                  ),
+                }
+              : {}),
+          })
         : undefined,
-      importDataRestorer: importDataRestorerConfig
-        ? staticImportDataRestorer(importDataRestorerConfig.outputDirectory)
-        : undefined,
-      managedOfferingAccess,
+      platformAccess,
     });
     Bun.serve({ hostname, port, fetch: handler });
     io.stdout(`Takosumi Accounts listening at http://${hostname}:${port}`);
     io.stdout(`Accounts persistence: ${servePlan.persistence.driver}`);
     io.stdout(
-      `Operator platform services: ${
-        servePlan.workloadPlatformServices.paths.join(", ")
-      }`,
+      `Operator platform services: ${servePlan.serviceGraphMaterialResolver.paths.join(
+        ", ",
+      )}`,
     );
     await new Promise(() => {});
     return 0;

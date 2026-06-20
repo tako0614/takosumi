@@ -20,20 +20,28 @@ const TONE_CLASS: Record<Tone, string> = {
 export default function Toast(props: Props): JSX.Element {
   const tone = () => props.tone ?? "neutral";
   return (
-    <div class={`tg-toast ${TONE_CLASS[tone()]}`} role={tone() === "error" ? "alert" : "status"}>
+    <div
+      class={`tg-toast ${TONE_CLASS[tone()]}`}
+      role={tone() === "error" ? "alert" : "status"}
+    >
       <Show
         when={props.icon}
         fallback={
           <Show when={tone() !== "neutral"}>
             <span aria-hidden="true" style="display:inline-flex">
-              <Show when={tone() === "success"} fallback={<XCircle size={16} />}>
+              <Show
+                when={tone() === "success"}
+                fallback={<XCircle size={16} />}
+              >
                 <CheckCircle2 size={16} />
               </Show>
             </span>
           </Show>
         }
       >
-        <span aria-hidden="true" style="display:inline-flex">{props.icon}</span>
+        <span aria-hidden="true" style="display:inline-flex">
+          {props.icon}
+        </span>
       </Show>
       <span>{props.children}</span>
     </div>

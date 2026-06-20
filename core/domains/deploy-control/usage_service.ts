@@ -5,7 +5,7 @@
  * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
  * Space-scoped billing READ projection (`getSpaceBilling` / `listSpaceUsage` /
  * `listSpaceCreditReservations`), the operator/meter usage-event writes
- * (`recordMeteredUsage` / `recordManagedResourceUsage`), the invoice
+ * (`recordMeteredUsage` / `recordGatewayResourceUsage`), the invoice
  * reconciliation adjustment (`reconcileInvoiceUsage`), and the manual credit
  * top-up (`topUpSpaceCredits`). The controller holds one instance and re-exposes
  * each method on its public API unchanged, so the `/api` billing route layer and
@@ -33,7 +33,7 @@ import type {
   CreditBalance,
   CreditReservation,
   InvoiceUsageReconciliation,
-  ManagedResourceUsageMeter,
+  GatewayResourceUsageMeter,
   SpaceSubscription,
   UsageEvent,
   UsageEventKind,
@@ -56,10 +56,10 @@ export interface RecordMeteredUsageInput {
   readonly createdAt?: string;
 }
 
-export interface RecordManagedResourceUsageInput {
+export interface RecordGatewayResourceUsageInput {
   readonly periodStart: string;
   readonly periodEnd: string;
-  readonly meters: readonly ManagedResourceUsageMeter[];
+  readonly meters: readonly GatewayResourceUsageMeter[];
 }
 
 export interface ReconcileInvoiceUsageInput {
@@ -223,9 +223,9 @@ export class UsageReportingService {
     return { usageEvent };
   }
 
-  async recordManagedResourceUsage(
+  async recordGatewayResourceUsage(
     spaceId: string,
-    input: RecordManagedResourceUsageInput,
+    input: RecordGatewayResourceUsageInput,
   ): Promise<{ readonly usageEvents: readonly UsageEvent[] }> {
     requireNonEmptyString(spaceId, "spaceId");
     await this.#requireSpace(spaceId);
@@ -240,7 +240,7 @@ export class UsageReportingService {
         quantity: meter.quantity,
         credits: meter.credits,
         idempotencyKey: [
-          "managed-resource",
+          "provider-runtime",
           spaceId,
           period.periodStart,
           period.periodEnd,
@@ -399,7 +399,7 @@ function normalizeMeteredUsageEvent(
   };
 }
 
-function normalizeUsagePeriod(input: RecordManagedResourceUsageInput): {
+function normalizeUsagePeriod(input: RecordGatewayResourceUsageInput): {
   readonly periodStart: string;
   readonly periodEnd: string;
 } {
@@ -412,20 +412,20 @@ function normalizeUsagePeriod(input: RecordManagedResourceUsageInput): {
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "managed resource usage period must have valid ISO periodStart < periodEnd",
+      "Gateway resource usage period must have valid ISO periodStart < periodEnd",
     );
   }
   if (!Array.isArray(input.meters)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "managed resource usage meters must be an array",
+      "Gateway resource usage meters must be an array",
     );
   }
   for (const meter of input.meters) {
-    if (!isManagedResourceUsageKind(meter.kind)) {
+    if (!isGatewayResourceUsageKind(meter.kind)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "managed resource usage kind is not supported",
+        "Gateway resource usage kind is not supported",
       );
     }
     requireNonEmptyString(meter.meterId, "meterId");
@@ -461,8 +461,8 @@ function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
 function isUsageEventKind(value: unknown): value is UsageEventKind {
   return (
     value === "runner_minute" ||
-    value === "managed_compute" ||
-    value === "managed_storage_gb_hour" ||
+    value === "gateway_compute" ||
+    value === "gateway_storage_gb_hour" ||
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb" ||
@@ -470,12 +470,12 @@ function isUsageEventKind(value: unknown): value is UsageEventKind {
   );
 }
 
-function isManagedResourceUsageKind(
+function isGatewayResourceUsageKind(
   value: unknown,
-): value is ManagedResourceUsageMeter["kind"] {
+): value is GatewayResourceUsageMeter["kind"] {
   return (
-    value === "managed_compute" ||
-    value === "managed_storage_gb_hour" ||
+    value === "gateway_compute" ||
+    value === "gateway_storage_gb_hour" ||
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb"

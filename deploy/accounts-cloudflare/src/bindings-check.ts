@@ -17,7 +17,7 @@
 
 /** Required binding names, grouped by kind, for the platform worker. */
 export const REQUIRED_PLATFORM_BINDINGS = {
-  d1: ["TAKOSUMI_ACCOUNTS_DB", "TAKOS_D1"],
+  d1: ["TAKOSUMI_ACCOUNTS_DB", "TAKOSUMI_CONTROL_DB"],
   r2: [
     "TAKOSUMI_ACCOUNTS_EXPORTS",
     "R2_ARTIFACTS",

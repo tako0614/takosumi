@@ -3,8 +3,8 @@ import type {
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppBindingRecord,
-  AppGrantRecord,
+  ServiceBindingMaterialRecord,
+  ServiceGrantMaterialRecord,
   AppInstallationLedgerStore,
   InstallationEventRecord,
   InstallationRecord,
@@ -13,8 +13,8 @@ import type {
   SpaceRecord,
 } from "./ledger.ts";
 import {
-  assertValidAppBindingRecord,
-  assertValidAppGrantRecord,
+  assertValidServiceBindingMaterialRecord,
+  assertValidServiceGrantMaterialRecord,
 } from "./ledger.ts";
 
 export interface AuthorizationCodeRecord {
@@ -22,7 +22,7 @@ export interface AuthorizationCodeRecord {
   redirectUri: string;
   scope: string;
   subject: string;
- takosumiSubject?: TakosumiSubject;
+  takosumiSubject?: TakosumiSubject;
   installationId?: string;
   appId?: string;
   spaceId?: string;
@@ -37,7 +37,7 @@ export interface TokenRecord {
   clientId: string;
   scope: string;
   subject: string;
- takosumiSubject?: TakosumiSubject;
+  takosumiSubject?: TakosumiSubject;
   installationId?: string;
   appId?: string;
   spaceId?: string;
@@ -134,9 +134,9 @@ export interface LaunchTokenRecord {
 export type LaunchTokenConsumeResult =
   | { ok: true; record: LaunchTokenRecord }
   | {
-    ok: false;
-    reason: "not_found" | "redirect_mismatch" | "expired" | "used";
-  };
+      ok: false;
+      reason: "not_found" | "redirect_mismatch" | "expired" | "used";
+    };
 
 export interface LaunchTokenPruneResult {
   deleted: number;
@@ -350,9 +350,7 @@ export interface AccountsStore extends AppInstallationLedgerStore {
     | TakosumiAccountRecord
     | undefined
     | Promise<TakosumiAccountRecord | undefined>;
-  linkUpstreamIdentity(
-    record: UpstreamIdentityRecord,
-  ): void | Promise<void>;
+  linkUpstreamIdentity(record: UpstreamIdentityRecord): void | Promise<void>;
   findUpstreamIdentity(input: {
     providerId: string;
     upstreamIssuer: string;
@@ -361,9 +359,7 @@ export interface AccountsStore extends AppInstallationLedgerStore {
     | UpstreamIdentityRecord
     | undefined
     | Promise<UpstreamIdentityRecord | undefined>;
-  savePasskeyCredential(
-    record: PasskeyCredentialRecord,
-  ): void | Promise<void>;
+  savePasskeyCredential(record: PasskeyCredentialRecord): void | Promise<void>;
   findPasskeyCredential(
     credentialId: string,
   ):
@@ -446,9 +442,7 @@ export interface AccountsStore extends AppInstallationLedgerStore {
    */
   claimBillingWebhookEvent(
     record: BillingWebhookEventRecord,
-  ):
-    | BillingWebhookEventClaimResult
-    | Promise<BillingWebhookEventClaimResult>;
+  ): BillingWebhookEventClaimResult | Promise<BillingWebhookEventClaimResult>;
   saveBillingUsageRecord(record: BillingUsageRecord): void | Promise<void>;
   findBillingUsageRecord(
     usageReportId: string,
@@ -616,10 +610,12 @@ export interface AccountsStore extends AppInstallationLedgerStore {
    * exchanging the given authorization code. The caller is responsible
    * for cascading the refresh chain revocations.
    */
-  revokeTokensIssuedFromCode(code: string): {
-    access: readonly string[];
-    refresh: readonly string[];
-  } | Promise<{ access: readonly string[]; refresh: readonly string[] }>;
+  revokeTokensIssuedFromCode(code: string):
+    | {
+        access: readonly string[];
+        refresh: readonly string[];
+      }
+    | Promise<{ access: readonly string[]; refresh: readonly string[] }>;
   /**
    * Retention cleanup for the refresh-chain / authorization-code tracking
    * tables (migrations 019 / 021). These tables append a row on every
@@ -684,8 +680,10 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #spaces = new Map<string, SpaceRecord>();
   readonly #installations = new Map<string, InstallationRecord>();
   readonly #runtimeBindings = new Map<string, RuntimeBindingRecord>();
-  readonly #appBindings = new Map<string, AppBindingRecord>();
-  readonly #appGrants = new Map<string, AppGrantRecord>();
+  readonly #serviceBindingMaterials = new Map<
+    string,
+    ServiceBindingMaterialRecord
+  >();
   readonly #installationEvents = new Map<string, InstallationEventRecord[]>();
   readonly #upstreamIdentities = new Map<string, UpstreamIdentityRecord>();
   readonly #passkeyCredentials = new Map<string, PasskeyCredentialRecord>();
@@ -698,10 +696,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
   readonly #accessTokens = new Map<string, TokenRecord>();
   readonly #refreshTokens = new Map<string, TokenRecord>();
-  readonly #personalAccessTokens = new Map<
-    string,
-    PersonalAccessTokenRecord
-  >();
+  readonly #personalAccessTokens = new Map<string, PersonalAccessTokenRecord>();
   readonly #personalAccessTokenIdsBySecret = new Map<string, string>();
   readonly #launchTokenConsumptions = new Map<
     string,
@@ -743,8 +738,8 @@ export class InMemoryAccountsStore implements AccountsStore {
       emailVerified: record.emailVerified ?? existing?.emailVerified,
       termsVersion: record.termsVersion ?? existing?.termsVersion,
       termsAcceptedAt: record.termsAcceptedAt ?? existing?.termsAcceptedAt,
-      termsAcceptedSource: record.termsAcceptedSource ??
-        existing?.termsAcceptedSource,
+      termsAcceptedSource:
+        record.termsAcceptedSource ?? existing?.termsAcceptedSource,
     });
   }
 
@@ -782,8 +777,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   }
 
   listSpacesForAccount(accountId: string): readonly SpaceRecord[] {
-    return [...this.#spaces.values()].filter((space) =>
-      space.accountId === accountId
+    return [...this.#spaces.values()].filter(
+      (space) => space.accountId === accountId,
     );
   }
 
@@ -795,7 +790,7 @@ export class InMemoryAccountsStore implements AccountsStore {
       }
     }
     return [...this.#spaces.values()].filter((space) =>
-      ownedAccountIds.has(space.accountId)
+      ownedAccountIds.has(space.accountId),
     );
   }
 
@@ -803,25 +798,21 @@ export class InMemoryAccountsStore implements AccountsStore {
     this.#installations.set(record.installationId, record);
   }
 
-  findAppInstallation(
-    installationId: string,
-  ): InstallationRecord | undefined {
+  findAppInstallation(installationId: string): InstallationRecord | undefined {
     return this.#installations.get(installationId);
   }
 
-  listAppInstallationsForSpace(
-    spaceId: string,
-  ): readonly InstallationRecord[] {
-    return [...this.#installations.values()].filter((installation) =>
-      installation.spaceId === spaceId
+  listAppInstallationsForSpace(spaceId: string): readonly InstallationRecord[] {
+    return [...this.#installations.values()].filter(
+      (installation) => installation.spaceId === spaceId,
     );
   }
 
   listAppInstallationsForBillingAccount(
     billingAccountId: string,
   ): readonly InstallationRecord[] {
-    return [...this.#installations.values()].filter((installation) =>
-      installation.billingAccountId === billingAccountId
+    return [...this.#installations.values()].filter(
+      (installation) => installation.billingAccountId === billingAccountId,
     );
   }
 
@@ -835,34 +826,36 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#runtimeBindings.get(runtimeBindingId);
   }
 
-  saveAppBinding(record: AppBindingRecord): void {
-    assertValidAppBindingRecord(record);
-    this.#appBindings.set(record.bindingId, record);
+  saveServiceBindingMaterial(record: ServiceBindingMaterialRecord): void {
+    assertValidServiceBindingMaterialRecord(record);
+    this.#serviceBindingMaterials.set(record.bindingId, record);
   }
 
-  listAppBindingsForInstallation(
+  listServiceBindingMaterialsForInstallation(
     installationId: string,
-  ): readonly AppBindingRecord[] {
-    return [...this.#appBindings.values()].filter((binding) =>
-      binding.installationId === installationId
+  ): readonly ServiceBindingMaterialRecord[] {
+    return [...this.#serviceBindingMaterials.values()].filter(
+      (binding) => binding.installationId === installationId,
     );
   }
 
-  saveAppGrant(record: AppGrantRecord): void {
-    assertValidAppGrantRecord(record);
-    this.#appGrants.set(record.grantId, record);
+  saveServiceGrantMaterial(record: ServiceGrantMaterialRecord): void {
+    assertValidServiceGrantMaterialRecord(record);
+    void record;
   }
 
-  findAppGrant(grantId: string): AppGrantRecord | undefined {
-    return this.#appGrants.get(grantId);
+  findServiceGrantMaterial(
+    grantId: string,
+  ): ServiceGrantMaterialRecord | undefined {
+    void grantId;
+    return undefined;
   }
 
-  listAppGrantsForInstallation(
+  listServiceGrantMaterialsForInstallation(
     installationId: string,
-  ): readonly AppGrantRecord[] {
-    return [...this.#appGrants.values()].filter((grant) =>
-      grant.installationId === installationId
-    );
+  ): readonly ServiceGrantMaterialRecord[] {
+    void installationId;
+    return [];
   }
 
   appendInstallationEvent(record: InstallationEventRecord): void {
@@ -901,8 +894,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   listPasskeyCredentialsForSubject(
     subject: TakosumiSubject,
   ): readonly PasskeyCredentialRecord[] {
-    return [...this.#passkeyCredentials.values()].filter((credential) =>
-      credential.subject === subject
+    return [...this.#passkeyCredentials.values()].filter(
+      (credential) => credential.subject === subject,
     );
   }
 
@@ -970,9 +963,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   findBillingAccountByStripeCustomerId(
     stripeCustomerId: string,
   ): BillingAccountRecord | undefined {
-    const billingAccountId = this.#billingAccountsByStripeCustomerId.get(
-      stripeCustomerId,
-    );
+    const billingAccountId =
+      this.#billingAccountsByStripeCustomerId.get(stripeCustomerId);
     return billingAccountId
       ? this.#billingAccounts.get(billingAccountId)
       : undefined;
@@ -1012,8 +1004,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   listBillingUsageRecordsForInstallation(
     installationId: string,
   ): readonly BillingUsageRecord[] {
-    return [...this.#billingUsageRecords.values()].filter((record) =>
-      record.installationId === installationId
+    return [...this.#billingUsageRecords.values()].filter(
+      (record) => record.installationId === installationId,
     );
   }
 
@@ -1087,10 +1079,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     return { ...updated };
   }
 
-  recordPersonalAccessTokenUsed(
-    tokenId: string,
-    lastUsedAt: number,
-  ): void {
+  recordPersonalAccessTokenUsed(tokenId: string, lastUsedAt: number): void {
     const record = this.#personalAccessTokens.get(tokenId);
     if (!record) return;
     this.#personalAccessTokens.set(tokenId, { ...record, lastUsedAt });
@@ -1168,10 +1157,7 @@ export class InMemoryAccountsStore implements AccountsStore {
       this.#oidcClientsByInstallation.delete(existing.installationId);
     }
     this.#oidcClients.set(record.clientId, record);
-    this.#oidcClientsByInstallation.set(
-      record.installationId,
-      record.clientId,
-    );
+    this.#oidcClientsByInstallation.set(record.installationId, record.clientId);
   }
 
   findOidcClient(clientId: string): OidcClientRecord | undefined {
@@ -1264,8 +1250,8 @@ export class InMemoryAccountsStore implements AccountsStore {
     refreshTokenRoot: string,
     accessToken: string,
   ): void {
-    const root = this.#refreshChainRoots.get(refreshTokenRoot) ??
-      refreshTokenRoot;
+    const root =
+      this.#refreshChainRoots.get(refreshTokenRoot) ?? refreshTokenRoot;
     let set = this.#refreshChainAccessTokens.get(root);
     if (!set) {
       set = new Set();
@@ -1274,9 +1260,10 @@ export class InMemoryAccountsStore implements AccountsStore {
     set.add(accessToken);
   }
 
-  revokeTokensIssuedFromCode(
-    code: string,
-  ): { access: readonly string[]; refresh: readonly string[] } {
+  revokeTokensIssuedFromCode(code: string): {
+    access: readonly string[];
+    refresh: readonly string[];
+  } {
     const entry = this.#authorizationCodeTokens.get(code);
     if (!entry) return { access: [], refresh: [] };
     // Cascade-delete the access tokens issued from this code, then
@@ -1380,9 +1367,7 @@ function upstreamIdentityKey(input: {
   upstreamIssuer: string;
   upstreamSubject: string;
 }): string {
-  return [
-    input.providerId,
-    input.upstreamIssuer,
-    input.upstreamSubject,
-  ].join("\n");
+  return [input.providerId, input.upstreamIssuer, input.upstreamSubject].join(
+    "\n",
+  );
 }

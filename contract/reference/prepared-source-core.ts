@@ -17,7 +17,7 @@
  *  - paths and link targets are normalized and rejected when they escape.
  *
  * This module lives in `contract/reference/*` — the layer that the runner and
- * `src/runtime-agent` extraction sites both import — so the single tar-verify /
+ * `core/runtime-agent` extraction sites both import — so the single tar-verify /
  * capped-fetch core cannot drift between them and silently weaken one of them.
  *
  * Error MESSAGE text differs slightly between the two callers (one prefixes
@@ -49,8 +49,13 @@ export function isSha256Digest(value: string): boolean {
 }
 
 export function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 ||
-    status === 307 || status === 308;
+  return (
+    status === 301 ||
+    status === 302 ||
+    status === 303 ||
+    status === 307 ||
+    status === 308
+  );
 }
 
 /**
@@ -75,11 +80,9 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   const hash = await crypto.subtle.digest("SHA-256", buffer);
-  return `sha256:${
-    Array.from(new Uint8Array(hash))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  }`;
+  return `sha256:${Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 /**
@@ -95,8 +98,10 @@ export async function readBodyWithCap(
   response: Response,
   cap: number,
   label: string,
-  tooLargeMessage: (label: string, cap: number) => string =
-    defaultExceedsCapMessage,
+  tooLargeMessage: (
+    label: string,
+    cap: number,
+  ) => string = defaultExceedsCapMessage,
 ): Promise<Uint8Array> {
   const body = response.body;
   if (body === null) {
@@ -220,8 +225,8 @@ export function normalizeTarEntryPath(entry: string, label: string): string {
   }
   const segments = withoutTrailingSlash.split("/");
   if (
-    segments.some((segment) =>
-      segment.length === 0 || segment === "." || segment === ".."
+    segments.some(
+      (segment) => segment.length === 0 || segment === "." || segment === "..",
     )
   ) {
     throw new Error(`${label} escapes destination: ${entry}`);
@@ -242,9 +247,12 @@ export function assertSafeTarLinkTarget(
     throw new Error(`${label} link target is unsafe: ${target}`);
   }
   if (
-    target.split("/").some((segment) =>
-      segment.length === 0 || segment === "." || segment === ".."
-    )
+    target
+      .split("/")
+      .some(
+        (segment) =>
+          segment.length === 0 || segment === "." || segment === "..",
+      )
   ) {
     throw new Error(`${label} link target escapes destination: ${target}`);
   }

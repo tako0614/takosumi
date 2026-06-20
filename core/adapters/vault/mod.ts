@@ -52,9 +52,13 @@ import {
   mintGitSourceCredential,
 } from "@takosumi/providers/git/credentials.ts";
 import {
-  mintProviderEnvSetVariables,
-  ProviderEnvSetDriverError,
-} from "@takosumi/providers/provider-env-set/credentials.ts";
+  mintGenericEnvProviderVariables,
+  GenericEnvProviderDriverError,
+} from "@takosumi/providers/generic-env-provider/credentials.ts";
+import {
+  validateGenericEnvProviderRegistration,
+  GenericEnvProviderConnectionError,
+} from "@takosumi/providers/generic-env-provider/connection.ts";
 import { verifyDriverForKind } from "./verify_drivers.ts";
 import type {
   OpenTofuDeploymentStore,
@@ -157,7 +161,7 @@ export class ConnectionVaultError extends Error {
  * rules IN the vault:
  *   - `source`  -> ONLY git-kind connections; returns env + files.
  *   - `build`   -> ALWAYS empty; error if any connection / provider is asked for.
- *   - `plan` / `apply` / `destroy` -> ONLY provider connections; git excluded.
+ *   - `plan` / `apply` / `destroy` -> ONLY provider env bindings; git excluded.
  */
 export interface MintRequest {
   readonly spaceId: string;
@@ -179,13 +183,13 @@ export interface MintRequest {
   readonly connectionIds?: readonly string[];
 }
 
-/** One provider binding credential mint entry. */
-export interface ProviderBindingMintEntry {
+/** One provider env binding credential mint entry. */
+export interface InstallationProviderEnvBindingMintEntry {
   /** Provider rule, short (`cloudflare`) or registry form. */
   readonly provider: string;
   /** Optional OpenTofu provider alias declared by the generated root. */
   readonly alias?: string;
-  /** The Connection this provider binding resolved to. */
+  /** The Connection this provider env binding resolved to. */
   readonly connectionId: string;
 }
 
@@ -195,8 +199,8 @@ export interface ConnectionVault {
   revoke(id: string): Promise<boolean>;
   /**
    * Mints a {@link CredentialBundle} of env vars for the given providers within
-   * a space. Only verified connections may mint. This is the backward-compatible
-   * provider-mint path; it is equivalent to
+   * a space. Only verified connections may mint. This is the default
+   * provider-mint helper for plan/apply callers; it is equivalent to
    * `mintForPhase({ phase: "plan", providers })`.
    */
   mint(
@@ -211,20 +215,20 @@ export interface ConnectionVault {
    */
   mintForPhase(request: MintRequest): Promise<PhaseMintBundle>;
   /**
-   * Per-binding credential mint. For each provider binding entry the
+   * Per-connection credential mint. For each provider env binding entry the
    * vault re-validates the id (existence + space ownership, like
    * {@link MintRequest.connectionIds}), opens the connection's sealed values, and
    * maps its credential env names to `TF_VAR_<provider>_<alias>_<arg>`
    * entries using the provider arg mapping (cloudflare: `api_token`; aws:
-   * `access_key` / `secret_key` / `token`). A provider env set connection maps
-   * its declared variables to `TF_VAR_<variable>`.
+   * `access_key` / `secret_key` / `token`). A generic-env provider-env provider
+   * connection maps its declared variables to `TF_VAR_<variable>`.
    * A connection whose provider has neither mapping contributes no TF_VAR.
    * Phase rule: tofu phases only (plan / apply / destroy). The returned bundle
    * carries ONLY the per-alias TF_VAR env. Never serialized into logs.
    */
-  mintForProviderBindings(
+  mintForInstallationProviderEnvBindings(
     spaceId: string,
-    entries: readonly ProviderBindingMintEntry[],
+    entries: readonly InstallationProviderEnvBindingMintEntry[],
     options?: { readonly phase?: MintPhase },
   ): Promise<PhaseMintBundle>;
 }
@@ -304,7 +308,7 @@ type CloudflareTokenVendingConfig = NonNullable<
   ConnectionScopeHints["cloudflareTokenVending"]
 >;
 
-/** Injected fetch seam so `test()` is unit-testable without real network. */
+/** Injected fetch implementation so `test()` is unit-testable without real network. */
 export type VaultFetch = (
   input: string,
   init?: RequestInit,
@@ -334,12 +338,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   async register(input: RegisterConnectionInput): Promise<Connection> {
-    // spaceId is absent for an operator-scoped connection (spec §8); when
+    // spaceId is absent for a global helper connection; when
     // present it must be a real id.
     if (input.spaceId !== undefined || input.scope === "space") {
       requireNonEmpty(input.spaceId, "spaceId");
     }
-    // Privilege-escalation guard: an operator default (spec §8) has NO owning
+    // Privilege-escalation guard: a global helper connection has NO owning
     // Space, so a caller-supplied `scope: "operator"` must never win against a
     // present spaceId. A hybrid `{ spaceId, scope: "operator" }` row would
     // otherwise bypass the `scope === "space" && spaceId mismatch` cross-tenant
@@ -361,11 +365,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       return await this.#registerGitConnection(input, input.kind);
     }
     requireNonEmpty(input.provider, "provider");
+    const genericEnvRegistration =
+      input.kind === "generic_env_provider"
+        ? validateGenericEnvProviderInput(input)
+        : undefined;
     const rule = providerEnvRule(input.provider);
     if (!rule) {
-      return await this.#registerGenericProviderEnvSet(input);
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `generic-env provider ${input.provider} has no explicit env allowlist`,
+      );
     }
-    const values = input.values;
+    const values = genericEnvRegistration?.values ?? input.values;
     if (
       values === null ||
       typeof values !== "object" ||
@@ -377,7 +388,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const allowed = new Set(allowedEnvNamesForProvider(input.provider));
-    const envNames = Object.keys(values);
+    const envNames = genericEnvRegistration?.envNames ?? Object.keys(values);
     if (envNames.length === 0) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -442,6 +453,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(input.spaceId ? { spaceId: input.spaceId } : {}),
       provider: input.provider,
       kind: connectionKind,
+      ...(input.credentialDriver
+        ? { credentialDriver: input.credentialDriver }
+        : {}),
       scope: input.scope ?? (input.spaceId ? "space" : "operator"),
       authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -455,96 +469,23 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(expiresAt ? { expiresAt } : {}),
     };
     await this.#store.putConnection(connection);
-    return connection;
-  }
-
-  async #registerGenericProviderEnvSet(
-    input: RegisterConnectionInput,
-  ): Promise<Connection> {
-    if (!input.spaceId || input.scope === "operator") {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        "user provider env sets for unknown providers must be Space-scoped",
-      );
+    if (connection.spaceId) {
+      await this.#store.putProviderEnv({
+        id: connection.id,
+        spaceId: connection.spaceId,
+        providerSource: connection.provider,
+        displayName: connection.displayName ?? connection.provider,
+        materialization: isOAuthCredentialDriver(connection.credentialDriver)
+          ? "oauth"
+          : "secret",
+        status: connection.status === "verified" ? "ready" : "needs_setup",
+        requiredEnvNames: connection.envNames,
+        secretRef: connection.id,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        ...(connection.expiresAt ? { expiresAt: connection.expiresAt } : {}),
+      });
     }
-    const values = input.values;
-    if (
-      values === null ||
-      typeof values !== "object" ||
-      Array.isArray(values)
-    ) {
-      throw new ConnectionVaultError(
-        "invalid_argument",
-        "values must be an object of { variableName: value }",
-      );
-    }
-    const envNames = Object.keys(values);
-    if (envNames.length === 0) {
-      throw new ConnectionVaultError(
-        "invalid_argument",
-        "values must supply at least one provider env name",
-      );
-    }
-    for (const name of envNames) {
-      if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          `env name ${name} must be an uppercase environment variable name`,
-        );
-      }
-      if (typeof values[name] !== "string") {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          `value for ${name} must be a string`,
-        );
-      }
-    }
-    const id = this.#newId();
-    const cloudPartition = "local-adapters" as CloudPartition;
-    const sealed = await this.#crypto.seal(
-      JSON.stringify(values),
-      cloudPartition,
-      secretEnvelopeAad({
-        cloudPartition,
-        spaceId: input.spaceId,
-        connectionId: id,
-        provider: input.provider,
-      }),
-    );
-    const now = this.#now();
-    const nowIso = now.toISOString();
-    const connectionKind = input.kind ?? "static_secret";
-    const blob = makeStoredSecretBlob({
-      connectionId: id,
-      spaceId: input.spaceId,
-      provider: input.provider,
-      connectionKind,
-      sealed,
-      cloudPartition,
-      createdAt: nowIso,
-      crypto: this.#crypto,
-    });
-    await this.#store.putSecretBlob(blob);
-
-    const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
-    const connection: Connection = {
-      id,
-      spaceId: input.spaceId,
-      provider: input.provider,
-      kind: "provider_env_set",
-      scope: "space",
-      authMethod: "static_secret",
-      ...(input.displayName ? { displayName: input.displayName } : {}),
-      status: "pending",
-      ...(normalizeScope(input.scopeHints)
-        ? { scopeHints: normalizeScope(input.scopeHints) }
-        : {}),
-      envNames: [...envNames].sort(),
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      ...(expiresAt ? { expiresAt } : {}),
-    };
-    await this.#store.putConnection(connection);
     return connection;
   }
 
@@ -672,6 +613,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         detail: `connection ${connectionId} expired at ${connection.expiresAt}`,
       };
     }
+    if (isReservedGcpConnection(connection)) {
+      return {
+        status: "pending",
+        detail:
+          "reserved (gcp live verification and credential mint drivers pending)",
+      };
+    }
     const values = await this.#openValues(connection);
     let verified: { readonly ok: boolean; readonly detail?: string };
     if (isCloudflareProvider(connection.provider)) {
@@ -694,10 +642,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       });
     } else {
       // Per-ConnectionKind verify driver (git_https smart-HTTP probe,
-      // provider_env_set structural, git_ssh / gcp reserved-structural). This is
-      // what lets a git / Provider Env Set / GCP Connection reach `verified` and
-      // unblock mint; without it those kinds fell through to a permanent
-      // `pending` and could never mint.
+      // generic_env_provider structural, git_ssh reserved-structural, GCP
+      // reserved-pending). Git / generic-env can reach `verified`; GCP stays
+      // pending until a real verify + mint driver is wired.
       const driver = verifyDriverForKind(connection.kind);
       if (!driver) {
         return {
@@ -711,12 +658,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       return { status: "pending", detail: verified.detail };
     }
     const verifiedAtIso = this.#now().toISOString();
-    await this.#store.putConnection({
+    const verifiedConnection: Connection = {
       ...connection,
       status: "verified",
       verifiedAt: verifiedAtIso,
       updatedAt: verifiedAtIso,
-    });
+    };
+    await this.#store.putConnection(verifiedConnection);
+    await this.#syncProviderEnvForConnection(verifiedConnection);
     return { status: "verified" };
   }
 
@@ -724,6 +673,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const existed = await this.#store.getConnection(id);
     await this.#store.deleteSecretBlob(id);
     const deleted = await this.#store.deleteConnection(id);
+    if (existed) {
+      await this.#syncProviderEnvForConnection({
+        ...existed,
+        status: "revoked",
+        updatedAt: this.#now().toISOString(),
+      });
+    }
     return deleted || existed !== undefined;
   }
 
@@ -770,15 +726,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   /**
-   * Per-binding credential mint. See {@link ConnectionVault.mintForProviderBindings}.
+   * Per-connection credential mint. See {@link ConnectionVault.mintForInstallationProviderEnvBindings}.
    * Re-validates each connection id (existence + space ownership) before opening
    * any value, so a caller can never mint a connection from another space. Maps
    * each connection's credential env to `TF_VAR_<provider>_<alias>_<arg>`
    * using the provider arg mapping. Returns ONLY the TF_VAR env.
    */
-  async mintForProviderBindings(
+  async mintForInstallationProviderEnvBindings(
     spaceId: string,
-    entries: readonly ProviderBindingMintEntry[],
+    entries: readonly InstallationProviderEnvBindingMintEntry[],
     options?: { readonly phase?: MintPhase },
   ): Promise<PhaseMintBundle> {
     requireNonEmpty(spaceId, "spaceId");
@@ -793,7 +749,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     ) {
       throw new ConnectionVaultError(
         "failed_precondition",
-        `mintForProviderBindings is tofu-phase only; ${phase} phase must not request provider credentials`,
+        `mintForInstallationProviderEnvBindings is tofu-phase only; ${phase} phase must not request provider credentials`,
       );
     }
     const env: Record<string, string> = {};
@@ -819,10 +775,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         // A git connection is never a provider alias credential (invariants 4/5).
         throw new ConnectionVaultError(
           "failed_precondition",
-          `connection ${entry.connectionId} is a git source connection and cannot back a provider binding`,
+          `connection ${entry.connectionId} is a git source connection and cannot back a provider env binding`,
+        );
+      }
+      if (!sameProviderFamily(entry.provider, connection.provider)) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${entry.connectionId} provider ${connection.provider} does not match InstallationProviderEnvBinding provider ${entry.provider}`,
         );
       }
       assertConnectionVerified(connection);
+      assertProviderMintDriverAvailable(connection);
       const argMap = providerCredentialArgs(connection.provider);
       if (argMap.length === 0) {
         const customBundle = await this.#mintCustomProviderVariables(
@@ -865,24 +828,24 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
     | undefined
   > {
-    // A non-env-set connection contributes nothing and never needs its blob
+    // A non-generic-env connection contributes nothing and never needs its blob
     // opened (the driver's own `undefined` branch is structural-only). Gate the
-    // crypto here so the open happens only for a real Provider Env Set.
-    if (connection.kind !== "provider_env_set") return undefined;
+    // crypto here so the open happens only for the generic-env provider kind.
+    if (connection.kind !== "generic_env_provider") return undefined;
     const values = await this.#openValues(connection);
-    // The Provider Env Set driver (`@takosumi/providers/provider-env-set`) maps
-    // the opened values to root-only `TF_VAR_<name>` entries + mint evidence.
+    // The generic-env provider driver maps the opened values to root-only
+    // `TF_VAR_<name>` entries + mint evidence.
     // Its scope-precondition error is re-wrapped to the vault's surface so the
     // message text stays byte-identical for callers/tests.
     try {
-      return mintProviderEnvSetVariables(connection, values, alias);
+      return mintGenericEnvProviderVariables(connection, values, alias);
     } catch (error) {
       throw wrapDriverError(error);
     }
   }
 
   /**
-   * Builds the provider-binding-resolved connection pool for a tofu-phase mint. Each
+   * Builds the provider-connection-resolved connection pool for a tofu-phase mint. Each
    * id is re-read from the store; a space-scoped connection must belong to the
    * requesting space and an operator-scoped one is instance-wide. Unknown ids
    * fail closed.
@@ -930,7 +893,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
    *   7. `apply`   + providers      -> provider env only (git excluded).
    *   8. `destroy` + providers      -> provider env only (git excluded).
    *
-   * A git connection is NEVER minted for a tofu phase, and a provider connection
+   * A git connection is NEVER minted for a tofu phase, and a provider env binding
    * is NEVER minted for the source phase.
    */
   async mintForPhase(request: MintRequest): Promise<PhaseMintBundle> {
@@ -1063,10 +1026,41 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async #markConnectionExpired(connection: Connection): Promise<void> {
     if (connection.status === "expired") return;
     const nowIso = this.#now().toISOString();
-    await this.#store.putConnection({
+    const expiredConnection: Connection = {
       ...connection,
       status: "expired",
       updatedAt: nowIso,
+    };
+    await this.#store.putConnection(expiredConnection);
+    await this.#syncProviderEnvForConnection(expiredConnection);
+  }
+
+  async #syncProviderEnvForConnection(connection: Connection): Promise<void> {
+    if (isSourceGitKind(connection.kind)) return;
+    if (!connection.spaceId) return;
+    const existing = await this.#store.getProviderEnv(connection.id);
+    const nowIso = this.#now().toISOString();
+    await this.#store.putProviderEnv({
+      id: connection.id,
+      spaceId: connection.spaceId,
+      providerSource: connection.provider,
+      displayName: connection.displayName ?? connection.provider,
+      materialization: isOAuthCredentialDriver(connection.credentialDriver)
+        ? "oauth"
+        : "secret",
+      status:
+        connection.status === "verified"
+          ? "ready"
+          : connection.status === "expired"
+            ? "expired"
+            : connection.status === "revoked"
+              ? "blocked"
+              : "needs_setup",
+      requiredEnvNames: connection.envNames,
+      secretRef: connection.id,
+      createdAt: existing?.createdAt ?? connection.createdAt,
+      updatedAt: nowIso,
+      ...(connection.expiresAt ? { expiresAt: connection.expiresAt } : {}),
     });
   }
 
@@ -1080,7 +1074,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     // Partition and AAD are derived from the CONNECTION ROW — never from the
     // blob's self-described `aad.cloudPartition` — so a swapped or tampered blob
-    // cannot select its own key/AAD and fails the AES-GCM auth tag.
+    // cannot select its provider env/AAD and fails the AES-GCM auth tag.
     const plaintext = await this.#crypto.open(
       base64ToBytes(blob.ciphertext),
       cloudFamilyForProvider(connection.provider) as CloudPartition,
@@ -1114,6 +1108,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         ? Math.floor((expiresAtMs - this.#now().getTime()) / 1000)
         : undefined;
       return {
+        providerEnvId: connection.id,
         connectionId: connection.id,
         provider: connection.provider,
         delivery,
@@ -1126,6 +1121,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         issuer: "static_secret",
       };
     };
+    if (isReservedGcpConnection(connection)) {
+      throw reservedProviderMintDriverError("gcp");
+    }
     // Cloudflare token-vending: the driver mints a short-lived scoped token from
     // the opened bootstrap token (`@takosumi/providers/cloudflare`). Crypto /
     // opening stayed in core above; the driver only talks to the CF API. Its
@@ -1167,11 +1165,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (awsMinted) return awsMinted;
     return { values, evidence: staticEvidence() };
   }
-
 }
 
 /**
- * Local provider name used as the `<provider>` segment of the per-binding
+ * Local provider name used as the `<provider>` segment of the per-connection
  * credential var (`TF_VAR_<provider>_<alias>_<arg>`). Mirrors rootgen's
  * `providerLocalName`: the trailing type segment of the provider rule (e.g.
  * `cloudflare/cloudflare` / `cloudflare` -> `cloudflare`; `hashicorp/aws` ->
@@ -1215,6 +1212,34 @@ function assertConnectionVerified(connection: Connection): void {
       `connection ${connection.id} is ${connection.status} (not verified)`,
     );
   }
+}
+
+function assertProviderMintDriverAvailable(connection: Connection): void {
+  if (isReservedGcpConnection(connection)) {
+    throw reservedProviderMintDriverError("gcp");
+  }
+}
+
+function isReservedGcpConnection(connection: Connection): boolean {
+  const providerTail = connection.provider.toLowerCase().split("/").pop();
+  return (
+    connection.kind === "gcp_oauth_bootstrap" ||
+    connection.kind === "gcp_service_account_impersonation" ||
+    connection.credentialDriver === "gcp_oauth_bootstrap" ||
+    connection.credentialDriver === "gcp_service_account_impersonation" ||
+    providerTail === "google" ||
+    providerTail === "google-beta" ||
+    providerTail === "gcp"
+  );
+}
+
+function reservedProviderMintDriverError(
+  provider: string,
+): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "not_implemented",
+    `${provider} credential mint driver is not wired`,
+  );
 }
 
 function isAwsProvider(provider: string): boolean {
@@ -1274,6 +1299,7 @@ function normalizeScope(
     awsRegion?: string;
     gcpServiceAccountEmail?: string;
     gcpProjectId?: string;
+    templateId?: string;
   } = {};
   if (typeof scope.accountId === "string" && scope.accountId.length > 0) {
     out.accountId = scope.accountId;
@@ -1316,6 +1342,9 @@ function normalizeScope(
   }
   if (typeof scope.gcpProjectId === "string" && scope.gcpProjectId.length > 0) {
     out.gcpProjectId = scope.gcpProjectId;
+  }
+  if (typeof scope.templateId === "string" && scope.templateId.length > 0) {
+    out.templateId = scope.templateId;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -1455,10 +1484,23 @@ function defaultConnectionId(): string {
   return `conn_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
+function validateGenericEnvProviderInput(
+  input: RegisterConnectionInput,
+): ReturnType<typeof validateGenericEnvProviderRegistration> {
+  try {
+    return validateGenericEnvProviderRegistration(input);
+  } catch (error) {
+    if (error instanceof GenericEnvProviderConnectionError) {
+      throw new ConnectionVaultError(error.code, error.message);
+    }
+    throw error;
+  }
+}
+
 /**
  * Re-wraps a per-provider credential driver error into the vault's own
  * {@link ConnectionVaultError} surface. Each driver
- * (`@takosumi/providers/{cloudflare,aws,git,provider-env-set}`) raises its own
+ * (`@takosumi/providers/{cloudflare,aws,git,generic-env-provider}`) raises its own
  * typed error whose `message` text is byte-identical to the formerly-inline
  * vault message; all of them map to `failed_precondition` (the same code the
  * inline paths threw). Any other error is rethrown unchanged so unexpected
@@ -1469,7 +1511,7 @@ function wrapDriverError(error: unknown): unknown {
     error instanceof CloudflareCredentialError ||
     error instanceof AwsConnectionError ||
     error instanceof GitCredentialMintError ||
-    error instanceof ProviderEnvSetDriverError
+    error instanceof GenericEnvProviderDriverError
   ) {
     return new ConnectionVaultError("failed_precondition", error.message);
   }
@@ -1494,7 +1536,7 @@ interface SecretEnvelopeIdentity {
  * Derives the canonical AES-GCM AAD bytes from a connection row's identity. The
  * same identity MUST be reconstructed at seal and open time; at open we derive
  * `cloudPartition` from the connection row's provider (never from the blob's
- * self-described partition) so a tampered/swapped blob cannot pick its own key.
+ * self-described partition) so a tampered/swapped blob cannot pick its provider env.
  */
 function secretEnvelopeAad(identity: SecretEnvelopeIdentity): Uint8Array {
   const canonical = JSON.stringify({
@@ -1514,7 +1556,9 @@ function secretEnvelopeAad(identity: SecretEnvelopeIdentity): Uint8Array {
  */
 function connectionEnvelopeAad(connection: Connection): Uint8Array {
   return secretEnvelopeAad({
-    cloudPartition: cloudFamilyForProvider(connection.provider) as CloudPartition,
+    cloudPartition: cloudFamilyForProvider(
+      connection.provider,
+    ) as CloudPartition,
     ...(connection.spaceId ? { spaceId: connection.spaceId } : {}),
     connectionId: connection.id,
     provider: connection.provider,
@@ -1586,6 +1630,12 @@ function providerConnectionKindFor(provider: string): ConnectionKind {
     return "gcp_service_account_impersonation";
   }
   return "static_secret";
+}
+
+function isOAuthCredentialDriver(
+  driver: Connection["credentialDriver"] | undefined,
+): boolean {
+  return driver === "cloudflare_oauth" || driver === "gcp_oauth_bootstrap";
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

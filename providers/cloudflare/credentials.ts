@@ -1,10 +1,10 @@
 /**
  * Cloudflare credential driver (token-vending mint + verify).
  *
- * This is the provider-specific credential implementation the managed-provider
+ * This is the provider-specific credential implementation the provider runtime
  * registry (`@takosumi/providers`) refers to. It is a self-contained,
  * dependency-light extraction of the Cloudflare logic that lives inline in the
- * in-process vault (`src/service/adapters/vault/mod.ts`): the API token-vending
+ * in-process vault (`core/adapters/vault/mod.ts`): the API token-vending
  * mint (`POST /user/tokens`) and the token verify (`GET /user/tokens/verify`).
  *
  * Boundary: this driver NEVER opens sealed secret blobs and NEVER touches the
@@ -137,6 +137,7 @@ export async function mintCloudflareProviderValues(input: {
       CLOUDFLARE_API_TOKEN: minted.token,
     },
     evidence: {
+      providerEnvId: connection.id,
       connectionId: connection.id,
       provider: connection.provider,
       delivery,

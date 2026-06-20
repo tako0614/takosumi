@@ -1,6 +1,6 @@
 import { For } from "solid-js";
 import { PRICING_PLANS, OWNERSHIP_ROWS } from "~/content/pricing";
-import SplatField from "./SplatField";
+import SplatField from "./SplatField.tsx";
 
 export default function Pricing() {
   return (
@@ -8,10 +8,11 @@ export default function Pricing() {
       <SplatField density="section" />
       <div class="container">
         <span class="eyebrow">pricing & ownership</span>
-        <h2>自分で持つか、まかせるか。</h2>
+        <h2>自分で持つか、公式ホスティングを使うか。</h2>
         <p class="lede">
-          self-host は無料の open source。自分のインフラに置いて、自分で所有します。
-          おまかせ (managed) はクレジット制 —— host も運用も Takosumi 側が持ちます。
+          self-host は無料の open
+          source。自分のインフラに置いて、自分で所有します。 Takosumi Cloud
+          は公式ホスティング版で、公開 access と料金はローンチ時に案内します。
         </p>
 
         <div class="plan-grid">
@@ -27,9 +28,7 @@ export default function Pricing() {
                   <span class="plan-price-note">{plan.priceNote}</span>
                 </div>
                 <ul class="plan-features">
-                  <For each={plan.features}>
-                    {(f) => <li>{f.label}</li>}
-                  </For>
+                  <For each={plan.features}>{(f) => <li>{f.label}</li>}</For>
                 </ul>
                 <a
                   class="btn"
@@ -50,13 +49,13 @@ export default function Pricing() {
         <div class="comparison plan-ownership">
           <table>
             <caption class="sr-only">
-              self-host と managed の所有 / 運用の違い
+              self-host と hosted Takosumi の所有 / 運用の違い
             </caption>
             <thead>
               <tr>
                 <th scope="col"></th>
                 <th scope="col">自分で動かす</th>
-                <th scope="col">おまかせ (managed)</th>
+                <th scope="col">hosted Takosumi</th>
               </tr>
             </thead>
             <tbody>
@@ -67,7 +66,7 @@ export default function Pricing() {
                       <strong>{r.axis}</strong>
                     </th>
                     <td class="us">{r.selfHost}</td>
-                    <td>{r.managed}</td>
+                    <td>{r.platform}</td>
                   </tr>
                 )}
               </For>
@@ -76,7 +75,8 @@ export default function Pricing() {
         </div>
 
         <p class="plan-footnote">
-          managed の具体的な料金とクレジットの単価は、ローンチ時にこのページで案内します。
+          hosted Takosumi の具体的な料金、クレジット単価、公開 access
+          は、ローンチ時にこのページで案内します。
         </p>
       </div>
     </section>

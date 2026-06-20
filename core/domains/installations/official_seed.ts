@@ -6,14 +6,12 @@
  * generated root + repo-shipped sample child module remains the canonical
  * OpenTofu surface.
  *
- * Two seed shapes compose here:
- *   - The named official InstallConfig aliases (`core` / `talk` / `files`) —
- *     user-facing convenience config names over the first-party module catalog.
- *     `core` maps to the `core` module, while `talk` and `files` map to
- *     runnable generic modules (`cloudflare-worker-service` and
- *     `cloudflare-r2-storage`) with stable friendly ids
- *     (`cfg-official-core` / `cfg-official-talk` / `cfg-official-files`).
- *   - The GENERIC per-template configs for every other built-in module
+ * Three seed shapes compose here:
+ *   - The generic Capsule InstallConfig (`cfg-default-opentofu-capsule`) used by
+ *     standard Git URL installs. It has no `templateBinding`.
+ *   - The named official InstallConfig alias (`core`) for the Space base
+ *     Capsule.
+ *   - The per-template configs for every other built-in starter module
  *     (`cfg-official-<templateId>`, installType opentofu_module).
  *
  * The config id is stable so the upsert is idempotent across restarts.
@@ -34,6 +32,17 @@ import {
 } from "../templates/mod.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
+export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
+
+export const RETIRED_OFFICIAL_INSTALL_CONFIG_IDS = [
+  "cfg-official-talk",
+  "cfg-official-files",
+] as const;
+
+export function isRetiredOfficialInstallConfigId(id: string): boolean {
+  return RETIRED_OFFICIAL_INSTALL_CONFIG_IDS.some((retired) => retired === id);
+}
+
 /** The stable InstallConfig id derived from a config name (`cfg-official-<name>`). */
 export function installConfigIdForName(name: string): string {
   return `cfg-official-${name}`;
@@ -45,10 +54,9 @@ export function installConfigIdForTemplate(templateId: string): string {
 }
 
 /**
- * Named official InstallConfig aliases (spec §10 install types). Each binds a
- * first-party module by id and pins the §10 install type the product uses
- * (core for the base installation, opentofu_module for the deploy-module
- * aliases). The friendly name is both the InstallConfig name and the id suffix.
+ * Named official InstallConfig aliases (spec §10 install types). `core` is the
+ * only Takosumi built-in alias. Talk / Files stay Git-installed service
+ * examples, not seeded InstallConfig aliases.
  */
 interface NamedOfficialInstall {
   readonly name: string;
@@ -58,17 +66,22 @@ interface NamedOfficialInstall {
 
 const NAMED_OFFICIAL_INSTALLS: readonly NamedOfficialInstall[] = [
   { name: "core", templateId: "core", installType: "core" },
-  {
-    name: "talk",
-    templateId: "cloudflare-worker-service",
-    installType: "opentofu_module",
-  },
-  {
-    name: "files",
-    templateId: "cloudflare-r2-storage",
-    installType: "opentofu_module",
-  },
 ];
+
+function defaultCapsuleInstallConfig(now: string): InstallConfig {
+  return {
+    id: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    name: "opentofu-capsule",
+    sourceKind: "generic_capsule",
+    installType: "opentofu_module",
+    trustLevel: "trusted",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+}
 
 /** Projects a template's public outputs into the InstallConfig outputAllowlist. */
 function outputAllowlistFromTemplate(
@@ -114,6 +127,7 @@ export function installConfigFromTemplate(
   return {
     id: options.id ?? installConfigIdForTemplate(template.id),
     name: options.name ?? template.id,
+    sourceKind: "first_party_capsule",
     installType: options.installType ?? "opentofu_module",
     trustLevel: "official",
     variableMapping: {},
@@ -129,11 +143,11 @@ export function installConfigFromTemplate(
 }
 
 /**
- * Derives the full built-in shared InstallConfig set: the named official
- * aliases (`core` / `talk` / `files`) plus a generic per-template config for
- * every OTHER first-party module. A template already bound by a named alias
- * does NOT also get a generic `cfg-official-<templateId>` config (avoids two
- * configs over the same module surface).
+ * Derives the full built-in shared InstallConfig set: the generic Capsule
+ * default, the named official alias (`core`), plus a per-template config for
+ * every OTHER first-party starter module. A template already bound by a named
+ * alias does NOT also get a generic `cfg-official-<templateId>` config (avoids
+ * two configs over the same module surface).
  */
 export function officialInstallConfigs(
   options: {
@@ -143,16 +157,18 @@ export function officialInstallConfigs(
 ): readonly InstallConfig[] {
   const registry = options.registry ?? defaultTemplateRegistry;
   const nowIso = (options.now ?? (() => new Date()))().toISOString();
-  const configs: InstallConfig[] = [];
+  const configs: InstallConfig[] = [defaultCapsuleInstallConfig(nowIso)];
   const boundTemplateIds = new Set<string>();
   for (const named of NAMED_OFFICIAL_INSTALLS) {
     const template = registry.list().find((t) => t.id === named.templateId);
     if (!template) continue;
-    configs.push(installConfigFromTemplate(template, nowIso, {
-      id: installConfigIdForName(named.name),
-      name: named.name,
-      installType: named.installType,
-    }));
+    configs.push(
+      installConfigFromTemplate(template, nowIso, {
+        id: installConfigIdForName(named.name),
+        name: named.name,
+        installType: named.installType,
+      }),
+    );
     boundTemplateIds.add(template.id);
   }
   for (const template of registry.list()) {

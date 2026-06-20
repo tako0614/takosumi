@@ -3,7 +3,7 @@
  *
  * Kept local to the runtime-agent boundary (rather than reaching into the
  * service layer) so the operator-internal runtime agent stays decoupled from
- * `src/service/`, while still avoiding a per-module re-declaration of the same
+ * `core/`, while still avoiding a per-module re-declaration of the same
  * `isRecord` one-liner.
  */
 
