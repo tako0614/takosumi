@@ -48,4 +48,18 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain("sessionStorage");
     expect(connectionsTabSource).toContain('"conn.return.cta"');
   });
+
+  test("connections tab gives form controls stable names", () => {
+    expect(connectionsTabSource).toContain('name="provider"');
+    expect(connectionsTabSource).toContain('name="displayName"');
+    expect(connectionsTabSource).toContain('name="helperToken"');
+    expect(connectionsTabSource).toContain('name="genericProvider"');
+    expect(connectionsTabSource).toContain("name={`field:${field().envName}`}");
+    expect(connectionsTabSource).toContain(
+      "name={`genericEnvName:${index}`}",
+    );
+    expect(connectionsTabSource).toContain(
+      "name={`genericEnvValue:${index}`}",
+    );
+  });
 });
