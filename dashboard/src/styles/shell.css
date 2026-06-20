@@ -441,7 +441,6 @@
   text-decoration: none;
 }
 .auth-brand-mark {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -456,28 +455,6 @@
   background-size: 10px 10px;
   color: var(--tg-fg-muted);
   box-shadow: none;
-}
-.auth-brand-mark-core {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-.auth-brand-mark-draft {
-  position: absolute;
-  right: -22px;
-  bottom: -8px;
-  padding: 1px 5px;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-sm);
-  background: var(--tg-bg);
-  color: var(--tg-fg-subtle);
-  font-family: var(--tg-font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  line-height: 1.4;
 }
 .auth-brand-text {
   font-family: var(--tg-font-display);

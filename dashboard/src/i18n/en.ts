@@ -60,9 +60,6 @@ export const en: Record<keyof typeof ja, string> = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
   "auth.signInSub": "Continue with your Takosumi account.",
-  "auth.brandDraft": "preview",
-  "auth.brandDraftAria": "Takosumi preview mark",
-  "auth.brandDraftMark": "ts",
   "auth.continueWith": "Continue with {provider}",
   "auth.notConfigured": "Currently unavailable",
   "auth.providerChecking": "Checking availability",

@@ -514,7 +514,7 @@ function Inner() {
             {(id) => (
               <Button
                 variant="ghost"
-                href={`/installations/${encodeURIComponent(id())}`}
+                href={`/capsules/${encodeURIComponent(id())}`}
               >
                 {t("run.backToApp")}
               </Button>
@@ -633,7 +633,7 @@ function Inner() {
                     {(id) => (
                       <Button
                         variant="primary"
-                        href={`/installations/${encodeURIComponent(id())}`}
+                        href={`/capsules/${encodeURIComponent(id())}`}
                       >
                         {t("run.backToApp")}
                       </Button>
@@ -652,8 +652,7 @@ function Inner() {
                       onClick={() => {
                         setNeedsConfirm(false);
                         const id = installationId();
-                        if (id)
-                          navigate(`/installations/${encodeURIComponent(id)}`);
+                        if (id) navigate(`/capsules/${encodeURIComponent(id)}`);
                       }}
                     >
                       {t("run.stop")}

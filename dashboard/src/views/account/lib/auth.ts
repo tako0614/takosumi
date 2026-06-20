@@ -40,7 +40,7 @@ export function startUpstreamOAuth(provider: Provider): void {
   // Upstream OAuth providers don't echo back which provider was used in the
   // callback URL — stash it here so /sign-in/callback can recover it.
   sessionStorage.setItem(PROVIDER_KEY, provider);
-  // Preserve intended return URL (e.g. user landed on /installations unauth
+  // Preserve intended return URL (e.g. user landed on /capsules unauth
   // and was bounced to /sign-in; after auth we want to send them back there).
   const url = new URL(location.href);
   const intended = safeOAuthReturnTo(url.searchParams.get("return"));
