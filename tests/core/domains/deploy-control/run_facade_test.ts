@@ -137,6 +137,7 @@ test("getRun returns a source-scoped compatibility_check run", async () => {
     status: "succeeded",
     sourceSnapshotId: "snap_1",
     compatibilityReportId: "caprep_1",
+    errorCode: "OpenTofu runner rejected compatibility_check run ccr_1",
     createdBy: "system",
     createdAt: "2026-06-07T00:00:00.000Z",
     startedAt: "2026-06-07T00:00:00.000Z",
@@ -152,6 +153,15 @@ test("getRun returns a source-scoped compatibility_check run", async () => {
     status: "succeeded",
     sourceSnapshotId: "snap_1",
     compatibilityReportId: "caprep_1",
+  });
+  await expect(controller.getRunLogs("ccr_1")).resolves.toEqual({
+    diagnostics: [
+      {
+        severity: "error",
+        message: "OpenTofu runner rejected compatibility_check run ccr_1",
+      },
+    ],
+    auditEvents: [],
   });
 });
 

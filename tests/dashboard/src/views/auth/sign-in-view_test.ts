@@ -68,10 +68,10 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).not.toContain("GitHub");
   });
 
-  test("uses the provisional tako.png logo without the old ink placeholder", () => {
+  test("uses the provided tako.png logo without the old ink placeholder", () => {
     expect(signInViewSource).toContain("function BrandLogoMark()");
     expect(signInViewSource).toContain("auth-brand-mark");
-    expect(signInViewSource).toContain("<GeometricMark size={42} />");
+    expect(signInViewSource).toContain("<LogoMark size={42} />");
     expect(signInViewSource).not.toContain("TemporaryBrandMark");
     expect(signInViewSource).not.toContain("auth.brandDraft");
     expect(signInViewSource).not.toContain("auth.brandDraftMark");
