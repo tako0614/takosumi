@@ -7,9 +7,9 @@ audit ledger code that can be composed in two contexts:
 - the self-hosted Takos distribution worker, where the Takos product surface composes Takosumi accounts, deploy-control,
   dashboard, and runner boundaries in-process at the self-hoster's own origin.
 
-It installs plain OpenTofu modules into Spaces, records `source_sync` / `plan` / `apply` / `destroy_plan` /
-`destroy_apply` Runs, stores successful applies as `Deployment` records, and projects non-secret OpenTofu outputs as
-`OutputSnapshot`s.
+It registers plain OpenTofu/Terraform modules from Git URLs as Capsules under a Workspace/Project, binds providers or
+aliases to ProviderConnections through ProviderBindings, records plan/apply/destroy Runs, persists StateVersions, and
+projects OpenTofu outputs as Outputs.
 
 Takosumi handlers are consumed **in-process** through `tsconfig` aliases by the host worker. That is a composition
 mechanism, not two different products. There is no retired split account/deploy-control host topology, and no
@@ -29,7 +29,7 @@ Docs: <https://takosumi.com/docs/>
 query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
 inside `/new`.
 
-`deploy/accounts-cloudflare/` stores account-plane state in D1. Installation backup/export artifacts belong to the
+`deploy/accounts-cloudflare/` stores account-plane state in D1. Capsule backup/export artifacts belong to the
 deploy-control backup/export flow and its R2 buckets, not to the account-plane ownership boundary. Cloudflare Container
 is not used by the account-plane path; it is used by the deploy-control runner for OpenTofu `plan` / `apply`.
 
@@ -39,29 +39,34 @@ behind the one handler, not an alternate distribution.
 
 ## Public surface
 
-The product flow is deliberately small: choose a **Space**, register a Git **Source**, bind provider **Connections**,
-create an **Installation**, review a **Run**, then inspect the resulting **Deployment**, **OutputSnapshot**, and
-**Activity**. `RunGroup` appears when Takosumi coordinates multiple Runs across the dependency graph. See
-[AGENTS.md](AGENTS.md) "Public Surface" and [docs/reference/model.md](docs/reference/model.md) for the detailed model.
+The product flow is deliberately small: choose a **Workspace** and **Project**, register a Git **Source**, create a
+**Capsule**, bind provider aliases through **ProviderConnections**, **CredentialRecipes**, and **ProviderBindings**,
+review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See [AGENTS.md](AGENTS.md) "Public
+Surface" and [docs/final-plan.md](docs/final-plan.md) for the current model.
 
-| Concept          | Meaning                                                                                                                                                               |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Space`          | Owner namespace (`@handle`) holding members, sources, connections, installations, the dependency graph, policy, activity, and optional billing.                       |
-| `Source`         | A registered Git origin yielding immutable `SourceSnapshot`s (ref pinned to a commit, archived to R2 with digest).                                                    |
-| `Connection`     | Sealed backing material for Git credentials, OAuth helpers, token-vending, or secret/env provider credentials. Provider execution binds through Provider Connections. |
-| `Installation`   | The OpenTofu Capsule + generated root + tfstate + output/deployment unit directly under a Space (`@space/name`).                                                      |
-| `Dependency`     | A DAG edge from a producer Installation's outputs to a consumer Installation's inputs, pinned at plan time by a `DependencySnapshot`.                                 |
-| `Run`            | One execution (`source_sync` / `plan` / `apply` / `destroy_plan` / `destroy_apply` …) with approval gate, plan digest, policy status, logs, and audit events.         |
-| `RunGroup`       | A grouped Space operation such as dependency-ordered update or drift check; not a separate deploy primitive.                                                          |
-| `Deployment`     | A successful apply with source snapshot, dependency snapshot, state generation, and output snapshot references.                                                       |
-| `OutputSnapshot` | The `tofu output -json` generation captured after apply; raw outputs stay encrypted and only allowlisted projections are shown.                                       |
-| `Activity`       | The Space-scoped audit trail.                                                                                                                                         |
+| Concept              | Meaning                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Workspace`          | User/team owner boundary for projects, provider connections, secrets, state isolation, and audit.                               |
+| `Project`            | One product, service, application, or infrastructure group.                                                                       |
+| `Capsule`            | One OpenTofu/Terraform module execution unit, usually sourced from Git URL + ref + path.                                        |
+| `Source`             | Git URL / branch / ref / commit / module path / tarball / upload input.                                                         |
+| `ProviderConnection` | Provider credential configuration stored in Takosumi and resolved into temporary env/file material only while a Run executes.    |
+| `CredentialRecipe`   | Provider-specific env/file/pre-run action definition for running an existing OpenTofu/Terraform provider as-is.                 |
+| `ProviderBinding`    | Provider address or alias to ProviderConnection mapping.                                                                         |
+| `Secret`             | Encrypted backing material; secret values are write-only to APIs and redacted from logs.                                        |
+| `Run`                | One init / validate / plan / apply / destroy / refresh / output execution with source snapshot, provider bindings, and logs.    |
+| `StateVersion`       | Persisted Capsule state generation.                                                                                             |
+| `Output`             | Captured `tofu output -json`, optionally wired into another Capsule's inputs.                                                    |
+| `Runner`             | Local/docker/remote/operator/cloud execution boundary for checkout, OpenTofu execution, state sync, output extraction, cleanup. |
+| `AuditEvent`         | Actor/action/target/result evidence.                                                                                            |
+| `Operator`           | The person or organization running Takosumi for their own users.                                                                |
 
-Provider Catalog, provider credential ownership, OpenTofu Capsule, Compatibility Report, InstallConfig, Installation
-provider connection, Service Graph, StateSnapshot, Backup, and Billing are supporting API/operator concepts. They should
-support the install/review/deploy outcome rather than become the first thing a user has to learn.
+Legacy Space / Installation / Deployment / OutputSnapshot / `takos_provided` / Gateway-backed wording may still appear
+in migration notes or internal implementation names, but it is not the current public surface.
 
-Takosumi does not replace OpenTofu. OpenTofu owns resource graph, provider schema, state operation, and apply semantics. Takosumi records the reviewable and auditable control-plane layer around those operations.
+Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
+and auditable control-plane layer around those operations. Compatibility gateways and managed resources belong only to
+Takosumi Cloud.
 
 ## Local control-plane quickstart
 

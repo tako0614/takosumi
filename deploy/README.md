@@ -2,9 +2,11 @@
 
 Takosumi ships the OpenTofu-native deploy-control contract, service entry, CLI,
 dashboard/account-plane entry points, and reference operator deployment profiles.
-The public service surface is centered on Space, Source, Connection,
-Installation, Dependency, Run, RunGroup, Deployment, OutputSnapshot, and
-Activity.
+The public service surface is centered on Workspace, Project, Capsule, Source,
+ProviderConnection, CredentialRecipe, ProviderBinding, Secret, Run,
+StateVersion, Output, Runner, AuditEvent, and Operator. OSS Takosumi runs
+existing OpenTofu/Terraform providers as-is; compatibility gateways and managed
+resources belong only to Takosumi Cloud.
 
 The directories under `deploy/` are therefore **build-target templates and
 substrate runbooks**, not a separate public product surface. The canonical
@@ -12,7 +14,7 @@ operator target is the single Takosumi platform worker in `deploy/platform/`,
 served from `app.takosumi.com`, which composes the accounts plane, the
 in-process `/api` control plane, the dashboard SPA, and the OpenTofu runner
 container. `deploy/cloudflare/` remains a reference control-plane/runner
-scaffold and internal compatibility seam, not the public `/v1` API model.
+scaffold and internal compatibility seam, not the public API model.
 
 ## What lives here
 
