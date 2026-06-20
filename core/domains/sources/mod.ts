@@ -44,11 +44,13 @@ import {
   normalizedModuleObjectKey,
   parseNormalizedCapsuleArtifactBody,
   StaticHclCapsuleCompatibilityAnalyzer,
+  type CapsuleCompatibilityAnalysis,
   type CapsuleCompatibilityAnalyzer,
   type CapsuleSourceFile,
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { canonicalProviderAddress } from "@takosumi/providers";
+import { redactString } from "../observability/redaction.ts";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
@@ -403,62 +405,67 @@ export class SourcesService {
       startedAt: nowIso,
     };
     await this.#store.putCompatibilityCheckRun(runningRun);
+    const analysis = await this.#compatibilityAnalysisOrUnsupportedReport(
+      snapshot,
+      async (files) =>
+        await this.#compatibilityAnalyzer.analyze({
+          ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+          sourceSnapshot: snapshot,
+          files,
+          ...(input.policy ? { policy: input.policy } : {}),
+        }),
+    );
+    const normalizedArtifact = await this.#persistNormalizedArtifact(
+      snapshot,
+      analysis.normalizedFiles,
+    );
+    const id = this.#newId("caprep");
+    const normalizedObjectKey =
+      normalizedArtifact?.objectKey ??
+      (analysis.normalizedFiles ? undefined : analysis.normalizedObjectKey);
+    const normalizedDigest =
+      normalizedArtifact?.digest ??
+      (analysis.normalizedFiles ? undefined : analysis.normalizedDigest);
+    const report: CapsuleCompatibilityReport = {
+      id,
+      ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+      ...(input.installationId ? { installationId: input.installationId } : {}),
+      sourceSnapshotId: snapshot.id,
+      level: analysis.level,
+      findings: analysis.findings,
+      providers: await this.#enrichProviderOwnershipOptions(
+        spaceId,
+        analysis.providers,
+      ),
+      resources: analysis.resources,
+      dataSources: analysis.dataSources,
+      provisioners: analysis.provisioners,
+      ...(normalizedObjectKey ? { normalizedObjectKey } : {}),
+      ...(normalizedDigest ? { normalizedDigest } : {}),
+      createdAt: this.#now().toISOString(),
+    };
+    await this.#store.putCapsuleCompatibilityReport(report);
+    const succeededRun: Run = {
+      ...runningRun,
+      status: "succeeded",
+      compatibilityReportId: report.id,
+      finishedAt: this.#now().toISOString(),
+    };
+    await this.#store.putCompatibilityCheckRun(succeededRun);
+    return { report, run: succeededRun };
+  }
+
+  async #compatibilityAnalysisOrUnsupportedReport(
+    snapshot: SourceSnapshot,
+    analyze: (
+      files: readonly CapsuleSourceFile[],
+    ) => Promise<CapsuleCompatibilityAnalysis>,
+  ): Promise<CapsuleCompatibilityAnalysis> {
     try {
       const files = await this.#readCapsuleSourceFiles(snapshot);
-      const analysis = await this.#compatibilityAnalyzer.analyze({
-        ...(input.sourceId ? { sourceId: input.sourceId } : {}),
-        sourceSnapshot: snapshot,
-        files,
-        ...(input.policy ? { policy: input.policy } : {}),
-      });
-      const normalizedArtifact = await this.#persistNormalizedArtifact(
-        snapshot,
-        analysis.normalizedFiles,
-      );
-      const id = this.#newId("caprep");
-      const normalizedObjectKey =
-        normalizedArtifact?.objectKey ??
-        (analysis.normalizedFiles ? undefined : analysis.normalizedObjectKey);
-      const normalizedDigest =
-        normalizedArtifact?.digest ??
-        (analysis.normalizedFiles ? undefined : analysis.normalizedDigest);
-      const report: CapsuleCompatibilityReport = {
-        id,
-        ...(input.sourceId ? { sourceId: input.sourceId } : {}),
-        ...(input.installationId
-          ? { installationId: input.installationId }
-          : {}),
-        sourceSnapshotId: snapshot.id,
-        level: analysis.level,
-        findings: analysis.findings,
-        providers: await this.#enrichProviderOwnershipOptions(
-          spaceId,
-          analysis.providers,
-        ),
-        resources: analysis.resources,
-        dataSources: analysis.dataSources,
-        provisioners: analysis.provisioners,
-        ...(normalizedObjectKey ? { normalizedObjectKey } : {}),
-        ...(normalizedDigest ? { normalizedDigest } : {}),
-        createdAt: this.#now().toISOString(),
-      };
-      await this.#store.putCapsuleCompatibilityReport(report);
-      const succeededRun: Run = {
-        ...runningRun,
-        status: "succeeded",
-        compatibilityReportId: report.id,
-        finishedAt: this.#now().toISOString(),
-      };
-      await this.#store.putCompatibilityCheckRun(succeededRun);
-      return { report, run: succeededRun };
+      return await analyze(files);
     } catch (error) {
-      await this.#store.putCompatibilityCheckRun({
-        ...runningRun,
-        status: "failed",
-        errorCode: "compatibility_check_failed",
-        finishedAt: this.#now().toISOString(),
-      });
-      throw error;
+      return compatibilityCheckFailureAnalysis(snapshot, error);
     }
   }
 
@@ -825,6 +832,40 @@ export function uploadArchiveObjectKey(
 }
 
 export { normalizedModuleObjectKey };
+
+function compatibilityCheckFailureAnalysis(
+  snapshot: SourceSnapshot,
+  error: unknown,
+): CapsuleCompatibilityAnalysis {
+  const diagnostic = compatibilityFailureDiagnostic(error);
+  return {
+    level: "unsupported",
+    findings: [
+      {
+        severity: "error",
+        code: "capsule_compatibility_check_failed",
+        message:
+          "Takosumi could not inspect this Capsule before installation.",
+        path: snapshot.path,
+        suggestion: diagnostic
+          ? `Retry the check after source sync finishes. Operator diagnostic: ${diagnostic}`
+          : "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",
+      },
+    ],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: snapshot.archiveObjectKey,
+    normalizedDigest: snapshot.archiveDigest,
+  };
+}
+
+function compatibilityFailureDiagnostic(error: unknown): string | undefined {
+  const raw = error instanceof Error ? error.message : String(error);
+  const redacted = redactString(raw).replace(/\s+/g, " ").trim();
+  return redacted.length > 0 ? redacted.slice(0, 400) : undefined;
+}
 
 function nonEmpty(value: string | undefined): string | undefined {
   return typeof value === "string" && value.trim().length > 0
