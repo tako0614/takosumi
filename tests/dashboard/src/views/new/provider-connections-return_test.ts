@@ -37,7 +37,7 @@ describe("/new Provider Connections return context", () => {
     );
     expect(
       newAppViewSource.match(/href=\{providerConnectionsHref\(\)\}/g) ?? [],
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   });
 
   test("connections tab renders and preserves a safe install return target", () => {

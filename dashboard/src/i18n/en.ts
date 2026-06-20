@@ -311,11 +311,19 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.check": "Check and continue",
   "new.compat.recheck": "Check again",
   "new.compat.checking": "Checking...",
+  "new.progress.title": "Checking the source",
+  "new.progress.fetching":
+    "Takosumi is fetching the Git contents and checking whether this is a valid OpenTofu Capsule. Keep this page open.",
+  "new.progress.slow":
+    "This is taking a little longer than usual. Large repositories and cold starts can take time; when it finishes, Takosumi will only ask for the connections that are needed.",
+  "new.progress.status": "Run status: {status}",
   "new.compat.title": "Inspection result",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
+  "new.compat.patchHelp":
+    "Review the items above. Some issues require a repository change, while others can be resolved by setting up the required external service connection.",
   "new.proceed": "Review and add",
   "new.proceedHint": "Run “Check and continue” first.",
   "new.providers.title": "External service connections",
@@ -328,6 +336,10 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.manageConnections": "Manage connections",
   "new.providers.errorConnection":
     "Select a ready connection for {provider}.",
+  "new.providers.missingTitle": "A connection is required",
+  "new.providers.missingBody":
+    "This Capsule uses the external services below. Set up the connection and you can return here to continue.",
+  "new.providers.setupMissing": "Set up required connection",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create Capsule",
@@ -338,6 +350,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.configMissing": "Capsule configuration is not available yet.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
+  "new.error.sourceFetchFailed":
+    "Takosumi could not fetch the Git contents. Check the URL, ref, path, or private-repository connection. Detail: {message}",
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Workspace settings",
