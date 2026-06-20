@@ -39,7 +39,11 @@ const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
   { href: "/activity", labelKey: "nav.activity", icon: Activity },
-  { href: "/space/settings", labelKey: "nav.spaceSettings", icon: Settings2 },
+  {
+    href: "/workspace/settings",
+    labelKey: "nav.spaceSettings",
+    icon: Settings2,
+  },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 
