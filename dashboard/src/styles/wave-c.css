@@ -39,7 +39,16 @@
   flex-wrap: wrap;
   align-items: center;
 }
+.wc-inline-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+}
 @media (max-width: 640px) {
+  .wc-inline-feedback {
+    align-items: stretch;
+  }
 }
 
 /* ===== Connections: guided token + env-pair editor ===== */

@@ -130,6 +130,10 @@ export const en: Record<keyof typeof ja, string> = {
   "status.connection.revoked": "Revoked",
   "status.connection.expired": "Expired",
   "status.connection.error": "Error",
+  "status.providerConnection.ready": "Ready",
+  "status.providerConnection.needs_setup": "Needs verification",
+  "status.providerConnection.expired": "Expired",
+  "status.providerConnection.blocked": "Blocked",
 
   // --- run operation nouns (shared by run view / feeds) -------------------
   "op.plan": "Review",
@@ -334,8 +338,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.alias": "alias: {alias}",
   "new.providers.selectConnection": "Select a connection",
   "new.providers.manageConnections": "Manage connections",
-  "new.providers.errorConnection":
-    "Select a ready connection for {provider}.",
+  "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody":
     "This Capsule uses the external services below. Set up the connection and you can return here to continue.",
@@ -352,6 +355,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceFetchFailed":
     "Takosumi could not fetch the Git contents. Check the URL, ref, path, or private-repository connection. Detail: {message}",
+  "new.error.notRunnable":
+    "This inspection result is not runnable yet. Resolve the listed changes, then check again.",
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Workspace settings",
@@ -428,6 +433,11 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.return.defaultRef": "default ref",
   "conn.return.rootPath": "root module",
   "conn.return.cta": "Back to add Capsule",
+  "conn.saved.message": "Saved {name}.",
+  "conn.saved.needsTest":
+    "Saved {name}. Verify the connection before returning to add the Capsule.",
+  "conn.saved.testCta": "Verify connection",
+  "conn.saved.returnCta": "Back to add",
   "conn.add.title": "Add a connection",
   "conn.add.subtitle":
     "Pick a service, then paste a token or register env values.",
@@ -468,6 +478,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This Workspace has no connections yet. Add one with the form above.",
   "conn.test": "Test connection",
   "conn.testing": "Testing...",
+  "conn.test.notReady": "The connection is not ready yet (status: {status}).",
   "conn.remove.confirmTitle": "Delete connection",
   "conn.remove.confirmMessage":
     "Really delete {name}? Its stored credentials are deleted too. This cannot be undone.",

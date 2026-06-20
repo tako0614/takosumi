@@ -62,7 +62,8 @@ export class ControlApiError extends Error {
     return (
       this.status === 409 &&
       (this.code === "source_sync_required" ||
-        this.code === "failed_precondition")
+        (this.code === "failed_precondition" &&
+          /source_sync_required/u.test(this.message)))
     );
   }
 }
@@ -1028,25 +1029,32 @@ export async function listInstallConfigs(
 
 export async function checkCapsuleCompatibility(input: {
   readonly spaceId: string;
+  readonly sourceId?: string;
   readonly gitUrl: string;
   readonly ref: string;
   readonly path: string;
   readonly name: string;
   readonly installConfigId?: string;
   readonly signal?: AbortSignal;
+  readonly onSourceCreated?: (sourceId: string) => void;
   readonly onSourceSyncProgress?: (
     progress: SourceSnapshotWaitProgress,
   ) => void;
 }): Promise<CapsuleCompatibilityResult> {
-  const { source } = await createSource({
-    spaceId: input.spaceId,
-    name: input.name,
-    url: input.gitUrl,
-    defaultRef: input.ref,
-    defaultPath: input.path,
-  });
-  const syncEnvelope = await syncSource(source.id, { signal: input.signal });
-  const snapshot = await waitForLatestSourceSnapshot(source.id, {
+  const sourceId =
+    input.sourceId ??
+    (
+      await createSource({
+        spaceId: input.spaceId,
+        name: input.name,
+        url: input.gitUrl,
+        defaultRef: input.ref,
+        defaultPath: input.path,
+      })
+    ).source.id;
+  input.onSourceCreated?.(sourceId);
+  const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const snapshot = await waitForLatestSourceSnapshot(sourceId, {
     runId: extractRunId(syncEnvelope),
     signal: input.signal,
     onProgress: input.onSourceSyncProgress,
@@ -1068,7 +1076,7 @@ export async function checkCapsuleCompatibility(input: {
         readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
       }[];
     };
-  }>(`${BASE}/sources/${encodeURIComponent(source.id)}/compatibility-check`, {
+  }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
     body: {
       sourceSnapshotId: snapshot.id,
@@ -1107,7 +1115,7 @@ export async function checkCapsuleCompatibility(input: {
     ...(input.installConfigId
       ? { installConfigId: input.installConfigId }
       : {}),
-    sourceId: source.id,
+    sourceId,
     source: "api",
   };
 }
@@ -1292,11 +1300,7 @@ export async function waitForLatestSourceSnapshot(
         });
       } catch (err) {
         const apiError = err instanceof ControlApiError ? err : undefined;
-        if (
-          !apiError ||
-          apiError.status === 401 ||
-          apiError.status === 403
-        ) {
+        if (!apiError || apiError.status === 401 || apiError.status === 403) {
           throw err;
         }
       }
@@ -1329,7 +1333,7 @@ export async function waitForLatestSourceSnapshot(
     409,
     "source_sync_required",
     "Source contents are still being fetched.",
-    { snapshots: lastSnapshots },
+    { sourceId, snapshots: lastSnapshots },
   );
 }
 

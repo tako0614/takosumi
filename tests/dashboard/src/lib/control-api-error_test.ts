@@ -1,0 +1,40 @@
+import { describe, expect, test } from "bun:test";
+import { ControlApiError } from "../../../../dashboard/src/lib/control-api.ts";
+
+describe("ControlApiError source-sync classification", () => {
+  test("treats the typed source_sync_required code as source sync retryable", () => {
+    const error = new ControlApiError(
+      409,
+      "source_sync_required",
+      "Source contents are still being fetched.",
+    );
+
+    expect(error.isSourceSyncRequired).toBe(true);
+  });
+
+  test("keeps source_sync_required failed_precondition retryable for legacy route messages", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "source_sync_required: source src_1 has no SourceSnapshot; run a source sync first",
+    );
+
+    expect(error.isSourceSyncRequired).toBe(true);
+  });
+
+  test("does not classify unrelated failed_precondition errors as source sync", () => {
+    const duplicateInstallation = new ControlApiError(
+      409,
+      "failed_precondition",
+      "installation @space/takos (production) already exists",
+    );
+    const compatibilityNotRunnable = new ControlApiError(
+      409,
+      "failed_precondition",
+      "compatibility_report_not_runnable: report caprep_1 is needs_patch",
+    );
+
+    expect(duplicateInstallation.isSourceSyncRequired).toBe(false);
+    expect(compatibilityNotRunnable.isSourceSyncRequired).toBe(false);
+  });
+});

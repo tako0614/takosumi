@@ -24,7 +24,12 @@ import {
 import { ArrowLeft, Link, Plug, Plus, Trash } from "lucide-solid";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
-import { connectionStatusLabel, connectionTone } from "../../../lib/labels.ts";
+import {
+  connectionStatusLabel,
+  connectionTone,
+  providerConnectionStatusLabel,
+  providerConnectionTone,
+} from "../../../lib/labels.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import {
   INSTALL_RETURN_QUERY_PARAM,
@@ -87,10 +92,24 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const spaceId = () => props.spaceId;
 
   const [connections, { refetch }] = createResource(spaceId, listConnections);
-  const [providerConnections] = createResource(
-    spaceId,
-    listProviderConnections,
-  );
+  const [providerConnections, { refetch: refetchProviderConnections }] =
+    createResource(spaceId, listProviderConnections);
+  const [lastCreatedConnectionName, setLastCreatedConnectionName] =
+    createSignal<string | null>(null);
+  const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
+    string | null
+  >(null);
+
+  const refreshConnections = async () => {
+    await Promise.all([refetch(), refetchProviderConnections()]);
+  };
+
+  const afterConnectionCreated = async (connection: Connection) => {
+    setLastCreatedConnectionName(connection.displayName ?? connection.id);
+    setLastCreatedConnectionId(connection.id);
+    clearForm();
+    await refreshConnections();
+  };
   const installReturn = currentInstallReturnContext();
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
@@ -177,14 +196,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (!helper || !d) throw new Error(t("conn.error.invalidProvider"));
     const token = helperToken().trim();
     if (!token) throw new Error(t("conn.error.tokenRequired"));
-    await createConnection({
+    const connection = await createConnection({
       spaceId: spaceId(),
       provider: d.provider,
       displayName: displayName().trim() || undefined,
       values: { [helper.envName]: token },
     });
-    clearForm();
-    await refetch();
+    await afterConnectionCreated(connection);
   });
 
   // Advanced raw-field submit.
@@ -199,14 +217,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       }
       if (raw.length > 0) submitValues[field.envName] = raw;
     }
-    await createConnection({
+    const connection = await createConnection({
       spaceId: spaceId(),
       provider: d.provider,
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });
-    clearForm();
-    await refetch();
+    await afterConnectionCreated(connection);
   });
 
   // Generic own-key Provider Connection submit.
@@ -229,14 +246,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (Object.keys(submitValues).length === 0) {
       throw new Error(t("conn.genericEnv.oneRequired"));
     }
-    await createConnection({
+    const connection = await createConnection({
       spaceId: spaceId(),
       provider: name,
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });
-    clearForm();
-    await refetch();
+    await afterConnectionCreated(connection);
   });
 
   // ----- optional Cloudflare OAuth (probed; no dead button) ------------------
@@ -270,8 +286,18 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     setTestBusyId(id);
     setTestError(null);
     try {
-      await testConnection(id);
-      await refetch();
+      const result = (await testConnection(id)) as
+        | { readonly status?: string; readonly detail?: string }
+        | undefined;
+      await refreshConnections();
+      if (result?.status && result.status !== "verified") {
+        setTestError(
+          result.detail ??
+            t("conn.test.notReady", {
+              status: result.status,
+            }),
+        );
+      }
     } catch (e) {
       setTestError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -281,7 +307,11 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
   const remove = createAction(async (id: string) => {
     await revokeConnection(id);
-    await refetch();
+    if (lastCreatedConnectionId() === id) {
+      setLastCreatedConnectionId(null);
+      setLastCreatedConnectionName(null);
+    }
+    await refreshConnections();
   });
 
   const confirmRemove = async (c: Connection) => {
@@ -294,6 +324,17 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (!ok) return;
     void remove.run(c.id);
   };
+
+  const providerConnectionForConnectionId = (connectionId: string | null) =>
+    (providerConnections() ?? []).find(
+      (connection) => connection.id === connectionId,
+    );
+  const lastCreatedProviderConnection = () =>
+    providerConnectionForConnectionId(lastCreatedConnectionId());
+  const lastCreatedReady = () =>
+    lastCreatedProviderConnection()?.status === "ready";
+  const shouldOfferInstallReturn = () =>
+    !lastCreatedConnectionId() || lastCreatedReady();
 
   const providerConnectionColumns: readonly Column<ProviderConnection>[] = [
     {
@@ -311,7 +352,9 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     {
       header: t("conn.providerConnections.status"),
       cell: (d) => (
-        <Badge tone={d.status === "ready" ? "ok" : "warn"}>{d.status}</Badge>
+        <Badge tone={providerConnectionTone(d.status)}>
+          {providerConnectionStatusLabel(d.status)}
+        </Badge>
       ),
     },
   ];
@@ -340,17 +383,88 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             })}
             subtitle={installReturnDetails()}
             actions={
-              <Button
-                variant="secondary"
-                href={installReturnHref}
-                icon={<ArrowLeft size={16} />}
-                onClick={clearStoredInstallReturn}
+              <Show
+                when={shouldOfferInstallReturn()}
+                fallback={
+                  <Show when={lastCreatedConnectionId()}>
+                    {(id) => (
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        busy={testBusyId() === id()}
+                        onClick={() => void runTest(id())}
+                      >
+                        {testBusyId() === id()
+                          ? t("conn.testing")
+                          : t("conn.saved.testCta")}
+                      </Button>
+                    )}
+                  </Show>
+                }
               >
-                {t("conn.return.cta")}
-              </Button>
+                <Button
+                  variant="secondary"
+                  href={installReturnHref}
+                  icon={<ArrowLeft size={16} />}
+                  onClick={clearStoredInstallReturn}
+                >
+                  {t("conn.return.cta")}
+                </Button>
+              </Show>
             }
           />
         </Card>
+      </Show>
+
+      <Show when={lastCreatedConnectionName()}>
+        {(name) => (
+          <Toast tone="success">
+            <span class="wc-inline-feedback">
+              <span>
+                {t(
+                  lastCreatedReady()
+                    ? "conn.saved.message"
+                    : "conn.saved.needsTest",
+                  {
+                    name: name(),
+                  },
+                )}
+              </span>
+              <Show
+                when={lastCreatedReady() && installReturnHref}
+                fallback={
+                  <Show when={lastCreatedConnectionId()}>
+                    {(id) => (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        busy={testBusyId() === id()}
+                        onClick={() => void runTest(id())}
+                      >
+                        {testBusyId() === id()
+                          ? t("conn.testing")
+                          : t("conn.saved.testCta")}
+                      </Button>
+                    )}
+                  </Show>
+                }
+              >
+                {(href) => (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    href={href()}
+                    icon={<ArrowLeft size={14} />}
+                    onClick={clearStoredInstallReturn}
+                  >
+                    {t("conn.saved.returnCta")}
+                  </Button>
+                )}
+              </Show>
+            </span>
+          </Toast>
+        )}
       </Show>
 
       <Show when={(providerConnections() ?? []).length > 0}>

@@ -120,6 +120,15 @@ function displayRef(value: string): string {
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
 }
 
+function sourceIdFromControlError(error: ControlApiError | undefined): string {
+  const body = error?.body;
+  if (body && typeof body === "object" && "sourceId" in body) {
+    const value = (body as { readonly sourceId?: unknown }).sourceId;
+    return typeof value === "string" ? value : "";
+  }
+  return "";
+}
+
 function runStatusLabel(status: RunStatus): string {
   switch (status) {
     case "queued":
@@ -433,10 +442,23 @@ function Inner() {
     setActiveTab("git");
   };
 
+  const compatibilityRunnable = () => {
+    const level = compatibility()?.level;
+    return level === "ready" || level === "auto_capsulized";
+  };
+  const proceedBlocker = (): string =>
+    providerConnectionError() ??
+    (compatibility() && !compatibilityRunnable()
+      ? t("new.error.notRunnable")
+      : t("new.proceedHint"));
   const canContinue = () =>
     compatibility() !== null &&
-    compatibility()?.level !== "unsupported" &&
+    compatibilityRunnable() &&
     providerConnectionError() === null;
+  const retryAfterSyncWait = () => {
+    if (compatibility()) void runFlow();
+    else void runCompatibilityCheck();
+  };
 
   const runCompatibilityCheck = async () => {
     const validationError = validate();
@@ -457,12 +479,16 @@ function Inner() {
     try {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
+        sourceId: createdSourceId() ?? undefined,
         gitUrl: gitUrl().trim(),
         ref: effectiveRef(),
         path: path().trim() || ".",
         name: name().trim(),
         installConfigId: selectedInstallConfigId(),
         signal: controller.signal,
+        onSourceCreated: (sourceId) => {
+          setCreatedSourceId(sourceId);
+        },
         onSourceSyncProgress: (progress) => {
           if (progress.run?.status) {
             setSourceSyncRunStatus(progress.run.status);
@@ -483,6 +509,8 @@ function Inner() {
       if (isAbortError(err)) return;
       const apiError = err instanceof ControlApiError ? err : undefined;
       if (apiError?.isSourceSyncRequired) {
+        const sourceId = sourceIdFromControlError(apiError);
+        if (sourceId) setCreatedSourceId(sourceId);
         setStepSource("done");
         setStepSync("error");
         setSyncRequired(true);
@@ -500,7 +528,7 @@ function Inner() {
             ? t("new.error.sourceFetchFailed", {
                 message: apiError.message,
               })
-          : (apiError?.message ?? String(err)),
+            : (apiError?.message ?? String(err)),
       );
     } finally {
       finishAbortableFlow(controller);
@@ -516,7 +544,7 @@ function Inner() {
       return;
     }
     if (!canContinue()) {
-      setError(providerConnectionError() ?? t("new.proceedHint"));
+      setError(proceedBlocker());
       return;
     }
     setBusy(true);
@@ -820,8 +848,9 @@ function Inner() {
                 class="wb-install-form"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (canContinue()) void runFlow();
-                  else void runCompatibilityCheck();
+                  if (!compatibility()) void runCompatibilityCheck();
+                  else if (canContinue()) void runFlow();
+                  else setError(proceedBlocker());
                 }}
               >
                 {gitFields()}
@@ -1042,7 +1071,7 @@ function Inner() {
                     <Button
                       variant="secondary"
                       type="button"
-                      onClick={() => void runFlow()}
+                      onClick={retryAfterSyncWait}
                     >
                       {t("common.retry")}
                     </Button>
