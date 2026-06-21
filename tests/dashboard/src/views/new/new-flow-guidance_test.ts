@@ -124,6 +124,35 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.catalogInput.body");
   });
 
+  test("selected catalog services can use safe cloud-account hints instead of duplicate setup input", () => {
+    const hintSourceStart = newAppViewSource.indexOf(
+      "const catalogScopeHintValue",
+    );
+    const hintSourceEnd = newAppViewSource.indexOf(
+      "const sourceGitConnections",
+      hintSourceStart,
+    );
+    expect(hintSourceStart).toBeGreaterThan(-1);
+    expect(hintSourceEnd).toBeGreaterThan(hintSourceStart);
+    const hintSource = newAppViewSource.slice(hintSourceStart, hintSourceEnd);
+
+    expect(newAppViewSource).toContain("catalogScopeHintValue");
+    expect(hintSource).toContain("connection.scopeHints?.accountId");
+    expect(hintSource).toContain("connection.scopeHints?.awsRegion");
+    expect(newAppViewSource).toContain("catalogInputTouched");
+    expect(newAppViewSource).toContain(
+      "catalogScopeHintValue(entry, field) ??",
+    );
+    expect(newAppViewSource).toContain(
+      "if (catalogInputTouched()[key]) continue",
+    );
+    expect(newAppViewSource).toContain(
+      'if ((next[key] ?? "").trim()) continue',
+    );
+    expect(hintSource).not.toContain("repoUrl");
+    expect(hintSource).not.toContain("knownHostsEntry");
+  });
+
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
@@ -159,7 +188,9 @@ describe("/new flow guidance", () => {
 
   test("shows setup progress only while it is actionable", () => {
     expect(newAppViewSource).toContain("const showSetupProgress = ()");
-    expect(newAppViewSource).toContain("step === \"running\" || step === \"error\"");
+    expect(newAppViewSource).toContain(
+      'step === "running" || step === "error"',
+    );
     expect(newAppViewSource).toContain("showSetupProgress()");
     expect(newAppViewSource).not.toContain('stepSource() !== "idle"');
   });

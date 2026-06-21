@@ -152,10 +152,18 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const scopeHintsFromConnectionValues = (
     providerId: string,
     connectionValues: Readonly<Record<string, string>>,
-  ): { readonly accountId?: string } | undefined => {
-    if (providerId !== "cloudflare") return undefined;
-    const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
-    return accountId ? { accountId } : undefined;
+  ):
+    | { readonly accountId?: string; readonly awsRegion?: string }
+    | undefined => {
+    if (providerId === "cloudflare") {
+      const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
+      return accountId ? { accountId } : undefined;
+    }
+    if (providerId === "aws") {
+      const awsRegion = connectionValues.AWS_REGION?.trim();
+      return awsRegion ? { awsRegion } : undefined;
+    }
+    return undefined;
   };
 
   const setEnvPair = (index: number, patch: Partial<EnvPair>) => {

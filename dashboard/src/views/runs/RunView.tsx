@@ -43,7 +43,6 @@ import {
   listProviderConnections,
   planInstallation,
   type ProviderConnection,
-  type ProviderCredentialOwnership,
   type ProviderResolution,
   type Run,
   type RunAuditEvent,
@@ -51,6 +50,7 @@ import {
   type RunDiagnostic,
   type RunPlanResource,
 } from "../../lib/control-api.ts";
+import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   changeCountsForRun,
@@ -103,18 +103,19 @@ function hasCostToShow(cost: RunCostInfo): boolean {
 /** Pre-apply cost / shortfall panel — backend-computed values only. */
 function CostNotice(props: { readonly cost: RunCostInfo }) {
   const cost = () => props.cost;
+  const cloudBilling = () => isTakosumiCloudRuntime();
   return (
     <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
       <Show when={cost().estimatedCredits > 0}>
         <p class="wa-cost-line">
-          {t("run.cost.required", {
+          {t(cloudBilling() ? "run.cost.required" : "run.cost.capacityNeeded", {
             n: formatCredits(cost().estimatedCredits),
           })}
         </p>
       </Show>
       <Show when={cost().availableCredits !== undefined}>
         <p class="wa-cost-line muted">
-          {t("run.cost.balance", {
+          {t(cloudBilling() ? "run.cost.balance" : "run.cost.capacity", {
             n: formatCredits(cost().availableCredits ?? 0),
           })}
         </p>
@@ -123,11 +124,24 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
         <p class="wa-error">
           <Show
             when={cost().creditShortfall !== undefined}
-            fallback={<>{t("run.cost.blocked")}</>}
+            fallback={
+              <>
+                {t(
+                  cloudBilling()
+                    ? "run.cost.blocked"
+                    : "run.cost.capacityBlocked",
+                )}
+              </>
+            }
           >
-            {t("run.cost.shortfall", {
-              n: formatCredits(cost().creditShortfall ?? 0),
-            })}
+            {t(
+              cloudBilling()
+                ? "run.cost.shortfall"
+                : "run.cost.capacityShortfall",
+              {
+                n: formatCredits(cost().creditShortfall ?? 0),
+              },
+            )}
           </Show>
         </p>
         <Show when={cost().reasons.length > 0}>
@@ -135,9 +149,14 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
             <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
           </ul>
         </Show>
-        <Button variant="secondary" size="sm" href="/billing">
-          {t("run.cost.billingCta")}
-        </Button>
+        <Show
+          when={isTakosumiCloudRuntime()}
+          fallback={<p class="muted">{t("run.cost.operatorHelp")}</p>}
+        >
+          <Button variant="secondary" size="sm" href="/billing">
+            {t("run.cost.billingCta")}
+          </Button>
+        </Show>
       </Show>
     </div>
   );
@@ -218,7 +237,6 @@ interface ProviderResolutionRow {
   readonly provider: string;
   readonly connectionId?: string;
   readonly connectionName?: string;
-  readonly ownership?: ProviderCredentialOwnership;
   readonly status: ProviderResolution["status"];
   readonly blockedReason?: string;
 }
@@ -254,9 +272,7 @@ function providerResolutionTone(status: ProviderResolution["status"]): Tone {
   }
 }
 
-function providerResolutionNeedsAttention(
-  row: ProviderResolutionRow,
-): boolean {
+function providerResolutionNeedsAttention(row: ProviderResolutionRow): boolean {
   return row.status !== "resolved_provider_connection";
 }
 
@@ -280,16 +296,10 @@ function providerResolutionRows(
       (evidence.kind === "provider_connection"
         ? evidence.connectionId
         : undefined);
-    const ownership =
-      resolution.ownership ??
-      (evidence.kind === "provider_connection"
-        ? evidence.ownership
-        : undefined);
     return {
       provider: providerRequirementLabel(resolution),
       connectionId,
       connectionName: providerConnectionName(connectionId, connectionsById),
-      ownership,
       status: resolution.status,
       blockedReason:
         resolution.blockedReason ??
@@ -317,18 +327,6 @@ function ProviderResolutionTable(props: {
                 {t("run.connections.connection")}
               </span>
               <code>{row.connectionName ?? row.connectionId ?? "—"}</code>
-            </div>
-            <div>
-              <span class="wa-provider-resolution-label">
-                {t("run.connections.ownership")}
-              </span>
-              <span>
-                {row.ownership
-                  ? row.ownership === "takos_provided"
-                    ? t("conn.ownership.takosProvided")
-                    : t("conn.ownership.ownKey")
-                  : "—"}
-              </span>
             </div>
             <div>
               <span class="wa-provider-resolution-label">
