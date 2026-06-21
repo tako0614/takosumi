@@ -389,11 +389,6 @@
   font-size: var(--tg-fs-lg);
   letter-spacing: 0;
 }
-.av-store-head p {
-  margin: 4px 0 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-}
 .av-catalog-grid {
   list-style: none;
   margin: 0;
@@ -444,11 +439,6 @@
   color: var(--tg-accent-text);
   font-weight: 700;
 }
-.av-catalog-provider {
-  margin-top: var(--tg-s-1);
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-xs);
-}
 .av-import-card {
   margin-top: var(--tg-s-3);
 }
@@ -467,11 +457,6 @@
   margin: 0;
   font-size: var(--tg-fs-md);
   letter-spacing: 0;
-}
-.av-service-setup-head p {
-  margin: 4px 0 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
 }
 .av-service-setup-grid {
   display: grid;

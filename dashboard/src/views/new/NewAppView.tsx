@@ -258,6 +258,12 @@ function compatibilitySummaryDisplay(
   return result.summary;
 }
 
+function shouldShowCompatibilityPanel(
+  result: CapsuleCompatibilityResult,
+): boolean {
+  return result.level !== "ready" || result.diagnostics.length > 0;
+}
+
 function isFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/iu.test(value.trim());
 }
@@ -469,10 +475,7 @@ function Inner() {
     const id = selectedCatalogId();
     return id ? (CATALOG.find((entry) => entry.id === id) ?? null) : null;
   };
-  const catalogInputValue = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
-  ) => {
+  const catalogInputValue = (entry: CatalogEntry, field: CatalogInputField) => {
     const key = catalogInputKey(entry.id, field.name);
     return (
       catalogInputValues()[key] ??
@@ -808,14 +811,8 @@ function Inner() {
     setSourceAuthConnectionId(options[0]?.id ?? "");
   });
 
-  const providerConnectionOwnershipLabel = (
-    ownership: ProviderCredentialOwnership,
-  ) =>
-    ownership === "takos_provided"
-      ? t("conn.ownership.takosProvided")
-      : t("conn.ownership.ownKey");
   const providerConnectionLabel = (connection: ProviderConnection) =>
-    `${connection.displayName || connection.providerSource} (${providerConnectionOwnershipLabel(connection.ownership)})`;
+    connection.displayName || connection.providerSource;
 
   const canonicalProvider = (provider: string) => provider.toLowerCase().trim();
   const providerTail = (provider: string) => {
@@ -1545,7 +1542,6 @@ function Inner() {
             <div class="av-store-head">
               <div>
                 <h2>{t("new.store.title")}</h2>
-                <p>{t("new.catalog.intro")}</p>
               </div>
               <Button
                 variant="secondary"
@@ -1564,17 +1560,14 @@ function Inner() {
                       <CatalogIcon entry={entry} />
                     </div>
                     <div class="av-catalog-text">
-                      <span class="av-catalog-src">{entry.badge[locale()]}</span>
+                      <span class="av-catalog-src">
+                        {entry.badge[locale()]}
+                      </span>
                       <span class="av-catalog-name">
                         {entry.name[locale()]}
                       </span>
                       <span class="av-catalog-desc">
                         {entry.description[locale()]}
-                      </span>
-                      <span class="av-catalog-provider">
-                        {t("new.catalog.provider", {
-                          provider: providerDisplayName(entry.provider),
-                        })}
                       </span>
                     </div>
                     <Button
@@ -1603,8 +1596,7 @@ function Inner() {
               }
               subtitle={
                 usingSelectedService()
-                  ? (selectedCatalogEntry()?.description[locale()] ??
-                    t("new.selection.subtitle"))
+                  ? undefined
                   : t("new.advancedImport.subtitle")
               }
               actions={
@@ -1653,7 +1645,6 @@ function Inner() {
                     <section class="av-service-setup">
                       <div class="av-service-setup-head">
                         <h3>{t("new.catalogInput.title")}</h3>
-                        <p>{t("new.catalogInput.body")}</p>
                       </div>
                       <div class="av-service-setup-grid">
                         <For each={entry().inputs}>
@@ -1845,54 +1836,76 @@ function Inner() {
 
                 <Show when={compatibility()}>
                   {(result) => (
-                    <section class="wb-inline-panel">
-                      <div class="wb-compat-head">
-                        <h3 class="tg-card-title">{t("new.compat.title")}</h3>
-                        <Badge tone={compatibilityTone(result().level)}>
-                          {compatibilityLabel(result().level)}
-                        </Badge>
-                      </div>
-                      <p class="wb-compat-summary">
-                        {compatibilitySummaryDisplay(result())}
-                      </p>
-                      <Show when={result().level === "needs_patch"}>
-                        <p class="wb-note">{t("new.compat.patchHelp")}</p>
-                      </Show>
-                      <Show when={result().diagnostics.length > 0}>
-                        <ul class="wb-diagnostics">
-                          <For each={result().diagnostics}>
-                            {(diagnostic) => {
-                              const display =
-                                compatibilityDiagnosticDisplay(diagnostic);
-                              return (
-                                <li
-                                  class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
-                                >
-                                  {display.message}
-                                  <Show
-                                    when={display.detail && !display.technical}
-                                  >
-                                    {(detail) => (
-                                      <span class="muted"> — {detail()}</span>
-                                    )}
-                                  </Show>
-                                  <Show
-                                    when={display.detail && display.technical}
-                                  >
-                                    {(detail) => (
-                                      <details class="wb-inline-details">
-                                        <summary>{t("common.details")}</summary>
-                                        <p>{detail()}</p>
-                                      </details>
-                                    )}
-                                  </Show>
-                                </li>
-                              );
-                            }}
-                          </For>
-                        </ul>
-                      </Show>
-                    </section>
+                    <>
+                      {shouldShowCompatibilityPanel(result()) ? (
+                        <section class="wb-inline-panel">
+                          <div class="wb-compat-head">
+                            <h3 class="tg-card-title">
+                              {t("new.compat.title")}
+                            </h3>
+                            <Badge tone={compatibilityTone(result().level)}>
+                              {compatibilityLabel(result().level)}
+                            </Badge>
+                          </div>
+                          <p class="wb-compat-summary">
+                            {compatibilitySummaryDisplay(result())}
+                          </p>
+                          <Show when={result().level === "needs_patch"}>
+                            <p class="wb-note">{t("new.compat.patchHelp")}</p>
+                          </Show>
+                          <Show when={result().diagnostics.length > 0}>
+                            <ul class="wb-diagnostics">
+                              <For each={result().diagnostics}>
+                                {(diagnostic) => {
+                                  const display =
+                                    compatibilityDiagnosticDisplay(diagnostic);
+                                  return (
+                                    <li
+                                      class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
+                                    >
+                                      {display.message}
+                                      <Show
+                                        when={
+                                          display.detail && !display.technical
+                                        }
+                                      >
+                                        {(detail) => (
+                                          <span class="muted">
+                                            {" "}
+                                            — {detail()}
+                                          </span>
+                                        )}
+                                      </Show>
+                                      <Show
+                                        when={
+                                          display.detail && display.technical
+                                        }
+                                      >
+                                        {(detail) => (
+                                          <details class="wb-inline-details">
+                                            <summary>
+                                              {t("common.details")}
+                                            </summary>
+                                            <p>{detail()}</p>
+                                          </details>
+                                        )}
+                                      </Show>
+                                    </li>
+                                  );
+                                }}
+                              </For>
+                            </ul>
+                          </Show>
+                        </section>
+                      ) : (
+                        <p class="wb-ready-note">
+                          <Badge tone="ok">
+                            {compatibilityLabel(result().level)}
+                          </Badge>
+                          <span>{t("new.compat.readyBrief")}</span>
+                        </p>
+                      )}
+                    </>
                   )}
                 </Show>
 
@@ -1901,7 +1914,6 @@ function Inner() {
                     <div class="wb-compat-head">
                       <h3 class="tg-card-title">{t("new.providers.title")}</h3>
                     </div>
-                    <p class="wb-note">{t("new.providers.subtitle")}</p>
                     <div class="wb-provider-grid">
                       <For each={providerRows()}>
                         {(row, index) => {
@@ -1923,25 +1935,6 @@ function Inner() {
                                     })}
                                   </span>
                                 </Show>
-                                <details class="wb-inline-details">
-                                  <summary>
-                                    {t("new.providers.advanced")}
-                                  </summary>
-                                  <p>
-                                    <code>{row.provider}</code>
-                                    <Show when={row.alias}>
-                                      {(alias) => (
-                                        <>
-                                          {" "}
-                                          /{" "}
-                                          {t("new.providers.alias", {
-                                            alias: alias(),
-                                          })}
-                                        </>
-                                      )}
-                                    </Show>
-                                  </p>
-                                </details>
                               </div>
                               <Select
                                 id={`provider-connection-${index()}`}
@@ -1985,9 +1978,7 @@ function Inner() {
                     <Show when={missingProviderRows().length > 0}>
                       <div class="wb-action-callout" role="note">
                         <Show
-                          when={
-                            missingOperatorManagedProviderRows().length > 0
-                          }
+                          when={missingOperatorManagedProviderRows().length > 0}
                         >
                           <strong>
                             {t("new.providers.operatorMissingTitle")}

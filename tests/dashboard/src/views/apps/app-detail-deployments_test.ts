@@ -19,6 +19,7 @@ const source = readFileSync(
 describe("Installation detail deployment surface", () => {
   test("renders the outputs and deploy-history sections via the dictionary", () => {
     expect(source).toContain('t("app.outputs.title")');
+    expect(source).toContain('t("app.outputs.valuesTitle")');
     expect(source).toContain('t("app.deploys.title")');
   });
 
@@ -29,6 +30,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("apps.reviewChanges")');
     expect(source).toContain('t("app.deploys.advancedActions")');
     expect(source).toContain('t("app.deploys.backup")');
+    expect(source).not.toContain('t("app.deploys.generation")');
     expect(source.indexOf('t("apps.openApp")')).toBeLessThan(
       source.indexOf("function DeploysTab"),
     );
@@ -48,6 +50,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain(
       '{ href: `${base}/danger`, label: t("app.tab.danger") }',
     );
+    expect(source).not.toContain('t("app.nextSteps.title")');
     expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
       source.indexOf("function SettingsTab"),
     );
@@ -74,6 +77,8 @@ describe("Installation detail deployment surface", () => {
     // The outputs section reads outputsPublic; it must never reference a raw
     // output snapshot pointer or a `sensitive` field.
     expect(source).toContain("outputsPublic");
+    expect(source).toContain("publicLinkOutputs");
+    expect(source).toContain("otherPublicOutputs");
     expect(source).not.toContain('outputSnapshotId"');
     expect(source).not.toMatch(/\bsensitive\b/);
   });

@@ -420,6 +420,29 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     lastCreatedVerifiedHint();
   const shouldOfferInstallReturn = () =>
     !lastCreatedConnectionId() || lastCreatedReady();
+  const connectionById = createMemo(
+    () =>
+      new Map(
+        (connections() ?? []).map((connection) => [connection.id, connection]),
+      ),
+  );
+  const connectionEnvNames = (connectionId: string): readonly string[] =>
+    connectionById().get(connectionId)?.envNames ?? [];
+
+  const confirmRemoveProviderConnection = async (
+    connection: ProviderConnection,
+  ) => {
+    const ok = await confirm({
+      title: t("conn.remove.confirmTitle"),
+      message: t("conn.remove.confirmMessage", {
+        name: connection.displayName ?? connection.id,
+      }),
+      confirmText: t("common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    void remove.run(connection.id);
+  };
 
   const providerConnectionColumns: readonly Column<ProviderConnection>[] = [
     {
@@ -445,6 +468,11 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             <span class="wc-conn-detail-line">
               {providerConnectionOwnershipLabel(d.ownership)}
             </span>
+            <Show when={connectionEnvNames(d.id).length > 0}>
+              <span class="wc-conn-detail-line">
+                {connectionEnvNames(d.id).join(", ")}
+              </span>
+            </Show>
           </details>
         </div>
       ),
@@ -457,7 +485,86 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         </Badge>
       ),
     },
+    {
+      header: t("common.actions"),
+      cell: (d) => (
+        <div class="wc-conn-actions">
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            onClick={() => void runTest(d.id)}
+            busy={testBusyId() === d.id}
+          >
+            {testBusyId() === d.id ? t("conn.testing") : t("conn.test")}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            type="button"
+            onClick={() => void confirmRemoveProviderConnection(d)}
+            disabled={remove.busy()}
+            icon={<Trash size={14} />}
+          >
+            {t("common.delete")}
+          </Button>
+        </div>
+      ),
+    },
   ];
+
+  const rawConnectionList = () => (
+    <div class="wc-card-stack">
+      <ul class="wc-conn-list">
+        <For each={connections() ?? []}>
+          {(c) => (
+            <li class="wc-conn-row">
+              <div class="wc-conn-head">
+                <span class="wc-conn-name">{c.displayName ?? c.id}</span>
+                <StatusBadge
+                  status={c.status}
+                  label={connectionStatusLabel}
+                  tone={connectionTone}
+                />
+              </div>
+              <div class="wc-conn-meta">
+                <span>{c.provider}</span>
+                <span aria-hidden="true">·</span>
+                <Badge tone="muted">{scopeLabel(c.scope)}</Badge>
+                <Show when={c.envNames.length > 0}>
+                  <span aria-hidden="true">·</span>
+                  <code>{c.envNames.join(", ")}</code>
+                </Show>
+              </div>
+              <div class="wc-conn-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void runTest(c.id)}
+                  busy={testBusyId() === c.id}
+                >
+                  {testBusyId() === c.id ? t("conn.testing") : t("conn.test")}
+                </Button>
+                <Show when={c.status !== "revoked"}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    type="button"
+                    onClick={() => void confirmRemove(c)}
+                    disabled={remove.busy()}
+                    icon={<Trash size={14} />}
+                  >
+                    {t("common.delete")}
+                  </Button>
+                </Show>
+              </div>
+            </li>
+          )}
+        </For>
+      </ul>
+    </div>
+  );
 
   return (
     <div class="wc-stack">
@@ -569,15 +676,22 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       <Show when={(providerConnections() ?? []).length > 0}>
         <Card>
-          <CardHeader
-            title={t("conn.providerConnections.title")}
-            subtitle={t("conn.providerConnections.subtitle")}
-          />
+          <CardHeader title={t("conn.providerConnections.title")} />
+          <ActionError error={remove.error} />
+          <Show when={testError()}>
+            {(m) => <Toast tone="error">{m()}</Toast>}
+          </Show>
           <DataTable
             columns={providerConnectionColumns}
             rows={providerConnections() ?? []}
             rowKey={(d) => d.id}
           />
+          <Show when={(connections() ?? []).length > 0}>
+            <details class="connection-advanced">
+              <summary>{t("conn.list.title")}</summary>
+              {rawConnectionList()}
+            </details>
+          </Show>
         </Card>
       </Show>
       <Show when={providerConnections.error}>
@@ -590,10 +704,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       {/* ----- register form ----- */}
       <Card>
-        <CardHeader
-          title={t("conn.add.title")}
-          subtitle={t("conn.add.subtitle")}
-        />
+        <CardHeader title={t("conn.add.title")} />
         <div class="wc-form">
           <FormField label={t("conn.add.provider")}>
             <Select
@@ -687,15 +798,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                   <>
                     {/* Guided-token flow: provider's own token screen → paste. */}
                     <div class="wc-guided">
-                      <p class="muted">
-                        {t("conn.guided.intro", {
-                          provider: descriptor()?.label ?? "",
-                        })}
-                      </p>
-                      <ol class="wc-steps">
-                        <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
-                      </ol>
-
                       <div class="wc-form-actions">
                         <Button
                           variant="primary"
@@ -720,6 +822,12 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                           </Button>
                         </Show>
                       </div>
+                      <details class="connection-advanced connection-help">
+                        <summary>{t("conn.guided.stepsSummary")}</summary>
+                        <ol class="wc-steps">
+                          <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
+                        </ol>
+                      </details>
 
                       <form
                         class="wc-form"
@@ -838,8 +946,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
           >
             {/* Generic own-key Provider Connection editor. */}
             <div class="wc-guided">
-              <p class="muted">{t("conn.genericEnv.intro")}</p>
-
               <form
                 class="wc-form"
                 onSubmit={(e) => {
@@ -948,73 +1054,22 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         <Match when={connections()}>
           {(list) => (
             <Show
-              when={list().length > 0}
+              when={
+                list().length > 0 && (providerConnections() ?? []).length === 0
+              }
               fallback={
-                <EmptyState
-                  icon={<Plug size={26} />}
-                  title={t("spaceSettings.tab.connections")}
-                  message={t("conn.list.empty")}
-                />
+                <Show when={(providerConnections() ?? []).length === 0}>
+                  <EmptyState
+                    icon={<Plug size={26} />}
+                    title={t("spaceSettings.tab.connections")}
+                    message={t("conn.list.empty")}
+                  />
+                </Show>
               }
             >
               <Card>
                 <CardHeader title={t("conn.list.title")} />
-                <div class="wc-card-stack">
-                  <ActionError error={remove.error} />
-                  <Show when={testError()}>
-                    {(m) => <Toast tone="error">{m()}</Toast>}
-                  </Show>
-                  <ul class="wc-conn-list">
-                    <For each={list()}>
-                      {(c) => (
-                        <li class="wc-conn-row">
-                          <div class="wc-conn-head">
-                            <span class="wc-conn-name">
-                              {c.displayName ?? c.id}
-                            </span>
-                            <StatusBadge
-                              status={c.status}
-                              label={connectionStatusLabel}
-                              tone={connectionTone}
-                            />
-                          </div>
-                          <div class="wc-conn-meta">
-                            <span>{c.provider}</span>
-                            <span aria-hidden="true">·</span>
-                            <Badge tone="muted">{scopeLabel(c.scope)}</Badge>
-                            <span aria-hidden="true">·</span>
-                            <code>{c.envNames.join(", ")}</code>
-                          </div>
-                          <div class="wc-conn-actions">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              type="button"
-                              onClick={() => void runTest(c.id)}
-                              busy={testBusyId() === c.id}
-                            >
-                              {testBusyId() === c.id
-                                ? t("conn.testing")
-                                : t("conn.test")}
-                            </Button>
-                            <Show when={c.status !== "revoked"}>
-                              <Button
-                                variant="danger"
-                                size="sm"
-                                type="button"
-                                onClick={() => void confirmRemove(c)}
-                                disabled={remove.busy()}
-                                icon={<Trash size={14} />}
-                              >
-                                {t("common.delete")}
-                              </Button>
-                            </Show>
-                          </div>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </div>
+                {rawConnectionList()}
               </Card>
             </Show>
           )}
