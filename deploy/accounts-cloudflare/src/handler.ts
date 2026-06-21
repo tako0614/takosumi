@@ -62,6 +62,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS?: string;
+  readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
   /**
    * Operator billing plan catalog (spec §32): JSON array of
    * `{ id, kind: "subscription"|"pack", stripePriceId, credits,
@@ -401,6 +402,9 @@ async function buildAccountsHandler(
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
+    ),
+    billingRedirectAllowlist: splitList(
+      env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
     ),
     billingPlans: parseBillingPlans(optionalString(env.TAKOSUMI_BILLING_PLANS)),
   };
