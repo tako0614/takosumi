@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   capsuleNameFromUrl,
+  hasInstallPrefillParams,
   parseInstallPrefill,
 } from "../../../../dashboard/src/lib/install-link.ts";
 
@@ -126,6 +127,15 @@ describe("parseInstallPrefill", () => {
     ).toBeUndefined();
     // junk
     expect(parseInstallPrefill("?git=nonsense")).toBeUndefined();
+  });
+});
+
+describe("hasInstallPrefillParams", () => {
+  test("detects rejected install-prefill attempts separately from normal visits", () => {
+    expect(hasInstallPrefillParams("")).toBe(false);
+    expect(hasInstallPrefillParams("?tab=catalog")).toBe(false);
+    expect(hasInstallPrefillParams("?git=nonsense")).toBe(true);
+    expect(hasInstallPrefillParams("?source=git%3A%3Anonsense")).toBe(true);
   });
 });
 

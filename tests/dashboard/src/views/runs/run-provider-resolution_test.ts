@@ -58,4 +58,11 @@ describe("Run review ProviderConnection evidence", () => {
       "認証情報の値は表示しません",
     );
   });
+
+  test("gives blocked billing runs a recovery path from the review screen", () => {
+    expect(runViewSource).toContain('href="/workspace/settings/billing"');
+    expect(runViewSource).toContain('"run.cost.billingCta"');
+    expect(en["run.cost.billingCta"]).toContain("billing");
+    expect(ja["run.cost.billingCta"]).toContain("お支払い");
+  });
 });

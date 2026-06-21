@@ -26,6 +26,12 @@ export interface InstallPrefill {
   readonly vars?: Readonly<Record<string, string>>;
 }
 
+/** True when a URL query is trying to prefill the install flow. */
+export function hasInstallPrefillParams(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return params.has("git") || params.has("source");
+}
+
 /** Parse an install link's query into a prefill, or undefined when absent/bad. */
 export function parseInstallPrefill(
   search: string,
