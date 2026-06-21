@@ -35,3 +35,15 @@ test("BillingTab folds usage history and removes reservation ledgers from the UI
     '<CardHeader title={t("billing.usage.title")} />',
   );
 });
+
+test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  expect(source).toContain("isTakosumiCloudRuntime");
+  expect(source).toContain("<Show when={cloudBilling()}>");
+  expect(source).toContain("listSpaceUsage");
+  expect(source).toContain('"billing.usage.title"');
+  expect(source).toContain('"billing.plans.title"');
+  expect(source).toContain('"billing.portal"');
+  expect(source).not.toContain("createResource(listBillingPlans)");
+});

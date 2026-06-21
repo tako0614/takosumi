@@ -17,6 +17,7 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../../../lib/theme.ts";
+import { isTakosumiCloudRuntime } from "../../../../lib/deployment-brand.ts";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -84,13 +85,15 @@ export default function UserMenu() {
           >
             <UserCircle2 size={16} /> {t("nav.account")}
           </a>
-          <a
-            class="user-menu-item"
-            href="/billing"
-            onClick={() => setOpen(false)}
-          >
-            <CreditCard size={16} /> {t("nav.billing")}
-          </a>
+          <Show when={isTakosumiCloudRuntime()}>
+            <a
+              class="user-menu-item"
+              href="/billing"
+              onClick={() => setOpen(false)}
+            >
+              <CreditCard size={16} /> {t("nav.billing")}
+            </a>
+          </Show>
           <div
             class="user-menu-lang"
             role="group"

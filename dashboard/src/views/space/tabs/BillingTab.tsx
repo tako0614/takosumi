@@ -1,5 +1,5 @@
 /**
- * Workspace settings — お支払い. The real user-facing billing surface:
+ * Workspace settings — billing / usage. The Takosumi Cloud billing surface:
  *   - plan / credit-pack cards from the operator catalog
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
  *   - balance + billing-mode explanation
@@ -21,6 +21,7 @@ import {
   Switch,
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
+import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
 import {
   getSpaceBilling,
   listBillingPlans,
@@ -54,7 +55,11 @@ const MODE_KEY: Record<string, MessageKey> = {
 
 export default function BillingTab(props: { readonly spaceId: string }) {
   const [billing] = createResource(() => props.spaceId, getSpaceBilling);
-  const [plans] = createResource(listBillingPlans);
+  const cloudBilling = createMemo(() => isTakosumiCloudRuntime());
+  const [plans] = createResource(
+    () => (cloudBilling() ? "cloud" : undefined),
+    listBillingPlans,
+  );
   const [usage] = createResource(() => props.spaceId, listSpaceUsage);
 
   const mode = createMemo(() => billing()?.settings?.mode);
@@ -67,7 +72,11 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   );
   const hasBillingCatalog = createMemo(() => (plans()?.length ?? 0) > 0);
   const canOpenPortal = createMemo(
-    () => mode() !== undefined && mode() !== "disabled" && hasBillingCatalog(),
+    () =>
+      cloudBilling() &&
+      mode() !== undefined &&
+      mode() !== "disabled" &&
+      hasBillingCatalog(),
   );
   const billingSubtitle = createMemo(() => {
     if (billing.loading) return t("billing.loading");
@@ -76,6 +85,16 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     const currentMode = mode() ?? "disabled";
     return t(MODE_KEY[currentMode] ?? "billing.mode.disabled");
   });
+  const availableLabel = createMemo(() =>
+    cloudBilling()
+      ? t("billing.balance.available")
+      : t("billing.quota.available"),
+  );
+  const reservedLabel = createMemo(() =>
+    cloudBilling()
+      ? t("billing.balance.reserved")
+      : t("billing.quota.reserved"),
+  );
 
   // One-time checkout-result banner (the Stripe redirect lands back here with
   // ?checkout=success|cancelled). Read once, then strip from the URL.
@@ -217,7 +236,11 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
       <Card>
         <CardHeader
-          title={t("billing.balance.title")}
+          title={
+            cloudBilling()
+              ? t("billing.balance.title")
+              : t("billing.quota.title")
+          }
           subtitle={billingSubtitle()}
         />
         <Switch>
@@ -235,11 +258,11 @@ export default function BillingTab(props: { readonly spaceId: string }) {
             <KVList
               items={[
                 {
-                  label: t("billing.balance.available"),
+                  label: availableLabel(),
                   value: formatBillingNumber(balance()?.availableCredits ?? 0),
                 },
                 {
-                  label: t("billing.balance.reserved"),
+                  label: reservedLabel(),
                   value: formatBillingNumber(balance()?.reservedCredits ?? 0),
                 },
               ]}
@@ -266,49 +289,53 @@ export default function BillingTab(props: { readonly spaceId: string }) {
         </Show>
       </Card>
 
-      <Card>
-        <CardHeader title={t("billing.plans.title")} />
-        <Switch>
-          <Match when={plans.loading}>
-            <p class="muted">{t("billing.plans.loading")}</p>
-          </Match>
-          <Match when={plans.error}>
-            {(error) => (
-              <Toast tone="error">
-                {t("billing.plans.error", { message: errorMessage(error()) })}
-              </Toast>
-            )}
-          </Match>
-          <Match when={plans()}>
-            <Show when={hasBillingCatalog()}>
-              <p class="muted av-plan-policy">
-                {t("billing.plans.nonRefundable")}
-              </p>
-            </Show>
-            <Show
-              when={hasBillingCatalog()}
-              fallback={<p class="muted">{t("billing.plans.none")}</p>}
-            >
-              <Show when={subscriptions().length > 0}>
-                <ul class="av-plan-list">
-                  <For each={subscriptions()}>{planCard}</For>
-                </ul>
+      <Show when={cloudBilling()}>
+        <Card>
+          <CardHeader title={t("billing.plans.title")} />
+          <Switch>
+            <Match when={plans.loading}>
+              <p class="muted">{t("billing.plans.loading")}</p>
+            </Match>
+            <Match when={plans.error}>
+              {(error) => (
+                <Toast tone="error">
+                  {t("billing.plans.error", {
+                    message: errorMessage(error()),
+                  })}
+                </Toast>
+              )}
+            </Match>
+            <Match when={plans()}>
+              <Show when={hasBillingCatalog()}>
+                <p class="muted av-plan-policy">
+                  {t("billing.plans.nonRefundable")}
+                </p>
               </Show>
-              <Show when={packs().length > 0}>
-                <h3 class="tg-card-title av-plan-section">
-                  {t("billing.packs.title")}
-                </h3>
-                <ul class="av-plan-list">
-                  <For each={packs()}>{planCard}</For>
-                </ul>
+              <Show
+                when={hasBillingCatalog()}
+                fallback={<p class="muted">{t("billing.plans.none")}</p>}
+              >
+                <Show when={subscriptions().length > 0}>
+                  <ul class="av-plan-list">
+                    <For each={subscriptions()}>{planCard}</For>
+                  </ul>
+                </Show>
+                <Show when={packs().length > 0}>
+                  <h3 class="tg-card-title av-plan-section">
+                    {t("billing.packs.title")}
+                  </h3>
+                  <ul class="av-plan-list">
+                    <For each={packs()}>{planCard}</For>
+                  </ul>
+                </Show>
               </Show>
-            </Show>
-          </Match>
-        </Switch>
-        <Show when={checkoutError()}>
-          {(m) => <Toast tone="error">{m()}</Toast>}
-        </Show>
-      </Card>
+            </Match>
+          </Switch>
+          <Show when={checkoutError()}>
+            {(m) => <Toast tone="error">{m()}</Toast>}
+          </Show>
+        </Card>
+      </Show>
 
       <Card>
         <details class="wb-disclosure av-billing-ledger">
