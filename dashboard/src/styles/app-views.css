@@ -46,6 +46,10 @@
   margin: 0 0 var(--tg-s-3);
   font-size: var(--tg-fs-sm);
 }
+.av-billing-ledger {
+  display: grid;
+  gap: var(--tg-s-4);
+}
 
 /* ===== shared ===== */
 .av-actions {

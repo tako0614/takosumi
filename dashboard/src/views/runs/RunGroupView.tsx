@@ -5,7 +5,8 @@
  * "approve all" (`POST /api/v1/run-groups/:id/approve`).
  */
 import "../../styles/wave-a.css";
-import { createMemo, createResource, Match, Show, Switch } from "solid-js";
+import "../../styles/wave-b.css";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { Layers } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -23,8 +24,6 @@ import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
 import { Card, CardHeader } from "../../components/ui/Card.tsx";
 import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
-import KVList, { type KVItem } from "../../components/ui/KVList.tsx";
-import DataTable, { type Column } from "../../components/ui/DataTable.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 
@@ -46,39 +45,6 @@ function Inner() {
     await approveRunGroup(groupId());
     await refetch();
   });
-
-  const memberColumns: readonly Column<Run>[] = [
-    {
-      header: "Run",
-      cell: (r) => (
-        <a href={`/runs/${r.id}`}>
-          <code>{r.id}</code>
-        </a>
-      ),
-    },
-    {
-      header: t("run.details.type"),
-      cell: (r) => operationLabel(r.type),
-    },
-    {
-      header: t("members.col.status"),
-      cell: (r) => (
-        <StatusBadge status={r.status} label={runStatusLabel} tone={runTone} />
-      ),
-    },
-    {
-      header: t("app.installationSub"),
-      cell: (r) => (
-        <Show when={r.installationId} fallback={<span class="muted">—</span>}>
-          {(id) => (
-            <a href={`/capsules/${encodeURIComponent(id())}`}>
-              <code>{id()}</code>
-            </a>
-          )}
-        </Show>
-      ),
-    },
-  ];
 
   return (
     <AppShell>
@@ -109,21 +75,6 @@ function Inner() {
         </Match>
         <Match when={group()}>
           {(g) => {
-            const items = (): readonly KVItem[] => {
-              const out: KVItem[] = [
-                {
-                  label: t("runGroup.groupId"),
-                  value: <code>{g().runGroup.id}</code>,
-                },
-              ];
-              if (g().runGroup.type) {
-                out.push({
-                  label: t("run.details.type"),
-                  value: <code>{g().runGroup.type}</code>,
-                });
-              }
-              return out;
-            };
             return (
               <div class="wa-stack">
                 <Card>
@@ -155,7 +106,27 @@ function Inner() {
                       </Show>
                     }
                   />
-                  <KVList items={items()} />
+                  <details class="wb-disclosure">
+                    <summary>{t("run.details.title")}</summary>
+                    <div class="wb-stack-sm">
+                      <div>
+                        <span class="muted">{t("runGroup.groupId")}</span>
+                        <div>
+                          <code>{g().runGroup.id}</code>
+                        </div>
+                      </div>
+                      <Show when={g().runGroup.type}>
+                        {(type) => (
+                          <div>
+                            <span class="muted">{t("run.details.type")}</span>
+                            <div>
+                              <code>{type()}</code>
+                            </div>
+                          </div>
+                        )}
+                      </Show>
+                    </div>
+                  </details>
                   <Show when={approveAll.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
@@ -174,12 +145,16 @@ function Inner() {
                       </span>
                     }
                   />
-                  <DataTable
-                    columns={memberColumns}
-                    rows={g().runs}
-                    rowKey={(r) => r.id}
-                    empty={t("runGroup.membersEmpty")}
-                  />
+                  <Show
+                    when={g().runs.length > 0}
+                    fallback={<p class="muted">{t("runGroup.membersEmpty")}</p>}
+                  >
+                    <ul class="wa-run-group-list">
+                      <For each={g().runs}>
+                        {(run) => <RunGroupMemberRow run={run} />}
+                      </For>
+                    </ul>
+                  </Show>
                 </Card>
               </div>
             );
@@ -187,5 +162,57 @@ function Inner() {
         </Match>
       </Switch>
     </AppShell>
+  );
+}
+
+function RunGroupMemberRow(props: { readonly run: Run }) {
+  const run = () => props.run;
+  return (
+    <li class="wa-run-group-row">
+      <div class="wa-run-group-main">
+        <Show
+          when={run().installationId}
+          fallback={<span class="muted">{t("common.unknown")}</span>}
+        >
+          {(id) => (
+            <a
+              class="wa-run-group-service"
+              href={`/capsules/${encodeURIComponent(id())}`}
+            >
+              {t("runGroup.openService")}
+            </a>
+          )}
+        </Show>
+        <span class="wa-run-group-change">{operationLabel(run().type)}</span>
+      </div>
+      <StatusBadge
+        status={run().status}
+        label={runStatusLabel}
+        tone={runTone}
+      />
+      <details class="wb-disclosure wa-run-group-details">
+        <summary>{t("run.details.title")}</summary>
+        <div class="wb-stack-sm">
+          <div>
+            <span class="muted">{t("run.details.runId")}</span>
+            <div>
+              <a href={`/runs/${run().id}`}>
+                <code>{run().id}</code>
+              </a>
+            </div>
+          </div>
+          <Show when={run().installationId}>
+            {(id) => (
+              <div>
+                <span class="muted">{t("app.installationSub")}</span>
+                <div>
+                  <code>{id()}</code>
+                </div>
+              </div>
+            )}
+          </Show>
+        </div>
+      </details>
+    </li>
   );
 }

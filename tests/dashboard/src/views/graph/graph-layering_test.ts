@@ -3,6 +3,8 @@
  * Pure logic only (no DOM / SolidJS), runnable under `bun test`.
  */
 import { describe, expect, test } from "bun:test";
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 import { layerGraph } from "../../../../../dashboard/src/views/graph/graph-layering.ts";
 import { extractRunId } from "../../../../../dashboard/src/lib/control-api.ts";
 import type {
@@ -112,5 +114,18 @@ describe("extractRunId", () => {
     expect(extractRunId({})).toBeUndefined();
     expect(extractRunId(null)).toBeUndefined();
     expect(extractRunId("nope")).toBeUndefined();
+  });
+});
+
+describe("graph view copy", () => {
+  test("uses service-connection wording instead of graph theory jargon", () => {
+    expect(en["graph.title"]).toBe("Service connections");
+    expect(en["graph.layer"]).toBe("Review order {n}");
+    expect(en["graph.cycle"]).toBe("Needs connection review");
+    expect(en["graph.dependsOn"]).toBe("Uses {names}");
+    expect(ja["graph.title"]).toBe("サービス連携");
+    expect(ja["graph.layer"]).toBe("確認順 {n}");
+    expect(ja["graph.cycle"]).toBe("連携の見直しが必要");
+    expect(ja["graph.dependsOn"]).toBe("{names} を利用");
   });
 });
