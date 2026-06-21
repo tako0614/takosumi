@@ -70,6 +70,93 @@
   font-size: var(--tg-fs-sm);
 }
 
+/* ===== Workspace starter (home) ===== */
+.av-start {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: var(--tg-s-5);
+  align-items: stretch;
+  padding: var(--tg-s-5);
+  margin-bottom: var(--tg-s-5);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+  box-shadow: var(--tg-shadow-sm);
+}
+.av-start-copy {
+  min-width: 0;
+}
+.av-start-kicker {
+  display: inline-flex;
+  margin-bottom: var(--tg-s-2);
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.av-start-title {
+  margin: 0;
+  font-family: var(--tg-font-display);
+  font-size: var(--tg-fs-xl);
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+.av-start-sub {
+  max-width: 66ch;
+  margin: var(--tg-s-2) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.av-start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-4);
+}
+.av-start-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.av-start-steps li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: var(--tg-s-3);
+  align-items: start;
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg);
+}
+.av-start-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-accent-soft);
+  color: var(--tg-accent-text);
+}
+.av-start-steps strong,
+.av-start-steps small {
+  display: block;
+  min-width: 0;
+}
+.av-start-steps strong {
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-sm);
+}
+.av-start-steps small {
+  margin-top: 2px;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.45;
+}
+
 /* ===== app card grid (home) ===== */
 .av-grid {
   list-style: none;
@@ -272,6 +359,37 @@ button.tg-tab {
   .av-attention {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .av-start {
+    grid-template-columns: 1fr;
+    gap: var(--tg-s-4);
+    padding: var(--tg-s-4);
+  }
+
+  .av-start-actions .tg-btn {
+    flex: 1 1 100%;
+  }
+
+  .av-start-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .av-start-steps li {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: var(--tg-s-2);
+    padding: var(--tg-s-2);
+    text-align: center;
+  }
+
+  .av-start-step-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .av-start-steps small {
+    display: none;
   }
 
   .av-grid {
