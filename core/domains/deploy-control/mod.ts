@@ -198,6 +198,7 @@ import {
   type ReconcileStripeSpaceSubscriptionInput,
 } from "./billing_service.ts";
 import { redactString } from "../observability/redaction.ts";
+import type { ObservabilitySink } from "../observability/mod.ts";
 import { UsageReportingService } from "./usage_service.ts";
 // The usage input-type vocabulary is owned by the usage service; re-exported here
 // so the historical `./domains/deploy-control/mod.ts` import path stays stable.
@@ -799,6 +800,8 @@ export interface OpenTofuDeploymentControllerDependencies {
    * no sensitive outputs.
    */
   readonly releaseActivator?: ReleaseActivator;
+  readonly observability?: Pick<ObservabilitySink, "recordMetric">;
+  readonly metricTags?: Record<string, string>;
   /**
    * Operator/self-host billing default (§28). Space.billingSettings overrides
    * this. Omitted means self-host style `disabled`.
@@ -965,6 +968,8 @@ export class OpenTofuDeploymentController {
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
+  readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
+  readonly #metricTags: Record<string, string>;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #allowOperatorBackedProviderEnvs: boolean;
   readonly #seededProfiles: Promise<void>;
@@ -1006,6 +1011,8 @@ export class OpenTofuDeploymentController {
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#releaseActivator = dependencies.releaseActivator;
+    this.#observability = dependencies.observability;
+    this.#metricTags = dependencies.metricTags ?? {};
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
     this.#allowOperatorBackedProviderEnvs =
@@ -1393,6 +1400,13 @@ export class OpenTofuDeploymentController {
         policyStatus: planRun.policy.status,
       },
     });
+    if (planRun.status === "failed") {
+      await this.#recordDeployOperationMetric({
+        run: planRun,
+        operationKind: "plan",
+        status: "failed",
+      });
+    }
     const genericRootDispatch =
       internal.genericRootDispatch ??
       (templatePlan
@@ -3996,6 +4010,11 @@ export class OpenTofuDeploymentController {
       finishedAt: now,
     };
     await this.#persistTerminalRun("plan", failed);
+    await this.#recordDeployOperationMetric({
+      run: failed,
+      operationKind: "plan",
+      status: "failed",
+    });
     // Activity (§27 / §34): a plan / destroy_plan reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
     // diagnostic message), the run phase, and the targeted Installation id.
@@ -4045,6 +4064,14 @@ export class OpenTofuDeploymentController {
       finishedAt: now,
     };
     await this.#persistTerminalRun("apply", failed);
+    await this.#recordDeployOperationMetric({
+      run: failed,
+      operationKind: eventType === "destroy.failed" ? "destroy_apply" : "apply",
+      status: "failed",
+      startedAt,
+      finishedAt: now,
+      recordApplyDuration: true,
+    });
     // Activity (§27 / §34): an apply / destroy_apply reached a failed terminal
     // state. Public-safe metadata only — a compact error CODE (never the raw
     // diagnostic message), the run phase, and the targeted Installation id.
@@ -4138,6 +4165,11 @@ export class OpenTofuDeploymentController {
         installationId: updated.installationId,
         startedAt: running.startedAt,
         finishedAt: now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: updated,
+        operationKind: "plan",
+        status: updated.status,
       });
       // Drift check (§19 drift_check; Phase 8): resource changes are available
       // only in the runner result and are intentionally not persisted on the
@@ -4559,6 +4591,76 @@ export class OpenTofuDeploymentController {
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt: new Date(input.finishedAt).toISOString(),
     });
+  }
+
+  async #recordDeployOperationMetric(input: {
+    readonly run: PlanRun | ApplyRun;
+    readonly operationKind: "plan" | "apply" | "destroy_apply";
+    readonly status: RunStatus;
+    readonly startedAt?: number;
+    readonly finishedAt?: number;
+    readonly recordApplyDuration?: boolean;
+  }): Promise<void> {
+    const tags = this.#deployMetricTags(input);
+    await this.#recordMetric({
+      name: "takosumi_deploy_operation_count",
+      kind: "counter",
+      value: 1,
+      tags,
+      observedAtMs: input.finishedAt,
+    });
+    if (
+      input.recordApplyDuration === true &&
+      input.startedAt !== undefined &&
+      input.finishedAt !== undefined
+    ) {
+      await this.#recordMetric({
+        name: "takosumi_apply_duration_seconds",
+        kind: "histogram",
+        value: Math.max(0, input.finishedAt - input.startedAt) / 1000,
+        tags,
+        observedAtMs: input.finishedAt,
+      });
+    }
+  }
+
+  #deployMetricTags(input: {
+    readonly run: PlanRun | ApplyRun;
+    readonly operationKind: "plan" | "apply" | "destroy_apply";
+    readonly status: RunStatus;
+  }): Record<string, string> {
+    return {
+      ...this.#metricTags,
+      space_id: input.run.spaceId,
+      capsule_id: input.run.installationId ?? "unbound",
+      operationKind: input.operationKind,
+      status: input.status,
+    };
+  }
+
+  async #recordMetric(input: {
+    readonly name: string;
+    readonly kind: "counter" | "gauge" | "histogram";
+    readonly value: number;
+    readonly tags: Record<string, string>;
+    readonly observedAtMs?: number;
+  }): Promise<void> {
+    if (!this.#observability) return;
+    try {
+      await this.#observability.recordMetric({
+        id: `metric_${crypto.randomUUID()}`,
+        name: input.name,
+        kind: input.kind,
+        value: input.value,
+        tags: input.tags,
+        observedAt: new Date(input.observedAtMs ?? this.#now()).toISOString(),
+      });
+    } catch (error) {
+      log.warn("deploy_control.metric_record_failed", {
+        metric: input.name,
+        message: errorMessage(error),
+      });
+    }
   }
 
   /**
@@ -5363,6 +5465,14 @@ export class OpenTofuDeploymentController {
       startedAt,
       finishedAt: now,
     });
+    await this.#recordDeployOperationMetric({
+      run: completed,
+      operationKind: "apply",
+      status: "succeeded",
+      startedAt,
+      finishedAt: now,
+      recordApplyDuration: true,
+    });
     await this.#billing.captureApplyBillingUsage({
       planRun,
       applyRun: completed,
@@ -5589,6 +5699,14 @@ export class OpenTofuDeploymentController {
         installationId: completed.installationId,
         startedAt,
         finishedAt: now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: completed,
+        operationKind: "destroy_apply",
+        status: "succeeded",
+        startedAt,
+        finishedAt: now,
+        recordApplyDuration: true,
       });
       await this.#billing.captureApplyBillingUsage({
         planRun,

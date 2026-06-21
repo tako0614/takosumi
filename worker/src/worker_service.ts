@@ -60,7 +60,9 @@ export async function createWorkerServiceApp(
   const enqueueRun = openTofuRunEnqueuer(env);
   const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
-  const opentofuRunner = new CloudflareContainerOpenTofuRunner(env);
+  const opentofuRunner = new CloudflareContainerOpenTofuRunner(env, {
+    observability: adapters.observability,
+  });
   // Provider-credential Vault crypto (spec §8): the same env-backed, fail-closed
   // secret-boundary AES-GCM the secret store uses. Bootstrap builds the default
   // StaticSecretConnectionVault from this over the shared OpenTofu store, so a

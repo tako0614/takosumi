@@ -5,6 +5,7 @@ import type {
 } from "./bindings.ts";
 import { cachedDeployControlService } from "./deploy_control_seam.ts";
 import { InstallationLeaseBusyError } from "../../core/domains/deploy-control/installation_lease.ts";
+import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 // Queue consumer config (mirrors deploy/*/wrangler.toml `max_retries`): one
 // initial delivery + this many retries. On the final attempt the consumer
@@ -49,6 +50,9 @@ export interface ConsumeOpenTofuRunDeps {
     run: OpenTofuRunQueueMessage,
     env: CloudflareWorkerEnv,
   ) => Promise<void>;
+  readonly metricSink?: (
+    env: CloudflareWorkerEnv,
+  ) => Promise<WorkerMetricSink | undefined>;
 }
 
 export async function consumeOpenTofuRunBatch(
@@ -57,6 +61,7 @@ export async function consumeOpenTofuRunBatch(
   deps: ConsumeOpenTofuRunDeps = {
     dispatch: dispatchOpenTofuRun,
     markRetriesExhausted: markOpenTofuRunRetriesExhausted,
+    metricSink: opentofuRunQueueMetricSink,
   },
 ): Promise<void> {
   const isDeadLetter =
@@ -81,6 +86,7 @@ export async function consumeOpenTofuRunBatch(
       continue;
     }
     const run = parsed.message;
+    await recordQueueAgeMetric(run, env, deps);
     if (isDeadLetter) {
       await deps.markRetriesExhausted(run, env);
       message.ack?.();
@@ -115,6 +121,30 @@ export async function consumeOpenTofuRunBatch(
       throw redactedDispatchError(error);
     }
   }
+}
+
+async function recordQueueAgeMetric(
+  run: OpenTofuRunQueueMessage,
+  env: CloudflareWorkerEnv,
+  deps: ConsumeOpenTofuRunDeps,
+): Promise<void> {
+  const requestedAt = run.requestedAt ? Date.parse(run.requestedAt) : NaN;
+  const queueAgeSeconds = Number.isFinite(requestedAt)
+    ? Math.max(0, (Date.now() - requestedAt) / 1000)
+    : 0;
+  const observability = await deps.metricSink?.(env);
+  await recordWorkerMetric({
+    observability,
+    env,
+    name: "takosumi_runner_queue_age_seconds",
+    kind: "gauge",
+    value: queueAgeSeconds,
+    tags: {
+      operationKind: run.action,
+      status: "dequeued",
+      space_id: run.spaceId,
+    },
+  });
 }
 
 /**
@@ -152,6 +182,17 @@ async function dispatchOpenTofuRun(
       throw new Error(
         `unsupported OpenTofu run action: ${assertNeverAction(run.action)}`,
       );
+  }
+}
+
+async function opentofuRunQueueMetricSink(
+  env: CloudflareWorkerEnv,
+): Promise<WorkerMetricSink | undefined> {
+  try {
+    return (await cachedDeployControlService(env)).context.adapters
+      .observability;
+  } catch {
+    return undefined;
   }
 }
 
