@@ -81,14 +81,6 @@ function Inner(props: {
       href: "/advanced/workspace/billing",
       label: t("spaceSettings.tab.billing"),
     },
-    {
-      href: "/advanced/workspace/backups",
-      label: t("spaceSettings.tab.backups"),
-    },
-    {
-      href: "/advanced/workspace/shares",
-      label: t("spaceSettings.tab.shares"),
-    },
   ];
 
   return (

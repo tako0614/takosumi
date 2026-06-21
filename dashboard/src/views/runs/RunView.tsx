@@ -254,6 +254,12 @@ function providerResolutionTone(status: ProviderResolution["status"]): Tone {
   }
 }
 
+function providerResolutionNeedsAttention(
+  row: ProviderResolutionRow,
+): boolean {
+  return row.status !== "resolved_provider_connection";
+}
+
 function providerConnectionName(
   connectionId: string | undefined,
   connectionsById: ReadonlyMap<string, ProviderConnection>,
@@ -505,6 +511,9 @@ function Inner() {
   );
   const providerRows = createMemo(() =>
     providerResolutionRows(run.latest, providerConnectionsById()),
+  );
+  const providerRowsNeedingAttention = createMemo(() =>
+    providerRows().filter(providerResolutionNeedsAttention),
   );
   const diagnosticRows = createMemo(() => logs()?.diagnostics ?? []);
   const showDiagnosticsPanel = createMemo(
@@ -1026,12 +1035,14 @@ function Inner() {
                 </Show>
               </Card>
 
-              <Show when={providerRows().length > 0}>
+              <Show when={providerRowsNeedingAttention().length > 0}>
                 <details class="wb-disclosure">
                   <summary>{t("run.connections.reviewTitle")}</summary>
                   <Card>
                     <p class="wa-notice">{t("run.connections.reviewBody")}</p>
-                    <ProviderResolutionTable rows={providerRows()} />
+                    <ProviderResolutionTable
+                      rows={providerRowsNeedingAttention()}
+                    />
                   </Card>
                 </details>
               </Show>

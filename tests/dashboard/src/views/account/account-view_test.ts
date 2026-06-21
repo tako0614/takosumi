@@ -12,10 +12,13 @@ const sourcePath = resolve(
 const source = readFileSync(sourcePath, "utf8");
 
 describe("AccountView", () => {
-  test("keeps support and management details folded out of the default account view", () => {
+  test("keeps support details folded and team management out of account settings", () => {
     expect(source).toContain('"account.session.details"');
     expect(source).toContain('class="wb-disclosure wc-advanced-settings"');
-    expect(source).toContain('<summary>{t("account.manage.title")}</summary>');
+    expect(source).not.toContain('<summary>{t("account.manage.title")}</summary>');
+    expect(source).not.toContain('href="/billing"');
+    expect(source).not.toContain('href="/connections"');
+    expect(source).not.toContain('href="/activity"');
     expect(source).toContain('label: t("account.profile.displayName")');
     expect(source).toContain('label: t("account.profile.email")');
     expect(source).not.toContain(
@@ -30,10 +33,10 @@ describe("AccountView", () => {
     expect(source).toContain(
       'label: t("account.profile.subject"),\n                    value: <code class="wc-code">{props.session.subject}</code>',
     );
-    expect(en["account.session.details"]).toBe("Session details");
-    expect(ja["account.session.details"]).toBe("セッション詳細");
-    expect(en["account.manage.title"]).toBe("Advanced management");
-    expect(ja["account.manage.title"]).toBe("高度な管理");
+    expect(en["account.session.details"]).toBe("Support info");
+    expect(ja["account.session.details"]).toBe("サポート情報");
+    expect(en).not.toHaveProperty("account.manage.title");
+    expect(ja).not.toHaveProperty("account.manage.title");
     expect(en["account.session.otherNote"]).not.toContain("coming soon");
     expect(ja["account.session.otherNote"]).not.toContain("準備中");
   });

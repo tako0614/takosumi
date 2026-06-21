@@ -349,17 +349,20 @@ describe("/new Provider Connections return context", () => {
     expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
   });
 
-  test("ProviderConnection ownership remains available inside friendly connection details", () => {
-    expect(connectionsTabSource).toContain("providerConnectionOwnershipLabel");
-    expect(connectionsTabSource).toContain(
-      "providerConnectionOwnershipLabel(connection.ownership)",
-    );
-    expect(connectionsTabSource).toContain('class="wc-inline-details"');
+  test("ProviderConnection list stays friendly and hides raw credential plumbing", () => {
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
     expect(connectionsTabSource).toContain('class="wc-conn-actions"');
+    expect(connectionsTabSource).toContain("providerConnections.loading");
+    expect(connectionsTabSource).not.toContain("providerConnectionOwnershipLabel");
+    expect(connectionsTabSource).not.toContain('class="wc-inline-details"');
+    expect(connectionsTabSource).not.toContain(
+      '<code class="wc-code">{connection.id}</code>',
+    );
+    expect(connectionsTabSource).not.toContain("{connection.providerSource}");
+    expect(connectionsTabSource).not.toContain("c.envNames.join");
     expect(connectionsTabSource).not.toContain("providerConnectionColumns");
     expect(connectionsTabSource).not.toContain("<DataTable");
-    expect(connectionsTabSource).toContain(
+    expect(connectionsTabSource).not.toContain(
       '<summary>{t("conn.list.title")}</summary>',
     );
     expect(connectionsTabSource).not.toContain(

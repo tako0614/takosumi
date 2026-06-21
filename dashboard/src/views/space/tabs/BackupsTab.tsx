@@ -71,56 +71,6 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
         </span>
       ),
     },
-    {
-      header: t("common.details"),
-      cell: (backup) => (
-        <details class="wb-disclosure">
-          <summary>{t("common.details")}</summary>
-          <div class="wb-stack-sm">
-            <div>
-              <span class="muted">{t("backups.detail.id")}</span>
-              <div>
-                <code class="wb-mono">{backup.id}</code>
-              </div>
-            </div>
-            <div>
-              <span class="muted">{t("backups.col.artifact")}</span>
-              <div>
-                <code class="wb-mono">{backup.objectKey}</code>
-              </div>
-              <div class="wb-subline">{shortDigest(backup.digest)}</div>
-            </div>
-            <Show when={backup.serviceData}>
-              {(data) => (
-                <div>
-                  <span class="muted">{t("backups.col.serviceData")}</span>
-                  <div>
-                    <code class="wb-mono">{data().objectKey}</code>
-                  </div>
-                  <div class="wb-subline">
-                    {t("backups.serviceDataSummary", {
-                      exported: data().exportedCount,
-                      unsupported: data().unsupportedCount,
-                      missing: data().missingCount,
-                    })}
-                  </div>
-                </div>
-              )}
-            </Show>
-            <Show when={backup.createdByRunId}>
-              {(runId) => (
-                <div>
-                  <span class="muted">{t("backups.col.run")}</span>
-                  <div>
-                    <code class="wb-mono">{runId()}</code>
-                  </div>
-                </div>
-              )}
-            </Show>
-          </div>
-        </details>
-      ),
-    },
   ];
 
   return (
@@ -200,10 +150,6 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
       </Card>
     </div>
   );
-}
-
-function shortDigest(value: string): string {
-  return value.length > 18 ? `${value.slice(0, 18)}...` : value;
 }
 
 function formatBytes(value: number): string {

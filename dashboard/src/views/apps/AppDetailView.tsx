@@ -815,11 +815,22 @@ function readyProviderConnectionsForProvider(
 function providerConnectionLabel(
   providerConnection: ProviderConnection,
 ): string {
-  const ownershipLabel =
-    providerConnection.ownership === "takos_provided"
-      ? t("conn.ownership.takosProvided")
-      : t("conn.ownership.ownKey");
-  return `${providerConnection.displayName || providerConnection.providerSource} (${ownershipLabel})`;
+  return providerConnection.displayName || providerConnection.providerSource;
+}
+
+function providerDisplayName(provider: string): string {
+  const name = providerTail(provider).trim();
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : provider;
+}
+
+function boundConnectionLabel(
+  row: InstallationProviderConnectionRow,
+  providerConnections: readonly ProviderConnection[],
+): string {
+  const match = providerConnections.find(
+    (connection) => connection.id === row.connectionId,
+  );
+  return match ? providerConnectionLabel(match) : t("common.none");
 }
 
 function buildProviderConnections(
@@ -953,120 +964,139 @@ function SettingsTab(props: {
             title={t("app.bindings.title")}
             subtitle={t("app.bindings.subtitle")}
           />
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void saveProfile.run();
-            }}
+          <Show
+            when={rows().length > 0}
+            fallback={<p class="muted">{t("app.bindings.none")}</p>}
           >
-            <div class="wa-binding-grid">
-              <For each={rows()}>
-                {(row, index) => {
-                  const readyConnections = () =>
-                    readyProviderConnectionsForProvider(
-                      row.provider,
-                      props.availableProviderConnections,
+            <KVList
+              items={rows().map((row) => ({
+                label: row.alias
+                  ? `${providerDisplayName(row.provider)} (${row.alias})`
+                  : providerDisplayName(row.provider),
+                value: boundConnectionLabel(
+                  row,
+                  props.availableProviderConnections,
+                ),
+              }))}
+            />
+          </Show>
+          <details class="wb-disclosure">
+            <summary>{t("app.bindings.editAdvanced")}</summary>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveProfile.run();
+              }}
+            >
+              <div class="wa-binding-grid">
+                <For each={rows()}>
+                  {(row, index) => {
+                    const readyConnections = () =>
+                      readyProviderConnectionsForProvider(
+                        row.provider,
+                        props.availableProviderConnections,
+                      );
+                    return (
+                      <div class="wa-binding-row">
+                        <div class="wa-binding-head">
+                          <Input
+                            value={row.provider}
+                            onInput={(e) =>
+                              update(index(), {
+                                provider: e.currentTarget.value,
+                                connectionId: "",
+                              })
+                            }
+                            placeholder="registry.opentofu.org/cloudflare/cloudflare"
+                          />
+                          <Input
+                            value={row.alias}
+                            onInput={(e) =>
+                              update(index(), { alias: e.currentTarget.value })
+                            }
+                            placeholder={t("app.bindings.aliasPlaceholder")}
+                          />
+                        </div>
+                        <div class="wa-binding-controls">
+                          <Select
+                            value={row.connectionId}
+                            onChange={(e) =>
+                              update(index(), {
+                                connectionId: e.currentTarget.value,
+                              })
+                            }
+                          >
+                            <option value="">
+                              {t("app.bindings.selectConnection")}
+                            </option>
+                            <For each={readyConnections()}>
+                              {(connection) => (
+                                <option value={connection.id}>
+                                  {providerConnectionLabel(connection)}
+                                </option>
+                              )}
+                            </For>
+                          </Select>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            onClick={() =>
+                              setRows((prev) =>
+                                prev.filter((_, i) => i !== index()),
+                              )
+                            }
+                          >
+                            {t("app.bindings.remove")}
+                          </Button>
+                        </div>
+                      </div>
                     );
-                  return (
-                    <div class="wa-binding-row">
-                      <div class="wa-binding-head">
-                        <Input
-                          value={row.provider}
-                          onInput={(e) =>
-                            update(index(), {
-                              provider: e.currentTarget.value,
-                              connectionId: "",
-                            })
-                          }
-                          placeholder="registry.opentofu.org/cloudflare/cloudflare"
-                        />
-                        <Input
-                          value={row.alias}
-                          onInput={(e) =>
-                            update(index(), { alias: e.currentTarget.value })
-                          }
-                          placeholder={t("app.bindings.aliasPlaceholder")}
-                        />
-                      </div>
-                      <div class="wa-binding-controls">
-                        <Select
-                          value={row.connectionId}
-                          onChange={(e) =>
-                            update(index(), {
-                              connectionId: e.currentTarget.value,
-                            })
-                          }
-                        >
-                          <option value="">
-                            {t("app.bindings.selectConnection")}
-                          </option>
-                          <For each={readyConnections()}>
-                            {(connection) => (
-                              <option value={connection.id}>
-                                {providerConnectionLabel(connection)}
-                              </option>
-                            )}
-                          </For>
-                        </Select>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          type="button"
-                          onClick={() =>
-                            setRows((prev) =>
-                              prev.filter((_, i) => i !== index()),
-                            )
-                          }
-                        >
-                          {t("app.bindings.remove")}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
-            <div class="wa-form-actions">
-              <Button
-                variant="secondary"
-                type="button"
-                onClick={() =>
-                  setRows((prev) => [
-                    ...prev,
-                    {
-                      provider: "",
-                      alias: "",
-                      connectionId: "",
-                    },
-                  ])
-                }
-              >
-                {t("app.bindings.add")}
-              </Button>
-              <Button
-                variant="primary"
-                type="submit"
-                disabled={saveProfile.busy()}
-                busy={saveProfile.busy()}
-              >
-                {saveProfile.busy() ? t("common.saving") : t("common.save")}
-              </Button>
-            </div>
-            <Show when={formError()}>
-              {(m) => (
-                <p class="wa-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-            <Show when={saveProfile.error()}>
-              {(m) => (
-                <p class="wa-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-          </form>
+                  }}
+                </For>
+              </div>
+              <div class="wa-form-actions">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() =>
+                    setRows((prev) => [
+                      ...prev,
+                      {
+                        provider: "",
+                        alias: "",
+                        connectionId: "",
+                      },
+                    ])
+                  }
+                >
+                  {t("app.bindings.add")}
+                </Button>
+                <Button
+                  variant="primary"
+                  type="submit"
+                  disabled={saveProfile.busy()}
+                  busy={saveProfile.busy()}
+                >
+                  {saveProfile.busy() ? t("common.saving") : t("common.save")}
+                </Button>
+              </div>
+              <Show when={formError()}>
+                {(m) => (
+                  <p class="wa-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+              <Show when={saveProfile.error()}>
+                {(m) => (
+                  <p class="wa-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+            </form>
+          </details>
         </Card>
       </details>
 

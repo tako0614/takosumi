@@ -13,20 +13,21 @@ test("BillingTab does not mask billing API failures as disabled or empty state",
   expect(source).toContain("billing.error");
   expect(source).toContain("plans.error");
   expect(source).toContain("usage.error");
-  expect(source).toContain("reservations.error");
   expect(source).not.toContain('billing()?.settings?.mode ?? "disabled"');
   expect(source).not.toContain("(plans() ?? []).length > 0");
   expect(source).not.toContain("(usage() ?? []).length > 0");
-  expect(source).not.toContain("(reservations() ?? []).length > 0");
+  expect(source).not.toContain("reservations()");
 });
 
-test("BillingTab keeps operational ledgers folded behind usage details", () => {
+test("BillingTab folds usage history and removes reservation ledgers from the UI", () => {
   const source = readFileSync(sourcePath, "utf8");
 
   expect(source).toContain('summary>{t("billing.ledger.title")}</summary>');
   expect(source).toContain('class="wb-disclosure av-billing-ledger"');
-  expect(source).toContain('"billing.reservations.title"');
   expect(source).toContain('"billing.usage.title"');
+  expect(source).not.toContain("listSpaceCreditReservations");
+  expect(source).not.toContain("CreditReservation");
+  expect(source).not.toContain('"billing.reservations.title"');
   expect(source).not.toContain(
     '<CardHeader title={t("billing.reservations.title")} />',
   );
