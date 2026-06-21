@@ -3000,7 +3000,7 @@ async function listControlConnections(
 }
 
 /**
- * Registers a Space-owned provider helper Connection from the dashboard
+ * Registers a Space-owned provider/source helper Connection from the dashboard
  * session. This is the credential-helper write path
  * the §31 connections screen calls same-origin: the guided-token paste and the
  * raw-token "詳細設定" fallback both POST here.
@@ -3033,10 +3033,22 @@ async function createControlConnection(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  const provider = stringValue(body.provider) ?? "cloudflare";
+  const requestedKind = stringValue(body.kind);
+  const sourceGitKind =
+    requestedKind === "source_git_https_token" ? requestedKind : undefined;
+  const provider = sourceGitKind
+    ? sourceGitKind
+    : (stringValue(body.provider) ?? "cloudflare");
   const values = stringRecord(body.values);
   if (!values || Object.keys(values).length === 0) {
     return errorJson("invalid_request", "values is required", 400);
+  }
+  if (sourceGitKind && !stringValue(values.GIT_HTTPS_TOKEN)) {
+    return errorJson(
+      "invalid_request",
+      "values.GIT_HTTPS_TOKEN is required",
+      400,
+    );
   }
   const scopeHints = connectionScopeHintsFromValues(
     provider,
@@ -3046,12 +3058,16 @@ async function createControlConnection(
   const createRequest: CreateConnectionRequest = {
     spaceId,
     provider,
-    credentialDriver:
-      provider === "cloudflare" ? "cloudflare_api_token" : "generic_env",
-    // Cloudflare gets the dedicated api-token kind; anything else is the
-    // generic-env provider kind. Both become Space-scoped provider connections.
-    kind:
-      provider === "cloudflare"
+    credentialDriver: sourceGitKind
+      ? "static_secret"
+      : provider === "cloudflare"
+        ? "cloudflare_api_token"
+        : "generic_env",
+    // Cloudflare gets the dedicated api-token kind; source Git gets the source
+    // credential kind; anything else is the generic-env provider kind.
+    kind: sourceGitKind
+      ? sourceGitKind
+      : provider === "cloudflare"
         ? "cloudflare_api_token"
         : "generic_env_provider",
     authMethod: "static_secret",
@@ -3722,7 +3738,14 @@ function connectionScopeHints(
 ): ConnectionScopeHints | undefined {
   if (!isPlainJsonObject(value)) return undefined;
   const hints: Record<string, string> = {};
-  for (const key of ["accountId", "zoneId", "templateId"] as const) {
+  for (const key of [
+    "accountId",
+    "zoneId",
+    "repoUrl",
+    "username",
+    "knownHostsEntry",
+    "templateId",
+  ] as const) {
     const v = stringValue(value[key]);
     if (v) hints[key] = v;
   }

@@ -200,6 +200,22 @@
 .wb-source-advanced {
   max-width: 720px;
 }
+.wb-source-access {
+  max-width: 720px;
+}
+.wb-source-access > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.wb-source-token-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(220px, 1fr);
+  gap: var(--tg-s-3);
+}
+.wb-source-token-actions {
+  margin-top: var(--tg-s-2);
+}
 .wb-inline-details {
   margin-top: var(--tg-s-2);
   color: var(--tg-fg-muted);
@@ -388,6 +404,9 @@
   .wb-variable-row {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+  .wb-source-token-grid {
+    grid-template-columns: 1fr;
   }
   .wb-install-form.wb-install-source-form > .wb-form-actions {
     position: fixed;

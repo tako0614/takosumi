@@ -653,6 +653,15 @@ export type ConnectionStatus =
   | "error";
 export type ConnectionScopeKind = "operator" | "space";
 
+export interface ConnectionScopeHints {
+  readonly accountId?: string;
+  readonly zoneId?: string;
+  readonly repoUrl?: string;
+  readonly username?: string;
+  readonly knownHostsEntry?: string;
+  readonly templateId?: string;
+}
+
 export interface Connection {
   readonly id: string;
   readonly spaceId?: string;
@@ -663,6 +672,7 @@ export interface Connection {
   readonly authMethod: string;
   readonly displayName?: string;
   readonly status: ConnectionStatus;
+  readonly scopeHints?: ConnectionScopeHints;
   readonly envNames: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -1069,6 +1079,7 @@ export async function checkCapsuleCompatibility(input: {
   readonly ref: string;
   readonly path: string;
   readonly name: string;
+  readonly authConnectionId?: string;
   readonly installConfigId?: string;
   readonly signal?: AbortSignal;
   readonly onSourceCreated?: (sourceId: string) => void;
@@ -1085,6 +1096,9 @@ export async function checkCapsuleCompatibility(input: {
         url: input.gitUrl,
         defaultRef: input.ref,
         defaultPath: input.path,
+        ...(input.authConnectionId
+          ? { authConnectionId: input.authConnectionId }
+          : {}),
       })
     ).source.id;
   input.onSourceCreated?.(sourceId);
@@ -1579,7 +1593,7 @@ export async function createConnection(input: {
   readonly spaceId: string;
   readonly provider: string;
   readonly displayName?: string;
-  readonly scopeHints?: { readonly accountId?: string };
+  readonly scopeHints?: ConnectionScopeHints;
   readonly values: Readonly<Record<string, string>>;
 }): Promise<Connection> {
   const body = await controlFetch<{ connection: Connection }>(
@@ -1592,6 +1606,34 @@ export async function createConnection(input: {
         ...(input.displayName ? { displayName: input.displayName } : {}),
         ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         values: input.values,
+      },
+    },
+  );
+  return body.connection;
+}
+
+export async function createSourceHttpsTokenConnection(input: {
+  readonly spaceId: string;
+  readonly displayName?: string;
+  readonly repoUrl?: string;
+  readonly username?: string;
+  readonly token: string;
+}): Promise<Connection> {
+  const scopeHints: ConnectionScopeHints = {
+    ...(input.repoUrl ? { repoUrl: input.repoUrl } : {}),
+    ...(input.username ? { username: input.username } : {}),
+  };
+  const body = await controlFetch<{ connection: Connection }>(
+    `${BASE}/connections`,
+    {
+      method: "POST",
+      body: {
+        spaceId: input.spaceId,
+        provider: "source_git_https_token",
+        kind: "source_git_https_token",
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(Object.keys(scopeHints).length > 0 ? { scopeHints } : {}),
+        values: { GIT_HTTPS_TOKEN: input.token },
       },
     },
   );

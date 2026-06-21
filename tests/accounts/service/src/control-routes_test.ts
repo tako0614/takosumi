@@ -3308,6 +3308,61 @@ test("Connections create: registers a Space-owned connection; token never echoed
   expect(text).not.toContain("CLOUDFLARE_API_TOKEN");
 });
 
+test("Connections create: registers a Space-owned source Git HTTPS token; token never echoed", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "ignored-provider",
+      kind: "source_git_https_token",
+      displayName: "private source",
+      scope: "operator",
+      scopeHints: {
+        repoUrl: "https://github.com/example/private.git",
+        username: "git",
+      },
+      values: {
+        GIT_HTTPS_TOKEN: "ghp-private-source-token",
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    spaceId?: string;
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    scope?: string;
+    scopeHints?: { repoUrl?: string; username?: string };
+    values?: Record<string, string>;
+  };
+  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.provider).toEqual("source_git_https_token");
+  expect(passed.kind).toEqual("source_git_https_token");
+  expect(passed.credentialDriver).toEqual("static_secret");
+  expect(passed.scope).toEqual("space");
+  expect(passed.scopeHints).toEqual({
+    repoUrl: "https://github.com/example/private.git",
+    username: "git",
+  });
+  expect(passed.values?.GIT_HTTPS_TOKEN).toEqual("ghp-private-source-token");
+
+  const text = await response!.text();
+  expect(text).not.toContain("ghp-private-source-token");
+  expect(text).not.toContain("GIT_HTTPS_TOKEN");
+});
+
 test("Connections create: requires spaceId and values", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -3336,6 +3391,23 @@ test("Connections create: requires spaceId and values", async () => {
     operations,
   });
   expect(noValuesResp?.status).toEqual(400);
+
+  const sourceNoToken = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      kind: "source_git_https_token",
+      values: { OTHER_SECRET: "not-a-git-token" },
+    },
+  });
+  const sourceNoTokenResp = await handleControlRoute({
+    request: sourceNoToken.request,
+    url: sourceNoToken.url,
+    store,
+    operations,
+  });
+  expect(sourceNoTokenResp?.status).toEqual(400);
+
   // Neither malformed request reached the facade.
   expect(operations.calls.createConnection).toBeUndefined();
 });
