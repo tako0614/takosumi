@@ -177,6 +177,28 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("else void runCompatibilityCheck()");
   });
 
+  test("/new can use a Source Git credential for private repositories", () => {
+    expect(newAppViewSource).toContain("createSourceHttpsTokenConnection");
+    expect(newAppViewSource).toContain("listConnections");
+    expect(newAppViewSource).toContain("testConnection(connection.id)");
+    expect(newAppViewSource).toContain('type SourceAccessMode = "public"');
+    expect(newAppViewSource).toContain('"source_git_https_token"');
+    expect(newAppViewSource).toContain(
+      "authConnectionId: sourceAuthConnectionIdForRun()",
+    );
+    expect(
+      newAppViewSource.match(/sourceAuthConnectionIdForRun\(\)/g) ?? [],
+    ).toHaveLength(2);
+    expect(controlApiSource).toContain(
+      "export async function createSourceHttpsTokenConnection",
+    );
+    expect(controlApiSource).toContain('kind: "source_git_https_token"');
+    expect(controlApiSource).toContain("readonly authConnectionId?: string");
+    expect(
+      controlApiSource.match(/authConnectionId: input.authConnectionId/g) ?? [],
+    ).toHaveLength(2);
+  });
+
   test("/new retry still saves Provider Connections after a partial install create", () => {
     const createIndex = newAppViewSource.indexOf("await createInstallation({");
     const setCreatedIndex = newAppViewSource.indexOf(

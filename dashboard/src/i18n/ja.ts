@@ -373,6 +373,33 @@ export const ja = {
   "new.git.advanced": "バージョンとフォルダを指定",
   "new.git.ref": "バージョン",
   "new.git.path": "フォルダ",
+  "new.sourceAccess.title": "非公開リポジトリ",
+  "new.sourceAccess.body":
+    "公開リポジトリなら認証情報は不要です。非公開の取得元では、読み取り専用の HTTPS token を保存するか、保存済みの取得元接続を選んでください。",
+  "new.sourceAccess.mode": "取得元アクセス",
+  "new.sourceAccess.public": "公開リポジトリ",
+  "new.sourceAccess.existing": "保存済みの取得元接続を使う",
+  "new.sourceAccess.token": "HTTPS token を保存する",
+  "new.sourceAccess.connection": "取得元接続",
+  "new.sourceAccess.selectConnection": "取得元接続を選択",
+  "new.sourceAccess.noConnections":
+    "この Workspace には、検証済みの取得元接続がまだありません。",
+  "new.sourceAccess.username": "ユーザー名",
+  "new.sourceAccess.accessToken": "Access token",
+  "new.sourceAccess.tokenPlaceholder": "読み取り専用リポジトリ token",
+  "new.sourceAccess.saveToken": "token を保存",
+  "new.sourceAccess.tokenBody":
+    "token は書き込み専用の Source connection として保存され、この Workspace の Git fetch step にだけ渡されます。",
+  "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
+  "new.sourceAccess.errorSaveToken":
+    "取得元を確認する前に、非公開リポジトリの token を保存してください。",
+  "new.sourceAccess.errorSelectConnection":
+    "検証済みの取得元接続を選択してください。",
+  "new.sourceAccess.errorConnectionUnavailable":
+    "選択した取得元接続は現在利用できません。",
+  "new.sourceAccess.httpsConnection": "HTTPS 取得元接続",
+  "new.sourceAccess.sshConnection": "SSH 取得元接続",
+  "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
   "new.vars.inputsTitle": "OpenTofu 入力",
