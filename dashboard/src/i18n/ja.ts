@@ -44,7 +44,6 @@ export const ja = {
   "nav.accountSection": "アカウント",
   "nav.advanced": "詳細",
   "nav.notifications": "通知",
-  "nav.notificationsShort": "通知",
   "nav.spaceSettings": "Workspace 設定",
   "nav.spaceSettingsShort": "設定",
   "nav.account": "アカウント",
@@ -169,16 +168,12 @@ export const ja = {
   "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
-  "apps.empty.title": "まだサービスがありません",
-  "apps.empty.message": "サンプルから始めるか、取得元 URL から追加できます。",
-  "apps.empty.cta": "サービスを追加",
   "apps.openApp": "サービスを開く",
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",
   "apps.reviewChanges": "更新を確認",
   "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
-  "apps.graphLink": "サービスマップ",
   "apps.summary.aria": "サービス状態",
   "apps.summary.title": "あなたのサービス",
   "apps.summary.body": "{total} 件中 {deployed} 件がデプロイ済みです。",
@@ -188,15 +183,10 @@ export const ja = {
   "apps.start.kicker": "まだサービスがありません",
   "apps.start.titleEmpty": "使いたいサービスを追加しましょう",
   "apps.start.bodyEmpty":
-    "サンプルから始めるか、アプリページのインストールリンク、取得元 URL から追加できます。",
-  "apps.start.add": "サービスを追加",
-  "apps.start.connections": "クラウド接続",
+    "まずはサンプルから始められます。アプリページのインストールリンクも使えます。",
   "apps.start.optionCatalog": "サンプルから始める",
   "apps.start.optionCatalogSub":
     "すぐ試せる構成を選んで、必要な接続だけ後から設定します。",
-  "apps.start.optionLink": "リンクや URL から追加",
-  "apps.start.optionLinkSub":
-    "アプリページのリンクや OpenTofu/Terraform の取得元 URL を使います。",
 
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "サービス",
@@ -358,49 +348,30 @@ export const ja = {
   "new.title": "サービスを追加",
   "new.subtitle":
     "おすすめから選ぶか、アプリのインストールリンクを貼り付けます。",
-  "new.guide.aria": "サービス追加の案内",
-  "new.guide.kicker": "サービス追加",
-  "new.guide.title": "追加したいサービスを選びます",
-  "new.guide.choose":
-    "おすすめから選ぶか、アプリページにあるインストールリンクを貼り付けてください。",
-  "new.guide.check":
-    "まず追加できるか確認します。必要な接続がある場合だけ、この後に案内します。",
-  "new.guide.checking":
-    "取得元を確認しています。完了すると次に必要な操作だけを表示します。",
-  "new.guide.connect":
-    "このサービスに必要な外部サービス接続を設定すると、続きから追加できます。",
-  "new.guide.ready":
-    "追加内容の確認へ進めます。確認画面で承認するまでデプロイされません。",
-  "new.guide.needsFix":
-    "追加前に直す必要がある項目があります。下の確認結果を見てください。",
-  "new.steps.aria": "サービス追加の進行状況",
-  "new.steps.choose": "選ぶ",
-  "new.steps.check": "確認",
-  "new.steps.connect": "接続",
-  "new.steps.review": "承認",
-  "new.flow.source": "追加するもの",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "おすすめサービス",
-  "new.tab.catalog": "おすすめ",
-  "new.tab.git": "リンク / URL",
   "new.catalog.intro":
-    "追加したいものを選びます。確認するまで追加はされません。",
-  "new.catalog.readyStarter": "スターター",
+    "ホストしたいものを選びます。Takosumi はそのサービスに必要な設定だけを案内します。",
+  "new.catalog.provider": "{provider} を使います",
   "new.catalog.select": "これを追加",
-  "new.advancedImport.open": "リンクや取得元から追加",
+  "new.advancedImport.open": "インストールリンクを使う",
   "new.advancedImport.close": "リンク入力を閉じる",
-  "new.advancedImport.title": "リンクや取得元から追加",
+  "new.advancedImport.title": "インストールリンクで追加",
   "new.advancedImport.subtitle":
-    "アプリページのインストールリンク、または取得元 URL を貼り付けます。",
-  "new.selection.title": "選択中のサービス",
+    "アプリページのインストールリンク、または詳しい人向けの Git URL を貼り付けます。",
   "new.selection.subtitle":
     "まず内容を確認します。デプロイは承認後に実行されます。",
-  "new.selection.change": "取得元を変更",
   "new.selection.sourceDetails": "取得元の詳細",
+  "new.catalogInput.title": "サービス設定",
+  "new.catalogInput.body":
+    "このサービスに必要な最小限の設定を入力します。secret や API キーは外部サービス接続に入れます。",
+  "new.catalogInput.errorRequired": "{label} を入力してください。",
+  "new.catalogInput.errorUnsafeValue":
+    "{label} の値が長すぎるか、使えない文字を含んでいます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
-  "new.git.url": "インストールリンクまたは取得元 URL",
+  "new.git.url": "インストールリンクまたは Git URL",
   "new.git.advanced": "詳細な取得元設定",
   "new.git.ref": "バージョン",
   "new.git.path": "フォルダ",
@@ -448,16 +419,9 @@ export const ja = {
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
     "project_name はリソース接頭辞の欄で指定してください。",
+  "new.vars.errorCatalogReserved":
+    "「{name}」はサービス設定の欄で指定してください。",
   "new.vars.errorDuplicate": "「{name}」が重複しています。",
-  "new.managed.notice":
-    "まず内容を確認します。必要な接続がある場合だけ、この後に案内します。",
-  "new.managed.needCredential":
-    "追加するには、まだこの Workspace にない外部サービス接続が必要です。",
-  "new.managed.connectFirst": "接続を設定する",
-  "new.managed.byoTitle": "自分のクラウド接続を使う",
-  "new.managed.byoBody":
-    "このサービスが AWS / GCP / Kubernetes / Cloudflare などを使う場合は、必要な接続を追加または選択してください。",
-  "new.managed.byoLink": "接続を設定する",
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
   "new.deeplink.invalidBody":
     "安全な HTTPS Git 取得元が含まれていないか、ブラウザで開けない取得元情報が含まれています。例から選ぶか、Git URL を手動で貼り付けてください。",
@@ -498,12 +462,9 @@ export const ja = {
   "new.providers.title": "外部サービス接続",
   "new.providers.subtitle":
     "最初の確認に進む前に、このサービスが使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
-  "new.providers.noneRequired":
-    "このサービスは最初の確認で追加の接続を要求していません。",
   "new.providers.alias": "alias: {alias}",
   "new.providers.advanced": "接続の詳細",
   "new.providers.selectConnection": "接続を選択",
-  "new.providers.manageConnections": "接続を管理",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.errorOperatorManaged":
