@@ -38,7 +38,7 @@ const SignInCallbackView = lazy(() =>
 );
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
-// --- Capsule-centric core -----------------------------------------------------
+// --- Normal hosted-service surface --------------------------------------------
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
@@ -53,6 +53,18 @@ const SpaceSettingsView = lazy(
   () => import("./views/space/SpaceSettingsView.tsx"),
 );
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
+
+function ConnectionsView() {
+  return <SpaceSettingsView standaloneTab="connections" />;
+}
+
+function BillingView() {
+  return <SpaceSettingsView standaloneTab="billing" />;
+}
+
+function AdvancedWorkspaceView() {
+  return <SpaceSettingsView />;
+}
 
 // --- redirects ---------------------------------------------------------------
 
@@ -97,10 +109,12 @@ function App() {
         component={() => <RedirectWithQuery to="/sign-in" />}
       />
 
-      {/* Capsule-centric core (AuthGuard-gated inside each view). */}
+      {/* Normal hosted-service surface (AuthGuard-gated inside each view). */}
       <Route path="/" component={AppListView} />
       <Route path="/capsules" component={AppListView} />
       <Route path="/new" component={NewAppView} />
+      <Route path="/connections" component={ConnectionsView} />
+      <Route path="/billing" component={BillingView} />
       <Route path="/capsules/:id" component={AppDetailView} />
       <Route path="/capsules/:id/:tab" component={AppDetailView} />
       <Route path="/runs/:id" component={RunView} />
@@ -108,8 +122,21 @@ function App() {
       <Route path="/graph" component={GraphView} />
       <Route path="/activity" component={ActivityView} />
       <Route path="/notifications" component={NotificationsView} />
-      <Route path="/workspace/settings" component={SpaceSettingsView} />
-      <Route path="/workspace/settings/:tab" component={SpaceSettingsView} />
+      <Route
+        path="/workspace/settings"
+        component={() => <RedirectWithQuery to="/advanced/workspace" />}
+      />
+      <Route
+        path="/workspace/settings/:tab"
+        component={(props) => (
+          <RedirectWithQuery to={`/advanced/workspace/${props.params.tab}`} />
+        )}
+      />
+      <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
+      <Route
+        path="/advanced/workspace/:tab"
+        component={AdvancedWorkspaceView}
+      />
       <Route path="/account" component={AccountView} />
 
       {/* Old paths → new homes. /install is the external install link
@@ -133,40 +160,34 @@ function App() {
         path="/installations/:id/:tab"
         component={RedirectLegacyInstallationDetail}
       />
-      <Route
-        path="/connections"
-        component={() => (
-          <RedirectWithQuery to="/workspace/settings/connections" />
-        )}
-      />
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/capsules" />} />
       <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
       <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
       <Route
         path="/members"
-        component={() => <Navigate href="/workspace/settings/members" />}
+        component={() => <Navigate href="/advanced/workspace/members" />}
       />
       <Route
         path="/backups"
-        component={() => <Navigate href="/workspace/settings/backups" />}
+        component={() => <Navigate href="/advanced/workspace/backups" />}
       />
       <Route
         path="/output-shares"
-        component={() => <Navigate href="/workspace/settings/shares" />}
+        component={() => <Navigate href="/advanced/workspace/shares" />}
       />
       <Route path="/sources" component={() => <Navigate href="/" />} />
       <Route
         path="/providers"
-        component={() => <Navigate href="/workspace/settings/connections" />}
+        component={() => <Navigate href="/connections" />}
       />
       <Route
         path="/account/settings"
-        component={() => <Navigate href="/workspace/settings" />}
+        component={() => <Navigate href="/advanced/workspace" />}
       />
       <Route
         path="/account/billing"
-        component={() => <Navigate href="/workspace/settings/billing" />}
+        component={() => <Navigate href="/billing" />}
       />
       <Route
         path="/account/profile"
@@ -178,12 +199,12 @@ function App() {
       />
       <Route
         path="/space/settings"
-        component={() => <RedirectWithQuery to="/workspace/settings" />}
+        component={() => <RedirectWithQuery to="/advanced/workspace" />}
       />
       <Route
         path="/space/settings/:tab"
         component={(props) => (
-          <RedirectWithQuery to={`/workspace/settings/${props.params.tab}`} />
+          <RedirectWithQuery to={`/advanced/workspace/${props.params.tab}`} />
         )}
       />
 

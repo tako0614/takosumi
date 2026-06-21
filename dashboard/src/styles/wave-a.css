@@ -316,6 +316,16 @@
   font-size: var(--tg-fs-sm);
   color: var(--tg-danger);
 }
+.wa-output-url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.wa-output-url code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
 
 /* --- Deployment history list ----------------------------------------------- */
 .wa-deploy-history {
@@ -412,9 +422,8 @@
   gap: var(--tg-s-2);
 }
 .wa-activity-action {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-accent);
+  font-weight: 700;
+  color: var(--tg-fg);
 }
 .wa-activity-target {
   font-size: var(--tg-fs-xs);

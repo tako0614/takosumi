@@ -20,7 +20,7 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
     expect(appListSource).toContain("when={list().length === 0}");
     expect(appListSource).toContain('href="/new"');
-    expect(appListSource).toContain('href="/workspace/settings/connections"');
+    expect(appListSource).toContain('href="/connections"');
     expect(appListSource).toContain('t("apps.start.stepSource")');
     expect(appListSource).toContain('t("apps.start.stepConnection")');
     expect(appListSource).toContain('t("apps.start.stepDeploy")');
@@ -29,7 +29,9 @@ describe("AppListView Workspace starter", () => {
   test("uses a compact summary for workspaces that already have services", () => {
     expect(appListSource).toContain("function WorkspaceSummaryBar");
     expect(appListSource).toContain("<WorkspaceSummaryBar");
-    expect(appListSource).toContain("<ServiceGrid");
+    expect(appListSource).toContain("<ServiceList");
+    expect(appListSource).toContain('class="av-service-list"');
+    expect(appListSource).toContain('class="av-service-row"');
     expect(appListSource).toContain('t("apps.summary.total")');
     expect(appListSource).toContain('t("apps.summary.deployed")');
     expect(appListSource).toContain('t("apps.summary.clear")');
@@ -49,6 +51,8 @@ describe("AppListView Workspace starter", () => {
   test("keeps the starter responsive on mobile", () => {
     expect(appViewsCssSource).toContain(".av-start");
     expect(appViewsCssSource).toContain(".av-summary");
+    expect(appViewsCssSource).toContain(".av-service-list");
+    expect(appViewsCssSource).toContain(".av-service-actions .tg-btn");
     expect(appViewsCssSource).toContain("grid-template-columns: 1fr;");
     expect(appViewsCssSource).toContain(".av-start-actions .tg-btn");
     expect(appViewsCssSource).toContain("flex: 1 1 100%;");

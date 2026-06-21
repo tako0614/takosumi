@@ -1,11 +1,10 @@
 /**
- * Activity view — the Workspace-scoped audit trail (the raw, expert counterpart
- * of the notifications feed). Lists recent {@link ActivityEvent}s for the
- * current Workspace via the current compatibility route. Each row shows the raw
- * action verb, the targeted entity, the actor, and the timestamp; metadata is
- * rendered as compact key=value chips (never secrets).
+ * History view — the Workspace-scoped activity feed. The default row is
+ * plain-language; raw action/target/metadata remains available in a disclosure
+ * for support and audit work.
  */
 import "../../styles/wave-a.css";
+import "../../styles/wave-b.css";
 import { createResource, For, Match, Show, Switch } from "solid-js";
 import { ScrollText } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -16,6 +15,7 @@ import {
   type ControlApiError,
   listActivity,
 } from "../../lib/control-api.ts";
+import { operationLabel } from "../../lib/labels.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Card } from "../../components/ui/Card.tsx";
@@ -48,14 +48,73 @@ function MetadataChips(props: { metadata: Record<string, unknown> }) {
   );
 }
 
+function metaString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function activityTitle(event: ActivityEvent): string {
+  const metadata = event.metadata ?? {};
+  switch (event.action) {
+    case "installation.created":
+      return t("notif.event.installCreated", {
+        name: metaString(metadata, "name") ?? "—",
+      });
+    case "run.plan_created":
+      return t("notif.event.planReady", {
+        operation: operationLabel(metaString(metadata, "operation")),
+      });
+    case "run.approved":
+      return t("notif.event.approved", {
+        operation: operationLabel(metaString(metadata, "operation")),
+      });
+    case "run.applied":
+      return t("notif.event.applied");
+    case "run.destroyed":
+      return t("notif.event.destroyed");
+    case "run.failed":
+      return t("notif.event.failed", {
+        operation: operationLabel(metaString(metadata, "phase")),
+      });
+    case "connection.created":
+      return metaString(metadata, "provider")
+        ? t("notif.event.connCreated", {
+            provider: metaString(metadata, "provider")!,
+          })
+        : t("notif.event.connCreatedGeneric");
+    case "connection.revoked":
+      return metaString(metadata, "provider")
+        ? t("notif.event.connRevoked", {
+            provider: metaString(metadata, "provider")!,
+          })
+        : t("notif.event.connRevokedGeneric");
+    case "backup.created":
+      return t("notif.event.backupCreated");
+    case "dependency.created":
+      return t("notif.event.depCreated");
+    case "dependency.deleted":
+      return t("notif.event.depDeleted");
+    case "output_share.created":
+      return t("notif.event.shareRequested");
+    case "output_share.approved":
+      return t("notif.event.shareApproved");
+    case "output_share.revoked":
+      return t("notif.event.shareRevoked");
+    case "run_group.created":
+      return t("notif.event.groupCreated");
+    default:
+      return event.action;
+  }
+}
+
 function ActivityRow(props: { event: ActivityEvent }) {
   return (
     <li class="wa-activity-row">
       <div class="wa-activity-head">
-        <code class="wa-activity-action">{props.event.action}</code>
-        <span class="wa-activity-target">
-          {props.event.targetType} · {props.event.targetId}
-        </span>
+        <span class="wa-activity-action">{activityTitle(props.event)}</span>
       </div>
       <div class="wa-activity-rowmeta">
         <Show when={props.event.actorId}>
@@ -66,7 +125,21 @@ function ActivityRow(props: { event: ActivityEvent }) {
           {formatDateTime(props.event.createdAt)}
         </time>
       </div>
-      <MetadataChips metadata={props.event.metadata} />
+      <details class="wb-disclosure">
+        <summary>{t("activity.details")}</summary>
+        <div class="wa-meta">
+          <span class="wa-meta-chip">
+            <span class="muted">action</span>=<code>{props.event.action}</code>
+          </span>
+          <span class="wa-meta-chip">
+            <span class="muted">target</span>=
+            <code>
+              {props.event.targetType}:{props.event.targetId}
+            </code>
+          </span>
+        </div>
+        <MetadataChips metadata={props.event.metadata} />
+      </details>
     </li>
   );
 }

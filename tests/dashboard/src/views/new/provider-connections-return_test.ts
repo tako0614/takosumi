@@ -1,7 +1,7 @@
 /**
  * Regression guard for the `/new` -> Provider Connections detour.
  *
- * Creating a Provider Connection happens on `/space/settings/connections`, but
+ * Creating a Provider Connection happens on `/connections`, but
  * the user must be able to return to the exact `/new?git=...&ref=...&path=...`
  * add flow afterwards. These source assertions keep the view wired to the
  * shared, validated return-context helper instead of hard-coding bare settings
@@ -134,8 +134,16 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"new.providers.errorOperatorManaged"');
     expect(newAppViewSource).toContain('"new.providers.operatorMissingNext"');
     expect(en["new.providers.operatorMissingBody"]).not.toContain("operator");
-    expect(en["new.providers.operatorMissingNext"]).toContain("managed access");
+    expect(en["new.providers.operatorMissingBody"]).not.toContain(
+      "Takosumi Cloud",
+    );
+    expect(en["new.providers.operatorMissingNext"]).toContain(
+      "Workspace admin",
+    );
     expect(ja["new.providers.operatorMissingBody"]).not.toContain("運営側");
+    expect(ja["new.providers.operatorMissingBody"]).not.toContain(
+      "Takosumi Cloud",
+    );
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {

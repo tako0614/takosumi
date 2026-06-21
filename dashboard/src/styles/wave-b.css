@@ -375,7 +375,7 @@
   border-color: color-mix(in srgb, var(--tg-status-error) 40%, transparent);
 }
 
-/* ===== Output shares: draft editor rows ===== */
+/* ===== Shared values: draft editor rows ===== */
 .wb-output-editor {
   display: grid;
   gap: var(--tg-s-2);
