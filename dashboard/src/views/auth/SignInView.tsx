@@ -248,7 +248,7 @@ export function SignInPanel() {
 function BrandLogoMark() {
   return (
     <span class="auth-brand-mark" aria-hidden="true">
-      <LogoMark size={44} title="Takosumi" />
+      <LogoMark size={48} title="Takosumi" />
     </span>
   );
 }
