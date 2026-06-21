@@ -787,6 +787,8 @@ export const ja = {
   "billing.packs.credits": "{n} クレジット",
   "billing.packs.buy": "購入する",
   "billing.portal": "支払い方法と請求の管理（Stripe）",
+  "billing.portalUnavailable":
+    "課金が無効、または受付中のプランがないため、支払い管理は利用できません。",
   "billing.portalOpening": "開いています...",
   "billing.checkout.starting": "チェックアウトへ移動中...",
   "billing.checkout.failed": "チェックアウトを開始できませんでした — {message}",

@@ -62,6 +62,10 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   const packs = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "pack"),
   );
+  const hasBillingCatalog = createMemo(() => (plans() ?? []).length > 0);
+  const canOpenPortal = createMemo(
+    () => mode() !== "disabled" && hasBillingCatalog(),
+  );
 
   // One-time checkout-result banner (the Stripe redirect lands back here with
   // ?checkout=success|cancelled). Read once, then strip from the URL.
@@ -147,7 +151,10 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       header: t("members.col.status"),
       cell: (r) => <code class="wc-code">{r.status}</code>,
     },
-    { header: t("billing.usage.credits"), cell: (r) => r.estimatedCredits },
+    {
+      header: t("billing.usage.credits"),
+      cell: (r) => formatBillingNumber(r.estimatedCredits),
+    },
     {
       header: "Run",
       cell: (r) => <code class="wc-code">{r.runId}</code>,
@@ -163,8 +170,14 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       header: t("billing.usage.kind"),
       cell: (e) => <code class="wc-code">{e.kind}</code>,
     },
-    { header: t("billing.usage.quantity"), cell: (e) => e.quantity },
-    { header: t("billing.usage.credits"), cell: (e) => e.credits },
+    {
+      header: t("billing.usage.quantity"),
+      cell: (e) => formatBillingNumber(e.quantity),
+    },
+    {
+      header: t("billing.usage.credits"),
+      cell: (e) => formatBillingNumber(e.credits),
+    },
     {
       header: "Run",
       cell: (e) => (
@@ -228,25 +241,30 @@ export default function BillingTab(props: { readonly spaceId: string }) {
           items={[
             {
               label: t("billing.balance.available"),
-              value: balance()?.availableCredits ?? 0,
+              value: formatBillingNumber(balance()?.availableCredits ?? 0),
             },
             {
               label: t("billing.balance.reserved"),
-              value: balance()?.reservedCredits ?? 0,
+              value: formatBillingNumber(balance()?.reservedCredits ?? 0),
             },
           ]}
         />
-        <div class="wc-form-actions">
-          <Button
-            variant="secondary"
-            type="button"
-            busy={portalBusy()}
-            onClick={() => void openPortal()}
-            icon={<ExternalLink size={16} />}
-          >
-            {portalBusy() ? t("billing.portalOpening") : t("billing.portal")}
-          </Button>
-        </div>
+        <Show
+          when={canOpenPortal()}
+          fallback={<p class="muted">{t("billing.portalUnavailable")}</p>}
+        >
+          <div class="wc-form-actions">
+            <Button
+              variant="secondary"
+              type="button"
+              busy={portalBusy()}
+              onClick={() => void openPortal()}
+              icon={<ExternalLink size={16} />}
+            >
+              {portalBusy() ? t("billing.portalOpening") : t("billing.portal")}
+            </Button>
+          </div>
+        </Show>
         <Show when={portalError()}>
           {(m) => <Toast tone="error">{m()}</Toast>}
         </Show>
@@ -254,11 +272,11 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
       <Card>
         <CardHeader title={t("billing.plans.title")} />
-        <Show when={(plans() ?? []).length > 0}>
+        <Show when={hasBillingCatalog()}>
           <p class="muted av-plan-policy">{t("billing.plans.nonRefundable")}</p>
         </Show>
         <Show
-          when={(plans() ?? []).length > 0}
+          when={hasBillingCatalog()}
           fallback={<p class="muted">{t("billing.plans.none")}</p>}
         >
           <Show when={subscriptions().length > 0}>
@@ -309,4 +327,10 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       </Card>
     </div>
   );
+}
+
+function formatBillingNumber(value: number): string {
+  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
+    maximumFractionDigits: 3,
+  }).format(value);
 }

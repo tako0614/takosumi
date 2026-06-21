@@ -775,6 +775,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.packs.credits": "{n} credits",
   "billing.packs.buy": "Buy",
   "billing.portal": "Manage payment & invoices (Stripe)",
+  "billing.portalUnavailable":
+    "Payment management is unavailable while billing is disabled or no plans are open.",
   "billing.portalOpening": "Opening...",
   "billing.checkout.starting": "Redirecting to checkout...",
   "billing.checkout.failed": "Could not start checkout — {message}",
