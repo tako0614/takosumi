@@ -4,12 +4,15 @@ import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
+  handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handleSourceWebhookRequest,
   isOidcMetricPath,
+  isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
   pollAutoSyncSources,
+  summarizePrometheusMetrics,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
@@ -311,9 +314,68 @@ test("platform metrics route is forwarded to the deploy-control seam", async () 
   ]);
 });
 
+test("platform metrics dashboard renders protected live metric samples", async () => {
+  const env = { TAKOSUMI_METRICS_SCRAPE_TOKEN: "scrape-token" } as never;
+  const forwarded: { url: string; authorization: string | null }[] = [];
+  const response = await handlePlatformMetricsDashboardRequest(
+    new Request("https://app.takosumi.com/internal/platform/metrics-dashboard", {
+      headers: { authorization: "Bearer scrape-token" },
+    }),
+    env,
+    () => ({
+      fetch: async (input: RequestInfo | URL) => {
+        const request = input instanceof Request ? input : new Request(input);
+        forwarded.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+        });
+        return new Response(
+          [
+            'takosumi_deploy_operation_count{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded"} 1',
+            'takosumi_apply_duration_seconds_bucket{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded",le="1"} 1',
+          ].join("\n"),
+          {
+            status: 200,
+            headers: {
+              "content-type": "text/plain; version=0.0.4; charset=utf-8",
+            },
+          },
+        );
+      },
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/html");
+  const html = await response.text();
+  expect(html).toContain("Takosumi Platform Metrics");
+  expect(html).toContain("deploy-overview-required-metrics");
+  expect(html).toContain("takosumi_deploy_operation_count");
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/metrics",
+      authorization: "Bearer scrape-token",
+    },
+  ]);
+});
+
+test("platform metrics dashboard forwards auth failures from scrape endpoint", async () => {
+  const response = await handlePlatformMetricsDashboardRequest(
+    new Request("https://app.takosumi.com/internal/platform/metrics-dashboard"),
+    {} as never,
+    () => ({
+      fetch: async () =>
+        Response.json({ error: "unauthenticated" }, { status: 401 }),
+    }),
+  );
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthenticated" });
+});
+
 test("platform metrics route does not capture dashboard paths", async () => {
   expect(isPlatformMetricsPath("/metrics")).toBe(true);
   expect(isPlatformMetricsPath("/metrics/extra")).toBe(false);
+  expect(isPlatformMetricsDashboardPath("/internal/platform/metrics-dashboard"))
+    .toBe(true);
   const response = await handlePlatformMetricsRequest(
     new Request("https://app.takosumi.com/metrics/extra"),
     {} as never,
@@ -324,6 +386,23 @@ test("platform metrics route does not capture dashboard paths", async () => {
     }),
   );
   expect(response).toBeUndefined();
+});
+
+test("platform metrics summary captures required metric and label coverage", () => {
+  const summary = summarizePrometheusMetrics(
+    [
+      'takosumi_deploy_operation_count{environment="production",runtime_cell_id="cell",space_id="space",capsule_id="cap",operationKind="apply",status="succeeded"} 1',
+      'custom_metric{environment="production"} 1',
+    ].join("\n"),
+  );
+  expect(summary.metricCount).toBe(2);
+  expect(summary.requiredMetrics.find((metric) =>
+    metric.name === "takosumi_deploy_operation_count"
+  )?.present).toBe(true);
+  expect(summary.missingRequiredMetrics).toContain(
+    "takosumi_apply_duration_seconds_bucket",
+  );
+  expect(summary.missingRequiredLabels).toEqual([]);
 });
 
 test("platform OIDC metric classifier covers issuer and upstream auth paths", () => {
