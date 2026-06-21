@@ -78,16 +78,24 @@ describe("installReturnContext", () => {
       git: "https://github.com/acme/worker.git",
       ref: "main",
       path: "deploy/opentofu",
-      vars: { project_name: "takos-space" },
+      vars: {
+        domain: "app.example.com",
+        project_name: "takos-space",
+        region: "ap-northeast-1",
+      },
     });
     expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&var.project_name=takos-space",
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&var.domain=app.example.com&var.project_name=takos-space&var.region=ap-northeast-1",
     );
     expect(installReturnContext(returnPath)).toMatchObject({
       git: "https://github.com/acme/worker.git",
       ref: "main",
       path: "deploy/opentofu",
-      vars: { project_name: "takos-space" },
+      vars: {
+        domain: "app.example.com",
+        project_name: "takos-space",
+        region: "ap-northeast-1",
+      },
       label: "worker",
     });
   });

@@ -173,6 +173,30 @@
 .wb-disclosure .tg-field {
   margin-bottom: var(--tg-s-3);
 }
+.wb-input-vars {
+  max-width: 720px;
+}
+.wb-variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  margin-top: var(--tg-s-3);
+}
+.wb-variable-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) auto;
+  gap: var(--tg-s-3);
+  align-items: end;
+}
+.wb-variable-row .tg-field {
+  margin-bottom: 0;
+}
+.wb-variable-row .tg-btn {
+  min-width: 112px;
+}
+.wb-input-vars > .wb-form-actions {
+  margin-top: var(--tg-s-3);
+}
 .wb-source-advanced {
   max-width: 720px;
 }
@@ -360,6 +384,10 @@
   }
   .wb-provider-row {
     grid-template-columns: 1fr;
+  }
+  .wb-variable-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
   .wb-install-form.wb-install-source-form > .wb-form-actions {
     position: fixed;
