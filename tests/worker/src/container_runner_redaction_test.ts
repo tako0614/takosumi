@@ -225,19 +225,50 @@ test("container runner reads Capsule compatibility source files", async () => {
   ]);
 });
 
+test("container runner times out stuck Capsule compatibility reads", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envStalling({ TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS: "1" }),
+  );
+
+  await expect(
+    runner.readCapsuleSourceFiles({
+      runId: "compat_timeout",
+      sourceSnapshot: {
+        id: "snap_timeout",
+        sourceId: "src_timeout",
+        url: "https://github.com/acme/repo.git",
+        ref: "main",
+        resolvedCommit: "abc123",
+        path: ".",
+        archiveObjectKey:
+          "spaces/space_1/sources/src_timeout/snapshots/snap_timeout/source.tar.zst",
+        archiveDigest: `sha256:${"a".repeat(64)}`,
+        archiveSizeBytes: 128,
+        fetchedByRunId: "ssr_timeout",
+        fetchedAt: "2026-06-07T00:00:00.000Z",
+      },
+    }),
+  ).rejects.toThrow(
+    "OpenTofu runner compatibility_check run compat_timeout exceeded 1ms timeout",
+  );
+});
+
 test("container runner dispatches custom_command service-data backups to the backup action", async () => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(
-    envReturning({
-      status: "succeeded",
-      artifact: {
-        ref: "r2://service-data/exports/backup.tar.zst.enc",
-        digest: PLAN_DIGEST,
-        sizeBytes: 42,
+    envReturning(
+      {
+        status: "succeeded",
+        artifact: {
+          ref: "r2://service-data/exports/backup.tar.zst.enc",
+          digest: PLAN_DIGEST,
+          sizeBytes: 42,
+        },
       },
-    }, (body) => {
-      captured = body;
-    }),
+      (body) => {
+        captured = body;
+      },
+    ),
   );
 
   const result = await runner.run({
@@ -248,15 +279,15 @@ test("container runner dispatches custom_command service-data backups to the bac
       sourceId: "src_1",
       name: "talk",
       environment: "production",
-    } as Parameters<CloudflareContainerOpenTofuRunner["run"]>[0][
-      "installation"
-    ],
+    } as Parameters<
+      CloudflareContainerOpenTofuRunner["run"]
+    >[0]["installation"],
     installConfig: {
       id: "cfg_1",
       name: "talk",
-    } as Parameters<CloudflareContainerOpenTofuRunner["run"]>[0][
-      "installConfig"
-    ],
+    } as Parameters<
+      CloudflareContainerOpenTofuRunner["run"]
+    >[0]["installConfig"],
     sourceSnapshot: {
       id: "snap_1",
       sourceId: "src_1",
@@ -277,8 +308,9 @@ test("container runner dispatches custom_command service-data backups to the bac
   });
 
   expect(result.status).toEqual("exported");
-  expect(result.status === "exported" ? result.artifact.ref : undefined)
-    .toEqual("r2://service-data/exports/backup.tar.zst.enc");
+  expect(
+    result.status === "exported" ? result.artifact.ref : undefined,
+  ).toEqual("r2://service-data/exports/backup.tar.zst.enc");
   expect(captured?.action).toEqual("backup");
   expect((captured?.request as Record<string, unknown>).backup).toEqual({
     mode: "custom_command",
@@ -294,16 +326,19 @@ test("container runner dispatches custom_command service-data backups to the bac
 test("container runner dispatches provider_snapshot service-data backups without source archive", async () => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(
-    envReturning({
-      status: "succeeded",
-      artifact: {
-        ref: "r2://service-data/provider/provider.tar.zst.enc",
-        digest: PLAN_DIGEST,
-        sizeBytes: 64,
+    envReturning(
+      {
+        status: "succeeded",
+        artifact: {
+          ref: "r2://service-data/provider/provider.tar.zst.enc",
+          digest: PLAN_DIGEST,
+          sizeBytes: 64,
+        },
       },
-    }, (body) => {
-      captured = body;
-    }),
+      (body) => {
+        captured = body;
+      },
+    ),
   );
 
   const result = await runner.run({
@@ -314,31 +349,33 @@ test("container runner dispatches provider_snapshot service-data backups without
       sourceId: "src_1",
       name: "talk",
       environment: "production",
-    } as Parameters<CloudflareContainerOpenTofuRunner["run"]>[0][
-      "installation"
-    ],
+    } as Parameters<
+      CloudflareContainerOpenTofuRunner["run"]
+    >[0]["installation"],
     installConfig: {
       id: "cfg_1",
       name: "talk",
-    } as Parameters<CloudflareContainerOpenTofuRunner["run"]>[0][
-      "installConfig"
-    ],
+    } as Parameters<
+      CloudflareContainerOpenTofuRunner["run"]
+    >[0]["installConfig"],
     mode: "provider_snapshot",
     outputPath: "provider.snapshot",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
   });
 
   expect(result.status).toEqual("exported");
-  expect(result.status === "exported" ? result.artifact.ref : undefined)
-    .toEqual("r2://service-data/provider/provider.tar.zst.enc");
+  expect(
+    result.status === "exported" ? result.artifact.ref : undefined,
+  ).toEqual("r2://service-data/provider/provider.tar.zst.enc");
   expect(captured?.action).toEqual("backup");
   expect((captured?.request as Record<string, unknown>).backup).toEqual({
     mode: "provider_snapshot",
     outputPath: "provider.snapshot",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
   });
-  expect((captured?.request as Record<string, unknown>).sourceArchive)
-    .toBeUndefined();
+  expect(
+    (captured?.request as Record<string, unknown>).sourceArchive,
+  ).toBeUndefined();
 });
 
 function envReturning(
@@ -351,13 +388,38 @@ function envReturning(
       idFromName: (name: string) => name,
       get: () => ({
         fetch: async (request: Request) => {
-          onRequest?.(await request.json() as Record<string, unknown>);
+          onRequest?.((await request.json()) as Record<string, unknown>);
           return Promise.resolve(
             Response.json(payload, {
               status,
             }),
           );
         },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+}
+
+function envStalling(
+  vars: Partial<CloudflareWorkerEnv> = {},
+): CloudflareWorkerEnv {
+  return {
+    ...vars,
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: (request: Request) =>
+          new Promise<Response>((_, reject) => {
+            if (request.signal.aborted) {
+              reject(new DOMException("Aborted", "AbortError"));
+              return;
+            }
+            request.signal.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
       }),
     },
   } as unknown as CloudflareWorkerEnv;

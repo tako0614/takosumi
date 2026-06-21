@@ -34,6 +34,14 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
   /**
+   * Maximum time the request path waits for the runner-backed Capsule
+   * compatibility source-file extraction. Compatibility checks are still
+   * recorded as Runs by the control plane; this prevents a stuck runner DO from
+   * holding `/api/v1/deploy` or dashboard compatibility requests open for
+   * minutes before the caller receives an actionable failure.
+   */
+  readonly TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS?: string;
+  /**
    * Cloud-only hosted-provider-connection switch. When set to `enabled`, the
    * platform composition may expose Space-scoped ProviderConnections backed by
    * operator-scoped Connections (`takos_provided`).
