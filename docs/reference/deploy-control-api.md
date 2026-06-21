@@ -98,6 +98,32 @@ audit evidence
 
 Secrets are redacted before logs or diagnostics are persisted.
 
+## Release Activation Seam
+
+Takosumi OSS treats a successful `apply` as an OpenTofu/Terraform ledger commit:
+state, outputs, deployments, run history, and audit evidence are persisted.
+
+Application publication is a separate operator/Cloud extension step. A host may
+inject a post-apply release activator to publish a product artifact, such as a
+Takos distribution Worker script/assets/container bundle, after the apply ledger
+commit succeeds.
+
+The seam is intentionally generic:
+
+```text
+OpenTofu apply
+  -> StateVersion / Output / Deployment ledger commit
+  -> optional host-injected release activation
+  -> Activity event: release_activation.pending|succeeded|failed
+```
+
+The activator receives no provider credentials, no runner env, and no sensitive
+OpenTofu outputs. Secret-shaped output names or values are filtered before the
+hook. A release activation failure records Activity evidence but does not roll
+back the OpenTofu apply ledger; callers must surface it as "infrastructure
+applied, application activation failed/pending" rather than as a generic apply
+failure.
+
 ## Cloud-Only Exclusions
 
 The OSS API must not expose:

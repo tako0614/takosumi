@@ -22,9 +22,11 @@ import { expect, test } from "bun:test";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
+  OpenTofuDeploymentControllerDependencies,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
   OpenTofuRunner,
+  ReleaseActivationInput,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -39,6 +41,7 @@ import {
   CredentialBundle,
   PhaseMintBundle,
 } from "../../../../core/adapters/vault/mod.ts";
+import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import type {
   Connection,
   PlanRun,
@@ -145,6 +148,7 @@ function recordingRunner(
 function controllerWith(
   store: OpenTofuDeploymentStore,
   runner: OpenTofuRunner,
+  overrides: Partial<OpenTofuDeploymentControllerDependencies> = {},
 ): OpenTofuDeploymentController {
   return new OpenTofuDeploymentController({
     store,
@@ -152,6 +156,17 @@ function controllerWith(
     vault: fakeProviderVault() as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
+    ...overrides,
+  });
+}
+
+function activityRecorderFor(store: OpenTofuDeploymentStore): ActivityService {
+  let nextId = 1;
+  let nextMs = Date.parse("2026-06-07T00:00:00.000Z");
+  return new ActivityService({
+    store,
+    newId: (prefix) => `${prefix}_test_${String(nextId++).padStart(4, "0")}`,
+    now: () => new Date(nextMs++),
   });
 }
 
@@ -1492,6 +1507,97 @@ test("mirror-required policy is dispatched to plan and apply runner jobs", async
     evidenceCount: 1,
     mirroredCount: 1,
     attestedCount: 1,
+  });
+});
+
+test("release activator runs after apply with only non-sensitive outputs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({
+          status: "pending",
+          kind: "takos.cloudflare.worker",
+          launchUrl: "https://x.example",
+          metadata: { workerName: "takos-preview" },
+        });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.nonSensitiveOutputs).toEqual({
+    launch_url: "https://x.example",
+    public_url: "https://public.example",
+    bucket_name: "my-bucket",
+  });
+  expect(JSON.stringify(activations[0])).not.toContain("admin_token");
+  expect(JSON.stringify(activations[0])).not.toContain("super-secret-token");
+  expect(JSON.stringify(activations[0])).not.toContain("sk-output-raw-token");
+
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.pending",
+  );
+  expect(activity).toBeDefined();
+  expect(activity).toMatchObject({
+    targetType: "deployment",
+    runId: applyRun.id,
+    metadata: {
+      installationId: "inst_fixture",
+      applyRunId: applyRun.id,
+      outputCount: 3,
+      activationKind: "takos.cloudflare.worker",
+      hasLaunchUrl: true,
+      hasHealthUrl: false,
+      metadataKeys: ["workerName"],
+    },
+  });
+  expect(JSON.stringify(activity)).not.toContain("https://x.example");
+  expect(JSON.stringify(activity)).not.toContain("super-secret-token");
+});
+
+test("release activator failure records activity without failing apply", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () =>
+        Promise.reject(new Error("activation healthcheck failed")),
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.failed",
+  );
+  expect(activity).toBeDefined();
+  const deployment = await store.getDeployment(activity!.targetId);
+  expect(deployment?.status).toBe("active");
+  expect(activity?.metadata).toMatchObject({
+    installationId: "inst_fixture",
+    applyRunId: applyRun.id,
+    outputCount: 3,
+    message: "activation healthcheck failed",
   });
 });
 
