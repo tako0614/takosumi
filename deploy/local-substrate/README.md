@@ -49,9 +49,9 @@ probe host 経由の run ledger surface を検証する。
 | mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                          |
 | stripe             |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                        |
 
-加えて vitest 4 case (COSE/JWK decode) + worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal) + Playwright 2 spec (install wizard happy path + TLS trust regression) を CI で並列実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
+加えて repo 側の unit / worker / browser-evidence self-test は root の quality gate で実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
-CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。 3 job (smoke / vitest / playwright) が submodule checkout 経由で takosumi + takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた full chain を毎 PR で再現する。
+CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。現在は `smoke` job が submodule checkout 経由で takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた smoke chain を毎 PR で再現する。Playwright dashboard job は現時点では未実装で、signed-in browser UX は `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` の operator evidence として扱う。
 
 For a fresh local verification, run `bash scripts/up.sh --profile postgres`
 followed by `bash scripts/smoke.sh`. Do not treat old pass-count notes as
@@ -188,14 +188,13 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 
 | 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                   |
 | -------- | ------ | -------------- | ------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) で毎 PR 自動実行されている (smoke + dashboard-playwright job)。ローカル目視は別途要_ |
+| _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) は smoke job まで。ローカル目視 / browser UX evidence は別途要_ |
 
 CI で自動検証されるパス:
 
 - ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
   - `smoke` job: `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
-  - `dashboard-playwright` job: 同 install + Playwright が **`ignoreHTTPSErrors=false`** で Chromium が Pebble 経由の cert を NSS DB から validate するかを assert
-  - `dashboard-vitest` job: COSE/JWK unit test
+  - browser UX evidence: root の `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` で operator が別途収集・検証する
 
 ローカル目視は dev iteration の中で実行し、上記 table に行追加して commit する。
 
