@@ -13,6 +13,7 @@ managed storage、official billing、official resource backend は含めませ�
 - ProviderConnection の sealed backing material / secret delivery を管理する
 - state backend と lock backend を管理する
 - OpenTofu runner image / local/docker/remote/operator runner pool を管理する
+- 必要な場合は release activator materializer を運用し、apply ledger とアプリ公開結果を分けて記録する
 - provider credential / control-plane token / state backend credential を user workload に渡さない
 - dashboard / API / audit / quota / billing-placeholder を運用する
 - tenant isolation、workspace isolation、runner pool isolation、network egress policy の evidence を持つ
@@ -53,17 +54,18 @@ official resource pools
 
 OSS Operator GA の readiness は以下です。
 
-| Area | Required evidence |
-| --- | --- |
-| Website/docs | docs build, custom domain/TLS if hosted publicly |
-| Runner | non-production OpenTofu plan/apply/destroy proof |
-| Accounts/auth | dashboard, session/OIDC as configured, audit trail |
-| State | state backend, lock evidence, backup/restore drill |
-| Secrets | encrypted storage, rotation process, redaction proof |
-| Provider catalog | own-key ProviderConnection policy and helper coverage |
-| Network | provider allowlist and egress enforcement |
-| Tenant isolation | workspace/team separation and runner isolation |
-| Audit | run, secret, state, and admin action evidence |
+| Area               | Required evidence                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Website/docs       | docs build, custom domain/TLS if hosted publicly                                                                             |
+| Runner             | non-production OpenTofu plan/apply/destroy proof                                                                             |
+| Release activation | webhook/materializer proof, activation failure surfacing, rollback-independent ledger evidence if app publication is enabled |
+| Accounts/auth      | dashboard, session/OIDC as configured, audit trail                                                                           |
+| State              | state backend, lock evidence, backup/restore drill                                                                           |
+| Secrets            | encrypted storage, rotation process, redaction proof                                                                         |
+| Provider catalog   | own-key ProviderConnection policy and helper coverage                                                                        |
+| Network            | provider allowlist and egress enforcement                                                                                    |
+| Tenant isolation   | workspace/team separation and runner isolation                                                                               |
+| Audit              | run, secret, state, and admin action evidence                                                                                |
 
 Cloud GA adds managed resource, compatibility gateway, official billing, abuse,
 support, usage metering, and deprovision proof requirements.
