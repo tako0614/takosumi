@@ -158,7 +158,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"new.deeplink.invalidTitle"');
     expect(newAppViewSource).toContain('"new.deeplink.invalidBody"');
     expect(en["new.deeplink.invalidBody"].toLowerCase()).toContain(
-      "paste the git url manually",
+      "paste the repository url manually",
     );
     expect(ja["new.deeplink.invalidBody"]).toContain("手動で貼り付け");
   });
