@@ -6564,7 +6564,7 @@ test("accounts handler does not expose retired installation projection import ro
   );
 });
 
-test("accounts handler keeps generic installation mutations un-launch-gated but gates materialize/export when platform readiness access is closed", async () => {
+test("accounts handler keeps export un-launch-gated but gates materialize when platform readiness access is closed", async () => {
   const handler = createAccountsHandler({
     platformAccess: { status: "closed" },
     launchTokens: {
@@ -6572,8 +6572,9 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
     },
   });
 
-  // Generic deployment / rollback / status mutations are platform surface: the
-  // launch gate no longer applies, so they proceed to ownership auth (401).
+  // Generic deployment / rollback / status / export mutations are platform
+  // surfaces: the launch gate no longer applies, so they proceed to ownership
+  // auth (401) when unauthenticated.
   const ungatedRequests = [
     new Request(
       "https://accounts.example.test/v1/installation-projections/inst_1/deployments",
@@ -6601,6 +6602,12 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
         body: JSON.stringify({ status: "installing" }),
       },
     ),
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_1/export",
+      {
+        method: "POST",
+      },
+    ),
   ];
 
   for (const request of ungatedRequests) {
@@ -6609,17 +6616,11 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
     expect((await response.json()).error).toEqual("invalid_token");
   }
 
-  // The platform-cell materialize/export mutations are offering surfaces and
-  // stay launch-gated while the offering is closed.
+  // The platform-cell materialize mutation is an offering surface and stays
+  // launch-gated while the offering is closed.
   const gatedRequests = [
     new Request(
       "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
-      {
-        method: "POST",
-      },
-    ),
-    new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/export",
       {
         method: "POST",
       },
@@ -6633,6 +6634,57 @@ test("accounts handler keeps generic installation mutations un-launch-gated but 
       "launch_readiness_not_complete",
     );
   }
+});
+
+test("accounts handler allows authenticated owner export while platform readiness access is closed", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+  });
+
+  const createResponse = await handler(
+    new Request("https://accounts.example.test/v1/installation-projections", {
+      method: "POST",
+      body: JSON.stringify({
+        installationId: "inst_closed_export",
+        accountId: "acct_closed_export",
+        spaceId: "space_closed_export",
+        appId: "example.closed-export",
+        source: {
+          gitUrl: "https://github.com/example/closed-export",
+          ref: "main",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          planDigest: "sha256:closed-export",
+        },
+        mode: "dedicated",
+        status: "ready",
+        createdBySubject: "tsub_closed_export",
+      }),
+    }),
+  );
+  expect(createResponse.status).toEqual(202);
+
+  const exportResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_closed_export/export",
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": "idem-closed-export" },
+        body: JSON.stringify({
+          includeData: false,
+          format: "bundle",
+          encryption: { method: "none" },
+          scope: { secrets: "templates-only" },
+        }),
+      },
+    ),
+  );
+
+  expect(exportResponse.status).toEqual(202);
+  const body = await exportResponse.json();
+  expect(body.status).toEqual("preparing");
+  expect(body.event.type).toEqual("installation.export-requested");
 });
 
 test("accounts handler does not launch-gate core OAuth and PAT issuance when platform readiness access is closed", async () => {
