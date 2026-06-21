@@ -27,11 +27,16 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain("function DeploysTab");
     expect(source).toContain("onReview={() => void plan.run()}");
     expect(source).toContain('t("apps.reviewChanges")');
+    expect(source).toContain('t("app.deploys.advancedActions")');
+    expect(source).toContain('t("app.deploys.backup")');
     expect(source.indexOf('t("apps.openApp")')).toBeLessThan(
       source.indexOf("function DeploysTab"),
     );
     expect(source.indexOf('t("apps.reviewChanges")')).toBeGreaterThan(
       source.indexOf("function DeploysTab"),
+    );
+    expect(source.indexOf('t("app.deploys.backup")')).toBeGreaterThan(
+      source.indexOf('t("app.deploys.advancedActions")'),
     );
   });
 
@@ -45,6 +50,12 @@ describe("Installation detail deployment surface", () => {
     );
     expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
       source.indexOf("function SettingsTab"),
+    );
+    expect(source).toMatch(
+      /<summary>\{t\("app\.source\.title"\)\}<\/summary>[\s\S]*<Card>/,
+    );
+    expect(source).toMatch(
+      /<summary>\{t\("app\.tab\.danger"\)\}<\/summary>[\s\S]*t\("app\.settings\.removeTitle"\)/,
     );
   });
 
@@ -69,6 +80,8 @@ describe("Installation detail deployment surface", () => {
 
   test("a past deployment offers the restore action wired to the rollback fn", () => {
     expect(source).toContain('t("app.deploys.restore")');
+    expect(source).toContain('t("app.deploys.restoreMenu")');
+    expect(source).toContain('class="wb-inline-details"');
     expect(source).toContain("createDeploymentRollbackPlan");
     // The button is hidden on the current deployment (no-op rollback).
     expect(source).toMatch(/Show when=\{!isCurrent\(\)\}/);
