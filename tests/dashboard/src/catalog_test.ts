@@ -12,4 +12,15 @@ describe("dashboard catalog", () => {
   test("product distributions are not generic Takosumi starter cards", () => {
     expect(CATALOG.map((entry) => entry.id)).not.toContain("takos");
   });
+
+  test("starter copy does not imply a public URL is always produced", () => {
+    const hello = CATALOG.find(
+      (entry) => entry.id === "cloudflare-hello-worker",
+    );
+    expect(hello?.description.en.toLowerCase()).toContain("connection-test");
+    expect(hello?.description.en.toLowerCase()).toContain("route/dispatcher");
+    expect(hello?.description.en.toLowerCase()).not.toContain(
+      "public url is output",
+    );
+  });
 });

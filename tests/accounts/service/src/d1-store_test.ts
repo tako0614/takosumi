@@ -18,6 +18,7 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
   await store.saveAccount({
     subject: "tsub_test",
     email: "user@example.test",
+    emailVerified: true,
     displayName: "User",
     termsVersion: "terms-2026-05-13",
     termsAcceptedAt: 1000,
@@ -58,6 +59,9 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
     "terms-2026-05-13",
   );
   expect(
+    (await store.findAccountByVerifiedEmail(" RENAMED@example.test "))?.subject,
+  ).toEqual("tsub_test");
+  expect(
     (await store.listPasskeyCredentialsForSubject("tsub_test")).map(
       (credential) => credential.credentialId,
     ),
@@ -92,6 +96,17 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
       }),
     ),
   ).toEqual([{ id: "bind_auth", name: "auth", kind: "identity.oidc" }]);
+
+  await store.saveAccount({
+    subject: "tsub_test",
+    email: "renamed@example.test",
+    emailVerified: false,
+    createdAt: 1000,
+    updatedAt: 3000,
+  });
+  expect(
+    await store.findAccountByVerifiedEmail("renamed@example.test"),
+  ).toEqual(undefined);
 });
 
 test("D1AccountsStore consumes one-shot records", async () => {

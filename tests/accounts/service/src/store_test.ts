@@ -44,6 +44,34 @@ test("InMemoryAccountsStore persists accounts and upstream identity links", () =
   ).toEqual("tsub_test");
 });
 
+test("InMemoryAccountsStore resolves only verified email addresses", () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_verified",
+    email: "Member@Example.Test",
+    emailVerified: true,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveAccount({
+    subject: "tsub_unverified",
+    email: "pending@example.test",
+    emailVerified: false,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+
+  expect(
+    store.findAccountByVerifiedEmail(" member@example.test ")?.subject,
+  ).toEqual("tsub_verified");
+  expect(store.findAccountByVerifiedEmail("pending@example.test")).toEqual(
+    undefined,
+  );
+  expect(store.findAccountByVerifiedEmail("missing@example.test")).toEqual(
+    undefined,
+  );
+});
+
 test("InMemoryAccountsStore indexes passkey credentials by subject", () => {
   const store = new InMemoryAccountsStore();
   store.savePasskeyCredential({

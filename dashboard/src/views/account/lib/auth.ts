@@ -62,6 +62,11 @@ export function recallOAuthProvider(): Provider | null {
   return v === "google" ? v : null;
 }
 
+export function recallOAuthReturnTo(): string {
+  if (typeof sessionStorage === "undefined") return "/";
+  return safeOAuthReturnTo(sessionStorage.getItem(RETURN_KEY));
+}
+
 export interface CallbackResult {
   readonly returnTo: string;
 }
@@ -83,10 +88,7 @@ export async function completeUpstreamOAuth(
   if (!expected) {
     throw new Error("oauth flow was not started in this tab");
   }
-  sessionStorage.removeItem(STATE_KEY);
-  sessionStorage.removeItem(PROVIDER_KEY);
-  const returnTo = safeOAuthReturnTo(sessionStorage.getItem(RETURN_KEY));
-  sessionStorage.removeItem(RETURN_KEY);
+  const returnTo = recallOAuthReturnTo();
 
   // The worker's /v1/auth/upstream/callback handler only accepts GET with
   // query params (it was originally designed as the direct upstream redirect
@@ -96,6 +98,9 @@ export async function completeUpstreamOAuth(
     paths.UPSTREAM_CALLBACK + qs({ code, state, provider }),
     { method: "GET", auth: false },
   );
+  sessionStorage.removeItem(STATE_KEY);
+  sessionStorage.removeItem(PROVIDER_KEY);
+  sessionStorage.removeItem(RETURN_KEY);
   return {
     returnTo,
   };

@@ -61,6 +61,12 @@ export class PostgresAccountsStore implements AccountsStore {
     return accounts.findAccount(this.#client, subject);
   }
 
+  findAccountByVerifiedEmail(
+    email: string,
+  ): Promise<TakosumiAccountRecord | undefined> {
+    return accounts.findAccountByVerifiedEmail(this.#client, email);
+  }
+
   linkUpstreamIdentity(record: UpstreamIdentityRecord): Promise<void> {
     return accounts.linkUpstreamIdentity(this.#client, record);
   }

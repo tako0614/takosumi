@@ -9,7 +9,7 @@ managed storage、official billing、official resource backend は含めませ�
 
 - control-plane auth / token boundary を設定する
 - runner substrate / runner image / resource limits / provider allowlist seed を定義する
-- Provider Catalog と Provider Connection policy を管理する
+- CredentialRecipe seed、provider allowlist、ProviderConnection policy を管理する
 - ProviderConnection の sealed backing material / secret delivery を管理する
 - state backend と lock backend を管理する
 - OpenTofu runner image / local/docker/remote/operator runner pool を管理する
@@ -62,7 +62,7 @@ OSS Operator GA の readiness は以下です。
 | Accounts/auth      | dashboard, session/OIDC as configured, audit trail                                                                           |
 | State              | state backend, lock evidence, backup/restore drill                                                                           |
 | Secrets            | encrypted storage, rotation process, redaction proof                                                                         |
-| Provider catalog   | own-key ProviderConnection policy and helper coverage                                                                        |
+| Provider recipes   | CredentialRecipe seed, provider allowlist, ProviderConnection policy, and helper coverage                                    |
 | Network            | provider allowlist and egress enforcement                                                                                    |
 | Tenant isolation   | workspace/team separation and runner isolation                                                                               |
 | Audit              | run, secret, state, and admin action evidence                                                                                |

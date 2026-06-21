@@ -23,6 +23,7 @@ export const rpc = {
     startUpstreamOAuth: auth.startUpstreamOAuth,
     completeUpstreamOAuth: auth.completeUpstreamOAuth,
     recallOAuthProvider: auth.recallOAuthProvider,
+    recallOAuthReturnTo: auth.recallOAuthReturnTo,
   },
 } as const;
 

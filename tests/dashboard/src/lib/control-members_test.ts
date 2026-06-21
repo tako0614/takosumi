@@ -91,21 +91,27 @@ describe("listMembers", () => {
 });
 
 describe("inviteMember", () => {
-  test("POSTs accountId + role to the members route and returns the member", async () => {
+  test("POSTs email + role to the members route and returns the member", async () => {
     const captured = stubFetch({ member: MEMBER }, 201);
     const got = await inviteMember("spc 1", {
-      accountId: "acct_alice",
+      email: "alice@example.test",
       role: "admin",
     });
     const req = captured();
     expect(req.method).toBe("POST");
     expect(req.url).toBe("/api/v1/spaces/spc%201/members");
     // The spaceId is the path, NOT the body — the server re-resolves it.
-    expect(req.body).toEqual({ accountId: "acct_alice", role: "admin" });
+    expect(req.body).toEqual({ email: "alice@example.test", role: "admin" });
     expect(got).toEqual(MEMBER);
   });
 
   test("omits role when not given (server defaults to member)", async () => {
+    const captured = stubFetch({ member: MEMBER }, 201);
+    await inviteMember("spc_1", { email: "bob@example.test" });
+    expect(captured().body).toEqual({ email: "bob@example.test" });
+  });
+
+  test("can still send accountId for operator/debug callers", async () => {
     const captured = stubFetch({ member: MEMBER }, 201);
     await inviteMember("spc_1", { accountId: "acct_bob" });
     expect(captured().body).toEqual({ accountId: "acct_bob" });

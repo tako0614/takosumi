@@ -19,6 +19,7 @@
  * doesn't fire a /me request on every render but still notices a
  * server-side revocation within a reasonable window.
  */
+import { setCurrentSpaceId } from "../../../lib/space-state.ts";
 
 export interface SessionRecord {
   readonly subject: string;
@@ -186,6 +187,7 @@ export function clearSession(): void {
   cachedSession = null;
   cachedAt = Date.now();
   initialized = true;
+  setCurrentSpaceId("");
   notify(null);
   if (typeof fetch !== "undefined") {
     fetch(SESSION_ME_PATH, {
