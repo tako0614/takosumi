@@ -28,7 +28,13 @@ import {
   Show,
 } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
-import { Download } from "lucide-solid";
+import {
+  Download,
+  GitBranch,
+  ListChecks,
+  Plug,
+  SearchCheck,
+} from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -80,6 +86,8 @@ import {
 } from "../../components/ui/index.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
+type NewFlowStage = "source" | "check" | "connect" | "review";
+type NewFlowStepState = "done" | "current" | "next";
 
 interface ProviderConnectionRow {
   readonly provider: string;
@@ -506,10 +514,18 @@ function Inner() {
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerConnectionsForProvider(row.provider, row.ownershipOptions)
       .length === 0;
+  const rowAllowsOwnKey = (row: ProviderConnectionRow) =>
+    row.ownershipOptions.includes("own_key");
+  const rowRequiresOperatorManagedOnly = (row: ProviderConnectionRow) =>
+    row.ownershipOptions.includes("takos_provided") && !rowAllowsOwnKey(row);
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
   const missingProviderRows = () =>
     providerRows().filter(providerNeedsConnection);
+  const missingOwnKeyProviderRows = () =>
+    missingProviderRows().filter(rowAllowsOwnKey);
+  const missingOperatorManagedProviderRows = () =>
+    missingProviderRows().filter(rowRequiresOperatorManagedOnly);
 
   const defaultConnectionForProvider = (
     provider: string,
@@ -618,6 +634,11 @@ function Inner() {
         row.ownershipOptions,
       );
       if (!row.connectionId.trim()) {
+        if (rowRequiresOperatorManagedOnly(row)) {
+          return t("new.providers.errorOperatorManaged", {
+            provider: providerLabel(row.provider),
+          });
+        }
         return t("new.providers.errorConnection", {
           provider: row.provider,
         });
@@ -674,6 +695,43 @@ function Inner() {
     compatibility() !== null &&
     compatibilityRunnable() &&
     providerConnectionError() === null;
+  const flowStage = (): NewFlowStage => {
+    if (!gitUrl().trim() || !name().trim()) return "source";
+    if (!compatibility() || !compatibilityRunnable()) return "check";
+    if (needsCloudCredential()) return "connect";
+    return "review";
+  };
+  const flowStepState = (stage: NewFlowStage): NewFlowStepState => {
+    const stages: readonly NewFlowStage[] = [
+      "source",
+      "check",
+      "connect",
+      "review",
+    ];
+    const current = stages.indexOf(flowStage());
+    const target = stages.indexOf(stage);
+    if (target < current) return "done";
+    if (target === current) return "current";
+    return "next";
+  };
+  const flowStepClass = (stage: NewFlowStage) =>
+    `av-new-flow-step is-${flowStepState(stage)}`;
+  const nextAction = () => {
+    const stage = flowStage();
+    if (stage === "source") return t("new.flow.nextSource");
+    if (stage === "check") return t("new.flow.nextCheck");
+    if (stage === "connect") return t("new.flow.nextConnect");
+    return t("new.flow.nextReview");
+  };
+  const sourceSummaryTitle = () =>
+    gitUrl().trim() ? (name().trim() || capsuleNameFromUrl(gitUrl())) : "";
+  const sourceSummaryMeta = () =>
+    gitUrl().trim()
+      ? t("new.flow.sourceMeta", {
+          ref: displayRef(effectiveRef()),
+          path: path().trim() || ".",
+        })
+      : t("new.flow.sourceEmpty");
   const retryAfterSyncWait = () => {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
@@ -969,6 +1027,71 @@ function Inner() {
           />
         }
       >
+        <section class="av-new-flow" aria-label={t("new.flow.aria")}>
+          <div class="av-new-flow-copy">
+            <span class="av-new-flow-kicker">{t("new.flow.kicker")}</span>
+            <h2>{t("new.flow.title")}</h2>
+            <p>{nextAction()}</p>
+            <div class="av-new-source">
+              <span class="av-new-source-label">{t("new.flow.source")}</span>
+              <Show
+                when={gitUrl().trim()}
+                fallback={
+                  <span class="av-new-source-empty">
+                    {t("new.flow.sourceEmpty")}
+                  </span>
+                }
+              >
+                {(url) => (
+                  <>
+                    <strong>{sourceSummaryTitle()}</strong>
+                    <code>{url()}</code>
+                  </>
+                )}
+              </Show>
+              <span class="av-new-source-meta">{sourceSummaryMeta()}</span>
+            </div>
+          </div>
+          <ol class="av-new-flow-steps">
+            <li class={flowStepClass("source")}>
+              <span class="av-new-flow-icon">
+                <GitBranch size={16} />
+              </span>
+              <span>
+                <strong>{t("new.flow.stepSource")}</strong>
+                <small>{t("new.flow.stepSourceSub")}</small>
+              </span>
+            </li>
+            <li class={flowStepClass("check")}>
+              <span class="av-new-flow-icon">
+                <SearchCheck size={16} />
+              </span>
+              <span>
+                <strong>{t("new.flow.stepCheck")}</strong>
+                <small>{t("new.flow.stepCheckSub")}</small>
+              </span>
+            </li>
+            <li class={flowStepClass("connect")}>
+              <span class="av-new-flow-icon">
+                <Plug size={16} />
+              </span>
+              <span>
+                <strong>{t("new.flow.stepConnect")}</strong>
+                <small>{t("new.flow.stepConnectSub")}</small>
+              </span>
+            </li>
+            <li class={flowStepClass("review")}>
+              <span class="av-new-flow-icon">
+                <ListChecks size={16} />
+              </span>
+              <span>
+                <strong>{t("new.flow.stepReview")}</strong>
+                <small>{t("new.flow.stepReviewSub")}</small>
+              </span>
+            </li>
+          </ol>
+        </section>
+
         {/* tab strip: examples | git url */}
         <nav class="tg-tabs" aria-label="Add method">
           <button
@@ -1043,20 +1166,6 @@ function Inner() {
                 <p class="wb-note" role="note">
                   {t("new.managed.notice")}
                 </p>
-              </Show>
-              <Show when={needsCloudCredential()}>
-                <div class="wb-action-callout" role="note">
-                  <strong>{t("new.providers.missingTitle")}</strong>
-                  <p>{t("new.managed.needCredential")}</p>
-                  <ul>
-                    <For each={missingProviderRows()}>
-                      {(row) => <li>{providerLabel(row.provider)}</li>}
-                    </For>
-                  </ul>
-                  <A href={providerConnectionsHref()} class="link">
-                    {t("new.managed.connectFirst")}
-                  </A>
-                </div>
               </Show>
               <details class="wb-disclosure">
                 <summary>{t("new.managed.byoTitle")}</summary>
@@ -1291,20 +1400,35 @@ function Inner() {
                       </Show>
                       <Show when={missingProviderRows().length > 0}>
                         <div class="wb-action-callout" role="note">
-                          <strong>{t("new.providers.missingTitle")}</strong>
-                          <p>{t("new.providers.missingBody")}</p>
-                          <ul>
-                            <For each={missingProviderRows()}>
-                              {(row) => <li>{providerLabel(row.provider)}</li>}
-                            </For>
-                          </ul>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            href={providerConnectionsHref()}
+                          <Show
+                            when={missingOperatorManagedProviderRows().length > 0}
                           >
-                            {t("new.providers.setupMissing")}
-                          </Button>
+                            <strong>
+                              {t("new.providers.operatorMissingTitle")}
+                            </strong>
+                            <p>{t("new.providers.operatorMissingBody")}</p>
+                            <ul>
+                              <For each={missingOperatorManagedProviderRows()}>
+                                {(row) => <li>{providerLabel(row.provider)}</li>}
+                              </For>
+                            </ul>
+                          </Show>
+                          <Show when={missingOwnKeyProviderRows().length > 0}>
+                            <strong>{t("new.providers.missingTitle")}</strong>
+                            <p>{t("new.providers.missingBody")}</p>
+                            <ul>
+                              <For each={missingOwnKeyProviderRows()}>
+                                {(row) => <li>{providerLabel(row.provider)}</li>}
+                              </For>
+                            </ul>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              href={providerConnectionsHref()}
+                            >
+                              {t("new.providers.setupMissing")}
+                            </Button>
+                          </Show>
                         </div>
                       </Show>
                       <p class="wb-note">

@@ -317,6 +317,27 @@ export const en: Record<keyof typeof ja, string> = {
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
   "new.subtitle": "Start from an example or add one from a Git source URL.",
+  "new.flow.aria": "Add service progress",
+  "new.flow.kicker": "Add flow",
+  "new.flow.title": "Check the source before anything is deployed",
+  "new.flow.source": "Current source",
+  "new.flow.sourceEmpty": "No source selected yet.",
+  "new.flow.sourceMeta": "Version {ref} / folder {path}",
+  "new.flow.nextSource": "Choose an example or paste a Git URL.",
+  "new.flow.nextCheck":
+    "Run the source check. Takosumi will only ask for connections this service needs.",
+  "new.flow.nextConnect":
+    "Set up the missing cloud connection, then return here to continue.",
+  "new.flow.nextReview":
+    "Review the plan next. Nothing is deployed until you confirm it on the review screen.",
+  "new.flow.stepSource": "Source",
+  "new.flow.stepSourceSub": "Git URL, version, and folder",
+  "new.flow.stepCheck": "Check",
+  "new.flow.stepCheckSub": "Inspect before creating a plan",
+  "new.flow.stepConnect": "Connect",
+  "new.flow.stepConnectSub": "Use only selected external services",
+  "new.flow.stepReview": "Review",
+  "new.flow.stepReviewSub": "Confirm the plan before deploy",
   "new.tab.catalog": "Examples",
   "new.tab.git": "Source URL",
   "new.catalog.intro":
@@ -379,10 +400,15 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.selectConnection": "Select a connection",
   "new.providers.manageConnections": "Manage connections",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
+  "new.providers.errorOperatorManaged":
+    "{provider} needs an operator-managed connection that is not available in this Workspace yet.",
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody":
     "This service uses the external services below. Set up the connection and you can return here to continue.",
   "new.providers.setupMissing": "Set up required connection",
+  "new.providers.operatorMissingTitle": "Managed connection is not available",
+  "new.providers.operatorMissingBody":
+    "This service expects a Takosumi Cloud managed connection. It is not enabled for this Workspace yet, so adding cannot continue until the operator makes it available.",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create service",

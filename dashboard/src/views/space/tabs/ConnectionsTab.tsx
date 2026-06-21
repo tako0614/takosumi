@@ -87,6 +87,14 @@ function scopeLabel(scope: string | undefined): string {
   return key ? t(key) : scope;
 }
 
+function providerConnectionOwnershipLabel(
+  ownership: ProviderConnection["ownership"],
+): string {
+  return ownership === "takos_provided"
+    ? t("conn.ownership.takosProvided")
+    : t("conn.ownership.ownKey");
+}
+
 export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const { confirm } = useConfirmDialog();
   const spaceId = () => props.spaceId;
@@ -385,7 +393,11 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     },
     {
       header: t("conn.providerConnections.ownership"),
-      cell: (d) => <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>,
+      cell: (d) => (
+        <Badge tone={d.ownership === "takos_provided" ? "info" : "neutral"}>
+          {providerConnectionOwnershipLabel(d.ownership)}
+        </Badge>
+      ),
     },
     {
       header: t("conn.providerConnections.status"),
