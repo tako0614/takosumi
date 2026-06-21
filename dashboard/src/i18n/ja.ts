@@ -224,7 +224,7 @@ export const ja = {
   "app.source.name": "名前",
   "app.source.url": "Git URL",
   "app.source.refPath": "Ref / Path",
-  "app.source.status": "状態",
+  "app.source.status": "取得状態",
   "app.source.loading": "ソース情報を読み込み中です。",
   "app.info.title": "Capsule 情報",
   "app.info.id": "ID",
