@@ -94,9 +94,24 @@ bun run check:takosumi-billing-readiness -- \
 ```
 
 GA billing evidence is collected through the `billing-operation` operation-drill
-batch:
+batch and the `external-provider` billing provider batch. The latter covers
+Stripe checkout/webhook, failed payment, invoice, tax, plan transition, and
+refund/credit evidence:
 
 ```bash
+bun run status:takosumi-readiness-gaps -- \
+  --file takosumi-private/evidence/platform-readiness-production.json \
+  --collection-class external-provider \
+  --checklist \
+  --write-collection-workplan takosumi-private/evidence/external-provider-workplan-production-current.json \
+  --json
+
+bun run plan:takosumi-operation-drills -- \
+  --workplan-file takosumi-private/evidence/external-provider-workplan-production-current.json \
+  --batch billing-provider-events \
+  --print-batch-template \
+  --out-file takosumi-private/evidence/billing-provider-events-template.json
+
 bun run plan:takosumi-operation-drills -- \
   --batch billing-operation \
   --print-batch-template \
