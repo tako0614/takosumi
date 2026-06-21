@@ -1,11 +1,10 @@
 /**
- * Mobile bottom bar — mirrors the sidebar's five destinations plus the
- * notifications feed (the desktop reaches it via the TopBar bell; on phones a
- * tab keeps it one tap away). Expert surfaces are inside Installation detail / Space
- * settings, so nothing is nav-chrome-only on desktop.
+ * Mobile bottom bar for the normal hosted-service flow. Keep it to the core
+ * consumer destinations; advanced workspace settings are reachable from account
+ * / advanced routes instead of occupying a primary phone tab.
  */
 import { A, useLocation } from "@solidjs/router";
-import { Bell, Home, Plus, Settings2, UserCircle2 } from "lucide-solid";
+import { Bell, Home, Plus, UserCircle2 } from "lucide-solid";
 import { t } from "../../../../i18n/index.ts";
 
 export default function MobileTabs() {
@@ -18,12 +17,6 @@ export default function MobileTabs() {
       label: () => t("nav.notifications"),
       mobileLabel: () => t("nav.notificationsShort"),
       icon: Bell,
-    },
-    {
-      href: "/workspace/settings",
-      label: () => t("nav.spaceSettings"),
-      mobileLabel: () => t("nav.spaceSettingsShort"),
-      icon: Settings2,
     },
     { href: "/account", label: () => t("nav.account"), icon: UserCircle2 },
   ] as const;

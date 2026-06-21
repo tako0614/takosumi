@@ -1,7 +1,7 @@
 /**
- * Capsule detail (`/capsules/:id` + tab routes) — one Capsule, four tabs:
- *   概要     status / public outputs / dependencies / source
- *   デプロイ  Deployment generations + recent runs (+ rollback / backup)
+ * Service detail (`/capsules/:id` + tab routes) — one service, four tabs:
+ *   概要     status / public links / dependencies
+ *   デプロイ  saved versions + recent activity (+ restore / backup)
  *   設定     source coordinates + provider connections (advanced, folded)
  *   危険な操作 destroy (review-first)
  *
@@ -272,7 +272,7 @@ function Inner() {
                 }
               />
 
-              <Tabs items={tabItems()} aria-label="Capsule sections" />
+              <Tabs items={tabItems()} aria-label="Service sections" />
 
               <Show when={plan.error()}>
                 {(m) => (
@@ -505,41 +505,38 @@ function OverviewTab(props: {
         </Card>
       </Show>
 
-      <Card>
-        <CardHeader title={t("app.source.title")} />
-        <Show
-          when={props.source}
-          fallback={<p class="muted">{t("app.source.loading")}</p>}
-        >
-          {(src) => (
-            <KVList
-              items={[
-                { label: t("app.source.name"), value: src().name },
-                {
-                  label: t("app.source.url"),
-                  value: <code>{src().url}</code>,
-                },
-                {
-                  label: t("app.source.refPath"),
-                  value: (
-                    <>
-                      <code>{src().defaultRef}</code>
-                      <span class="muted"> / </span>
-                      <code>{src().defaultPath}</code>
-                    </>
-                  ),
-                },
-                { label: t("app.source.status"), value: src().status },
-              ]}
-            />
-          )}
-        </Show>
-      </Card>
-
       <details class="wb-disclosure">
         <summary>{t("app.info.title")}</summary>
         <KVList
           items={[
+            ...(props.source
+              ? [
+                  { label: t("app.source.name"), value: props.source.name },
+                  {
+                    label: t("app.source.url"),
+                    value: <code>{props.source.url}</code>,
+                  },
+                  {
+                    label: t("app.source.refPath"),
+                    value: (
+                      <>
+                        <code>{props.source.defaultRef}</code>
+                        <span class="muted"> / </span>
+                        <code>{props.source.defaultPath}</code>
+                      </>
+                    ),
+                  },
+                  {
+                    label: t("app.source.status"),
+                    value: props.source.status,
+                  },
+                ]
+              : [
+                  {
+                    label: t("app.source.title"),
+                    value: t("app.source.loading"),
+                  },
+                ]),
             {
               label: t("app.info.id"),
               value: <code>{props.installation.id}</code>,
@@ -605,15 +602,18 @@ function OutputValue(props: { readonly value: unknown }): JSX.Element {
   return (
     <Switch fallback={<code>{stringifyOutput(props.value)}</code>}>
       <Match when={isUrlString(props.value)}>
-        <Button
-          variant="primary"
-          size="sm"
-          href={props.value as string}
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          {props.value as string}
-        </Button>
+        <span class="wa-output-url">
+          <Button
+            variant="primary"
+            size="sm"
+            href={props.value as string}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {t("app.output.openPublicLink")}
+          </Button>
+          <code>{props.value as string}</code>
+        </span>
       </Match>
       <Match when={typeof props.value === "string"}>
         <code>{props.value as string}</code>
@@ -729,8 +729,7 @@ function DeploysTab(props: {
                       <span class="wa-deploy-meta">
                         {t("app.deploys.generation", {
                           n: deployment.stateGeneration,
-                        })}{" "}
-                        · <code>{deployment.id}</code>
+                        })}
                       </span>
                       <Show when={!isCurrent()}>
                         <Button

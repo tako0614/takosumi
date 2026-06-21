@@ -132,7 +132,7 @@ describe("installReturnContext", () => {
     const href = providerConnectionsHrefForInstallReturn(returnPath);
     const url = new URL(href, "https://app.takosumi.test");
 
-    expect(url.pathname).toEqual("/workspace/settings/connections");
+    expect(url.pathname).toEqual("/connections");
     expect(url.searchParams.get("return")).toEqual(returnPath);
     expect(
       installReturnPathFromReturnParam(url.searchParams.get("return")),
@@ -154,7 +154,7 @@ describe("installReturnContext", () => {
     const href = providerConnectionsHrefForInstallReturn(returnPath);
     const url = new URL(href, "https://app.takosumi.test");
 
-    expect(url.pathname).toEqual("/workspace/settings/connections");
+    expect(url.pathname).toEqual("/connections");
     expect(url.searchParams.get("return")).toEqual(returnPath);
     expect(installReturnContext(url.searchParams.get("return"))).toMatchObject({
       ref: fullRef,
@@ -174,11 +174,11 @@ describe("installReturnContext", () => {
       providerConnectionsHrefForInstallReturn(
         "/new?git=http%3A%2F%2Fexample.com%2Facme%2Fworker.git&ref=main&path=deploy",
       ),
-    ).toEqual("/workspace/settings/connections");
+    ).toEqual("/connections");
     expect(
       providerConnectionsHrefForInstallReturn(
         "//evil.example/new?git=https://github.com/acme/worker.git",
       ),
-    ).toEqual("/workspace/settings/connections");
+    ).toEqual("/connections");
   });
 });

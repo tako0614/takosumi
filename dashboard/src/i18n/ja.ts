@@ -5,7 +5,7 @@
  * placeholders are interpolated by `t()`.
  *
  * Vocabulary contract (the unified verb set — do not reintroduce 公開/反映):
- *   物 = Capsule
+ *   物 = サービス
  *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
  */
 export const ja = {
@@ -35,9 +35,11 @@ export const ja = {
   "common.empty": "データがありません",
 
   // --- nav / shell ----------------------------------------------------------
-  "nav.home": "ホーム",
+  "nav.home": "サービス",
   "nav.add": "追加",
-  "nav.activity": "アクティビティ",
+  "nav.connections": "接続",
+  "nav.billing": "お支払い",
+  "nav.activity": "履歴",
   "nav.notifications": "通知",
   "nav.notificationsShort": "通知",
   "nav.spaceSettings": "Workspace 設定",
@@ -158,28 +160,29 @@ export const ja = {
   "op.compatibility_check": "互換性チェック",
   "op.generic": "操作",
 
-  // --- Capsule list (home) --------------------------------------------------
+  // --- Service list (home) --------------------------------------------------
   "apps.title": "サービス",
-  "apps.subtitle": "この Workspace に追加したサービスと状態を表示します。",
+  "apps.subtitle": "ホストしているサービスと状態を表示します。",
   "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
   "apps.empty.title": "まだサービスがありません",
   "apps.empty.message": "サンプルから始めるか、取得元 URL から追加できます。",
   "apps.empty.cta": "サービスを追加",
-  "apps.openApp": "出力を開く",
+  "apps.openApp": "サービスを開く",
+  "apps.viewDetails": "管理",
   "apps.reviewChanges": "変更を確認",
   "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
-  "apps.graphLink": "依存グラフ",
-  "apps.summary.aria": "Workspace のサービス状態",
+  "apps.graphLink": "サービスマップ",
+  "apps.summary.aria": "サービス状態",
   "apps.summary.total": "合計",
   "apps.summary.deployed": "デプロイ済み",
   "apps.summary.clear": "要対応なし",
   "apps.summary.needsAttention": "要対応 {n} 件",
-  "apps.start.aria": "Workspace のデプロイ概要",
-  "apps.start.kicker": "Workspace",
-  "apps.start.titleEmpty": "最初のサービスをデプロイ",
+  "apps.start.aria": "サービスホスティングの概要",
+  "apps.start.kicker": "サービス",
+  "apps.start.titleEmpty": "最初のサービスをホスト",
   "apps.start.bodyEmpty":
     "取得元を追加し、必要なクラウド接続を選び、変更内容を確認してデプロイします。",
   "apps.start.add": "取得元から追加",
@@ -191,51 +194,52 @@ export const ja = {
     "認証情報は取得元ではなく Takosumi に保存します。",
   "apps.start.stepDeploy": "確認してデプロイ",
   "apps.start.stepDeploySub":
-    "先に変更内容を確認し、承認してから公開出力を開きます。",
+    "先に変更内容を確認し、承認してからサービスを開きます。",
 
-  // --- Capsule detail ------------------------------------------------------
-  "app.installationSub": "Capsule",
+  // --- Service detail ------------------------------------------------------
+  "app.installationSub": "サービス",
   "app.tab.overview": "概要",
   "app.tab.deploys": "デプロイ",
   "app.tab.settings": "設定",
   "app.tab.danger": "危険な操作",
-  "app.notFound": "Capsule が見つかりません",
+  "app.notFound": "サービスが見つかりません",
   "app.backToList": "一覧へ",
-  "app.outputs.title": "公開アドレス・出力",
+  "app.outputs.title": "公開リンクと値",
   "app.outputs.subtitle":
-    "この Capsule が公開しているアドレスや値です。秘密情報は表示されません。",
+    "このサービスが公開しているアドレスや値です。秘密情報は表示されません。",
   "app.outputs.empty":
-    "まだ公開された出力はありません。デプロイすると表示されます。",
+    "まだ公開リンクはありません。デプロイすると表示されます。",
   "app.outputs.none":
-    "この Capsule は公開アドレス・出力を持ちません。公開画面を持たないサービスではアドレスが出ないことがあります。",
+    "このサービスには公開リンクがありません。公開画面を持たないサービスではアドレスが出ないことがあります。",
   "app.nextSteps.title": "次にやること",
   "app.nextSteps.infraOnly":
     "このサービスにはまだ公開 URL がありません。最新の実行結果とサービスの説明を確認し、公開画面を持たない構成なのか、別サービスとの連携が必要なのかを確認してください。",
   "app.nextSteps.docs": "ドキュメントを開く →",
   "app.output.launchUrl": "公開アドレス",
+  "app.output.openPublicLink": "公開リンクを開く",
   "app.output.url": "アドレス",
   "app.output.publicUrl": "公開アドレス",
   "app.output.endpoint": "エンドポイント",
   "app.output.hostname": "ホスト名",
   "app.deps.title": "依存関係",
-  "app.deps.dependsOn": "依存している Capsule",
-  "app.deps.usedBy": "この Capsule を使っている Capsule",
+  "app.deps.dependsOn": "利用しているサービス",
+  "app.deps.usedBy": "このサービスを使っているサービス",
   "app.source.title": "ソース",
   "app.source.name": "名前",
   "app.source.url": "Git URL",
   "app.source.refPath": "Ref / Path",
   "app.source.status": "取得状態",
   "app.source.loading": "ソース情報を読み込み中です。",
-  "app.info.title": "Capsule 情報",
+  "app.info.title": "技術的な詳細",
   "app.info.id": "ID",
-  "app.info.generation": "State generation",
+  "app.info.generation": "復元ポイント",
   "app.info.deployment": "Current deployment",
   "app.info.installConfig": "追加設定",
   "app.deploys.title": "デプロイ履歴",
   "app.deploys.subtitle":
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
-  "app.deploys.generation": "世代 {n}",
+  "app.deploys.generation": "バージョン {n}",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました: {id}",
@@ -256,7 +260,7 @@ export const ja = {
   "app.bindings.errorProvider": "接続 {index} の接続先を入力してください。",
   "app.bindings.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
-  "app.danger.destroyTitle": "Capsule を削除",
+  "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
   "app.danger.destroyCta": "削除プランを確認",
@@ -316,7 +320,7 @@ export const ja = {
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "ポリシー",
-  "run.details.installation": "Capsule",
+  "run.details.installation": "サービス",
   "run.details.sourceSnapshot": "取得元の固定情報",
   "run.details.dependencySnapshot": "連携入力の固定情報",
   "run.details.baseGeneration": "元の状態",
@@ -409,7 +413,7 @@ export const ja = {
   "new.vars.projectName": "リソース接頭辞",
   "new.vars.inputsTitle": "詳細設定",
   "new.vars.inputsBody":
-    "この Capsule に渡す任意の非 secret 変数です。トークン、パスワード、API キーは外部サービス接続に入れてください。",
+    "このサービスに渡す任意の非 secret 詳細値です。トークン、パスワード、API キーは外部サービス接続に入れてください。",
   "new.vars.inputName": "変数名",
   "new.vars.inputValue": "値",
   "new.vars.addInput": "入力を追加",
@@ -481,16 +485,17 @@ export const ja = {
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.errorOperatorManaged":
-    "{provider} には、この Workspace でまだ利用できない運営管理の接続が必要です。",
+    "{provider} はこの Workspace ではまだ利用できません。",
   "new.providers.missingTitle": "接続の設定が必要です",
   "new.providers.missingBody":
     "このサービスは下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
   "new.providers.setupMissing": "必要な接続を設定",
-  "new.providers.operatorMissingTitle": "運営管理の接続がまだ利用できません",
+  "new.providers.operatorMissingTitle": "このサービスはまだここでは使えません",
   "new.providers.operatorMissingBody":
-    "このサービスは Takosumi Cloud 管理の接続を前提にしています。この Workspace ではまだ有効化されていません。",
+    "必要なサービス接続が、この Workspace ではまだ有効化されていません。",
   "new.providers.operatorMissingNext":
-    "この Workspace で managed access が有効になると、続きから追加できます。",
+    "Workspace の管理者に有効化を依頼し、その後この画面に戻って続けてください。",
+  "new.step.technical": "技術的な進行状況",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
   "new.step.create": "サービスを作成",
@@ -519,7 +524,7 @@ export const ja = {
   "spaceSettings.tab.connections": "接続",
   "spaceSettings.tab.billing": "お支払い",
   "spaceSettings.tab.backups": "バックアップ",
-  "spaceSettings.tab.shares": "出力の共有",
+  "spaceSettings.tab.shares": "共有値",
   "spaceSettings.general.displayName": "表示名",
   "spaceSettings.general.handle": "ハンドル",
   "spaceSettings.general.type": "種別",
@@ -587,10 +592,10 @@ export const ja = {
   "conn.return.subtitle": "{source} / {ref} / {path}",
   "conn.return.defaultRef": "デフォルト ref",
   "conn.return.rootPath": "root module",
-  "conn.return.cta": "Capsule 追加に戻る",
+  "conn.return.cta": "サービス追加に戻る",
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest":
-    "{name} を保存しました。Capsule 追加に戻る前に、接続確認を完了してください。",
+    "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
   "conn.add.title": "接続を追加",
@@ -669,7 +674,7 @@ export const ja = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Workspace の設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応している Capsule でのみ表示されます。",
+    "Workspace の設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応しているサービスでのみ表示されます。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
@@ -681,23 +686,26 @@ export const ja = {
   "backups.empty.message":
     "この Workspace の最初のバックアップを作成できます。",
 
-  // --- output shares -------------------------------------------------------------
+  // --- shared values -------------------------------------------------------------
   "shares.subtitle": "Workspace 間でサービスの公開値を明示的に共有します。",
   "shares.create.title": "共有を作成",
   "shares.create.toSpace": "共有先 Workspace",
-  "shares.create.producer": "共有元 Capsule",
+  "shares.create.producer": "共有元サービス",
   "shares.create.selectPlaceholder": "選択してください",
   "shares.create.outputs": "共有する値",
   "shares.create.addOutput": "共有する値を追加",
   "shares.create.removeOutput": "削除",
-  "shares.create.sensitiveReason": "sensitive output を共有する理由",
+  "shares.create.outputName": "値の名前",
+  "shares.create.outputAlias": "表示名",
+  "shares.create.sensitiveValue": "機微な値",
+  "shares.create.sensitiveReason": "機微な値を共有する理由",
+  "shares.create.sensitivePlaceholder": "チケット番号 / 承認理由",
   "shares.create.cta": "共有を作成",
   "shares.error.outputsRequired":
-    "共有する output 名を 1 つ以上入力してください。",
-  "shares.error.reasonRequired":
-    "sensitive output を共有する理由を入力してください。",
+    "共有する値の名前を 1 つ以上入力してください。",
+  "shares.error.reasonRequired": "機微な値を共有する理由を入力してください。",
   "shares.col.direction": "方向",
-  "shares.col.installation": "Capsule",
+  "shares.col.installation": "サービス",
   "shares.col.outputs": "共有する値",
   "shares.col.status": "状態",
   "shares.approve": "承認",
@@ -711,26 +719,26 @@ export const ja = {
   // --- notifications -------------------------------------------------------------
   "notif.title": "通知",
   "notif.subtitle":
-    "追加・実行・承認・失敗など、あなたの Workspace での出来事を新しい順に表示します。",
+    "追加・デプロイ・承認・失敗など、最近の出来事を新しい順に表示します。",
   "notif.empty.title": "まだ通知はありません",
   "notif.empty.message":
-    "Capsule を追加したり実行したりすると、ここに出来事が並びます。",
+    "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
   "notif.viewRaw": "生の監査ログ（アクティビティ）を見る →",
-  "notif.event.installCreated": "Capsule「{name}」を追加しました",
+  "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
   "notif.event.planReadyDetail": "内容を確認して承認できます",
   "notif.event.planBlockedDetail": "ポリシーにより承認が止まっています",
   "notif.event.approved": "{operation}を承認しました",
-  "notif.event.applied": "Capsule の変更をデプロイしました",
-  "notif.event.appliedDetail": "出力 {n} 件を更新",
-  "notif.event.destroyed": "Capsule を削除しました",
+  "notif.event.applied": "サービスの変更をデプロイしました",
+  "notif.event.appliedDetail": "公開値 {n} 件を更新",
+  "notif.event.destroyed": "サービスを削除しました",
   "notif.event.failed": "{operation}に失敗しました",
   "notif.event.failedDetail": "エラー: {code}",
   "notif.event.failedHint": "詳細は実行ログを確認してください",
-  "notif.event.drift": "Capsule の実状態が記録とズレています",
+  "notif.event.drift": "サービスの実状態が保存済みの記録とズレています",
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
@@ -739,18 +747,19 @@ export const ja = {
   "notif.event.connRevoked": "接続「{provider}」が無効になりました",
   "notif.event.connRevokedGeneric": "接続が無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
-  "notif.event.depCreated": "Capsule 間の連携を追加しました",
-  "notif.event.depDeleted": "Capsule 間の連携を解除しました",
-  "notif.event.shareRequested": "出力の共有リクエストが届きました",
-  "notif.event.shareApproved": "出力の共有を承認しました",
-  "notif.event.shareRevoked": "出力の共有を取り消しました",
+  "notif.event.depCreated": "サービス間の連携を追加しました",
+  "notif.event.depDeleted": "サービス間の連携を解除しました",
+  "notif.event.shareRequested": "値の共有リクエストが届きました",
+  "notif.event.shareApproved": "値の共有を承認しました",
+  "notif.event.shareRevoked": "値の共有を取り消しました",
   "notif.event.groupCreated": "まとめての更新を開始しました",
 
   // --- activity -------------------------------------------------------------------
-  "activity.title": "アクティビティ",
+  "activity.title": "履歴",
   "activity.subtitle":
-    "Workspace の監査証跡（最近の操作）です。生のイベントを表示します。",
-  "activity.empty.title": "まだアクティビティがありません",
+    "最近のサービスやアカウントの出来事です。技術的な監査詳細は各項目から確認できます。",
+  "activity.details": "技術的な詳細",
+  "activity.empty.title": "まだ履歴がありません",
   "activity.empty.message":
     "この Workspace で操作が行われると、ここに記録されます。",
 
@@ -770,8 +779,8 @@ export const ja = {
   "graph.layer": "層 {n}",
   "graph.cycle": "循環（解決不能）",
   "graph.dependsOn": "↑ 依存: {names}",
-  "graph.empty.title": "Capsule がありません",
-  "graph.empty.message": "この Workspace にはまだ Capsule がありません。",
+  "graph.empty.title": "サービスがありません",
+  "graph.empty.message": "この Workspace にはまだサービスがありません。",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
@@ -795,6 +804,9 @@ export const ja = {
   "account.theme.body": "ライト / ダーク / 端末設定に合わせた表示を選べます。",
 
   // --- billing -------------------------------------------------------------------
+  "billing.title": "お支払い",
+  "billing.subtitle":
+    "このスペースのプラン、クレジット、使用量、支払い設定を確認します。",
   "billing.mode.disabled": "この Workspace では課金は無効です。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce": "デプロイにはクレジット残高が必要です。",

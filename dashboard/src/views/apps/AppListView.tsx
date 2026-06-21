@@ -1,11 +1,9 @@
 /**
- * Home (`/`) — the per-Workspace Capsule list, the dashboard's primary surface.
+ * Home (`/`) — the Workspace service list, the dashboard's primary surface.
  *
- * Card grid over the current compatibility Installation list: status, a direct
- * "開く" launch link resolved from public outputs, the dependency line from the
- * Workspace graph, and a needs-attention strip derived from Capsule lifecycle
- * status (error / stale). Click-through goes to
- * `/capsules/:id`.
+ * Operational list over the current compatibility Installation list: status,
+ * a direct launch link resolved from public outputs, dependency hints, and a
+ * needs-attention strip derived from service lifecycle status (error / stale).
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -115,7 +113,7 @@ function Inner() {
     return map;
   });
 
-  /** Capsules currently needing attention (error / stale under either model). */
+  /** Services currently needing attention (error / stale under either model). */
   const attentionCount = createMemo(
     () => (installations() ?? []).filter(needsAttention).length,
   );
@@ -169,8 +167,8 @@ function Inner() {
 
         <Switch>
           <Match when={installations.loading}>
-            <div class="av-grid">
-              <Skeleton variant="card" count={3} />
+            <div class="av-service-list">
+              <Skeleton variant="row" count={4} />
             </div>
           </Match>
           <Match when={installations.error}>
@@ -192,7 +190,7 @@ function Inner() {
                         deployedCount={deployedCount()}
                         attentionCount={attentionCount()}
                       />
-                      <ServiceGrid
+                      <ServiceList
                         installations={list()}
                         dependsOn={dependsOn()}
                         staleReasons={staleReasons()}
@@ -213,7 +211,7 @@ function Inner() {
   );
 }
 
-function ServiceGrid(props: {
+function ServiceList(props: {
   readonly installations: readonly Installation[];
   readonly dependsOn: ReadonlyMap<string, readonly string[]>;
   readonly staleReasons: ReadonlyMap<string, string>;
@@ -221,51 +219,63 @@ function ServiceGrid(props: {
   readonly openDetail: (inst: Installation) => void;
 }) {
   return (
-    <ul class="av-grid">
+    <ul class="av-service-list">
       <For each={props.installations}>
         {(inst) => (
-          <li>
+          <li class="av-service-row">
             <button
               type="button"
-              class="av-card"
+              class="av-service-main"
               onClick={() => props.openDetail(inst)}
             >
-              <div class="av-card-head">
-                <span class="av-card-name">{inst.name}</span>
+              <div class="av-service-head">
+                <span class="av-service-name">{inst.name}</span>
                 <StatusBadge
                   status={effectiveInstallationStatus(inst)}
                   label={installationStatusLabel}
                   tone={installationTone}
                 />
               </div>
-              <Show when={(props.dependsOn.get(inst.id) ?? []).length > 0}>
-                <p class="av-card-meta">
-                  {t("apps.dependsOn", {
-                    names: (props.dependsOn.get(inst.id) ?? []).join(", "),
-                  })}
-                </p>
-              </Show>
+              <div class="av-service-meta">
+                <Show when={props.launchUrls.has(inst.id)}>
+                  <Badge tone="info">{t("app.output.publicUrl")}</Badge>
+                </Show>
+                <Show when={(props.dependsOn.get(inst.id) ?? []).length > 0}>
+                  <span>
+                    {t("apps.dependsOn", {
+                      names: (props.dependsOn.get(inst.id) ?? []).join(", "),
+                    })}
+                  </span>
+                </Show>
+                <Show
+                  when={
+                    effectiveInstallationStatus(inst) === "stale" &&
+                    props.staleReasons.get(inst.id)
+                  }
+                >
+                  {(reason) => (
+                    <span class="av-service-warn">
+                      {t("apps.staleReason", { reason: reason() })}
+                    </span>
+                  )}
+                </Show>
+              </div>
+            </button>
+            <div class="av-service-actions">
               <Show
-                when={
-                  effectiveInstallationStatus(inst) === "stale" &&
-                  props.staleReasons.get(inst.id)
+                when={props.launchUrls.get(inst.id)}
+                fallback={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => props.openDetail(inst)}
+                  >
+                    {t("apps.viewDetails")}
+                  </Button>
                 }
               >
-                {(reason) => (
-                  <p class="av-card-meta av-card-warn">
-                    {t("apps.staleReason", { reason: reason() })}
-                  </p>
-                )}
-              </Show>
-              <Show when={inst.currentDeploymentId}>
-                <p class="av-card-meta">
-                  <Badge tone="info">outputs</Badge>
-                </p>
-              </Show>
-            </button>
-            <Show when={props.launchUrls.get(inst.id)}>
-              {(url) => (
-                <div class="av-card-foot">
+                {(url) => (
                   <Button
                     variant="primary"
                     size="sm"
@@ -275,9 +285,9 @@ function ServiceGrid(props: {
                   >
                     {t("apps.openApp")} ↗
                   </Button>
-                </div>
-              )}
-            </Show>
+                )}
+              </Show>
+            </div>
           </li>
         )}
       </For>
@@ -327,7 +337,7 @@ function WorkspaceStartPanel() {
           </Button>
           <Button
             variant="secondary"
-            href="/workspace/settings/connections"
+            href="/connections"
             icon={<Cloud size={16} />}
           >
             {t("apps.start.connections")}

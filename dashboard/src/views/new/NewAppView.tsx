@@ -1,8 +1,8 @@
 /**
- * Add a Capsule (`/new`) — examples + Git URL, one flow.
+ * Add a service (`/new`) — examples + Git URL, one flow.
  *
  * Three entry shapes, identical install path:
- *   - Examples: curated first-party / known Capsule coordinates (src/catalog.ts).
+ *   - Examples: curated first-party / known service coordinates (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
  *   - Git URL: the raw source form (the developer power path).
  *   - External install link: another site links `/install?git=…` (or the
@@ -301,9 +301,7 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
   return "";
 }
 
-function isDuplicateServiceError(
-  error: ControlApiError | undefined,
-): boolean {
+function isDuplicateServiceError(error: ControlApiError | undefined): boolean {
   return error?.isDuplicateService ?? false;
 }
 
@@ -2011,24 +2009,29 @@ function Inner() {
               </form>
 
               <Show when={stepSource() !== "idle"} fallback={null}>
-                <ol class="wb-steps">
-                  <li class={`wb-step ${stepClass(stepSource())}`}>
-                    <span class="wb-step-icon">{stepIcon(stepSource())}</span>
-                    {t("new.step.register")}
-                  </li>
-                  <li class={`wb-step ${stepClass(stepSync())}`}>
-                    <span class="wb-step-icon">{stepIcon(stepSync())}</span>
-                    {t("new.step.sync")}
-                  </li>
-                  <li class={`wb-step ${stepClass(stepInstall())}`}>
-                    <span class="wb-step-icon">{stepIcon(stepInstall())}</span>
-                    {t("new.step.create")}
-                  </li>
-                  <li class={`wb-step ${stepClass(stepPlan())}`}>
-                    <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
-                    {t("new.step.plan")}
-                  </li>
-                </ol>
+                <details class="wb-disclosure">
+                  <summary>{t("new.step.technical")}</summary>
+                  <ol class="wb-steps">
+                    <li class={`wb-step ${stepClass(stepSource())}`}>
+                      <span class="wb-step-icon">{stepIcon(stepSource())}</span>
+                      {t("new.step.register")}
+                    </li>
+                    <li class={`wb-step ${stepClass(stepSync())}`}>
+                      <span class="wb-step-icon">{stepIcon(stepSync())}</span>
+                      {t("new.step.sync")}
+                    </li>
+                    <li class={`wb-step ${stepClass(stepInstall())}`}>
+                      <span class="wb-step-icon">
+                        {stepIcon(stepInstall())}
+                      </span>
+                      {t("new.step.create")}
+                    </li>
+                    <li class={`wb-step ${stepClass(stepPlan())}`}>
+                      <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
+                      {t("new.step.plan")}
+                    </li>
+                  </ol>
+                </details>
               </Show>
             </CardSection>
           </Card>

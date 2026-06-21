@@ -60,7 +60,7 @@ describe("Run review ProviderConnection evidence", () => {
   });
 
   test("gives blocked billing runs a recovery path from the review screen", () => {
-    expect(runViewSource).toContain('href="/workspace/settings/billing"');
+    expect(runViewSource).toContain('href="/billing"');
     expect(runViewSource).toContain('"run.cost.billingCta"');
     expect(en["run.cost.billingCta"]).toContain("billing");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");

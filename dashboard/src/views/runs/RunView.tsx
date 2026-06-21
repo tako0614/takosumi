@@ -135,11 +135,7 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
             <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
           </ul>
         </Show>
-        <Button
-          variant="secondary"
-          size="sm"
-          href="/workspace/settings/billing"
-        >
+        <Button variant="secondary" size="sm" href="/billing">
           {t("run.cost.billingCta")}
         </Button>
       </Show>

@@ -1,9 +1,8 @@
 /**
- * Workspace settings (`/workspace/settings[/:tab]`) — everything that belongs to the
- * Workspace rather than to one Capsule: general (display name / policy), members,
- * connections, billing, backups, output shares. Tabs are routes so deep links
- * and the backend's OAuth-callback redirect (`/connections?connected=1` →
- * `/workspace/settings/connections?connected=1`) work unchanged.
+ * Advanced Workspace settings (`/advanced/workspace[/:tab]`) and standalone
+ * normal-user surfaces (`/connections`, `/billing`). The standalone surfaces reuse the same
+ * tab implementations but do not present them as "Workspace settings"; the full
+ * tabbed view remains for advanced and legacy routes.
  */
 import "../../styles/wave-a.css";
 import { Match, Show, Switch } from "solid-js";
@@ -30,17 +29,29 @@ type TabId =
   | "backups"
   | "shares";
 
-export default function SpaceSettingsView() {
+type StandaloneTabId = Extract<TabId, "connections" | "billing">;
+
+interface SpaceSettingsViewProps {
+  readonly standaloneTab?: StandaloneTabId;
+}
+
+export default function SpaceSettingsView(props: SpaceSettingsViewProps = {}) {
   return (
-    <Page title={t("spaceSettings.title")}>
-      {(session) => <Inner session={session} />}
+    <Page title={pageTitle(props.standaloneTab)}>
+      {(session) => (
+        <Inner session={session} standaloneTab={props.standaloneTab} />
+      )}
     </Page>
   );
 }
 
-function Inner(props: { readonly session: SessionRecord }) {
+function Inner(props: {
+  readonly session: SessionRecord;
+  readonly standaloneTab?: StandaloneTabId;
+}) {
   const params = useParams();
   const tab = (): TabId => {
+    if (props.standaloneTab) return props.standaloneTab;
     const raw = params.tab;
     return raw === "members" ||
       raw === "connections" ||
@@ -54,28 +65,28 @@ function Inner(props: { readonly session: SessionRecord }) {
 
   const tabItems = () => [
     {
-      href: "/workspace/settings",
+      href: "/advanced/workspace",
       label: t("spaceSettings.tab.general"),
       end: true,
     },
     {
-      href: "/workspace/settings/members",
+      href: "/advanced/workspace/members",
       label: t("spaceSettings.tab.members"),
     },
     {
-      href: "/workspace/settings/connections",
+      href: "/advanced/workspace/connections",
       label: t("spaceSettings.tab.connections"),
     },
     {
-      href: "/workspace/settings/billing",
+      href: "/advanced/workspace/billing",
       label: t("spaceSettings.tab.billing"),
     },
     {
-      href: "/workspace/settings/backups",
+      href: "/advanced/workspace/backups",
       label: t("spaceSettings.tab.backups"),
     },
     {
-      href: "/workspace/settings/shares",
+      href: "/advanced/workspace/shares",
       label: t("spaceSettings.tab.shares"),
     },
   ];
@@ -83,10 +94,12 @@ function Inner(props: { readonly session: SessionRecord }) {
   return (
     <AppShell>
       <PageHeader
-        title={t("spaceSettings.title")}
-        subtitle={t("spaceSettings.subtitle")}
+        title={pageTitle(props.standaloneTab)}
+        subtitle={pageSubtitle(props.standaloneTab)}
       />
-      <Tabs items={tabItems()} aria-label="Workspace settings sections" />
+      <Show when={!props.standaloneTab}>
+        <Tabs items={tabItems()} aria-label="Workspace settings sections" />
+      </Show>
 
       <Show
         when={spaceId()}
@@ -126,4 +139,26 @@ function Inner(props: { readonly session: SessionRecord }) {
       </Show>
     </AppShell>
   );
+}
+
+function pageTitle(tab: StandaloneTabId | undefined): string {
+  switch (tab) {
+    case "connections":
+      return t("conn.providerConnections.title");
+    case "billing":
+      return t("billing.title");
+    default:
+      return t("spaceSettings.title");
+  }
+}
+
+function pageSubtitle(tab: StandaloneTabId | undefined): string {
+  switch (tab) {
+    case "connections":
+      return t("conn.subtitle");
+    case "billing":
+      return t("billing.subtitle");
+    default:
+      return t("spaceSettings.subtitle");
+  }
 }

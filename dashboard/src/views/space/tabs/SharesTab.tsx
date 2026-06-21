@@ -1,6 +1,6 @@
 /**
- * Workspace settings — 出力の共有. Port of the former ControlOutputSharesView body:
- * explicit cross-Space OutputShares (create / approve / revoke).
+ * Workspace settings — shared values. Port of the former ControlOutputSharesView
+ * body: explicit cross-Space value shares (create / approve / revoke).
  */
 import "../../../styles/wave-b.css";
 import {
@@ -179,11 +179,16 @@ export default function SharesTab(props: { readonly spaceId: string }) {
               <li class="wb-chip">
                 {output.name}
                 <Show when={output.alias}>
-                  {(alias) => <span class="muted"> as {alias()}</span>}
+                  {(alias) => (
+                    <span class="muted">
+                      {" "}
+                      {t("shares.create.outputAlias")} {alias()}
+                    </span>
+                  )}
                 </Show>
                 <Show when={output.sensitive}>
                   <Badge tone="warn" class="wb-you-tag">
-                    sensitive
+                    {t("shares.create.sensitiveValue")}
                   </Badge>
                 </Show>
               </li>
@@ -306,7 +311,7 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                         placeholder="base_domain"
                         autocomplete="off"
                         spellcheck={false}
-                        aria-label="Output name"
+                        aria-label={t("shares.create.outputName")}
                       />
                       <Input
                         type="text"
@@ -319,10 +324,10 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                         placeholder="alias"
                         autocomplete="off"
                         spellcheck={false}
-                        aria-label="Output alias"
+                        aria-label={t("shares.create.outputAlias")}
                       />
                       <Checkbox
-                        label="sensitive"
+                        label={t("shares.create.sensitiveValue")}
                         checked={output.sensitive}
                         onChange={(e) =>
                           updateOutput(output.id, {
@@ -360,7 +365,7 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                   value={sensitiveReason()}
                   onInput={(e) => setSensitiveReason(e.currentTarget.value)}
                   rows={3}
-                  placeholder="ticket / approval reason"
+                  placeholder={t("shares.create.sensitivePlaceholder")}
                   spellcheck={false}
                 />
               </FormField>
