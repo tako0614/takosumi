@@ -31,6 +31,7 @@ import { A, useNavigate } from "@solidjs/router";
 import {
   Download,
   GitBranch,
+  KeyRound,
   ListChecks,
   Plug,
   Plus,
@@ -56,6 +57,7 @@ import {
   checkCapsuleCompatibility,
   ControlApiError,
   createInstallation,
+  createSourceHttpsTokenConnection,
   createSource,
   extractRunId,
   type InstallationProviderConnectionBindings,
@@ -64,12 +66,15 @@ import {
   type CapsuleCompatibilityResult,
   type InstallConfig,
   listProviderConnections,
+  listConnections,
   listInstallConfigs,
   planInstallation,
   putInstallationProviderConnectionSet,
   syncSource,
+  testConnection,
   waitForLatestSourceSnapshot,
   type CapsuleCompatibilityProvider,
+  type Connection,
   type ProviderConnection,
   type ProviderCredentialOwnership,
   type RunStatus,
@@ -92,6 +97,7 @@ import {
 type StepState = "idle" | "running" | "done" | "error";
 type NewFlowStage = "source" | "check" | "connect" | "review";
 type NewFlowStepState = "done" | "current" | "next";
+type SourceAccessMode = "public" | "existing" | "token";
 
 interface ProviderConnectionRow {
   readonly provider: string;
@@ -335,6 +341,15 @@ function Inner() {
     isFullCommitSha(initialRef) ? initialRef : null,
   );
   const [path, setPath] = createSignal(prefill?.path || ".");
+  const [sourceAccessMode, setSourceAccessMode] =
+    createSignal<SourceAccessMode>("public");
+  const [sourceAuthConnectionId, setSourceAuthConnectionId] = createSignal("");
+  const [sourceTokenUsername, setSourceTokenUsername] = createSignal("git");
+  const [sourceToken, setSourceToken] = createSignal("");
+  const [savingSourceToken, setSavingSourceToken] = createSignal(false);
+  const [sourceTokenError, setSourceTokenError] = createSignal<string | null>(
+    null,
+  );
   const initialName = prefill
     ? (prefill.name ?? capsuleNameFromUrl(prefill.git))
     : "";
@@ -358,6 +373,10 @@ function Inner() {
 
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
   const [configs] = createResource(spaceId, listInstallConfigs);
+  const [connections, { refetch: refetchConnections }] = createResource(
+    spaceId,
+    listConnections,
+  );
   const [providerConnections] = createResource(
     spaceId,
     listProviderConnections,
@@ -437,6 +456,8 @@ function Inner() {
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
+    const sourceCredentialError = sourceAccessError();
+    if (sourceCredentialError) return sourceCredentialError;
     const variableError = inputVariableError();
     if (variableError) return variableError;
     return null;
@@ -540,9 +561,91 @@ function Inner() {
   const providerConnectionsHref = () =>
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
+  const visibleConnections = () => connections() ?? connections.latest ?? [];
+  const sourceGitConnections = () =>
+    visibleConnections().filter(
+      (connection) =>
+        connection.scope === "space" &&
+        (connection.kind === "source_git_https_token" ||
+          connection.kind === "source_git_ssh_key") &&
+        connection.status === "verified",
+    );
+  const sourceConnectionLabel = (connection: Connection) =>
+    connection.displayName ||
+    connection.scopeHints?.repoUrl ||
+    (connection.kind === "source_git_ssh_key"
+      ? t("new.sourceAccess.sshConnection")
+      : t("new.sourceAccess.httpsConnection"));
+  const sourceAuthConnectionIdForRun = () =>
+    sourceAccessMode() === "existing"
+      ? sourceAuthConnectionId().trim() || undefined
+      : undefined;
+  const sourceAccessError = (): string | null => {
+    if (sourceAccessMode() === "public") return null;
+    if (sourceAccessMode() === "token") {
+      return t("new.sourceAccess.errorSaveToken");
+    }
+    const connectionId = sourceAuthConnectionId().trim();
+    if (!connectionId) return t("new.sourceAccess.errorSelectConnection");
+    if (
+      !sourceGitConnections().some(
+        (connection) => connection.id === connectionId,
+      )
+    ) {
+      return t("new.sourceAccess.errorConnectionUnavailable");
+    }
+    return null;
+  };
+  const saveSourceTokenConnection = async () => {
+    setSourceTokenError(null);
+    const currentSpaceId = spaceId();
+    if (!currentSpaceId) {
+      setSourceTokenError(t("new.error.spaceRequired"));
+      return;
+    }
+    const token = sourceToken().trim();
+    if (!token) {
+      setSourceTokenError(t("new.sourceAccess.errorTokenRequired"));
+      return;
+    }
+    setSavingSourceToken(true);
+    try {
+      const connection = await createSourceHttpsTokenConnection({
+        spaceId: currentSpaceId,
+        displayName: t("new.sourceAccess.defaultDisplayName", {
+          name: name().trim() || capsuleNameFromUrl(gitUrl()) || "source",
+        }),
+        repoUrl: gitUrl().trim() || undefined,
+        username: sourceTokenUsername().trim() || "git",
+        token,
+      });
+      await testConnection(connection.id);
+      await refetchConnections();
+      setSourceAuthConnectionId(connection.id);
+      setSourceAccessMode("existing");
+      setSourceToken("");
+      resetCompatibility();
+    } catch (err) {
+      const apiError = err instanceof ControlApiError ? err : undefined;
+      setSourceTokenError(apiError?.message ?? String(err));
+    } finally {
+      setSavingSourceToken(false);
+    }
+  };
+
   createEffect(() => {
     if (!supportsProjectNameInput() || resourcePrefixTouched()) return;
     setResourcePrefix(defaultProjectName());
+  });
+
+  createEffect(() => {
+    if (sourceAccessMode() !== "existing") return;
+    const current = sourceAuthConnectionId();
+    const options = sourceGitConnections();
+    if (current && options.some((connection) => connection.id === current)) {
+      return;
+    }
+    setSourceAuthConnectionId(options[0]?.id ?? "");
   });
 
   const providerConnectionOwnershipLabel = (
@@ -840,6 +943,7 @@ function Inner() {
         ref: effectiveRef(),
         path: path().trim() || ".",
         name: name().trim(),
+        authConnectionId: sourceAuthConnectionIdForRun(),
         installConfigId: selectedInstallConfigId(),
         signal: controller.signal,
         onSourceCreated: (sourceId) => {
@@ -921,6 +1025,7 @@ function Inner() {
           url: gitUrl().trim(),
           defaultRef: effectiveRef(),
           defaultPath: path().trim() || ".",
+          authConnectionId: sourceAuthConnectionIdForRun(),
         });
         sourceId = result.source.id;
         setCreatedSourceId(sourceId);
@@ -1043,6 +1148,115 @@ function Inner() {
           spellcheck={false}
         />
       </FormField>
+
+      <details
+        class="wb-disclosure wb-source-access"
+        open={sourceAccessMode() !== "public"}
+      >
+        <summary>
+          <KeyRound size={15} aria-hidden="true" />
+          {t("new.sourceAccess.title")}
+        </summary>
+        <p class="wb-note">{t("new.sourceAccess.body")}</p>
+        <FormField label={t("new.sourceAccess.mode")}>
+          <Select
+            id="new-source-access-mode"
+            name="sourceAccessMode"
+            value={sourceAccessMode()}
+            onChange={(e) => {
+              setSourceAccessMode(e.currentTarget.value as SourceAccessMode);
+              setSourceTokenError(null);
+              resetCompatibility();
+            }}
+          >
+            <option value="public">{t("new.sourceAccess.public")}</option>
+            <option value="existing">{t("new.sourceAccess.existing")}</option>
+            <option value="token">{t("new.sourceAccess.token")}</option>
+          </Select>
+        </FormField>
+
+        <Show when={sourceAccessMode() === "existing"}>
+          <FormField label={t("new.sourceAccess.connection")}>
+            <Select
+              id="new-source-auth-connection"
+              name="sourceAuthConnection"
+              value={sourceAuthConnectionId()}
+              onChange={(e) => {
+                setSourceAuthConnectionId(e.currentTarget.value);
+                resetCompatibility();
+              }}
+            >
+              <option value="" selected={!sourceAuthConnectionId()}>
+                {t("new.sourceAccess.selectConnection")}
+              </option>
+              <For each={sourceGitConnections()}>
+                {(connection) => (
+                  <option
+                    value={connection.id}
+                    selected={connection.id === sourceAuthConnectionId()}
+                  >
+                    {sourceConnectionLabel(connection)}
+                  </option>
+                )}
+              </For>
+            </Select>
+          </FormField>
+          <Show when={sourceGitConnections().length === 0}>
+            <p class="wb-note">{t("new.sourceAccess.noConnections")}</p>
+          </Show>
+        </Show>
+
+        <Show when={sourceAccessMode() === "token"}>
+          <div class="wb-source-token-grid">
+            <FormField label={t("new.sourceAccess.username")}>
+              <Input
+                id="new-source-token-username"
+                name="sourceTokenUsername"
+                type="text"
+                value={sourceTokenUsername()}
+                onInput={(e) => setSourceTokenUsername(e.currentTarget.value)}
+                placeholder="git"
+                autocomplete="username"
+                spellcheck={false}
+              />
+            </FormField>
+            <FormField label={t("new.sourceAccess.accessToken")} required>
+              <Input
+                id="new-source-token"
+                name="sourceAccessToken"
+                type="password"
+                value={sourceToken()}
+                onInput={(e) => {
+                  setSourceToken(e.currentTarget.value);
+                  setSourceTokenError(null);
+                }}
+                placeholder={t("new.sourceAccess.tokenPlaceholder")}
+                autocomplete="new-password"
+                spellcheck={false}
+              />
+            </FormField>
+          </div>
+          <div class="wb-form-actions wb-source-token-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              busy={savingSourceToken()}
+              disabled={savingSourceToken()}
+              onClick={() => void saveSourceTokenConnection()}
+            >
+              {t("new.sourceAccess.saveToken")}
+            </Button>
+          </div>
+          <p class="wb-note">{t("new.sourceAccess.tokenBody")}</p>
+          <Show when={sourceTokenError()}>
+            {(message) => (
+              <p class="wb-error" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+        </Show>
+      </details>
 
       <details class="wb-disclosure wb-source-advanced">
         <summary>{t("new.git.advanced")}</summary>

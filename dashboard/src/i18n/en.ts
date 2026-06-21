@@ -367,6 +367,33 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.advanced": "Choose version and folder",
   "new.git.ref": "Version",
   "new.git.path": "Folder",
+  "new.sourceAccess.title": "Private repository",
+  "new.sourceAccess.body":
+    "Public repositories need no credential. For a private source, save a read-only HTTPS token or select a saved source connection.",
+  "new.sourceAccess.mode": "Source access",
+  "new.sourceAccess.public": "Public repository",
+  "new.sourceAccess.existing": "Use a saved source connection",
+  "new.sourceAccess.token": "Save an HTTPS token",
+  "new.sourceAccess.connection": "Source connection",
+  "new.sourceAccess.selectConnection": "Select a source connection",
+  "new.sourceAccess.noConnections":
+    "No verified source connections are available in this Workspace yet.",
+  "new.sourceAccess.username": "Username",
+  "new.sourceAccess.accessToken": "Access token",
+  "new.sourceAccess.tokenPlaceholder": "Read-only repository token",
+  "new.sourceAccess.saveToken": "Save token",
+  "new.sourceAccess.tokenBody":
+    "The token is stored as a write-only Source connection and is only exposed to the Git fetch step for this Workspace.",
+  "new.sourceAccess.errorTokenRequired": "Enter an access token.",
+  "new.sourceAccess.errorSaveToken":
+    "Save the private repository token before checking the source.",
+  "new.sourceAccess.errorSelectConnection":
+    "Select a verified source connection.",
+  "new.sourceAccess.errorConnectionUnavailable":
+    "The selected source connection is no longer available.",
+  "new.sourceAccess.httpsConnection": "HTTPS source connection",
+  "new.sourceAccess.sshConnection": "SSH source connection",
+  "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
   "new.vars.inputsTitle": "OpenTofu inputs",
