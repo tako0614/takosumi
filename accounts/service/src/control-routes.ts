@@ -3228,13 +3228,28 @@ async function completeCloudflareOAuth(
     subject,
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
+  let created: ConnectionResponse;
   try {
     // Force Space scope regardless of what the helper produced.
-    await operations.createConnection({ ...createRequest, scope: "space" });
+    created = await operations.createConnection({
+      ...createRequest,
+      scope: "space",
+    });
   } catch {
     return redirectToConnections(url, { error: "oauth_failed" });
   }
-  return redirectToConnections(url, { connected: spaceId });
+  let connectionStatus: TestConnectionResponse["status"] | undefined;
+  try {
+    const result = await operations.testConnection(created.connection.id);
+    connectionStatus = result.status;
+  } catch {
+    connectionStatus = "pending";
+  }
+  return redirectToConnections(url, {
+    connected: spaceId,
+    connectionId: created.connection.id,
+    connectionStatus,
+  });
 }
 
 function connectionOAuthUnavailable(): Response {
@@ -3247,15 +3262,24 @@ function connectionOAuthUnavailable(): Response {
 
 /**
  * Same-origin redirect back to the dashboard connections screen. Only opaque
- * status keys (`connected` / `connection_error`) ride the query — never the
- * token or any error detail.
+ * status keys (`connected` / `connection_error`) and the public Connection id /
+ * verification status ride the query — never the token or any error detail.
  */
 function redirectToConnections(
   url: URL,
-  result: { readonly connected?: string; readonly error?: string },
+  result: {
+    readonly connected?: string;
+    readonly error?: string;
+    readonly connectionId?: string;
+    readonly connectionStatus?: TestConnectionResponse["status"];
+  },
 ): Response {
   const target = new URL("/connections", url.origin);
   if (result.connected) target.searchParams.set("connected", "1");
+  if (result.connectionId)
+    target.searchParams.set("connection_id", result.connectionId);
+  if (result.connectionStatus)
+    target.searchParams.set("connection_status", result.connectionStatus);
   if (result.error) target.searchParams.set("connection_error", result.error);
   return new Response(null, {
     status: 303,

@@ -3563,6 +3563,8 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   const location = callbackResp!.headers.get("location") ?? "";
   expect(location).toContain("/connections");
   expect(location).toContain("connected=1");
+  expect(location).toContain("connection_id=conn_new");
+  expect(location).toContain("connection_status=verified");
   // The minted token never rides the redirect query.
   expect(location).not.toContain("minted-oauth-token");
 
@@ -3573,6 +3575,7 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   };
   expect(passed.spaceId).toEqual("space_a");
   expect(passed.scope).toEqual("space");
+  expect(operations.calls.testConnection).toEqual(["conn_new"]);
 });
 
 test("Cloudflare OAuth callback without the session cookie still completes (cross-site redirect)", async () => {
@@ -3617,8 +3620,11 @@ test("Cloudflare OAuth callback without the session cookie still completes (cros
   const location = response!.headers.get("location") ?? "";
   expect(location).toContain("/connections");
   expect(location).toContain("connected=1");
+  expect(location).toContain("connection_id=conn_new");
+  expect(location).toContain("connection_status=verified");
   const passed = operations.calls.createConnection?.[0] as { scope?: string };
   expect(passed.scope).toEqual("space");
+  expect(operations.calls.testConnection).toEqual(["conn_new"]);
 });
 
 test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", async () => {

@@ -5,10 +5,11 @@
  * is gone). Secret values are write-only — kept in component state only until
  * the submit resolves, then cleared.
  *
- * The Cloudflare OAuth callback redirects to `/connections?connected=1`, which
- * the router forwards here query-intact; the one-time banner reads and strips
- * those params. `/new` links may also include a safe `return=/new?...` target
- * so users can create a Provider Connection, then jump back to the add flow.
+ * The Cloudflare OAuth callback redirects to `/connections?connected=1` plus an
+ * opaque `connection_id` / `connection_status`, which the router forwards here
+ * query-intact; the one-time banner reads and strips those params. `/new` links
+ * may also include a safe `return=/new?...` target so users can create a
+ * Provider Connection, then jump back to the add flow.
  */
 import "../../../styles/wave-c.css";
 import {
@@ -107,6 +108,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
     string | null
   >(null);
+  const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
+    createSignal(false);
 
   const refreshConnections = async () => {
     await Promise.all([refetch(), refetchProviderConnections()]);
@@ -115,6 +118,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const afterConnectionCreated = async (connection: Connection) => {
     setLastCreatedConnectionName(connection.displayName ?? connection.id);
     setLastCreatedConnectionId(connection.id);
+    setLastCreatedVerifiedHint(false);
     clearForm();
     await refreshConnections();
   };
@@ -192,14 +196,29 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   >(null);
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("connected")) setOauthNotice({ kind: "ok" });
-    else {
+    if (params.get("connected")) {
+      setOauthNotice({ kind: "ok" });
+      const connectionId = params.get("connection_id");
+      if (connectionId && !/[\r\n\0]/u.test(connectionId)) {
+        setLastCreatedConnectionId(connectionId);
+      }
+      setLastCreatedVerifiedHint(
+        params.get("connection_status") === "verified",
+      );
+    } else {
       const err = params.get("connection_error");
       if (err) setOauthNotice({ kind: "error", code: err });
     }
-    if (params.has("connected") || params.has("connection_error")) {
+    if (
+      params.has("connected") ||
+      params.has("connection_error") ||
+      params.has("connection_id") ||
+      params.has("connection_status")
+    ) {
       params.delete("connected");
       params.delete("connection_error");
+      params.delete("connection_id");
+      params.delete("connection_status");
       const next = params.toString();
       window.history.replaceState(
         {},
@@ -337,12 +356,15 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         | undefined;
       await refreshConnections();
       if (result?.status && result.status !== "verified") {
+        setLastCreatedVerifiedHint(false);
         setTestError(
           result.detail ??
             t("conn.test.notReady", {
               status: result.status,
             }),
         );
+      } else if (result?.status === "verified") {
+        setLastCreatedVerifiedHint(true);
       }
     } catch (e) {
       setTestError(e instanceof Error ? e.message : String(e));
@@ -356,6 +378,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (lastCreatedConnectionId() === id) {
       setLastCreatedConnectionId(null);
       setLastCreatedConnectionName(null);
+      setLastCreatedVerifiedHint(false);
     }
     await refreshConnections();
   });
@@ -378,7 +401,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const lastCreatedProviderConnection = () =>
     providerConnectionForConnectionId(lastCreatedConnectionId());
   const lastCreatedReady = () =>
-    lastCreatedProviderConnection()?.status === "ready";
+    lastCreatedProviderConnection()?.status === "ready" ||
+    lastCreatedVerifiedHint();
   const shouldOfferInstallReturn = () =>
     !lastCreatedConnectionId() || lastCreatedReady();
 
