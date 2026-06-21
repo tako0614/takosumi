@@ -992,7 +992,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         when={
           !providerConnections.loading &&
           !providerConnections.error &&
-          (providerConnections() ?? []).length === 0
+          (providerConnections() ?? []).length === 0 &&
+          !shouldShowCreateForm()
         }
       >
         <EmptyState
