@@ -107,8 +107,9 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain("function BrandLogoMark()");
     expect(signInViewSource).toContain("auth-brand-mark");
     expect(signInViewSource).toContain(
-      '<LogoMark size={44} title="Takosumi" />',
+      '<LogoMark size={48} title="Takosumi" />',
     );
+    expect(signInViewSource).not.toContain("img src");
     expect(signInViewSource).not.toContain("TemporaryBrandMark");
     expect(signInViewSource).not.toContain("auth.brandDraft");
     expect(signInViewSource).not.toContain("auth.brandDraftMark");
@@ -122,12 +123,13 @@ describe("SignInView disabled OAuth guidance", () => {
       /<div class="auth-flow">[\s\S]*<SignInPanel \/>[\s\S]*<ThemeSwitcher \/>[\s\S]*<\/div>/,
     );
     expect(shellCssSource).toContain("justify-content: center;");
-    expect(shellCssSource).toContain("width: min(100%, 408px);");
-    expect(shellCssSource).toContain("translateY(clamp(12px, 3.8svh, 34px))");
-    expect(shellCssSource).toContain(
+    expect(shellCssSource).toContain("width: min(100%, 416px);");
+    expect(shellCssSource).toContain("translateY(clamp(10px, 4svh, 36px))");
+    expect(shellCssSource).toContain("background: transparent;");
+    expect(shellCssSource).not.toContain(
       "border: 1px dashed var(--tg-line-strong)",
     );
-    expect(shellCssSource).toContain("repeating-linear-gradient");
+    expect(shellCssSource).not.toContain("repeating-linear-gradient");
     expect(shellCssSource).not.toMatch(
       /\.auth-theme-switcher\s*\{[\s\S]*?display:\s*none;/,
     );
