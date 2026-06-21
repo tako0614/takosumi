@@ -290,9 +290,9 @@ operator-bearer hardening gate without printing the bearer token. Use
 ## 公開ゲート
 
 `TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"`（wrangler.toml の vars）の間、Stripe checkout と
-platform-cell の materialize/export は `launch_readiness_not_complete` の 503 を返す。公開時にこの var を変更して再デプロイ。
-これは Stripe checkout と platform-cell materialize/export だけの公開ゲート。OIDC / PAT / upstream OAuth /
-Capsule / Run / StateVersion / rollback は通常の session・Workspace 権限で動き続ける。
+platform-cell の materialize は `launch_readiness_not_complete` の 503 を返す。公開時にこの var を変更して再デプロイ。
+これは Stripe checkout と platform-cell materialize だけの公開ゲート。OIDC / PAT / upstream OAuth /
+Capsule / Run / StateVersion / rollback / export は通常の session・Workspace 権限で動き続ける。
 
 ## takos.jp からの public install 導線
 
