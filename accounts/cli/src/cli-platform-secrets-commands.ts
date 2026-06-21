@@ -137,6 +137,10 @@ const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
     secretClass: "manual_external",
   },
   {
+    name: "TAKOSUMI_METRICS_SCRAPE_TOKEN",
+    secretClass: "manual_external",
+  },
+  {
     name: "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
     secretClass: "manual_external",
   },
