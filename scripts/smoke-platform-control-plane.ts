@@ -603,7 +603,7 @@ function failedNextAction(input: {
     input.error.method === "POST" &&
     input.error.path === `${API_PREFIX}/deploy`
   ) {
-    return "The deploy request timed out before returning a run id. Check the scratch Space for a pending smoke Installation with this app name, mark it error if needed, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the synchronous deploy step that did not return.";
+    return "The deploy request timed out before returning a plan run id. Check the scratch Space for a pending smoke Installation with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the compatibility check or plan creation step that did not return.";
   }
   if (input.connectionRevokeSkippedReason !== undefined) {
     return "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke.";
@@ -1037,7 +1037,8 @@ async function latestDeploymentForInstallation(
     )}/deployments`,
   });
   const deployments = [...(response.deployments ?? [])].sort(
-    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+    (a, b) =>
+      b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
   );
   const deployment =
     deployments.find((candidate) => candidate.status === "active") ??
@@ -1506,7 +1507,7 @@ async function runSelfTest(): Promise<void> {
     deployTimeout.status !== "failed" ||
     deployTimeout.installationId !== undefined ||
     deployTimeout.planRunId !== undefined ||
-    !deployTimeout.nextAction?.includes("before returning a run id")
+    !deployTimeout.nextAction?.includes("before returning a plan run id")
   ) {
     throw new Error("self-test deploy timeout failed result shape is wrong");
   }

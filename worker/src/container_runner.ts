@@ -31,6 +31,8 @@ import { redactString } from "../../core/domains/observability/redaction.ts";
  * runner DO and parses the DO's JSON result back into the controller's result
  * shape. Credential values and run bodies are never logged.
  */
+const DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MS = 45_000;
+
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
 {
@@ -204,12 +206,19 @@ export class CloudflareContainerOpenTofuRunner
   async readCapsuleSourceFiles(
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]> {
-    const result = await this.#runContainer("compatibility_check", job.runId, {
-      sourceArchive: {
-        objectKey: job.sourceSnapshot.archiveObjectKey,
-        digest: job.sourceSnapshot.archiveDigest,
+    const result = await this.#runContainer(
+      "compatibility_check",
+      job.runId,
+      {
+        sourceArchive: {
+          objectKey: job.sourceSnapshot.archiveObjectKey,
+          digest: job.sourceSnapshot.archiveDigest,
+        },
       },
-    });
+      {
+        timeoutMs: compatibilityCheckTimeoutMs(this.env),
+      },
+    );
     const files = result.files;
     if (!Array.isArray(files)) {
       throw new Error(
@@ -286,36 +295,71 @@ export class CloudflareContainerOpenTofuRunner
     action: OpenTofuRunQueueMessage["action"],
     runId: string,
     request: unknown,
+    options: { readonly timeoutMs?: number } = {},
   ): Promise<Record<string, unknown>> {
     if (!this.env.RUNNER) {
       throw new Error("RUNNER binding is not configured");
     }
     const id = this.env.RUNNER.idFromName(runId);
-    const response = await this.env.RUNNER.get(id).fetch(
-      new Request(
-        `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            kind: "takosumi.opentofu-run@v1",
-            action,
-            runId,
-            requestedAt: new Date().toISOString(),
-            request,
-          }),
-        },
-      ),
-    );
-    const { payload, redactedText } = await readResponseJsonObject(response);
-    if (!response.ok) {
-      const detail = runnerFailureDetail(payload, redactedText);
-      throw new Error(
-        `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
-      );
+    const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const controller = timeoutMs ? new AbortController() : undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    if (controller && timeoutMs) {
+      timeout = setTimeout(() => controller.abort(), timeoutMs);
     }
-    return payload;
+    try {
+      const response = await this.env.RUNNER.get(id).fetch(
+        new Request(
+          `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              kind: "takosumi.opentofu-run@v1",
+              action,
+              runId,
+              requestedAt: new Date().toISOString(),
+              request,
+            }),
+            ...(controller ? { signal: controller.signal } : {}),
+          },
+        ),
+      );
+      const { payload, redactedText } = await readResponseJsonObject(response);
+      if (!response.ok) {
+        const detail = runnerFailureDetail(payload, redactedText);
+        throw new Error(
+          `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
+        );
+      }
+      return payload;
+    } catch (error) {
+      if (controller?.signal.aborted && timeoutMs) {
+        throw new Error(
+          `OpenTofu runner ${action} run ${runId} exceeded ${timeoutMs}ms timeout`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
+}
+
+function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
+  return (
+    positiveTimeoutMs(env.TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS) ??
+    DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MS
+  );
+}
+
+function positiveTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
 }
 
 function artifactPointerFromContainerResult(
