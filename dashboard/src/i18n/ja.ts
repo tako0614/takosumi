@@ -71,6 +71,8 @@ export const ja = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
   "auth.signInSub": "Takosumi のアカウントで続けます。",
+  "auth.signInCloud": "Takosumi Cloud にサインイン",
+  "auth.signInSubCloud": "Google アカウントで続けます。",
   "auth.continueWith": "{provider} で続ける",
   "auth.notConfigured": "現在利用できません",
   "auth.providerChecking": "利用可否を確認中です",

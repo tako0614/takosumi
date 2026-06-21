@@ -38,11 +38,23 @@ const PROVIDERS: ProviderInfo[] = [
     id: "google",
     name: "Google",
     icon: () => (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4c-.2 1.3-1 2.4-2 3.1v2.6h3.3c2-1.8 3-4.5 3-7.5z" />
-        <path d="M12 22c2.7 0 5-.9 6.7-2.4l-3.3-2.6c-.9.6-2.1 1-3.4 1-2.6 0-4.9-1.8-5.7-4.2H3v2.6C4.7 19.7 8.1 22 12 22z" />
-        <path d="M6.3 13.8c-.2-.6-.3-1.2-.3-1.8s.1-1.2.3-1.8V7.6H3C2.4 8.9 2 10.4 2 12s.4 3.1 1 4.4l3.3-2.6z" />
-        <path d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.9C16.9 2.9 14.7 2 12 2 8.1 2 4.7 4.3 3 7.6l3.3 2.6c.8-2.4 3.1-4.3 5.7-4.3z" />
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="#4285f4"
+          d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4c-.2 1.3-1 2.4-2 3.1v2.6h3.3c2-1.8 3-4.5 3-7.5z"
+        />
+        <path
+          fill="#34a853"
+          d="M12 22c2.7 0 5-.9 6.7-2.4l-3.3-2.6c-.9.6-2.1 1-3.4 1-2.6 0-4.9-1.8-5.7-4.2H3v2.6C4.7 19.7 8.1 22 12 22z"
+        />
+        <path
+          fill="#fbbc05"
+          d="M6.3 13.8c-.2-.6-.3-1.2-.3-1.8s.1-1.2.3-1.8V7.6H3C2.4 8.9 2 10.4 2 12s.4 3.1 1 4.4l3.3-2.6z"
+        />
+        <path
+          fill="#ea4335"
+          d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.9C16.9 2.9 14.7 2 12 2 8.1 2 4.7 4.3 3 7.6l3.3 2.6c.8-2.4 3.1-4.3 5.7-4.3z"
+        />
       </svg>
     ),
   },
@@ -134,8 +146,12 @@ export function SignInPanel() {
 
   return (
     <div class="sign-in-panel">
-      <h1 class="sign-in-title">{t("auth.signIn")}</h1>
-      <p class="sign-in-sub">{t("auth.signInSub")}</p>
+      <h1 class="sign-in-title">
+        {t(isTakosumiCloudRuntime() ? "auth.signInCloud" : "auth.signIn")}
+      </h1>
+      <p class="sign-in-sub">
+        {t(isTakosumiCloudRuntime() ? "auth.signInSubCloud" : "auth.signInSub")}
+      </p>
       <Show when={pendingInstall()}>
         <div
           class="sign-in-return-context"
@@ -232,7 +248,7 @@ export function SignInPanel() {
 function BrandLogoMark() {
   return (
     <span class="auth-brand-mark" aria-hidden="true">
-      <LogoMark size={42} />
+      <LogoMark size={44} title="Takosumi" />
     </span>
   );
 }

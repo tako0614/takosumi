@@ -433,6 +433,7 @@
   align-items: stretch;
   justify-content: center;
   gap: var(--tg-s-4);
+  transform: translateY(clamp(12px, 3.8svh, 34px));
 }
 .auth-theme-switcher {
   position: static;
@@ -478,12 +479,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 3px;
+  width: 44px;
+  height: 44px;
+  padding: 4px;
   border: 1px dashed var(--tg-line-strong);
   border-radius: var(--tg-r-sm);
-  background: var(--tg-bg-elev);
+  background:
+    linear-gradient(var(--tg-bg-elev), var(--tg-bg-elev)) padding-box,
+    repeating-linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--tg-line-strong) 55%, transparent) 0 6px,
+        transparent 6px 12px
+      )
+      border-box;
   color: var(--tg-fg-muted);
   box-shadow: none;
   overflow: hidden;
@@ -493,6 +501,7 @@
   height: 100%;
   border-radius: 3px;
   object-fit: cover;
+  filter: saturate(0.95);
 }
 .auth-brand-text {
   display: inline-flex;
@@ -596,9 +605,9 @@
   width: 34px;
   height: 34px;
   border-radius: var(--tg-r-sm);
-  background: var(--tg-bg-subtle);
+  background: #ffffff;
   border: 1px solid var(--tg-line);
-  color: var(--tg-fg);
+  color: #111827;
 }
 .sign-in-text {
   display: flex;
@@ -684,6 +693,7 @@
   .auth-flow {
     width: 100%;
     gap: var(--tg-s-3);
+    transform: translateY(clamp(8px, 2svh, 18px));
   }
 
   .sign-in-panel {

@@ -14,6 +14,10 @@ const shellCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/shell.css"),
   "utf8",
 );
+const deploymentBrandSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/deployment-brand.ts"),
+  "utf8",
+);
 
 describe("SignInView disabled OAuth guidance", () => {
   test("uses install-specific disabled-provider copy only when a return install is pending", () => {
@@ -76,12 +80,35 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('id: "google"');
     expect(signInViewSource).not.toContain('id: "github"');
     expect(signInViewSource).not.toContain("GitHub");
+    expect(signInViewSource).toContain('fill="#4285f4"');
+    expect(signInViewSource).toContain('fill="#34a853"');
+  });
+
+  test("uses Cloud-specific copy only on the Takosumi Cloud runtime", () => {
+    expect(signInViewSource).toContain(
+      'isTakosumiCloudRuntime() ? "auth.signInCloud" : "auth.signIn"',
+    );
+    expect(signInViewSource).toContain(
+      'isTakosumiCloudRuntime() ? "auth.signInSubCloud" : "auth.signInSub"',
+    );
+    expect(en["auth.signInCloud"]).toContain("Takosumi Cloud");
+    expect(en["auth.signInSubCloud"]).toContain("Google");
+    expect(ja["auth.signInCloud"]).toContain("Takosumi Cloud");
+    expect(ja["auth.signInSubCloud"]).toContain("Google");
+    expect(deploymentBrandSource).toContain(
+      'import.meta.env.VITE_TAKOSUMI_CLOUD === "1"',
+    );
+    expect(deploymentBrandSource).not.toContain(
+      "as Record<string, string | undefined>",
+    );
   });
 
   test("uses the provided tako.png logo without the old ink placeholder", () => {
     expect(signInViewSource).toContain("function BrandLogoMark()");
     expect(signInViewSource).toContain("auth-brand-mark");
-    expect(signInViewSource).toContain("<LogoMark size={42} />");
+    expect(signInViewSource).toContain(
+      '<LogoMark size={44} title="Takosumi" />',
+    );
     expect(signInViewSource).not.toContain("TemporaryBrandMark");
     expect(signInViewSource).not.toContain("auth.brandDraft");
     expect(signInViewSource).not.toContain("auth.brandDraftMark");
@@ -96,9 +123,11 @@ describe("SignInView disabled OAuth guidance", () => {
     );
     expect(shellCssSource).toContain("justify-content: center;");
     expect(shellCssSource).toContain("width: min(100%, 408px);");
+    expect(shellCssSource).toContain("translateY(clamp(12px, 3.8svh, 34px))");
     expect(shellCssSource).toContain(
       "border: 1px dashed var(--tg-line-strong)",
     );
+    expect(shellCssSource).toContain("repeating-linear-gradient");
     expect(shellCssSource).not.toMatch(
       /\.auth-theme-switcher\s*\{[\s\S]*?display:\s*none;/,
     );
