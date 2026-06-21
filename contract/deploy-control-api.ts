@@ -1,12 +1,16 @@
 /**
  * Public Takosumi deploy-control contract facade.
  *
- * Takosumi v1 customer-facing vocabulary is Space / Source / Connection /
- * Installation / Dependency / Run / Deployment / OutputSnapshot / Activity.
- * Supporting API DTOs for Provider Catalog, Capsule compatibility evidence,
- * InstallConfig, snapshots, RunGroup, Backup, Billing, and security records are
- * exported here because the dashboard and operator tooling need them, but they
- * should not be introduced as first-screen product nouns.
+ * Takosumi's final customer-facing vocabulary is Workspace / Project /
+ * Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding /
+ * Secret / Run / Plan / Apply / Destroy / StateVersion / Output / Runner /
+ * AuditEvent / Operator.
+ *
+ * This facade still exports some compatibility DTO names used by the current
+ * dashboard and operator tooling (Space / Installation / Deployment /
+ * OutputSnapshot / RunGroup / Provider Catalog). Treat those as implementation
+ * compatibility aliases while the wire surface migrates; do not introduce them
+ * as new public product nouns.
  *
  * Internal in-process compatibility DTOs for the account-plane workload seam live in
  * `internal-deploy-control-api.ts` and are intentionally not re-exported here.

@@ -4,8 +4,6 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
   { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/getting-started/quickstart" },
-  { text: "Service Graph", link: "/service-graph-spec" },
-  { text: "AI Gateway", link: "/reference/ai-gateway" },
   { text: "Model", link: "/reference/model" },
   { text: "API", link: "/reference/deploy-control-api" },
   { text: "Operator", link: "/reference/operator" },
@@ -15,8 +13,6 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Overview", link: "/en/" },
   { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Service Graph", link: "/service-graph-spec" },
-  { text: "AI Gateway", link: "/reference/ai-gateway" },
   { text: "Model", link: "/en/reference/model" },
   { text: "API", link: "/en/reference/deploy-control-api" },
   { text: "Operator", link: "/en/reference/operator" },
@@ -40,15 +36,9 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Core specification", link: "/core-spec" },
-        { text: "Service Graph", link: "/service-graph-spec" },
-        { text: "AI Gateway", link: "/reference/ai-gateway" },
         { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/reference/model" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
-        {
-          text: "Gateway OpenTofu",
-          link: "/reference/gateway-opentofu-architecture",
-        },
         {
           text: "Execution boundaries",
           link: "/reference/operator-execution-boundaries",
@@ -94,17 +84,11 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Core specification", link: "/core-spec" },
-        { text: "Service Graph", link: "/service-graph-spec" },
-        { text: "AI Gateway", link: "/reference/ai-gateway" },
         { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/en/reference/model" },
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
-        },
-        {
-          text: "Gateway OpenTofu",
-          link: "/reference/gateway-opentofu-architecture",
         },
         {
           text: "Execution boundaries",
