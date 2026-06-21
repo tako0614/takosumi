@@ -14,6 +14,8 @@ backends.
 - manage sealed backing material and secret delivery for ProviderConnections
 - manage state and lock backends
 - manage local/docker/remote/operator runner pools
+- operate a release activator materializer when enabled, and record app
+  publication separately from the apply ledger
 - keep provider credentials, control-plane tokens, and state backend credentials out of user workloads
 - operate dashboard, API, audit, quota, and billing-placeholder surfaces
 - keep evidence for tenant isolation, workspace isolation, runner isolation, and network egress policy
@@ -59,6 +61,7 @@ OSS Operator GA readiness:
 | --- | --- |
 | Website/docs | docs build, custom domain/TLS if hosted publicly |
 | Runner | non-production OpenTofu plan/apply/destroy proof |
+| Release activation | webhook/materializer proof, activation failure surfacing, rollback-independent ledger evidence if app publication is enabled |
 | Accounts/auth | dashboard, session/OIDC as configured, audit trail |
 | State | state backend, lock evidence, backup/restore drill |
 | Secrets | encrypted storage, rotation process, redaction proof |

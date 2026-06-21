@@ -44,6 +44,27 @@ const BASE_ENV = {
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 } satisfies Record<string, string>;
 
+const RELEASE_ACTIVATION_ENV = {
+  TAKOSUMI_RELEASE_ACTIVATOR_URL: "https://materializer.example.com/activate",
+  TAKOSUMI_RELEASE_ACTIVATOR_TOKEN: "release-activator-token",
+  TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-success.md",
+  TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST:
+    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-failure-surfacing.md",
+  TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST:
+    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-ledger-independence.md",
+  TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST:
+    "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-payload-boundary.md",
+  TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST:
+    "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+} satisfies Record<string, string>;
+
 test("node-postgres platform readiness defaults closed", () => {
   const config = parseEnv({
     TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
@@ -143,5 +164,33 @@ test("node-postgres platform readiness open accepts readiness and hardening evid
     readinessDigest: BASE_ENV.TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST,
     evidenceRef: BASE_ENV.TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF,
     approvalRef: BASE_ENV.TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF,
+  });
+});
+
+test("node-postgres platform readiness open requires release activation evidence when activator is enabled", () => {
+  expect(() =>
+    parseEnv({
+      ...BASE_ENV,
+      TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: "open",
+      TAKOSUMI_RELEASE_ACTIVATOR_URL:
+        RELEASE_ACTIVATION_ENV.TAKOSUMI_RELEASE_ACTIVATOR_URL,
+      TAKOSUMI_RELEASE_ACTIVATOR_TOKEN:
+        RELEASE_ACTIVATION_ENV.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN,
+    }),
+  ).toThrow(
+    "Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF",
+  );
+});
+
+test("node-postgres platform readiness open accepts release activation evidence when activator is enabled", () => {
+  const config = parseEnv({
+    ...BASE_ENV,
+    ...RELEASE_ACTIVATION_ENV,
+    TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: "open",
+  });
+
+  expect(config.platformAccess).toMatchObject({
+    status: "open",
+    readinessDigest: BASE_ENV.TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST,
   });
 });

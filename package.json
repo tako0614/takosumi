@@ -28,6 +28,7 @@
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
     "smoke:platform-control-plane": "bun scripts/smoke-platform-control-plane.ts",
+    "release-activation:evidence": "bun scripts/validate-release-activation-evidence.ts",
     "production-hardening:evidence": "bun scripts/validate-production-hardening-evidence.ts",
     "production-hardening:gates": "bun scripts/verify-production-hardening-gates.ts",
     "db:migrate": "bun core/scripts/db-migrate.ts",
