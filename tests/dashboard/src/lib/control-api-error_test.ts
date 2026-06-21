@@ -38,3 +38,56 @@ describe("ControlApiError source-sync classification", () => {
     expect(compatibilityNotRunnable.isSourceSyncRequired).toBe(false);
   });
 });
+
+describe("ControlApiError duplicate service classification", () => {
+  test("reads typed duplicate reasons from deploy-control error details", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "installation @workspace/takos (production) already exists",
+      {
+        error: {
+          code: "failed_precondition",
+          message: "installation @workspace/takos (production) already exists",
+          details: {
+            reason: "duplicate_installation",
+            installationId: "inst_existing",
+            name: "takos",
+            environment: "production",
+          },
+        },
+      },
+    );
+
+    expect(error.reason).toBe("duplicate_installation");
+    expect(error.isDuplicateService).toBe(true);
+  });
+
+  test("keeps duplicate fallback for older deploy-control messages", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "installation @workspace/takos (production) already exists",
+    );
+
+    expect(error.reason).toBeUndefined();
+    expect(error.isDuplicateService).toBe(true);
+  });
+
+  test("does not treat unrelated 409s as duplicate services", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "compatibility_report_not_runnable: report caprep_1 is needs_patch",
+      {
+        error: {
+          code: "failed_precondition",
+          details: { reason: "compatibility_report_not_runnable" },
+        },
+      },
+    );
+
+    expect(error.reason).toBe("compatibility_report_not_runnable");
+    expect(error.isDuplicateService).toBe(false);
+  });
+});
