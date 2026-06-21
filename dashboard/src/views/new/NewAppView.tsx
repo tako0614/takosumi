@@ -1607,14 +1607,6 @@ function Inner() {
               <div>
                 <h2>{t("new.store.title")}</h2>
               </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                onClick={() => setActiveTab("git")}
-              >
-                {t("new.advancedImport.open")}
-              </Button>
             </div>
             <ul class="av-catalog-grid">
               <For each={CATALOG}>
@@ -1646,6 +1638,18 @@ function Inner() {
                 )}
               </For>
             </ul>
+            <details class="wb-disclosure av-manual-import">
+              <summary>{t("new.advancedImport.open")}</summary>
+              <p class="wb-note">{t("new.advancedImport.subtitle")}</p>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => setActiveTab("git")}
+              >
+                {t("new.advancedImport.title")}
+              </Button>
+            </details>
           </section>
         </Show>
 

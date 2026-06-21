@@ -38,11 +38,19 @@ describe("History and notifications", () => {
 
   test("notifications link to history without advertising raw audit logs", () => {
     expect(notificationsSource).toContain('href="/activity"');
-    expect(en["notif.viewRaw"]).toBe("View support history →");
-    expect(ja["notif.viewRaw"]).toBe("サポート履歴を見る →");
+    expect(notificationsSource).toContain('t("notif.supportSummary")');
+    expect(notificationsSource).toMatch(
+      /<details class="wb-disclosure wc-notif-support">[\s\S]*href="\/activity"/,
+    );
+    expect(en["notif.supportSummary"]).toBe("Support details");
+    expect(ja["notif.supportSummary"]).toBe("サポート詳細");
+    expect(en["notif.viewRaw"]).toBe("Open history →");
+    expect(ja["notif.viewRaw"]).toBe("履歴を開く →");
     expect(en["notif.viewRaw"].toLowerCase()).not.toContain("raw");
     expect(en["notif.viewRaw"].toLowerCase()).not.toContain("audit");
+    expect(en["notif.viewRaw"].toLowerCase()).not.toContain("support");
     expect(ja["notif.viewRaw"]).not.toContain("生");
     expect(ja["notif.viewRaw"]).not.toContain("監査");
+    expect(ja["notif.viewRaw"]).not.toContain("サポート");
   });
 });

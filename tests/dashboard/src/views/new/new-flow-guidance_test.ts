@@ -63,6 +63,20 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.store.title")');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     expect(newAppViewSource).toContain('t("new.advancedImport.title")');
+    expect(newAppViewSource).toMatch(
+      /<details class="wb-disclosure av-manual-import">[\s\S]*t\("new\.advancedImport\.open"\)[\s\S]*setActiveTab\("git"\)/,
+    );
+    const storeHeadStart = newAppViewSource.indexOf(
+      '<div class="av-store-head">',
+    );
+    const catalogGridStart = newAppViewSource.indexOf(
+      '<ul class="av-catalog-grid">',
+    );
+    expect(storeHeadStart).toBeGreaterThan(-1);
+    expect(catalogGridStart).toBeGreaterThan(storeHeadStart);
+    expect(
+      newAppViewSource.slice(storeHeadStart, catalogGridStart),
+    ).not.toContain('setActiveTab("git")');
     expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).not.toContain("sourceSummaryMeta");
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
@@ -72,15 +86,21 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en["new.store.title"]).toBe("Recommended services");
-    expect(en["new.advancedImport.open"].toLowerCase()).toContain("manually");
+    expect(en["new.advancedImport.open"].toLowerCase()).toContain("link");
+    expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
+      "manually",
+    );
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja["new.store.title"]).toBe("おすすめサービス");
-    expect(ja["new.advancedImport.open"]).toContain("手動");
+    expect(ja["new.advancedImport.open"]).toContain("リンク");
+    expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");
     expect(en).not.toHaveProperty("new.selection.sourceDetails");
     expect(ja).not.toHaveProperty("new.selection.sourceDetails");
+    expect(en["new.providers.alias"]).toBe("Target: {alias}");
+    expect(ja["new.providers.alias"]).toBe("対象: {alias}");
   });
 
   test("catalog exposes multiple runnable service choices backed by official configs", () => {

@@ -29,8 +29,12 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain("onReview={() => void plan.run()}");
     expect(source).toContain('t("apps.reviewChanges")');
     expect(source).toContain('t("app.deploys.advancedActions")');
+    expect(source).toContain('t("app.settings.openCta")');
     expect(source).toContain('t("app.deploys.backup")');
     expect(source).not.toContain('t("app.deploys.generation")');
+    expect(source).not.toContain(
+      '{ href: `${base}/settings`, label: t("app.tab.settings") }',
+    );
     expect(source.indexOf('t("apps.openApp")')).toBeLessThan(
       source.indexOf("function DeploysTab"),
     );
@@ -38,6 +42,9 @@ describe("Installation detail deployment surface", () => {
       source.indexOf("function DeploysTab"),
     );
     expect(source.indexOf('t("app.deploys.backup")')).toBeGreaterThan(
+      source.indexOf('t("app.deploys.advancedActions")'),
+    );
+    expect(source.indexOf('t("app.settings.openCta")')).toBeGreaterThan(
       source.indexOf('t("app.deploys.advancedActions")'),
     );
   });
@@ -66,6 +73,8 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain("function boundConnectionLabel");
     expect(source).toContain('t("app.bindings.none")');
     expect(source).toContain('t("app.bindings.editAdvanced")');
+    expect(source).not.toContain("alias（任意）");
+    expect(source).not.toContain("alias (optional)");
     expect(source).toMatch(
       /<summary>\{t\("app\.bindings\.editAdvanced"\)\}<\/summary>[\s\S]*placeholder="registry\.opentofu\.org\/cloudflare\/cloudflare"/,
     );
