@@ -1062,12 +1062,17 @@ async function latestDeploymentForInstallation(
 async function assertCloudflareWorkerExists(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
-  const response = await cloudflareScriptRequest(options, "GET");
-  if (response.status !== 200) {
-    throw new Error(
-      `Cloudflare Worker ${options.appName} was not readable after apply (HTTP ${response.status})`,
-    );
+  const deadline = Date.now() + 60_000;
+  let lastStatus = 0;
+  while (Date.now() <= deadline) {
+    const response = await cloudflareScriptRequest(options, "GET");
+    lastStatus = response.status;
+    if (response.status === 200) return;
+    await sleep(2_000);
   }
+  throw new Error(
+    `Cloudflare Worker ${options.appName} was not readable after apply (last HTTP ${lastStatus})`,
+  );
 }
 
 async function assertCloudflareWorkerGone(
