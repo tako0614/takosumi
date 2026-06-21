@@ -213,6 +213,30 @@ export function isPlatformMetricsPath(pathname: string): boolean {
   return pathname === TAKOSUMI_METRICS_PATH;
 }
 
+const PLATFORM_METRICS_DASHBOARD_PATH =
+  "/internal/platform/metrics-dashboard" as const;
+const REQUIRED_DASHBOARD_METRICS = [
+  "takosumi_deploy_operation_count",
+  "takosumi_apply_duration_seconds_bucket",
+  "takosumi_runner_queue_age_seconds",
+  "takosumi_runner_active_runs",
+  "takosumi_runner_container_startup_seconds_bucket",
+  "takosumi_api_request_duration_seconds_bucket",
+  "takosumi_oidc_request_count",
+] as const;
+const REQUIRED_DASHBOARD_LABELS = [
+  "environment",
+  "runtime_cell_id",
+  "space_id",
+  "capsule_id",
+  "operationKind",
+  "status",
+] as const;
+
+export function isPlatformMetricsDashboardPath(pathname: string): boolean {
+  return pathname === PLATFORM_METRICS_DASHBOARD_PATH;
+}
+
 export async function handlePlatformMetricsRequest(
   request: Request,
   env: PlatformEnv,
@@ -221,8 +245,174 @@ export async function handlePlatformMetricsRequest(
   ) => PlatformDeployControlSeam = deployControlSeam,
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
+  if (isPlatformMetricsDashboardPath(url.pathname)) {
+    return await handlePlatformMetricsDashboardRequest(request, env, seamForEnv);
+  }
   if (!isPlatformMetricsPath(url.pathname)) return undefined;
   return await seamForEnv(env).fetch(request);
+}
+
+export async function handlePlatformMetricsDashboardRequest(
+  request: Request,
+  env: PlatformEnv,
+  seamForEnv: (
+    env: PlatformEnv,
+  ) => PlatformDeployControlSeam = deployControlSeam,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("method not allowed", {
+      status: 405,
+      headers: { allow: "GET, HEAD" },
+    });
+  }
+  const url = new URL(request.url);
+  const metricsRequest = new Request(
+    new URL(TAKOSUMI_METRICS_PATH, url.origin),
+    {
+      headers: {
+        accept: "text/plain",
+        ...(request.headers.get("authorization")
+          ? { authorization: request.headers.get("authorization") ?? "" }
+          : {}),
+      },
+    },
+  );
+  const metricsResponse = await seamForEnv(env).fetch(metricsRequest);
+  if (!metricsResponse.ok) return metricsResponse;
+  const metricsText = await metricsResponse.text();
+  const summary = summarizePrometheusMetrics(metricsText);
+  return new Response(renderPlatformMetricsDashboard(summary, metricsText), {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+interface PlatformMetricSummary {
+  readonly generatedAt: string;
+  readonly metricCount: number;
+  readonly requiredMetrics: readonly {
+    readonly name: string;
+    readonly present: boolean;
+    readonly sampleCount: number;
+    readonly labels: readonly string[];
+  }[];
+  readonly labelSet: readonly string[];
+  readonly missingRequiredMetrics: readonly string[];
+  readonly missingRequiredLabels: readonly string[];
+}
+
+export function summarizePrometheusMetrics(text: string): PlatformMetricSummary {
+  const byName = new Map<
+    string,
+    { sampleCount: number; labels: Set<string> }
+  >();
+  for (const rawLine of text.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = /^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{([^}]*)\})?\s+/u.exec(
+      line,
+    );
+    if (!match) continue;
+    const [, name, labelsText] = match;
+    const metric = byName.get(name) ?? { sampleCount: 0, labels: new Set() };
+    metric.sampleCount += 1;
+    for (const label of parsePrometheusLabelNames(labelsText ?? "")) {
+      metric.labels.add(label);
+    }
+    byName.set(name, metric);
+  }
+  const labelSet = [
+    ...new Set([...byName.values()].flatMap((metric) => [...metric.labels])),
+  ].sort();
+  const requiredMetrics = REQUIRED_DASHBOARD_METRICS.map((name) => {
+    const metric = byName.get(name);
+    return {
+      name,
+      present: metric !== undefined,
+      sampleCount: metric?.sampleCount ?? 0,
+      labels: [...(metric?.labels ?? [])].sort(),
+    };
+  });
+  return {
+    generatedAt: new Date().toISOString(),
+    metricCount: byName.size,
+    requiredMetrics,
+    labelSet,
+    missingRequiredMetrics: requiredMetrics
+      .filter((metric) => !metric.present)
+      .map((metric) => metric.name),
+    missingRequiredLabels: REQUIRED_DASHBOARD_LABELS.filter((label) =>
+      !labelSet.includes(label)
+    ),
+  };
+}
+
+function parsePrometheusLabelNames(labelsText: string): string[] {
+  return [...labelsText.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/gu)].map(
+    (match) => match[1] ?? "",
+  ).filter(Boolean);
+}
+
+function renderPlatformMetricsDashboard(
+  summary: PlatformMetricSummary,
+  metricsText: string,
+): string {
+  const requiredRows = summary.requiredMetrics.map((metric) =>
+    `<tr><td>${escapeHtml(metric.name)}</td><td>${metric.present ? "ok" : "missing"}</td><td>${metric.sampleCount}</td><td>${escapeHtml(metric.labels.join(", "))}</td></tr>`
+  ).join("");
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Takosumi Platform Metrics</title>
+  <style>
+    :root { color-scheme: dark light; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; padding: 32px; background: #0f1419; color: #eef2f6; }
+    main { max-width: 1120px; margin: 0 auto; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    .muted { color: #9aa7b5; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+    .panel { border: 1px solid #29323d; border-radius: 8px; padding: 16px; background: #151b22; }
+    .value { font-size: 30px; font-weight: 700; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; }
+    th, td { border-bottom: 1px solid #29323d; padding: 10px 8px; text-align: left; vertical-align: top; }
+    th { color: #b8c3cf; font-size: 13px; }
+    pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; border: 1px solid #29323d; border-radius: 8px; padding: 16px; background: #0b0f14; }
+    @media (max-width: 720px) { body { padding: 18px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Takosumi Platform Metrics</h1>
+    <p class="muted">Live operator dashboard backed by the same protected Prometheus scrape used for production readiness evidence.</p>
+    <section class="grid" id="deploy-overview-required-metrics">
+      <div class="panel"><div class="muted">Metrics</div><div class="value">${summary.metricCount}</div></div>
+      <div class="panel"><div class="muted">Missing Required Metrics</div><div class="value">${summary.missingRequiredMetrics.length}</div></div>
+      <div class="panel"><div class="muted">Missing Required Labels</div><div class="value">${summary.missingRequiredLabels.length}</div></div>
+    </section>
+    <h2>Required Metrics</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Status</th><th>Samples</th><th>Labels</th></tr></thead>
+      <tbody>${requiredRows}</tbody>
+    </table>
+    <h2>Label Set</h2>
+    <p>${escapeHtml(summary.labelSet.join(", "))}</p>
+    <h2>Raw Prometheus Exposition</h2>
+    <pre>${escapeHtml(metricsText)}</pre>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(
+    ">",
+    "&gt;",
+  ).replaceAll('"', "&quot;");
 }
 
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
