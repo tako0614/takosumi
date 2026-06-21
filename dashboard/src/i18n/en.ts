@@ -460,6 +460,10 @@ export const en: Record<keyof typeof ja, string> = {
     "An item needs review before this can be added.",
   "new.proceed": "Review and add",
   "new.proceedHint": "Use “Check and continue” first.",
+  "new.existing.title": "This service is already added",
+  "new.existing.body":
+    "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
+  "new.existing.open": "Open existing service",
   "new.providers.title": "External service connections",
   "new.providers.subtitle":
     "Choose the connections this service will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
@@ -493,6 +497,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceFetchFailed":
     "Takosumi could not fetch the Git contents. Check the URL, version, folder, or private-repository connection. Detail: {message}",
+  "new.error.alreadyExists":
+    "“{name}” is already added to this Workspace. Open it from the service list.",
   "new.error.notRunnable":
     "This inspection result is not runnable yet. Resolve the listed changes, then check again.",
 
