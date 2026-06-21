@@ -70,6 +70,38 @@
   font-size: var(--tg-fs-sm);
 }
 
+/* ===== compact status row (home) ===== */
+.av-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  margin-bottom: var(--tg-s-3);
+  padding: 0 0 var(--tg-s-3);
+  border-bottom: 1px solid var(--tg-line);
+}
+.av-summary-metrics {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-4);
+  min-width: 0;
+}
+.av-summary-metric {
+  display: flex;
+  align-items: baseline;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.av-summary-label {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+.av-summary-metric strong {
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-lg);
+  line-height: 1;
+}
+
 /* ===== Workspace starter (home) ===== */
 .av-start {
   display: grid;
@@ -490,6 +522,16 @@ button.tg-tab {
   .av-attention {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .av-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .av-summary-metrics {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .av-start {
