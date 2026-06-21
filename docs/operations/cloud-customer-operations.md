@@ -83,6 +83,16 @@ procedures in the launch-readiness evidence.
 The dashboard may show empty plans or disabled billing in closed access. That is
 valid only while Takosumi Cloud remains pre-GA or closed.
 
+First run the billing readiness preflight against operator-private config and
+the live authenticated billing plan projection:
+
+```bash
+bun run check:takosumi-billing-readiness -- \
+  --private-root takosumi-private \
+  --environment production \
+  --out-file evidence/billing-readiness-production.json
+```
+
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch:
 
