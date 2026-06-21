@@ -370,8 +370,7 @@ export const ja = {
   "new.flow.stepReviewSub": "承認して追加",
   "new.tab.catalog": "サンプル",
   "new.tab.git": "取得元 URL",
-  "new.catalog.intro":
-    "選ぶと入力欄に反映されます。まだ追加はされません。",
+  "new.catalog.intro": "選ぶと入力欄に反映されます。まだ追加はされません。",
   "new.catalog.select": "このサンプルを使う",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
@@ -466,6 +465,10 @@ export const ja = {
     "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認",
   "new.proceedHint": "先に「確認して続ける」を押してください。",
+  "new.existing.title": "このサービスは既に追加されています",
+  "new.existing.body":
+    "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
+  "new.existing.open": "既存サービスを開く",
   "new.providers.title": "外部サービス接続",
   "new.providers.subtitle":
     "最初の確認に進む前に、このサービスが使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
@@ -500,6 +503,8 @@ export const ja = {
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceFetchFailed":
     "Git の中身を取得できませんでした。URL、バージョン、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
+  "new.error.alreadyExists":
+    "「{name}」はこの Workspace に既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
