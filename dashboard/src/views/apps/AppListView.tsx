@@ -10,9 +10,8 @@ import { useNavigate } from "@solidjs/router";
 import {
   Boxes,
   Cloud,
-  GitBranch,
-  Network,
-  PlayCircle,
+  ExternalLink,
+  LayoutGrid,
   Plus,
 } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -138,9 +137,6 @@ function Inner() {
             <Button variant="primary" href="/new" icon={<Plus size={16} />}>
               {t("apps.add")}
             </Button>
-            <Button variant="ghost" href="/graph" icon={<Network size={16} />}>
-              {t("apps.graphLink")}
-            </Button>
           </div>
         }
       />
@@ -185,7 +181,7 @@ function Inner() {
                   when={list().length === 0}
                   fallback={
                     <>
-                      <WorkspaceSummaryBar
+                      <ServiceLauncherHeader
                         serviceCount={list().length}
                         deployedCount={deployedCount()}
                         attentionCount={attentionCount()}
@@ -228,6 +224,9 @@ function ServiceList(props: {
               class="av-service-main"
               onClick={() => props.openDetail(inst)}
             >
+              <span class="av-service-icon" aria-hidden="true">
+                <LayoutGrid size={18} />
+              </span>
               <div class="av-service-head">
                 <span class="av-service-name">{inst.name}</span>
                 <StatusBadge
@@ -237,9 +236,6 @@ function ServiceList(props: {
                 />
               </div>
               <div class="av-service-meta">
-                <Show when={props.launchUrls.has(inst.id)}>
-                  <Badge tone="info">{t("app.output.publicUrl")}</Badge>
-                </Show>
                 <Show when={(props.dependsOn.get(inst.id) ?? []).length > 0}>
                   <span>
                     {t("apps.dependsOn", {
@@ -265,26 +261,42 @@ function ServiceList(props: {
               <Show
                 when={props.launchUrls.get(inst.id)}
                 fallback={
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    type="button"
-                    onClick={() => props.openDetail(inst)}
-                  >
-                    {t("apps.viewDetails")}
-                  </Button>
+                  <>
+                    <Button variant="secondary" size="sm" type="button" disabled>
+                      {t("apps.noOpenLink")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      onClick={() => props.openDetail(inst)}
+                    >
+                      {t("apps.viewDetails")}
+                    </Button>
+                  </>
                 }
               >
                 {(url) => (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    href={url()}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                  >
-                    {t("apps.openApp")} ↗
-                  </Button>
+                  <>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<ExternalLink size={14} />}
+                      href={url()}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      {t("apps.openApp")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      onClick={() => props.openDetail(inst)}
+                    >
+                      {t("apps.viewDetails")}
+                    </Button>
+                  </>
                 )}
               </Show>
             </div>
@@ -295,31 +307,35 @@ function ServiceList(props: {
   );
 }
 
-function WorkspaceSummaryBar(props: {
+function ServiceLauncherHeader(props: {
   readonly serviceCount: number;
   readonly deployedCount: number;
   readonly attentionCount: number;
 }) {
   return (
     <section class="av-summary" aria-label={t("apps.summary.aria")}>
-      <div class="av-summary-metrics">
-        <span class="av-summary-metric">
-          <span class="av-summary-label">{t("apps.summary.total")}</span>
-          <strong>{props.serviceCount}</strong>
-        </span>
-        <span class="av-summary-metric">
-          <span class="av-summary-label">{t("apps.summary.deployed")}</span>
-          <strong>{props.deployedCount}</strong>
-        </span>
+      <div class="av-summary-copy">
+        <h2>{t("apps.summary.title")}</h2>
+        <p>
+          {t("apps.summary.body", {
+            total: props.serviceCount,
+            deployed: props.deployedCount,
+          })}
+        </p>
       </div>
-      <Show
-        when={props.attentionCount > 0}
-        fallback={<Badge tone="ok">{t("apps.summary.clear")}</Badge>}
-      >
-        <Badge tone="warn">
-          {t("apps.summary.needsAttention", { n: props.attentionCount })}
-        </Badge>
-      </Show>
+      <div class="av-summary-actions">
+        <Show
+          when={props.attentionCount > 0}
+          fallback={<Badge tone="ok">{t("apps.summary.clear")}</Badge>}
+        >
+          <Badge tone="warn">
+            {t("apps.summary.needsAttention", { n: props.attentionCount })}
+          </Badge>
+        </Show>
+        <Button variant="ghost" size="sm" href="/graph">
+          {t("apps.graphLink")}
+        </Button>
+      </div>
     </section>
   );
 }
@@ -344,35 +360,16 @@ function WorkspaceStartPanel() {
           </Button>
         </div>
       </div>
-      <ol class="av-start-steps">
-        <li>
-          <span class="av-start-step-icon">
-            <GitBranch size={16} />
-          </span>
-          <span>
-            <strong>{t("apps.start.stepSource")}</strong>
-            <small>{t("apps.start.stepSourceSub")}</small>
-          </span>
-        </li>
-        <li>
-          <span class="av-start-step-icon">
-            <Cloud size={16} />
-          </span>
-          <span>
-            <strong>{t("apps.start.stepConnection")}</strong>
-            <small>{t("apps.start.stepConnectionSub")}</small>
-          </span>
-        </li>
-        <li>
-          <span class="av-start-step-icon">
-            <PlayCircle size={16} />
-          </span>
-          <span>
-            <strong>{t("apps.start.stepDeploy")}</strong>
-            <small>{t("apps.start.stepDeploySub")}</small>
-          </span>
-        </li>
-      </ol>
+      <div class="av-start-options">
+        <a href="/new" class="av-start-option">
+          <span class="av-start-option-title">{t("apps.start.optionCatalog")}</span>
+          <span>{t("apps.start.optionCatalogSub")}</span>
+        </a>
+        <a href="/new" class="av-start-option">
+          <span class="av-start-option-title">{t("apps.start.optionLink")}</span>
+          <span>{t("apps.start.optionLinkSub")}</span>
+        </a>
+      </div>
     </section>
   );
 }

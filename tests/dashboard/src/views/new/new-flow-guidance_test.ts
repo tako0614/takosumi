@@ -16,35 +16,48 @@ const appViewsCssSource = readFileSync(
 );
 
 describe("/new flow guidance", () => {
-  test("shows a durable source-check-connect-review flow above the add form", () => {
-    expect(newAppViewSource).toContain('type NewFlowStage = "source"');
-    expect(newAppViewSource).toContain("const flowStage = ()");
-    expect(newAppViewSource).toContain('class="av-new-flow"');
-    expect(newAppViewSource).toContain('t("new.flow.stepSource")');
-    expect(newAppViewSource).toContain('t("new.flow.stepCheck")');
-    expect(newAppViewSource).toContain('t("new.flow.stepConnect")');
-    expect(newAppViewSource).toContain('t("new.flow.stepReview")');
+  test("uses a compact app-launcher guide instead of a permanent technical stepper", () => {
+    expect(newAppViewSource).toContain("const guideBody = () =>");
+    expect(newAppViewSource).toContain('class="av-new-guide"');
+    expect(newAppViewSource).toContain('t("new.guide.choose")');
+    expect(newAppViewSource).toContain('t("new.guide.check")');
+    expect(newAppViewSource).toContain('t("new.guide.connect")');
+    expect(newAppViewSource).toContain('t("new.guide.ready")');
+    expect(newAppViewSource).not.toContain('type NewFlowStage = "source"');
+    expect(newAppViewSource).not.toContain("const flowStage = ()");
+    expect(newAppViewSource).not.toContain('class="av-new-flow"');
+    expect(newAppViewSource).not.toContain('t("new.flow.stepSource")');
   });
 
   test("keeps the cloud UX clear that deploy happens only after review", () => {
-    expect(en["new.flow.nextReview"].toLowerCase()).toContain(
+    expect(en["new.guide.ready"].toLowerCase()).toContain(
       "nothing is deployed",
     );
-    expect(en["new.flow.title"].toLowerCase()).toContain("before");
-    expect(ja["new.flow.nextReview"]).toContain(
+    expect(en["new.guide.title"].toLowerCase()).toContain("choose");
+    expect(ja["new.guide.ready"]).toContain(
       "承認するまでデプロイされません",
     );
-    expect(ja["new.flow.title"]).toContain("デプロイ前");
+    expect(ja["new.guide.title"]).toContain("選びます");
+    expect(en).not.toHaveProperty("new.flow.nextReview");
+    expect(ja).not.toHaveProperty("new.flow.nextReview");
   });
 
-  test("keeps the /new flow compact on mobile", () => {
-    expect(appViewsCssSource).toContain(".av-new-flow");
-    expect(appViewsCssSource).toContain(".av-new-flow-steps");
-    expect(appViewsCssSource).toContain(
-      "grid-template-columns: repeat(4, minmax(0, 1fr));",
-    );
-    expect(appViewsCssSource).toContain(".av-new-flow-step small");
-    expect(appViewsCssSource).toContain("display: none;");
+  test("keeps the /new guide compact on mobile", () => {
+    expect(appViewsCssSource).toContain(".av-new-guide");
+    expect(appViewsCssSource).toContain(".av-new-guide-copy");
+    expect(appViewsCssSource).toContain(".av-new-source");
+    expect(appViewsCssSource).toContain("grid-template-columns: 1fr;");
+    expect(appViewsCssSource).not.toContain(".av-new-flow-steps");
+    expect(appViewsCssSource).not.toContain(".av-new-flow-step");
+  });
+
+  test("keeps the starter catalog app-like instead of exposing raw source coordinates", () => {
+    expect(newAppViewSource).toContain('t("new.catalog.readyStarter")');
+    expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
+    expect(en["new.tab.catalog"]).toBe("Recommended");
+    expect(en["new.tab.git"]).toBe("Link / URL");
+    expect(ja["new.tab.catalog"]).toBe("おすすめ");
+    expect(ja["new.tab.git"]).toBe("リンク / URL");
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {

@@ -37,6 +37,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.connections": "Connections",
   "nav.billing": "Billing",
   "nav.activity": "History",
+  "nav.manage": "Manage",
   "nav.notifications": "Notifications",
   "nav.notificationsShort": "Alerts",
   "nav.spaceSettings": "Workspace settings",
@@ -87,12 +88,12 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.providersLoadFailedMessageWithInstall":
     "Check your connection and try again. These install details are still preserved on this screen.",
   "auth.retryProviderCheck": "Check again",
-  "auth.installContextAria": "Install source to continue after sign-in",
-  "auth.installContextKicker": "Install request",
+  "auth.installContextAria": "Service to continue after sign-in",
+  "auth.installContextKicker": "Continue adding",
   "auth.installContextTitle": "Continue after sign-in",
-  "auth.installContextRef": "pinned version {ref}",
-  "auth.installContextDefaultRef": "default ref",
-  "auth.installContextRootPath": "root module",
+  "auth.installContextRef": "version {ref}",
+  "auth.installContextDefaultRef": "default version",
+  "auth.installContextRootPath": "main folder",
   "auth.termsPrefix": "By continuing, you agree to the ",
   "auth.termsOfService": "Terms of Service",
   "auth.and": " and ",
@@ -158,7 +159,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "Services",
-  "apps.subtitle": "Your hosted services and their status.",
+  "apps.subtitle": "Open and manage the services you have added.",
   "apps.add": "Add service",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
@@ -166,31 +167,30 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.empty.message": "Start from an example or add one from a source URL.",
   "apps.empty.cta": "Add service",
   "apps.openApp": "Open service",
+  "apps.noOpenLink": "No public link",
   "apps.viewDetails": "Manage",
   "apps.reviewChanges": "Review changes",
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.graphLink": "Service map",
   "apps.summary.aria": "Service status",
-  "apps.summary.total": "Total",
-  "apps.summary.deployed": "Deployed",
+  "apps.summary.title": "Your services",
+  "apps.summary.body": "{deployed} of {total} services are deployed.",
   "apps.summary.clear": "No attention needed",
   "apps.summary.needsAttention": "{n} need attention",
   "apps.start.aria": "Service hosting overview",
-  "apps.start.kicker": "Services",
-  "apps.start.titleEmpty": "Host your first service",
+  "apps.start.kicker": "No services yet",
+  "apps.start.titleEmpty": "Add a service you want to use",
   "apps.start.bodyEmpty":
-    "Add a source, connect the cloud account it needs, then review and deploy the change.",
-  "apps.start.add": "Add from source",
+    "Start from an example, an app-page install link, or a source URL.",
+  "apps.start.add": "Add service",
   "apps.start.connections": "Cloud connections",
-  "apps.start.stepSource": "Source",
-  "apps.start.stepSourceSub": "Use a repository, version, and folder.",
-  "apps.start.stepConnection": "Cloud connection",
-  "apps.start.stepConnectionSub":
-    "Keep credentials in Takosumi, not in the source.",
-  "apps.start.stepDeploy": "Review and deploy",
-  "apps.start.stepDeploySub":
-    "Review changes first, approve, then open the service.",
+  "apps.start.optionCatalog": "Start with an example",
+  "apps.start.optionCatalogSub":
+    "Pick a ready-made setup, then add only the connections it needs.",
+  "apps.start.optionLink": "Add from a link or URL",
+  "apps.start.optionLinkSub":
+    "Use an app-page install link or an OpenTofu/Terraform source URL.",
 
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "Service",
@@ -345,37 +345,34 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
-  "new.subtitle": "Choose an example or paste a source link.",
-  "new.flow.aria": "Add service progress",
-  "new.flow.kicker": "How it adds",
-  "new.flow.title": "Review it before adding",
+  "new.subtitle": "Choose a starter or paste an app install link.",
+  "new.guide.aria": "Add service guidance",
+  "new.guide.kicker": "Add service",
+  "new.guide.title": "Choose what you want to add",
+  "new.guide.choose":
+    "Pick a starter, or paste an install link from an app page.",
+  "new.guide.check":
+    "Takosumi will check it first and only ask for connections this service needs.",
+  "new.guide.checking":
+    "Takosumi is checking the source. When it finishes, only the next needed action appears.",
+  "new.guide.connect":
+    "Set up the external service connection this service needs, then continue from here.",
+  "new.guide.ready":
+    "You can review the addition next. Nothing is deployed until you approve it on the review screen.",
+  "new.guide.needsFix":
+    "Some items need to be fixed before this can be added. Check the inspection result below.",
   "new.flow.source": "What will be added",
-  "new.flow.sourceEmpty": "Nothing selected yet.",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
-  "new.flow.nextSource": "Choose an example or paste a source URL.",
-  "new.flow.nextCheck":
-    "Takosumi will check it and only ask for connections this service needs.",
-  "new.flow.nextConnect":
-    "Set up the missing cloud connection, then return here to continue.",
-  "new.flow.nextReview":
-    "Review the changes next. Nothing is deployed until you confirm it on the review screen.",
-  "new.flow.stepSource": "Input",
-  "new.flow.stepSourceSub": "URL and version",
-  "new.flow.stepCheck": "Check",
-  "new.flow.stepCheckSub": "See if it can be added",
-  "new.flow.stepConnect": "Connect",
-  "new.flow.stepConnectSub": "Only what is needed",
-  "new.flow.stepReview": "Review",
-  "new.flow.stepReviewSub": "Approve and add",
-  "new.tab.catalog": "Examples",
-  "new.tab.git": "Source URL",
+  "new.tab.catalog": "Recommended",
+  "new.tab.git": "Link / URL",
   "new.catalog.intro":
-    "Picking one fills in the form. It will not be added yet.",
-  "new.catalog.select": "Use this example",
+    "Choose what you want to add. Nothing is added until you check it.",
+  "new.catalog.readyStarter": "Starter",
+  "new.catalog.select": "Add this",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
-  "new.git.url": "Source URL",
-  "new.git.advanced": "Choose version and folder",
+  "new.git.url": "Install link or source URL",
+  "new.git.advanced": "Advanced source settings",
   "new.git.ref": "Version",
   "new.git.path": "Folder",
   "new.sourceAccess.title": "Private repository",

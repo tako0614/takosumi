@@ -30,12 +30,8 @@ import {
 import { A, useNavigate } from "@solidjs/router";
 import {
   Download,
-  GitBranch,
   KeyRound,
-  ListChecks,
-  Plug,
   Plus,
-  SearchCheck,
   Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
@@ -102,8 +98,6 @@ type FlowRun = {
   readonly id: number;
   readonly controller: AbortController;
 };
-type NewFlowStage = "source" | "check" | "connect" | "review";
-type NewFlowStepState = "done" | "current" | "next";
 type SourceAccessMode = "public" | "existing" | "token";
 
 interface ProviderConnectionRow {
@@ -922,33 +916,15 @@ function Inner() {
     compatibility() !== null &&
     compatibilityRunnable() &&
     providerConnectionError() === null;
-  const flowStage = (): NewFlowStage => {
-    if (!gitUrl().trim() || !name().trim()) return "source";
-    if (!compatibility() || !compatibilityRunnable()) return "check";
-    if (needsCloudCredential()) return "connect";
-    return "review";
-  };
-  const flowStepState = (stage: NewFlowStage): NewFlowStepState => {
-    const stages: readonly NewFlowStage[] = [
-      "source",
-      "check",
-      "connect",
-      "review",
-    ];
-    const current = stages.indexOf(flowStage());
-    const target = stages.indexOf(stage);
-    if (target < current) return "done";
-    if (target === current) return "current";
-    return "next";
-  };
-  const flowStepClass = (stage: NewFlowStage) =>
-    `av-new-flow-step is-${flowStepState(stage)}`;
-  const nextAction = () => {
-    const stage = flowStage();
-    if (stage === "source") return t("new.flow.nextSource");
-    if (stage === "check") return t("new.flow.nextCheck");
-    if (stage === "connect") return t("new.flow.nextConnect");
-    return t("new.flow.nextReview");
+  const guideBody = () => {
+    if (checkingCompatibility() || busy()) return t("new.guide.checking");
+    if (compatibility()) {
+      if (!compatibilityRunnable()) return t("new.guide.needsFix");
+      if (needsCloudCredential()) return t("new.guide.connect");
+      return t("new.guide.ready");
+    }
+    if (gitUrl().trim()) return t("new.guide.check");
+    return t("new.guide.choose");
   };
   const sourceSummaryTitle = () =>
     gitUrl().trim() ? name().trim() || capsuleNameFromUrl(gitUrl()) : "";
@@ -958,7 +934,7 @@ function Inner() {
           ref: displayRef(effectiveRef()),
           path: path().trim() || ".",
         })
-      : t("new.flow.sourceEmpty");
+      : "";
   const retryAfterSyncWait = () => {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
@@ -1433,69 +1409,20 @@ function Inner() {
           />
         }
       >
-        <section class="av-new-flow" aria-label={t("new.flow.aria")}>
-          <div class="av-new-flow-copy">
-            <span class="av-new-flow-kicker">{t("new.flow.kicker")}</span>
-            <h2>{t("new.flow.title")}</h2>
-            <p>{nextAction()}</p>
-            <div class="av-new-source">
+        <section class="av-new-guide" aria-label={t("new.guide.aria")}>
+          <div class="av-new-guide-copy">
+            <span class="av-new-guide-kicker">{t("new.guide.kicker")}</span>
+            <h2>{t("new.guide.title")}</h2>
+            <p>{guideBody()}</p>
+          </div>
+          <Show when={gitUrl().trim()}>
+            <div class="av-new-source" role="note">
               <span class="av-new-source-label">{t("new.flow.source")}</span>
-              <Show
-                when={gitUrl().trim()}
-                fallback={
-                  <span class="av-new-source-empty">
-                    {t("new.flow.sourceEmpty")}
-                  </span>
-                }
-              >
-                {(url) => (
-                  <>
-                    <strong>{sourceSummaryTitle()}</strong>
-                    <code>{url()}</code>
-                  </>
-                )}
-              </Show>
+              <strong>{sourceSummaryTitle()}</strong>
+              <code>{gitUrl().trim()}</code>
               <span class="av-new-source-meta">{sourceSummaryMeta()}</span>
             </div>
-          </div>
-          <ol class="av-new-flow-steps">
-            <li class={flowStepClass("source")}>
-              <span class="av-new-flow-icon">
-                <GitBranch size={16} />
-              </span>
-              <span>
-                <strong>{t("new.flow.stepSource")}</strong>
-                <small>{t("new.flow.stepSourceSub")}</small>
-              </span>
-            </li>
-            <li class={flowStepClass("check")}>
-              <span class="av-new-flow-icon">
-                <SearchCheck size={16} />
-              </span>
-              <span>
-                <strong>{t("new.flow.stepCheck")}</strong>
-                <small>{t("new.flow.stepCheckSub")}</small>
-              </span>
-            </li>
-            <li class={flowStepClass("connect")}>
-              <span class="av-new-flow-icon">
-                <Plug size={16} />
-              </span>
-              <span>
-                <strong>{t("new.flow.stepConnect")}</strong>
-                <small>{t("new.flow.stepConnectSub")}</small>
-              </span>
-            </li>
-            <li class={flowStepClass("review")}>
-              <span class="av-new-flow-icon">
-                <ListChecks size={16} />
-              </span>
-              <span>
-                <strong>{t("new.flow.stepReview")}</strong>
-                <small>{t("new.flow.stepReviewSub")}</small>
-              </span>
-            </li>
-          </ol>
+          </Show>
         </section>
 
         <Show when={installPrefillRejected}>
@@ -1542,10 +1469,9 @@ function Inner() {
                       <span class="av-catalog-desc">
                         {entry.description[locale()]}
                       </span>
-                      <code class="av-catalog-src">
-                        {entry.git}
-                        {entry.path !== "." ? ` // ${entry.path}` : ""}
-                      </code>
+                      <span class="av-catalog-src">
+                        {t("new.catalog.readyStarter")}
+                      </span>
                     </div>
                     <Button
                       variant="primary"

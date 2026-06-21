@@ -124,7 +124,6 @@ export function SignInPanel() {
     const ctx = pendingInstall();
     if (!ctx) return "";
     return [
-      ctx.sourceLabel,
       ctx.displayRef
         ? t("auth.installContextRef", { ref: ctx.displayRef })
         : t("auth.installContextDefaultRef"),
