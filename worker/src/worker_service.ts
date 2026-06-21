@@ -18,7 +18,10 @@ import { MemoryEncryptedSecretStore } from "../../core/adapters/secret-store/mod
 import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ImmutableSourceAdapter } from "../../core/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../core/domains/observability/mod.ts";
-import type { EnqueueRun } from "../../core/domains/deploy-control/mod.ts";
+import type {
+  EnqueueRun,
+  ReleaseActivator,
+} from "../../core/domains/deploy-control/mod.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
@@ -38,7 +41,10 @@ import { CloudflareContainerOpenTofuRunner } from "./container_runner.ts";
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
   role: "takosumi-api" | "takosumi-runtime-agent",
-  options: { readonly runnerProfiles?: readonly RunnerProfile[] } = {},
+  options: {
+    readonly runnerProfiles?: readonly RunnerProfile[];
+    readonly releaseActivator?: ReleaseActivator;
+  } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
   const storage = new CloudflareD1SnapshotStorageDriver(
@@ -121,6 +127,9 @@ export async function createWorkerServiceApp(
     ...(backupArtifactStore ? { serviceDataBackupRunner: opentofuRunner } : {}),
     ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
+    ...(options.releaseActivator
+      ? { releaseActivator: options.releaseActivator }
+      : {}),
   });
 }
 
@@ -137,7 +146,8 @@ function durableObjectInstallationCoordination(
 ): InstallationCoordination | undefined {
   const namespace = env.COORDINATION;
   if (!namespace) return undefined;
-  const stub = () => namespace.get(namespace.idFromName("takosumi-control-plane"));
+  const stub = () =>
+    namespace.get(namespace.idFromName("takosumi-control-plane"));
   const post = async (path: string, body: unknown): Promise<unknown> => {
     const response = await stub().fetch(
       new Request(`https://takos-coordination.internal/${path}`, {
