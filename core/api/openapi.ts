@@ -2754,6 +2754,10 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         planDigest: { type: "string" },
         planArtifactKey: { type: "string" },
         summary: { $ref: "#/components/schemas/RunChangeSummary" },
+        planResources: {
+          type: "array",
+          items: ref("RunPlanResource"),
+        },
         policyStatus: { enum: ["pass", "warn", "deny"] },
         providerResolutions: {
           type: "array",
@@ -2779,6 +2783,29 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         add: { type: "integer", minimum: 0 },
         change: { type: "integer", minimum: 0 },
         destroy: { type: "integer", minimum: 0 },
+      },
+      additionalProperties: false,
+    },
+    RunPlanResource: {
+      type: "object",
+      required: ["address", "type", "actions"],
+      properties: {
+        address: { type: "string" },
+        type: { type: "string" },
+        actions: {
+          type: "array",
+          items: { type: "string" },
+        },
+        scope: {
+          type: "object",
+          properties: {
+            cloudflareAccountId: { type: "string" },
+            cloudflareZoneId: { type: "string" },
+            awsAccountId: { type: "string" },
+            awsRegion: { type: "string" },
+          },
+          additionalProperties: false,
+        },
       },
       additionalProperties: false,
     },

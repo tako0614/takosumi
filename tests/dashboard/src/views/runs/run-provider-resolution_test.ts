@@ -37,6 +37,19 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("providerConnectionsForRun");
   });
 
+  test("shows public plan resources as the reviewable resource list", () => {
+    expect(controlApiSource).toContain(
+      "readonly planResources?: readonly RunPlanResource[]",
+    );
+    expect(runViewSource).toContain("PlanResourceReview");
+    expect(runViewSource).toContain("PLAN_RESOURCE_REVIEW_LIMIT");
+    expect(runViewSource).toContain("run.latest?.planResources ?? []");
+    expect(runViewSource).toContain("planResourceActionLabel");
+    expect(runViewSource).toContain('t("run.resources.title")');
+    expect(runViewSource).not.toContain("change.before");
+    expect(runViewSource).not.toContain("change.after");
+  });
+
   test("keeps the copy explicit that credentials are not displayed", () => {
     expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
       "credential values are not shown",

@@ -49,6 +49,7 @@ import {
   type RunAuditEvent,
   type RunCostInfo,
   type RunDiagnostic,
+  type RunPlanResource,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
@@ -338,6 +339,99 @@ function ProviderResolutionTable(props: {
   );
 }
 
+const PLAN_RESOURCE_REVIEW_LIMIT = 25;
+
+function isActionablePlanResource(resource: RunPlanResource): boolean {
+  return resource.actions.some((action) => action !== "no-op");
+}
+
+function planResourceTone(resource: RunPlanResource): Tone {
+  if (resource.actions.includes("delete")) return "danger";
+  if (
+    resource.actions.includes("create") &&
+    resource.actions.includes("delete")
+  )
+    return "danger";
+  if (resource.actions.includes("update")) return "warn";
+  if (resource.actions.includes("create")) return "ok";
+  return "muted";
+}
+
+function planResourceActionLabel(resource: RunPlanResource): string {
+  const actions = resource.actions;
+  if (actions.includes("delete") && actions.includes("create")) {
+    return t("run.resources.actionReplace");
+  }
+  if (actions.includes("delete")) return t("run.resources.actionDelete");
+  if (actions.includes("update")) return t("run.resources.actionUpdate");
+  if (actions.includes("create")) return t("run.resources.actionCreate");
+  return actions.join(" / ") || t("common.unknown");
+}
+
+function planResourceScopeLabel(
+  scope: RunPlanResource["scope"] | undefined,
+): string | undefined {
+  if (!scope) return undefined;
+  const parts = [
+    scope.cloudflareAccountId
+      ? `Cloudflare account ${scope.cloudflareAccountId}`
+      : undefined,
+    scope.cloudflareZoneId
+      ? `Cloudflare zone ${scope.cloudflareZoneId}`
+      : undefined,
+    scope.awsAccountId ? `AWS account ${scope.awsAccountId}` : undefined,
+    scope.awsRegion ? `AWS ${scope.awsRegion}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" / ") : undefined;
+}
+
+function PlanResourceReview(props: {
+  readonly resources: readonly RunPlanResource[];
+}) {
+  const actionable = () => props.resources.filter(isActionablePlanResource);
+  const visible = () => actionable().slice(0, PLAN_RESOURCE_REVIEW_LIMIT);
+  const hiddenCount = () =>
+    Math.max(0, actionable().length - PLAN_RESOURCE_REVIEW_LIMIT);
+  return (
+    <Show when={actionable().length > 0}>
+      <div class="wa-plan-resources">
+        <div class="wa-plan-resources-head">
+          <div>
+            <p class="wa-section-kicker">{t("run.resources.kicker")}</p>
+            <h3>{t("run.resources.title")}</h3>
+          </div>
+          <Badge tone="muted">
+            {t("run.resources.count", { n: actionable().length })}
+          </Badge>
+        </div>
+        <div class="wa-plan-resource-list">
+          <For each={visible()}>
+            {(resource) => (
+              <div class="wa-plan-resource-row">
+                <Badge tone={planResourceTone(resource)}>
+                  {planResourceActionLabel(resource)}
+                </Badge>
+                <div class="wa-plan-resource-main">
+                  <code>{resource.address}</code>
+                  <span class="muted">{resource.type}</span>
+                  <Show when={planResourceScopeLabel(resource.scope)}>
+                    {(scope) => (
+                      <span class="wa-plan-resource-scope">{scope()}</span>
+                    )}
+                  </Show>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+        <Show when={hiddenCount() > 0}>
+          <p class="muted">{t("run.resources.more", { n: hiddenCount() })}</p>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
@@ -390,6 +484,7 @@ function Inner() {
     inputNamesFromLogs(logs()?.auditEvents ?? []),
   );
   const changes = createMemo(() => changesFromLogs(logs()?.auditEvents ?? []));
+  const planResources = createMemo(() => run.latest?.planResources ?? []);
   const changeCounts = createMemo(() =>
     changeCountsForRun(run.latest, logs()?.auditEvents ?? []),
   );
@@ -905,6 +1000,7 @@ function Inner() {
                     </div>
                   </details>
                 </Show>
+                <PlanResourceReview resources={planResources()} />
               </Card>
 
               <Show when={providerRows().length > 0}>

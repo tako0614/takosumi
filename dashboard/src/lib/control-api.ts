@@ -439,6 +439,18 @@ export interface RunChangeSummary {
   readonly destroy?: number;
 }
 
+export interface RunPlanResource {
+  readonly address: string;
+  readonly type: string;
+  readonly actions: readonly string[];
+  readonly scope?: {
+    readonly cloudflareAccountId?: string;
+    readonly cloudflareZoneId?: string;
+    readonly awsAccountId?: string;
+    readonly awsRegion?: string;
+  };
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -455,6 +467,7 @@ export interface Run {
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
   readonly summary?: RunChangeSummary;
+  readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;

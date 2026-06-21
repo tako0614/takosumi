@@ -125,6 +125,14 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
         digest: "d",
       },
       summary: { add: 2, change: 1, destroy: 0 },
+      planResourceChanges: [
+        {
+          address: "cloudflare_workers_script.api",
+          type: "cloudflare_workers_script",
+          actions: ["update"],
+          scope: { cloudflareAccountId: "acct_public" },
+        },
+      ],
       baseStateGeneration: 3,
       compatibilityReportId: "caprep_1",
     }),
@@ -139,6 +147,14 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
   expect(run.summary).toEqual({ add: 2, change: 1, destroy: 0 });
+  expect(run.planResources).toEqual([
+    {
+      address: "cloudflare_workers_script.api",
+      type: "cloudflare_workers_script",
+      actions: ["update"],
+      scope: { cloudflareAccountId: "acct_public" },
+    },
+  ]);
   expect(run.compatibilityReportId).toBe("caprep_1");
   expect(run.policyStatus).toBe("pass");
   expect(run.installationId).toBe("inst_1");

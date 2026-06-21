@@ -51,6 +51,7 @@ export class CloudflareContainerOpenTofuRunner
       job.planRun.id,
       planDigest,
     );
+    const planResourceChanges = planResourceChangesFromContainerResult(result);
     return {
       planDigest,
       planArtifact,
@@ -84,6 +85,7 @@ export class CloudflareContainerOpenTofuRunner
             ) as OpenTofuPlanResult["summary"],
           }
         : {}),
+      ...(planResourceChanges ? { planResourceChanges } : {}),
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -345,9 +347,7 @@ function artifactPointerFromContainerResult(
   return pointer;
 }
 
-async function readResponseJsonObject(
-  response: Response,
-): Promise<{
+async function readResponseJsonObject(response: Response): Promise<{
   readonly payload: Record<string, unknown>;
   readonly redactedText: string;
 }> {
@@ -391,6 +391,53 @@ function diagnosticsFromContainerResult(
   return stderr && stderr.trim().length > 0
     ? [{ severity: "warning", message: redactRunnerDiagnosticText(stderr) }]
     : [];
+}
+
+function planResourceChangesFromContainerResult(
+  result: Record<string, unknown>,
+): OpenTofuPlanResult["planResourceChanges"] | undefined {
+  const value = result.planResourceChanges;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const address = stringFromRecord(entry, "address");
+    const type = stringFromRecord(entry, "type");
+    const actions = stringArrayFromRecord(entry, "actions");
+    if (!address || !type || !actions) return [];
+    const scope = recordFromRecord(entry, "scope");
+    const projectedScope = scope
+      ? {
+          ...(stringFromRecord(scope, "cloudflareAccountId")
+            ? {
+                cloudflareAccountId: stringFromRecord(
+                  scope,
+                  "cloudflareAccountId",
+                ),
+              }
+            : {}),
+          ...(stringFromRecord(scope, "cloudflareZoneId")
+            ? { cloudflareZoneId: stringFromRecord(scope, "cloudflareZoneId") }
+            : {}),
+          ...(stringFromRecord(scope, "awsAccountId")
+            ? { awsAccountId: stringFromRecord(scope, "awsAccountId") }
+            : {}),
+          ...(stringFromRecord(scope, "awsRegion")
+            ? { awsRegion: stringFromRecord(scope, "awsRegion") }
+            : {}),
+        }
+      : undefined;
+    return [
+      {
+        address,
+        type,
+        actions,
+        ...(projectedScope && Object.keys(projectedScope).length > 0
+          ? { scope: projectedScope }
+          : {}),
+      },
+    ];
+  });
+  return rows.length > 0 ? rows : undefined;
 }
 
 function redactRunnerDiagnosticText(text: string): string {

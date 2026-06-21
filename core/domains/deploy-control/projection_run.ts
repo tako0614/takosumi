@@ -206,6 +206,9 @@ export function projectPlanRun(
       ? { planArtifactKey: planRun.planArtifact.ref }
       : {}),
     ...(planRun.summary ? { summary: planRun.summary } : {}),
+    ...(planRun.planResourceChanges
+      ? { planResources: planRun.planResourceChanges }
+      : {}),
     ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
     ...(planRun.requiresApproval === true || type === "destroy_plan"

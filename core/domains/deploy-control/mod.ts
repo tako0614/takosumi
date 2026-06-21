@@ -4331,6 +4331,9 @@ export class OpenTofuDeploymentController {
         ? { providerLockDigest: result.providerLockDigest }
         : {}),
       ...(summary ? { summary } : {}),
+      ...(result.planResourceChanges
+        ? { planResourceChanges: result.planResourceChanges }
+        : {}),
       ...(diagnostics ? { diagnostics } : {}),
       ...(templateBinding ? { templateBinding } : {}),
       ...(requiresApproval ? { requiresApproval: true } : {}),
