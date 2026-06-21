@@ -1,8 +1,8 @@
 /**
  * Service detail (`/capsules/:id` + tab routes) — one service, four tabs:
  *   概要     status / public links / dependencies
- *   更新     saved versions + recent activity (+ review / restore / backup)
- *   設定     source coordinates + connected cloud accounts (advanced)
+ *   更新     saved versions + recent activity (review first, restore/backup folded)
+ *   設定     source coordinates + connected cloud accounts (advanced/folded)
  *   危険な操作 destroy (review-first)
  *
  * The friendly layer leads: open the service, check its status, then opt into
@@ -25,7 +25,7 @@ import {
   Switch,
 } from "solid-js";
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { Archive, ArrowLeft, ExternalLink } from "lucide-solid";
+import { Archive, ArrowLeft, ExternalLink, RotateCcw } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -592,17 +592,6 @@ function DeploysTab(props: {
               >
                 {t("apps.reviewChanges")}
               </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                icon={<Archive size={14} />}
-                disabled={props.backupBusy}
-                busy={props.backupBusy}
-                onClick={() => props.onBackup()}
-              >
-                {t("app.deploys.backup")}
-              </Button>
             </div>
           }
         />
@@ -672,15 +661,19 @@ function DeploysTab(props: {
                         })}
                       </span>
                       <Show when={!isCurrent()}>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          type="button"
-                          disabled={props.rollbackBusy}
-                          onClick={() => props.onRollback(deployment.id)}
-                        >
-                          {t("app.deploys.restore")}
-                        </Button>
+                        <details class="wb-inline-details">
+                          <summary>{t("app.deploys.restoreMenu")}</summary>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            type="button"
+                            icon={<RotateCcw size={14} />}
+                            disabled={props.rollbackBusy}
+                            onClick={() => props.onRollback(deployment.id)}
+                          >
+                            {t("app.deploys.restore")}
+                          </Button>
+                        </details>
                       </Show>
                     </li>
                   );
@@ -689,6 +682,23 @@ function DeploysTab(props: {
             </ul>
           </Match>
         </Switch>
+        <details class="wb-disclosure">
+          <summary>{t("app.deploys.advancedActions")}</summary>
+          <p class="muted">{t("app.deploys.advancedActionsBody")}</p>
+          <div class="wa-form-actions">
+            <Button
+              variant="secondary"
+              size="sm"
+              type="button"
+              icon={<Archive size={14} />}
+              disabled={props.backupBusy}
+              busy={props.backupBusy}
+              onClick={() => props.onBackup()}
+            >
+              {t("app.deploys.backup")}
+            </Button>
+          </div>
+        </details>
       </Card>
 
       <Card>
@@ -916,32 +926,38 @@ function SettingsTab(props: {
 
   return (
     <>
-      <Card>
-        <CardHeader title={t("app.source.title")} />
-        <Show
-          when={props.source}
-          fallback={<p class="muted">{t("app.source.loading")}</p>}
-        >
-          {(src) => (
-            <KVList
-              items={[
-                { label: t("app.source.name"), value: src().name },
-                { label: t("app.source.url"), value: <code>{src().url}</code> },
-                {
-                  label: t("app.source.refPath"),
-                  value: (
-                    <>
-                      <code>{src().defaultRef}</code>
-                      <span class="muted"> / </span>
-                      <code>{src().defaultPath}</code>
-                    </>
-                  ),
-                },
-              ]}
-            />
-          )}
-        </Show>
-      </Card>
+      <details class="wb-disclosure">
+        <summary>{t("app.source.title")}</summary>
+        <Card>
+          <CardHeader title={t("app.source.title")} />
+          <Show
+            when={props.source}
+            fallback={<p class="muted">{t("app.source.loading")}</p>}
+          >
+            {(src) => (
+              <KVList
+                items={[
+                  { label: t("app.source.name"), value: src().name },
+                  {
+                    label: t("app.source.url"),
+                    value: <code>{src().url}</code>,
+                  },
+                  {
+                    label: t("app.source.refPath"),
+                    value: (
+                      <>
+                        <code>{src().defaultRef}</code>
+                        <span class="muted"> / </span>
+                        <code>{src().defaultPath}</code>
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          </Show>
+        </Card>
+      </details>
 
       <details class="wb-disclosure">
         <summary>{t("app.bindings.title")}</summary>
@@ -1067,17 +1083,20 @@ function SettingsTab(props: {
         </Card>
       </details>
 
-      <Card>
-        <CardHeader
-          title={t("app.settings.removeTitle")}
-          subtitle={t("app.settings.removeBody")}
-          actions={
-            <Button variant="secondary" href={props.dangerHref}>
-              {t("app.settings.removeCta")}
-            </Button>
-          }
-        />
-      </Card>
+      <details class="wb-disclosure">
+        <summary>{t("app.tab.danger")}</summary>
+        <Card>
+          <CardHeader
+            title={t("app.settings.removeTitle")}
+            subtitle={t("app.settings.removeBody")}
+            actions={
+              <Button variant="secondary" href={props.dangerHref}>
+                {t("app.settings.removeCta")}
+              </Button>
+            }
+          />
+        </Card>
+      </details>
     </>
   );
 }

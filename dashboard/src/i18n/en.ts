@@ -227,7 +227,11 @@ export const en: Record<keyof typeof ja, string> = {
     "Past deployed states. Pick an older one to review a change that restores it.",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.generation": "Version {n}",
+  "app.deploys.restoreMenu": "More",
   "app.deploys.restore": "Restore this state",
+  "app.deploys.advancedActions": "More update actions",
+  "app.deploys.advancedActionsBody":
+    "Create a backup when you need a recovery point or export before making changes.",
   "app.deploys.backup": "Create backup",
   "app.deploys.backupCreated": "Backup created: {id}",
   "app.recentRuns.title": "Recent runs",
