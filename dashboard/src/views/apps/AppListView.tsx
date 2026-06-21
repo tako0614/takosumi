@@ -7,24 +7,16 @@
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import {
-  Boxes,
-  ExternalLink,
-  LayoutGrid,
-  Plus,
-  Sparkles,
-} from "lucide-solid";
+import { Boxes, ExternalLink, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   type ControlApiError,
   getDeployment,
-  getSpaceGraph,
   type Installation,
   listActivity,
   listInstallations,
-  type SpaceGraph,
 } from "../../lib/control-api.ts";
 import {
   effectiveInstallationStatus,
@@ -53,25 +45,7 @@ function Inner() {
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
 
   const [installations] = createResource(spaceId, listInstallations);
-  const [graph] = createResource(spaceId, getSpaceGraph);
   const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
-
-  // consumerInstallationId -> [producer names], from the graph edges.
-  const dependsOn = createMemo(() => {
-    const g: SpaceGraph | undefined = graph();
-    const map = new Map<string, string[]>();
-    if (!g) return map;
-    const nameById = new Map(g.nodes.map((n) => [n.installationId, n.name]));
-    for (const edge of g.edges) {
-      const producerName =
-        nameById.get(edge.producerInstallationId) ??
-        edge.producerInstallationId;
-      const list = map.get(edge.consumerInstallationId) ?? [];
-      list.push(producerName);
-      map.set(edge.consumerInstallationId, list);
-    }
-    return map;
-  });
 
   const staleReasons = createMemo(() => {
     const map = new Map<string, string>();
@@ -193,7 +167,6 @@ function Inner() {
                       />
                       <ServiceList
                         installations={list()}
-                        dependsOn={dependsOn()}
                         staleReasons={staleReasons()}
                         launchUrls={launchUrls() ?? new Map()}
                         openDetail={openDetail}
@@ -214,7 +187,6 @@ function Inner() {
 
 function ServiceList(props: {
   readonly installations: readonly Installation[];
-  readonly dependsOn: ReadonlyMap<string, readonly string[]>;
   readonly staleReasons: ReadonlyMap<string, string>;
   readonly launchUrls: ReadonlyMap<string, string>;
   readonly openDetail: (inst: Installation) => void;
@@ -246,13 +218,6 @@ function ServiceList(props: {
                 />
               </div>
               <div class="av-service-meta">
-                <Show when={(props.dependsOn.get(inst.id) ?? []).length > 0}>
-                  <span>
-                    {t("apps.dependsOn", {
-                      names: (props.dependsOn.get(inst.id) ?? []).join(", "),
-                    })}
-                  </span>
-                </Show>
                 <Show
                   when={
                     effectiveInstallationStatus(inst) === "stale" &&

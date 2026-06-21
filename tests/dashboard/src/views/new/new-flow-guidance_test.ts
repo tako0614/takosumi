@@ -61,12 +61,12 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).toContain('t("new.store.title")');
-    expect(newAppViewSource).toContain('t("new.catalog.provider"');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     expect(newAppViewSource).toContain('t("new.advancedImport.title")');
     expect(newAppViewSource).toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
+    expect(newAppViewSource).not.toContain('t("new.catalog.provider"');
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
@@ -109,12 +109,13 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain('class="av-service-setup"');
     expect(newAppViewSource).toContain('t("new.catalogInput.title")');
-    expect(newAppViewSource).toContain('name={`catalogInput:${field.name}`}');
+    expect(newAppViewSource).not.toContain('t("new.catalogInput.body")');
+    expect(newAppViewSource).toContain("name={`catalogInput:${field.name}`}");
     expect(newAppViewSource).toContain("clearSelectedCatalog");
     expect(newAppViewSource).toContain("defaultGitInstallConfig()?.id");
     expect(appViewsCssSource).toContain(".av-service-setup-grid");
-    expect(en["new.catalogInput.body"].toLowerCase()).toContain("secrets");
-    expect(ja["new.catalogInput.body"]).toContain("外部サービス接続");
+    expect(en).not.toHaveProperty("new.catalogInput.body");
+    expect(ja).not.toHaveProperty("new.catalogInput.body");
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
@@ -139,9 +140,13 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain(
       't("new.providers.manageConnections")',
     );
+    expect(newAppViewSource).not.toContain('t("new.providers.subtitle")');
+    expect(newAppViewSource).not.toContain('t("new.providers.advanced")');
     expect(en).not.toHaveProperty("new.providers.noneRequired");
     expect(ja).not.toHaveProperty("new.providers.noneRequired");
     expect(en).not.toHaveProperty("new.providers.manageConnections");
     expect(ja).not.toHaveProperty("new.providers.manageConnections");
+    expect(en).not.toHaveProperty("new.providers.subtitle");
+    expect(ja).not.toHaveProperty("new.providers.subtitle");
   });
 });

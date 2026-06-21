@@ -245,6 +245,14 @@
   margin: 0;
   color: var(--tg-fg-muted);
 }
+.wb-ready-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
 .wb-diagnostics {
   list-style: none;
   margin: var(--tg-s-3) 0 0;

@@ -358,9 +358,29 @@ describe("/new Provider Connections return context", () => {
     );
     expect(connectionsTabSource).toContain('class="wc-inline-details"');
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
+    expect(connectionsTabSource).toContain('header: t("common.actions")');
+    expect(connectionsTabSource).toContain(
+      '<summary>{t("conn.list.title")}</summary>',
+    );
     expect(connectionsTabSource).not.toContain(
       'cell: (d) => <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>',
     );
+    expect(connectionsTabSource).not.toContain(
+      'subtitle={t("conn.providerConnections.subtitle")}',
+    );
+    expect(connectionsTabSource).not.toContain(
+      'subtitle={t("conn.add.subtitle")}',
+    );
+    expect(connectionsTabSource).not.toContain('"conn.guided.intro"');
+    expect(connectionsTabSource).not.toContain('"conn.genericEnv.intro"');
+    expect(en).not.toHaveProperty("conn.providerConnections.subtitle");
+    expect(ja).not.toHaveProperty("conn.providerConnections.subtitle");
+    expect(en).not.toHaveProperty("conn.add.subtitle");
+    expect(ja).not.toHaveProperty("conn.add.subtitle");
+    expect(en).not.toHaveProperty("conn.guided.intro");
+    expect(ja).not.toHaveProperty("conn.guided.intro");
+    expect(en).not.toHaveProperty("conn.genericEnv.intro");
+    expect(ja).not.toHaveProperty("conn.genericEnv.intro");
   });
 
   test("deep-linked detail views import their view CSS explicitly", () => {

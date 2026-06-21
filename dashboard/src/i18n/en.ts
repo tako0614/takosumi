@@ -23,6 +23,7 @@ export const en: Record<keyof typeof ja, string> = {
   "common.unknown": "Unknown",
   "common.details": "Details",
   "common.advanced": "Advanced",
+  "common.actions": "Actions",
   "common.fetchFailed": "Failed to load — {message}",
   "common.copy": "Copy",
   "common.justNow": "just now",
@@ -168,7 +169,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
   "apps.reviewChanges": "Review update",
-  "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.summary.aria": "Service status",
   "apps.summary.title": "Your services",
@@ -192,24 +192,19 @@ export const en: Record<keyof typeof ja, string> = {
   "app.tab.danger": "Danger zone",
   "app.notFound": "Service not found",
   "app.backToList": "Back to list",
-  "app.outputs.title": "Public links and values",
-  "app.outputs.subtitle":
-    "Addresses and values this service exposes. Secrets are never shown.",
-  "app.outputs.empty": "No public links yet. They appear after a deploy.",
-  "app.outputs.none":
-    "This service exposes no public link. Some services only create background resources and do not emit a URL.",
-  "app.nextSteps.title": "Next steps",
-  "app.nextSteps.infraOnly":
-    "This service has no public URL yet. Check the latest deploy result and service notes to see whether it has no public screen or needs another service connected first.",
-  "app.nextSteps.docs": "Open the docs →",
+  "app.outputs.title": "Public links",
+  "app.outputs.subtitle": "Visible screens and addresses appear here.",
+  "app.outputs.empty": "Links appear after a deploy.",
+  "app.outputs.none": "This service has no public link.",
+  "app.outputs.valuesTitle": "Other values",
   "app.output.launchUrl": "Public address",
   "app.output.openPublicLink": "Open public link",
   "app.output.url": "URL",
   "app.output.publicUrl": "Public URL",
   "app.output.endpoint": "Endpoint",
   "app.output.hostname": "Hostname",
-  "app.deps.title": "Dependencies",
-  "app.deps.dependsOn": "Uses",
+  "app.deps.title": "Connected services",
+  "app.deps.dependsOn": "Services this uses",
   "app.deps.usedBy": "Used by",
   "app.source.title": "Source",
   "app.source.name": "Name",
@@ -226,7 +221,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.subtitle":
     "Past deployed states. Pick an older one to review a change that restores it.",
   "app.deploys.empty": "No deploys yet.",
-  "app.deploys.generation": "Version {n}",
   "app.deploys.restoreMenu": "More",
   "app.deploys.restore": "Restore this state",
   "app.deploys.advancedActions": "More update actions",
@@ -349,9 +343,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.store.aria": "Recommended services",
   "new.store.title": "Recommended services",
-  "new.catalog.intro":
-    "Choose what you want to host. Takosumi will ask only for the setup each service needs.",
-  "new.catalog.provider": "Uses {provider}",
   "new.catalog.select": "Add this",
   "new.advancedImport.open": "Use an install link",
   "new.advancedImport.close": "Hide link input",
@@ -361,8 +352,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
   "new.selection.sourceDetails": "Source details",
   "new.catalogInput.title": "Service setup",
-  "new.catalogInput.body":
-    "Fill in the minimum settings for this service. Secrets and API keys stay in external service connections.",
   "new.catalogInput.errorRequired": "Enter {label}.",
   "new.catalogInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
@@ -415,8 +404,7 @@ export const en: Record<keyof typeof ja, string> = {
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.vars.errorProjectNameReserved":
     "Use the Resource prefix field for project_name.",
-  "new.vars.errorCatalogReserved":
-    "Use the Service setup field for “{name}”.",
+  "new.vars.errorCatalogReserved": "Use the Service setup field for “{name}”.",
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
@@ -425,12 +413,12 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.recheck": "Check again",
   "new.compat.checking": "Checking...",
   "new.progress.title": "Checking the source",
-  "new.progress.fetching":
-    "Takosumi is fetching the Git contents and checking whether this can be added to this Workspace. Keep this page open.",
+  "new.progress.fetching": "Checking the contents. Keep this page open.",
   "new.progress.slow":
-    "This is taking a little longer than usual. Large repositories and cold starts can take time; when it finishes, Takosumi will only ask for the connections that are needed.",
+    "This is taking a little longer. You can continue when it finishes.",
   "new.progress.status": "Status: {status}",
-  "new.compat.title": "Inspection result",
+  "new.compat.title": "Check",
+  "new.compat.readyBrief": "Ready to continue.",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
@@ -456,24 +444,19 @@ export const en: Record<keyof typeof ja, string> = {
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
   "new.existing.open": "Open existing service",
   "new.providers.title": "External service connections",
-  "new.providers.subtitle":
-    "Choose the connections this service will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
   "new.providers.alias": "alias: {alias}",
-  "new.providers.advanced": "Connection details",
   "new.providers.selectConnection": "Select a connection",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.errorOperatorManaged":
     "{provider} is not available in this Workspace yet.",
   "new.providers.missingTitle": "A connection is required",
-  "new.providers.missingBody":
-    "This service uses the external services below. Set up the connection and you can return here to continue.",
+  "new.providers.missingBody": "Set up the connection to continue.",
   "new.providers.setupMissing": "Set up required connection",
   "new.providers.operatorMissingTitle":
     "This service is not available here yet",
   "new.providers.operatorMissingBody":
     "A required service connection has not been enabled for this Workspace.",
-  "new.providers.operatorMissingNext":
-    "Ask a Workspace admin to enable it, then return here to continue.",
+  "new.providers.operatorMissingNext": "Ask a Workspace admin to enable it.",
   "new.step.technical": "Technical progress",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
@@ -551,10 +534,8 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Register external service credentials per Workspace. Values are write-only and never shown again after saving.",
+    "Connect external services. Saved values are never shown again.",
   "conn.providerConnections.title": "External service connections",
-  "conn.providerConnections.subtitle":
-    "Connections available to this Workspace. Values stay write-only.",
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
   "conn.providerConnections.ownership": "Ownership",
@@ -576,8 +557,6 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.saved.testCta": "Verify connection",
   "conn.saved.returnCta": "Back to add",
   "conn.add.title": "Add a connection",
-  "conn.add.subtitle":
-    "Pick a service, then paste a token or register env values.",
   "conn.add.provider": "Service",
   "conn.add.genericEnvOption": "Use custom credentials",
   "conn.add.displayName": "Display name (optional)",
@@ -610,10 +589,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.provider.hcloud.token.placeholder": "Paste the Hetzner API token",
   "conn.provider.s3.label": "S3-compatible storage",
   "conn.provider.s3.endpoint.label": "S3 endpoint URL",
-  "conn.guided.intro":
-    "Connect to {provider}. Create a token on {provider}'s own screen and paste it here.",
   "conn.guided.openProvider": "Open {provider} to create a token",
   "conn.guided.oauth": "Connect automatically with {provider}",
+  "conn.guided.stepsSummary": "Token creation steps",
   "conn.guided.pasteLabel": "Paste the created token",
   "conn.guided.pastePlaceholder": "Paste the token here",
   "conn.guided.connect": "Connect",
@@ -622,8 +600,6 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.advanced.register": "Register values directly",
   "conn.register": "Register connection",
   "conn.registering": "Registering...",
-  "conn.genericEnv.intro":
-    "Register credentials for any external service (AWS / GCP / Kubernetes / …) as environment variables (NAME=value). Values are write-only; only the env names remain visible.",
   "conn.genericEnv.providerName": "External service name",
   "conn.genericEnv.envName": "Env variable name",
   "conn.genericEnv.value": "Value",
@@ -638,7 +614,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.invalidProvider": "Invalid provider.",
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
-  "conn.list.title": "Registered connections",
+  "conn.list.title": "Connection details",
   "conn.list.empty":
     "This Workspace has no connections yet. Add one with the form above.",
   "conn.test": "Test connection",
