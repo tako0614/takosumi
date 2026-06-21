@@ -29,10 +29,13 @@ describe("Run review ProviderConnection evidence", () => {
     expect(controlApiSource).toContain("readonly redactionProfileId?: string");
   });
 
-  test("shows ProviderConnection evidence before the deploy action is hidden in details", () => {
+  test("keeps ProviderConnection evidence available but folded behind review details", () => {
     expect(runViewSource).toContain("ProviderResolutionTable");
     expect(runViewSource).toContain("providerResolutionRows(run.latest");
     expect(runViewSource).toContain('t("run.connections.reviewTitle")');
+    expect(runViewSource).toContain(
+      '<summary>{t("run.connections.reviewTitle")}</summary>',
+    );
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
   });
@@ -46,6 +49,9 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("run.latest?.planResources ?? []");
     expect(runViewSource).toContain("planResourceActionLabel");
     expect(runViewSource).toContain('t("run.resources.title")');
+    expect(runViewSource).toContain(
+      "<PlanResourceReview resources={planResources()} />",
+    );
     expect(runViewSource).not.toContain("change.before");
     expect(runViewSource).not.toContain("change.after");
   });

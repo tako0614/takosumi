@@ -104,7 +104,10 @@
 
 /* ===== Workspace starter (home) ===== */
 .av-start {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  gap: var(--tg-s-5);
+  align-items: start;
   padding: var(--tg-s-5);
   margin-bottom: var(--tg-s-5);
   border: 1px solid var(--tg-line);
@@ -137,11 +140,60 @@
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
 }
+.av-start-choices {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--tg-s-3);
+}
+.av-start-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--tg-s-3);
+  align-items: start;
+  min-width: 0;
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg);
+  color: var(--tg-fg);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.av-start-choice:hover {
+  border-color: var(--tg-line-strong);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+}
+.av-start-choice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-accent-soft);
+  color: var(--tg-accent-text);
+}
+.av-start-choice span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.av-start-choice strong {
+  font-size: var(--tg-fs-base);
+}
+.av-start-choice small {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.45;
+}
 .av-start-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--tg-s-2);
   margin-top: var(--tg-s-4);
+  grid-column: 1 / -1;
 }
 /* ===== service grid (home) ===== */
 .av-service-grid {
@@ -397,6 +449,48 @@
   font-size: var(--tg-fs-xs);
 }
 
+.av-add-steps {
+  list-style: none;
+  margin: 0 0 var(--tg-s-5);
+  padding: var(--tg-s-2);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--tg-s-2);
+}
+.av-add-step {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  min-width: 0;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
+.av-add-step.is-current {
+  background: var(--tg-accent-soft);
+  color: var(--tg-accent-text);
+}
+.av-add-step.is-done {
+  color: var(--tg-fg);
+}
+.av-add-step-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--tg-r-full);
+  background: currentColor;
+  opacity: 0.5;
+}
+.av-add-step.is-current .av-add-step-dot,
+.av-add-step.is-done .av-add-step-dot {
+  opacity: 1;
+}
+
 .av-store {
   display: flex;
   flex-direction: column;
@@ -472,6 +566,40 @@
 .av-import-card {
   margin-top: var(--tg-s-3);
 }
+.av-selected-service {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--tg-s-3);
+  align-items: center;
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg);
+}
+.av-selected-service-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-accent-soft);
+  color: var(--tg-accent-text);
+}
+.av-selected-service-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.av-selected-service-text strong,
+.av-selected-service-text span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.av-selected-service-text span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
 /* tg-tab is styled for <a>; the /new method tabs are <button>s. */
 button.tg-tab {
   background: transparent;
@@ -507,6 +635,12 @@ button.tg-tab {
 
   .av-start-actions .tg-btn {
     flex: 1 1 100%;
+  }
+
+  .av-start {
+    grid-template-columns: 1fr;
+    gap: var(--tg-s-4);
+    padding: var(--tg-s-4);
   }
 
   .av-service-grid {
@@ -546,6 +680,15 @@ button.tg-tab {
     padding: var(--tg-s-2);
   }
 
+  .av-add-steps {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .av-add-step {
+    padding: var(--tg-s-2);
+    font-size: var(--tg-fs-xs);
+  }
+
   .av-new-source code {
     display: block;
     width: 100%;
@@ -568,6 +711,15 @@ button.tg-tab {
 
   .av-catalog-card {
     gap: var(--tg-s-3);
+  }
+
+  .av-selected-service {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .av-selected-service .tg-btn {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 }
 

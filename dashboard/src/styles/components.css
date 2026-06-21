@@ -440,6 +440,12 @@
 }
 
 @media (max-width: 640px) {
+  .tg-btn {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
+  }
+
   .tg-page-header {
     gap: var(--tg-s-2);
     margin-bottom: var(--tg-s-3);

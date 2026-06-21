@@ -91,6 +91,7 @@ import {
 } from "../../components/ui/index.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
+type AddStep = "choose" | "check" | "connect" | "review";
 type FlowRun = {
   readonly id: number;
   readonly controller: AbortController;
@@ -108,6 +109,43 @@ interface ProviderConnectionRow {
 interface InputVariableRow {
   readonly name: string;
   readonly value: string;
+}
+
+const ADD_STEPS: readonly AddStep[] = ["choose", "check", "connect", "review"];
+
+function addStepLabel(step: AddStep): string {
+  switch (step) {
+    case "choose":
+      return t("new.steps.choose");
+    case "check":
+      return t("new.steps.check");
+    case "connect":
+      return t("new.steps.connect");
+    case "review":
+      return t("new.steps.review");
+  }
+}
+
+function AddProgress(props: { readonly current: AddStep }) {
+  const currentIndex = () => ADD_STEPS.indexOf(props.current);
+  return (
+    <ol class="av-add-steps" aria-label={t("new.steps.aria")}>
+      <For each={ADD_STEPS}>
+        {(step, index) => (
+          <li
+            class="av-add-step"
+            classList={{
+              "is-current": index() === currentIndex(),
+              "is-done": index() < currentIndex(),
+            }}
+          >
+            <span class="av-add-step-dot" aria-hidden="true" />
+            <span>{addStepLabel(step)}</span>
+          </li>
+        )}
+      </For>
+    </ol>
+  );
 }
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
@@ -340,8 +378,11 @@ function Inner() {
     !prefill &&
     hasInstallPrefillParams(location.search);
 
+  const opensLinkMode =
+    typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("mode") === "link";
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
-    prefill ? "git" : "catalog",
+    prefill || opensLinkMode ? "git" : "catalog",
   );
   const initialRef = prefill?.ref || "main";
   const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
@@ -897,7 +938,7 @@ function Inner() {
     setResourcePrefix("");
     setResourcePrefixTouched(false);
     resetCompatibility();
-    setActiveTab("git");
+    setActiveTab("catalog");
   };
 
   const compatibilityRunnable = () => {
@@ -923,6 +964,15 @@ function Inner() {
     if (gitUrl().trim()) return t("new.guide.check");
     return t("new.guide.choose");
   };
+  const currentAddStep = (): AddStep => {
+    if (!gitUrl().trim()) return "choose";
+    if (!compatibility() || checkingCompatibility() || busy()) return "check";
+    if (!compatibilityRunnable()) return "check";
+    if (needsCloudCredential()) return "connect";
+    return "review";
+  };
+  const usingSelectedService = () =>
+    activeTab() !== "git" && Boolean(gitUrl().trim());
   const sourceSummaryTitle = () =>
     gitUrl().trim() ? name().trim() || capsuleNameFromUrl(gitUrl()) : "";
   const sourceSummaryMeta = () =>
@@ -1387,7 +1437,6 @@ function Inner() {
     <AppShell>
       <PageHeader
         title={t("new.title")}
-        subtitle={t("new.subtitle")}
         actions={
           <Button variant="ghost" href="/">
             {t("app.backToList")}
@@ -1421,6 +1470,8 @@ function Inner() {
           </Show>
         </section>
 
+        <AddProgress current={currentAddStep()} />
+
         <Show when={installPrefillRejected}>
           <div class="wb-action-callout" role="alert">
             <strong>{t("new.deeplink.invalidTitle")}</strong>
@@ -1428,60 +1479,80 @@ function Inner() {
           </div>
         </Show>
 
-        <section class="av-store" aria-label={t("new.store.aria")}>
-          <div class="av-store-head">
-            <div>
-              <h2>{t("new.store.title")}</h2>
-              <p>{t("new.catalog.intro")}</p>
+        <Show when={activeTab() !== "git" && !gitUrl().trim()}>
+          <section class="av-store" aria-label={t("new.store.aria")}>
+            <div class="av-store-head">
+              <div>
+                <h2>{t("new.store.title")}</h2>
+                <p>{t("new.catalog.intro")}</p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => setActiveTab("git")}
+              >
+                {t("new.advancedImport.open")}
+              </Button>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              type="button"
-              onClick={() =>
-                setActiveTab(activeTab() === "git" ? "catalog" : "git")
-              }
-            >
-              {activeTab() === "git"
-                ? t("new.advancedImport.close")
-                : t("new.advancedImport.open")}
-            </Button>
-          </div>
-          <ul class="av-catalog-grid">
-            <For each={CATALOG}>
-              {(entry) => (
-                <li class="av-catalog-card">
-                  <div class="av-catalog-icon" aria-hidden="true">
-                    <Download size={20} />
-                  </div>
-                  <div class="av-catalog-text">
-                    <span class="av-catalog-src">
-                      {t("new.catalog.readyStarter")}
-                    </span>
-                    <span class="av-catalog-name">{entry.name[locale()]}</span>
-                    <span class="av-catalog-desc">
-                      {entry.description[locale()]}
-                    </span>
-                  </div>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    type="button"
-                    onClick={() => pickCatalogEntry(entry)}
-                  >
-                    {t("new.catalog.select")}
-                  </Button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </section>
+            <ul class="av-catalog-grid">
+              <For each={CATALOG}>
+                {(entry) => (
+                  <li class="av-catalog-card">
+                    <div class="av-catalog-icon" aria-hidden="true">
+                      <Download size={20} />
+                    </div>
+                    <div class="av-catalog-text">
+                      <span class="av-catalog-src">
+                        {t("new.catalog.readyStarter")}
+                      </span>
+                      <span class="av-catalog-name">
+                        {entry.name[locale()]}
+                      </span>
+                      <span class="av-catalog-desc">
+                        {entry.description[locale()]}
+                      </span>
+                    </div>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      type="button"
+                      onClick={() => pickCatalogEntry(entry)}
+                    >
+                      {t("new.catalog.select")}
+                    </Button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </section>
+        </Show>
 
-        <Show when={activeTab() === "git"}>
+        <Show when={activeTab() === "git" || Boolean(gitUrl().trim())}>
           <Card class="av-import-card">
             <CardHeader
-              title={t("new.advancedImport.title")}
-              subtitle={t("new.advancedImport.subtitle")}
+              title={
+                usingSelectedService()
+                  ? t("new.selection.title")
+                  : t("new.advancedImport.title")
+              }
+              subtitle={
+                usingSelectedService()
+                  ? t("new.selection.subtitle")
+                  : t("new.advancedImport.subtitle")
+              }
+              actions={
+                activeTab() === "git" && !gitUrl().trim() ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    onClick={() => setActiveTab("catalog")}
+                  >
+                    {t("new.advancedImport.close")}
+                  </Button>
+                ) : undefined
+              }
             />
             <CardSection>
               {/* Link-seeded landing: say WHERE the values came from, and that
@@ -1517,7 +1588,29 @@ function Inner() {
                   else setError(proceedBlocker());
                 }}
               >
-                {gitFields()}
+                <Show when={usingSelectedService()} fallback={gitFields()}>
+                  <div class="av-selected-service">
+                    <span class="av-selected-service-icon" aria-hidden="true">
+                      <Download size={20} />
+                    </span>
+                    <div class="av-selected-service-text">
+                      <strong>{sourceSummaryTitle()}</strong>
+                      <span>{sourceSummaryMeta()}</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      onClick={() => setActiveTab("git")}
+                    >
+                      {t("new.selection.change")}
+                    </Button>
+                  </div>
+                  <details class="wb-disclosure wb-source-advanced">
+                    <summary>{t("new.selection.sourceDetails")}</summary>
+                    {gitFields()}
+                  </details>
+                </Show>
 
                 <FormField label={t("new.name")}>
                   <Input

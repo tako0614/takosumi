@@ -16,9 +16,15 @@ const appViewsCssSource = readFileSync(
 );
 
 describe("/new flow guidance", () => {
-  test("uses a compact app-launcher guide instead of a permanent technical stepper", () => {
+  test("uses an app-service progress rail instead of a permanent technical stepper", () => {
     expect(newAppViewSource).toContain("const guideBody = () =>");
     expect(newAppViewSource).toContain('class="av-new-guide"');
+    expect(newAppViewSource).toContain("function AddProgress");
+    expect(newAppViewSource).toContain('class="av-add-steps"');
+    expect(newAppViewSource).toContain('t("new.steps.choose")');
+    expect(newAppViewSource).toContain('t("new.steps.check")');
+    expect(newAppViewSource).toContain('t("new.steps.connect")');
+    expect(newAppViewSource).toContain('t("new.steps.review")');
     expect(newAppViewSource).toContain('t("new.guide.choose")');
     expect(newAppViewSource).toContain('t("new.guide.check")');
     expect(newAppViewSource).toContain('t("new.guide.connect")');
@@ -44,6 +50,8 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).toContain(".av-new-guide");
     expect(appViewsCssSource).toContain(".av-new-guide-copy");
     expect(appViewsCssSource).toContain(".av-new-source");
+    expect(appViewsCssSource).toContain(".av-add-steps");
+    expect(appViewsCssSource).toContain(".av-selected-service");
     expect(appViewsCssSource).toContain("grid-template-columns: 1fr;");
     expect(appViewsCssSource).not.toContain(".av-new-flow-steps");
     expect(appViewsCssSource).not.toContain(".av-new-flow-step");
@@ -56,7 +64,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.store.title")');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     expect(newAppViewSource).toContain('t("new.advancedImport.title")');
+    expect(newAppViewSource).toContain('t("new.selection.title")');
+    expect(newAppViewSource).toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).toContain('t("new.catalog.readyStarter")');
+    expect(newAppViewSource).toContain('setActiveTab("catalog")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en["new.tab.catalog"]).toBe("Recommended");
@@ -67,6 +78,8 @@ describe("/new flow guidance", () => {
     expect(ja["new.tab.git"]).toBe("リンク / URL");
     expect(ja["new.store.title"]).toBe("おすすめサービス");
     expect(ja["new.advancedImport.open"]).toContain("リンク");
+    expect(en["new.selection.subtitle"].toLowerCase()).toContain("deploy");
+    expect(ja["new.selection.subtitle"]).toContain("デプロイ");
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {

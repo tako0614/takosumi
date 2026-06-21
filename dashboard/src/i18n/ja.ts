@@ -41,6 +41,8 @@ export const ja = {
   "nav.billing": "お支払い",
   "nav.activity": "履歴",
   "nav.manage": "管理",
+  "nav.accountSection": "アカウント",
+  "nav.advanced": "詳細",
   "nav.notifications": "通知",
   "nav.notificationsShort": "通知",
   "nav.spaceSettings": "Workspace 設定",
@@ -260,6 +262,10 @@ export const ja = {
   "app.bindings.errorProvider": "接続 {index} の接続先を入力してください。",
   "app.bindings.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
+  "app.settings.removeTitle": "このサービスを削除しますか？",
+  "app.settings.removeBody":
+    "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
+  "app.settings.removeCta": "削除オプションを開く",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
@@ -367,6 +373,11 @@ export const ja = {
     "追加内容の確認へ進めます。確認画面で承認するまでデプロイされません。",
   "new.guide.needsFix":
     "追加前に直す必要がある項目があります。下の確認結果を見てください。",
+  "new.steps.aria": "サービス追加の進行状況",
+  "new.steps.choose": "選ぶ",
+  "new.steps.check": "確認",
+  "new.steps.connect": "接続",
+  "new.steps.review": "承認",
   "new.flow.source": "追加するもの",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
   "new.store.aria": "おすすめサービス",
@@ -381,7 +392,12 @@ export const ja = {
   "new.advancedImport.close": "リンク入力を閉じる",
   "new.advancedImport.title": "リンクや取得元から追加",
   "new.advancedImport.subtitle":
-    "アプリページのインストールリンクを貼り付けます。開発者向けには取得元 URL も使えます。",
+    "アプリページのインストールリンク、または取得元 URL を貼り付けます。",
+  "new.selection.title": "選択中のサービス",
+  "new.selection.subtitle":
+    "まず内容を確認します。デプロイは承認後に実行されます。",
+  "new.selection.change": "取得元を変更",
+  "new.selection.sourceDetails": "取得元の詳細",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
   "new.git.url": "インストールリンクまたは取得元 URL",

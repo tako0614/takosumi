@@ -351,10 +351,13 @@ describe("/new Provider Connections return context", () => {
     expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
   });
 
-  test("ProviderConnection ownership table reflects the backend projection", () => {
+  test("ProviderConnection ownership remains available inside friendly connection details", () => {
     expect(connectionsTabSource).toContain("providerConnectionOwnershipLabel");
-    expect(connectionsTabSource).toContain('d.ownership === "takos_provided"');
-    expect(connectionsTabSource).toContain("d.ownership");
+    expect(connectionsTabSource).toContain(
+      "providerConnectionOwnershipLabel(d.ownership)",
+    );
+    expect(connectionsTabSource).toContain('class="wc-inline-details"');
+    expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
     expect(connectionsTabSource).not.toContain(
       'cell: (d) => <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>',
     );
