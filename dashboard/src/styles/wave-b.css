@@ -225,7 +225,7 @@
   width: fit-content;
   font-size: var(--tg-fs-xs);
   font-weight: 600;
-  color: var(--tg-fg-subtle);
+  color: var(--tg-fg-muted);
 }
 .wb-inline-details p {
   margin: var(--tg-s-1) 0 0;
