@@ -10,6 +10,10 @@ const signInViewSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/auth/SignInView.tsx"),
   "utf8",
 );
+const shellCssSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/styles/shell.css"),
+  "utf8",
+);
 
 describe("SignInView disabled OAuth guidance", () => {
   test("uses install-specific disabled-provider copy only when a return install is pending", () => {
@@ -63,7 +67,7 @@ describe("SignInView disabled OAuth guidance", () => {
 
   test("shows the pending install target name on the sign-in context", () => {
     expect(signInViewSource).toContain(
-      "{pendingInstall()?.label ?? t(\"auth.installContextTitle\")}",
+      '{pendingInstall()?.label ?? t("auth.installContextTitle")}',
     );
   });
 
@@ -84,5 +88,19 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).not.toContain("InkBackdrop");
     expect(signInViewSource).not.toContain("InkdropMark");
     expect(ja).not.toHaveProperty("auth.brandDraft");
+  });
+
+  test("keeps the sign-in screen centered with mobile-visible appearance controls", () => {
+    expect(signInViewSource).toMatch(
+      /<div class="auth-flow">[\s\S]*<SignInPanel \/>[\s\S]*<ThemeSwitcher \/>[\s\S]*<\/div>/,
+    );
+    expect(shellCssSource).toContain("justify-content: center;");
+    expect(shellCssSource).toContain("width: min(100%, 408px);");
+    expect(shellCssSource).toContain(
+      "border: 1px dashed var(--tg-line-strong)",
+    );
+    expect(shellCssSource).not.toMatch(
+      /\.auth-theme-switcher\s*\{[\s\S]*?display:\s*none;/,
+    );
   });
 });

@@ -412,7 +412,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: clamp(64px, 10vh, 104px) var(--tg-s-5) clamp(40px, 8vh, 72px);
+  padding: var(--tg-s-6) var(--tg-s-5);
   background: var(--tg-bg);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
@@ -427,17 +427,17 @@
   z-index: 1;
 }
 .auth-flow {
-  width: min(100%, 384px);
+  width: min(100%, 408px);
   display: flex;
   flex-direction: column;
   align-items: stretch;
   justify-content: center;
+  gap: var(--tg-s-4);
 }
 .auth-theme-switcher {
-  position: absolute;
-  top: var(--tg-s-4);
-  right: var(--tg-s-4);
+  position: static;
   display: inline-flex;
+  align-self: center;
   gap: 2px;
   padding: 3px;
   background: var(--tg-bg-elev);
@@ -470,7 +470,7 @@
   align-items: center;
   gap: var(--tg-s-4);
   align-self: center;
-  margin-bottom: var(--tg-s-5);
+  margin-bottom: var(--tg-s-1);
   color: var(--tg-fg);
   text-decoration: none;
 }
@@ -478,14 +478,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border: 0;
+  width: 40px;
+  height: 40px;
+  padding: 3px;
+  border: 1px dashed var(--tg-line-strong);
   border-radius: var(--tg-r-sm);
-  background: transparent;
+  background: var(--tg-bg-elev);
   color: var(--tg-fg-muted);
   box-shadow: none;
   overflow: hidden;
+}
+.auth-brand-mark img {
+  width: 100%;
+  height: 100%;
+  border-radius: 3px;
+  object-fit: cover;
 }
 .auth-brand-text {
   display: inline-flex;
@@ -510,6 +517,11 @@
 .sign-in-panel {
   width: 100%;
   max-width: none;
+  padding: var(--tg-s-6);
+  background: var(--tg-bg-elev);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  box-shadow: var(--tg-shadow-sm);
 }
 .sign-in-title {
   font-family: var(--tg-font-display);
@@ -528,7 +540,7 @@
   gap: var(--tg-s-1);
   margin: calc(var(--tg-s-5) * -0.25) 0 var(--tg-s-5);
   padding: var(--tg-s-3) var(--tg-s-4);
-  background: var(--tg-bg-elev);
+  background: var(--tg-bg);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   overflow-wrap: anywhere;
@@ -560,7 +572,7 @@
   gap: var(--tg-s-3);
   min-height: 68px;
   padding: var(--tg-s-3) var(--tg-s-4);
-  background: var(--tg-bg-elev);
+  background: var(--tg-bg);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   color: var(--tg-fg);
@@ -571,7 +583,7 @@
 }
 .sign-in-btn:hover:not(:disabled) {
   border-color: var(--tg-line-strong);
-  background: var(--tg-bg-subtle);
+  background: var(--tg-bg-elev);
 }
 .sign-in-btn:disabled {
   cursor: not-allowed;
@@ -584,7 +596,7 @@
   width: 34px;
   height: 34px;
   border-radius: var(--tg-r-sm);
-  background: var(--tg-bg);
+  background: var(--tg-bg-subtle);
   border: 1px solid var(--tg-line);
   color: var(--tg-fg);
 }
@@ -662,19 +674,20 @@
   .auth-page {
     align-items: stretch;
     justify-content: center;
-    padding: clamp(76px, 12vh, 108px) var(--tg-s-4) clamp(32px, 8vh, 64px);
-  }
-
-  .auth-theme-switcher {
-    display: none;
+    padding: var(--tg-s-5) var(--tg-s-4);
   }
 
   .auth-brand {
-    margin-bottom: var(--tg-s-5);
+    margin-bottom: 0;
   }
 
   .auth-flow {
     width: 100%;
+    gap: var(--tg-s-3);
+  }
+
+  .sign-in-panel {
+    padding: var(--tg-s-5) var(--tg-s-4);
   }
 
   .sign-in-title {

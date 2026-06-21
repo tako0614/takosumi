@@ -261,7 +261,6 @@ export default function SignInView() {
   onMount(() => setDocumentTitle(t("auth.signIn")));
   return (
     <main class="auth-page">
-      <ThemeSwitcher />
       <div class="auth-flow">
         <a href="/" class="auth-brand">
           <BrandLogoMark />
@@ -273,6 +272,7 @@ export default function SignInView() {
           </span>
         </a>
         <SignInPanel />
+        <ThemeSwitcher />
       </div>
     </main>
   );
