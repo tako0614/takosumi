@@ -59,6 +59,20 @@ describe("SignInView disabled OAuth guidance", () => {
     );
   });
 
+  test("uses retry-oriented OAuth callback failure copy instead of protocol details", () => {
+    expect(signInViewSource).toContain("signInErrorMessage");
+    expect(signInViewSource).toContain('"auth.retryableCallbackFailure"');
+    expect(signInViewSource).toContain(
+      '"auth.retryableCallbackFailureWithDetail"',
+    );
+    expect(en["auth.retryableCallbackFailure"]).not.toMatch(
+      /code|state|provider|oauth/i,
+    );
+    expect(ja["auth.retryableCallbackFailure"]).not.toMatch(
+      /code|state|provider|oauth/i,
+    );
+  });
+
   test("lets visitors re-check sign-in method availability without losing the install return", () => {
     expect(signInViewSource).toMatch(
       /providersLoaded\(\)\s*&&\s*!providersLoadFailed\(\)\s*&&\s*!hasEnabledProvider\(\)/,

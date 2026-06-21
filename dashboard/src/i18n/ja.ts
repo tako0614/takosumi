@@ -104,7 +104,11 @@ export const ja = {
   "auth.failed": "サインインに失敗しました",
   "auth.backToSignIn": "サインインへ戻る",
   "auth.incompleteCallback":
-    "サインインの戻り値が不完全です (code / state / provider のいずれかが欠落)。再度サインインしてください。",
+    "サインインの戻り値を利用できませんでした。もう一度サインインしてください。",
+  "auth.retryableCallbackFailure":
+    "このブラウザタブからサインインを完了できませんでした。もう一度サインインしてください。",
+  "auth.retryableCallbackFailureWithDetail":
+    "サインインを完了できませんでした。もう一度お試しください。詳細: {message}",
 
   // --- 404 --------------------------------------------------------------
   "notFound.title": "ページが見つかりません",
@@ -161,8 +165,7 @@ export const ja = {
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
   "apps.empty.title": "まだサービスがありません",
-  "apps.empty.message":
-    "サンプルから始めるか、取得元 URL から追加できます。",
+  "apps.empty.message": "サンプルから始めるか、取得元 URL から追加できます。",
   "apps.empty.cta": "サービスを追加",
   "apps.openApp": "出力を開く",
   "apps.reviewChanges": "変更を確認",
@@ -296,6 +299,7 @@ export const ja = {
   "run.cost.shortfall":
     "クレジット残高が約 {n} 不足しているため、このまま実行できません。",
   "run.cost.blocked": "残高または上限の都合により、このまま実行できません。",
+  "run.cost.billingCta": "お支払いを開く",
   "run.changes.title": "変更内容",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
@@ -342,8 +346,7 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
-  "new.subtitle":
-    "サンプルから始めるか、取得元 URL を指定して追加します。",
+  "new.subtitle": "サンプルから始めるか、取得元 URL を指定して追加します。",
   "new.flow.aria": "サービス追加の進行状況",
   "new.flow.kicker": "追加フロー",
   "new.flow.title": "デプロイ前に取得元を確認します",
@@ -430,6 +433,9 @@ export const ja = {
   "new.managed.byoBody":
     "この Capsule に必要な AWS / GCP / Kubernetes / Cloudflare などの Provider Connection を追加または選択してください。",
   "new.managed.byoLink": "接続を設定する",
+  "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
+  "new.deeplink.invalidBody":
+    "安全な HTTPS Git 取得元が含まれていないか、ブラウザで開けない取得元情報が含まれています。例から選ぶか、Git URL を手動で貼り付けてください。",
   "new.compat.check": "確認して続ける",
   "new.compat.recheck": "もう一度確認",
   "new.compat.checking": "確認中...",
@@ -479,7 +485,9 @@ export const ja = {
   "new.providers.setupMissing": "必要な接続を設定",
   "new.providers.operatorMissingTitle": "運営管理の接続がまだ利用できません",
   "new.providers.operatorMissingBody":
-    "このサービスは Takosumi Cloud 管理の接続を前提にしています。この Workspace ではまだ有効化されていないため、運営側で利用可能になるまで追加を続行できません。",
+    "このサービスは Takosumi Cloud 管理の接続を前提にしています。この Workspace ではまだ有効化されていません。",
+  "new.providers.operatorMissingNext":
+    "この Workspace で managed access が有効になると、続きから追加できます。",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
   "new.step.create": "サービスを作成",

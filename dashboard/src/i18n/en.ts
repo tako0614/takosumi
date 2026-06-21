@@ -100,7 +100,11 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
   "auth.incompleteCallback":
-    "The sign-in response is incomplete (code / state / provider missing). Please try signing in again.",
+    "The sign-in response could not be used. Please try signing in again.",
+  "auth.retryableCallbackFailure":
+    "Takosumi could not finish sign-in from this browser tab. Please try signing in again.",
+  "auth.retryableCallbackFailureWithDetail":
+    "Takosumi could not finish sign-in. Please try again. Details: {message}",
 
   // --- 404 --------------------------------------------------------------
   "notFound.title": "Page not found",
@@ -157,8 +161,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
   "apps.empty.title": "No services yet",
-  "apps.empty.message":
-    "Start from an example or add one from a source URL.",
+  "apps.empty.message": "Start from an example or add one from a source URL.",
   "apps.empty.cta": "Add service",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
@@ -291,6 +294,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cost.shortfall":
     "Your credit balance is short by about {n}, so this cannot run.",
   "run.cost.blocked": "This cannot run due to balance or limits.",
+  "run.cost.billingCta": "Open billing",
   "run.changes.title": "Changes",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
@@ -424,6 +428,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.managed.byoBody":
     "Add or select the Provider Connection this Capsule needs for AWS, GCP, Kubernetes, Cloudflare, or another provider.",
   "new.managed.byoLink": "Set up a connection",
+  "new.deeplink.invalidTitle": "This install link cannot be used",
+  "new.deeplink.invalidBody":
+    "The link was missing a safe HTTPS Git source, or it included source material that cannot be opened in the browser. Choose an example or paste the Git URL manually.",
   "new.compat.check": "Check and continue",
   "new.compat.recheck": "Check again",
   "new.compat.checking": "Checking...",
@@ -472,7 +479,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.setupMissing": "Set up required connection",
   "new.providers.operatorMissingTitle": "Managed connection is not available",
   "new.providers.operatorMissingBody":
-    "This service expects a Takosumi Cloud managed connection. It is not enabled for this Workspace yet, so adding cannot continue until the operator makes it available.",
+    "This service expects a Takosumi Cloud managed connection. It is not enabled for this Workspace yet.",
+  "new.providers.operatorMissingNext":
+    "You can continue after managed access is enabled for this Workspace.",
   "new.step.register": "Register source",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create service",
