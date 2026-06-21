@@ -267,6 +267,10 @@ async function platformSecretManifest(
     markRequiredManualSecret(entries, name);
     known.add(name);
   }
+  for (const name of await configuredStripeBillingSecretNames(options)) {
+    markRequiredManualSecret(entries, name);
+    known.add(name);
+  }
   for (const name of await aiGatewayProfileApiKeyEnvNames(options)) {
     if (known.has(name)) continue;
     entries.push({ name, secretClass: "required_manual_external" });
@@ -311,6 +315,28 @@ async function configuredUpstreamOAuthClientSecretNames(
     )
     .map(({ secretName }) => secretName)
     .sort();
+}
+
+async function configuredStripeBillingSecretNames(
+  options: Record<string, string | boolean>,
+): Promise<readonly string[]> {
+  const configText = await readWranglerConfigText(options);
+  if (!hasConfiguredHostedBilling({ configText })) return [];
+  return [
+    "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
+    "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
+  ];
+}
+
+function hasConfiguredHostedBilling({
+  configText,
+}: {
+  readonly configText: string | undefined;
+}): boolean {
+  return [
+    "TAKOSUMI_BILLING_PLANS",
+    "TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST",
+  ].some((name) => configuredStringValue(name, configText) !== undefined);
 }
 
 function hasConfiguredUpstreamOAuthProvider({
