@@ -4,7 +4,8 @@
  * Composes the upload-origin deploy pipeline the way the dashboard cannot: it
  * takes a previously-ingested upload {@link SourceSnapshot}, resolves or creates
  * the target Installation `@space/name` (synthesizing a default InstallConfig
- * when the Installation is new), and starts a plan Run pinned to that snapshot.
+ * when the Installation is new), and returns the plan Run pinned to that
+ * snapshot. Callers apply that reviewed plan through the normal apply route.
  * Everything heavy (Capsule Gate / generated root / plan) runs in the existing
  * controller pipeline; this only wires the create-or-update + plan steps.
  *

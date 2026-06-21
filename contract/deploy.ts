@@ -36,8 +36,9 @@ export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
  * through Provider Connections). `providerConnections` binds required OpenTofu
  * providers to public Provider Connection identifiers before planning; it never
  * carries credential values.
- * `planOnly` stops after the plan Run; `autoApprove` approves and applies the
- * plan without a manual approval gate.
+ * `planOnly` stops after the plan Run. `autoApprove` is accepted for
+ * compatibility with older CLI callers, but public clients should follow the
+ * returned plan Run and call the reviewed apply route when the plan is ready.
  */
 export interface DeployRequest {
   readonly spaceId: string;
@@ -65,8 +66,9 @@ export interface InternalDeployRequest extends Omit<
 
 /**
  * Response of `POST {@link DEPLOY_PATH}`: the resolved Installation and the
- * plan Run the deploy started. When `autoApprove` is set the apply Run is
- * chained server-side; the CLI follows it from `run` via the run/logs routes.
+ * plan Run the deploy started. Older responses may include `applyRun` when a
+ * host explicitly chains the reviewed apply server-side; current public clients
+ * should treat `planRun ?? run` as the authoritative follow-up Run.
  */
 export interface DeployResponse {
   readonly installation: PublicInstallation;
