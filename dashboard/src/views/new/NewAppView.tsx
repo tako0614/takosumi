@@ -98,6 +98,10 @@ import {
 } from "../../components/ui/index.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
+type FlowRun = {
+  readonly id: number;
+  readonly controller: AbortController;
+};
 type NewFlowStage = "source" | "check" | "connect" | "review";
 type NewFlowStepState = "done" | "current" | "next";
 type SourceAccessMode = "public" | "existing" | "token";
@@ -114,6 +118,9 @@ interface InputVariableRow {
   readonly name: string;
   readonly value: string;
 }
+
+const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
+const INSTALLATION_DONE: StepState = "done";
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -294,9 +301,28 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
   return "";
 }
 
+function controlErrorDetails(error: ControlApiError | undefined): unknown {
+  const body = error?.body;
+  if (!body || typeof body !== "object" || !("error" in body)) return undefined;
+  const payload = (body as { readonly error?: unknown }).error;
+  if (!payload || typeof payload !== "object" || !("details" in payload)) {
+    return undefined;
+  }
+  return (payload as { readonly details?: unknown }).details;
+}
+
 function isDuplicateInstallationError(
   error: ControlApiError | undefined,
 ): boolean {
+  const details = controlErrorDetails(error);
+  if (
+    details &&
+    typeof details === "object" &&
+    (details as { readonly reason?: unknown }).reason ===
+      "duplicate_installation"
+  ) {
+    return true;
+  }
   return (
     error?.status === 409 &&
     /installation\s+.+\s+already exists/iu.test(error.message)
@@ -437,6 +463,7 @@ function Inner() {
   const [busy, setBusy] = createSignal(false);
   let sourceSyncSlowTimer: ReturnType<typeof setTimeout> | undefined;
   let activeFlowAbort: AbortController | undefined;
+  let activeFlowId = 0;
 
   const clearSourceSyncSlowTimer = () => {
     if (sourceSyncSlowTimer) {
@@ -453,14 +480,33 @@ function Inner() {
       }
     }, 8_000);
   };
-  const startAbortableFlow = () => {
+  const startAbortableFlow = (): FlowRun => {
     activeFlowAbort?.abort();
+    activeFlowId += 1;
     const controller = new AbortController();
     activeFlowAbort = controller;
-    return controller;
+    return { id: activeFlowId, controller };
   };
-  const finishAbortableFlow = (controller: AbortController) => {
-    if (activeFlowAbort === controller) {
+  const isCurrentFlow = (flow: FlowRun) =>
+    activeFlowId === flow.id &&
+    activeFlowAbort === flow.controller &&
+    !flow.controller.signal.aborted;
+  const throwIfStaleFlow = (flow: FlowRun) => {
+    if (!isCurrentFlow(flow)) {
+      throw new DOMException("Request was aborted.", "AbortError");
+    }
+  };
+  const abortActiveFlow = () => {
+    activeFlowAbort?.abort();
+    activeFlowAbort = undefined;
+    activeFlowId += 1;
+    clearSourceSyncSlowTimer();
+    setCheckingCompatibility(false);
+    setBusy(false);
+    setSourceSyncRunStatus(null);
+  };
+  const finishAbortableFlow = (flow: FlowRun) => {
+    if (isCurrentFlow(flow)) {
       activeFlowAbort = undefined;
     }
   };
@@ -473,6 +519,9 @@ function Inner() {
     if (!spaceId()) return t("new.error.spaceRequired");
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
+    if (!INSTALLATION_NAME_PATTERN.test(name().trim())) {
+      return t("new.error.nameInvalid");
+    }
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
@@ -863,6 +912,7 @@ function Inner() {
       }));
 
   const resetCompatibility = () => {
+    abortActiveFlow();
     setCompatibility(null);
     setProviderRows([]);
     setCreatedSourceId(null);
@@ -967,7 +1017,7 @@ function Inner() {
     setStepPlan("idle");
     setSourceSyncRunStatus(null);
     startSourceSyncSlowTimer();
-    const controller = startAbortableFlow();
+    const flow = startAbortableFlow();
     try {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
@@ -978,11 +1028,12 @@ function Inner() {
         name: name().trim(),
         authConnectionId: sourceAuthConnectionIdForRun(),
         installConfigId: selectedInstallConfigId(),
-        signal: controller.signal,
+        signal: flow.controller.signal,
         onSourceCreated: (sourceId) => {
-          setCreatedSourceId(sourceId);
+          if (isCurrentFlow(flow)) setCreatedSourceId(sourceId);
         },
         onSourceSyncProgress: (progress) => {
+          if (!isCurrentFlow(flow)) return;
           if (progress.run?.status) {
             setSourceSyncRunStatus(progress.run.status);
           }
@@ -991,6 +1042,7 @@ function Inner() {
           }
         },
       });
+      throwIfStaleFlow(flow);
       if (result.sourceId) {
         setCreatedSourceId(result.sourceId);
       }
@@ -999,7 +1051,7 @@ function Inner() {
       setProviderRows(rowsFromCompatibility(result));
       setCompatibility(result);
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err) || !isCurrentFlow(flow)) return;
       const apiError = err instanceof ControlApiError ? err : undefined;
       if (apiError?.isSourceSyncRequired) {
         const sourceId = sourceIdFromControlError(apiError);
@@ -1024,9 +1076,11 @@ function Inner() {
             : (apiError?.message ?? String(err)),
       );
     } finally {
-      finishAbortableFlow(controller);
-      clearSourceSyncSlowTimer();
-      setCheckingCompatibility(false);
+      if (isCurrentFlow(flow)) {
+        finishAbortableFlow(flow);
+        clearSourceSyncSlowTimer();
+        setCheckingCompatibility(false);
+      }
     }
   };
 
@@ -1046,21 +1100,36 @@ function Inner() {
     setSyncRequired(false);
     setSourceSyncRunStatus(null);
     startSourceSyncSlowTimer();
-    const controller = startAbortableFlow();
+    const flow = startAbortableFlow();
     const space = spaceId()!;
+    const flowInput = {
+      name: name().trim(),
+      gitUrl: gitUrl().trim(),
+      ref: effectiveRef(),
+      path: path().trim() || ".",
+      authConnectionId: sourceAuthConnectionIdForRun(),
+      installConfigId:
+        compatibility()?.installConfigId ?? selectedInstallConfigId(),
+      vars: installVariables(),
+      providerConnections: providerConnectionsPayload(),
+      sourceId: createdSourceId(),
+      installationId: createdInstallationId(),
+      syncDone: stepSync() === "done",
+    };
     try {
       // Step 1 — create Source (skip if a previous attempt already created it).
-      let sourceId = createdSourceId();
+      let sourceId = flowInput.sourceId;
       if (!sourceId) {
         setStepSource("running");
         const result = await createSource({
           spaceId: space,
-          name: name().trim(),
-          url: gitUrl().trim(),
-          defaultRef: effectiveRef(),
-          defaultPath: path().trim() || ".",
-          authConnectionId: sourceAuthConnectionIdForRun(),
+          name: flowInput.name,
+          url: flowInput.gitUrl,
+          defaultRef: flowInput.ref,
+          defaultPath: flowInput.path,
+          authConnectionId: flowInput.authConnectionId,
         });
+        throwIfStaleFlow(flow);
         sourceId = result.source.id;
         setCreatedSourceId(sourceId);
         setStepSource("done");
@@ -1071,15 +1140,17 @@ function Inner() {
       // Step 2 — sync the Source to resolve an immutable snapshot. When the
       // compatibility check already created and synced the Source, reuse that
       // snapshot instead of adding a second source_sync run.
-      if (stepSync() !== "done") {
+      if (!flowInput.syncDone) {
         setStepSync("running");
         const syncEnvelope = await syncSource(sourceId, {
-          signal: controller.signal,
+          signal: flow.controller.signal,
         });
+        throwIfStaleFlow(flow);
         await waitForLatestSourceSnapshot(sourceId, {
           runId: extractRunId(syncEnvelope),
-          signal: controller.signal,
+          signal: flow.controller.signal,
           onProgress: (progress) => {
+            if (!isCurrentFlow(flow)) return;
             if (progress.run?.status) {
               setSourceSyncRunStatus(progress.run.status);
             }
@@ -1088,6 +1159,7 @@ function Inner() {
             }
           },
         });
+        throwIfStaleFlow(flow);
         setStepSync("done");
       } else {
         setStepSync("done");
@@ -1095,30 +1167,30 @@ function Inner() {
 
       // Step 3 — create the current compatibility record bound to the chosen
       // service-side config. Public UI presents this as Capsule creation.
-      let installationId = createdInstallationId();
+      let installationId = flowInput.installationId;
       if (!installationId) {
         setStepInstall("running");
         const existing = await findExistingInstallation(
           space,
-          name().trim(),
+          flowInput.name,
           "production",
         ).catch(() => null);
+        throwIfStaleFlow(flow);
         if (existing) {
-          setStepInstall("done");
+          setStepInstall(INSTALLATION_DONE);
           setStepPlan("idle");
           setExistingInstallation(existing);
           return;
         }
-        const vars = installVariables();
         const installation = await createInstallation({
           spaceId: space,
-          name: name().trim(),
+          name: flowInput.name,
           environment: "production",
           sourceId,
-          installConfigId:
-            compatibility()?.installConfigId ?? selectedInstallConfigId(),
-          ...(vars ? { vars } : {}),
+          installConfigId: flowInput.installConfigId,
+          ...(flowInput.vars ? { vars: flowInput.vars } : {}),
         });
+        throwIfStaleFlow(flow);
         installationId = installation.id;
         setCreatedInstallationId(installationId);
       } else {
@@ -1126,17 +1198,22 @@ function Inner() {
       }
       await putInstallationProviderConnectionSet(
         installationId,
-        providerConnectionsPayload(),
+        flowInput.providerConnections,
       );
+      throwIfStaleFlow(flow);
       setStepInstall("done");
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");
       const planEnvelope = await planInstallation(installationId);
+      throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
       navigate(runId ? `/runs/${runId}` : "/");
     } catch (err) {
+      if (isAbortError(err) || !isCurrentFlow(flow)) {
+        return;
+      }
       const apiError = err instanceof ControlApiError ? err : undefined;
       if (apiError?.isSourceSyncRequired) {
         setSyncRequired(true);
@@ -1149,21 +1226,20 @@ function Inner() {
             message: apiError.message,
           }),
         );
-      } else if (isAbortError(err)) {
-        return;
       } else if (isDuplicateInstallationError(apiError)) {
-        setStepInstall("done");
+        setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
         const existing = await findExistingInstallation(
           space,
-          name().trim(),
+          flowInput.name,
           "production",
         ).catch(() => null);
+        throwIfStaleFlow(flow);
         if (existing) {
           setExistingInstallation(existing);
           setError(null);
         } else {
-          setError(t("new.error.alreadyExists", { name: name().trim() }));
+          setError(t("new.error.alreadyExists", { name: flowInput.name }));
         }
       } else {
         setError(apiError?.message ?? String(err));
@@ -1173,9 +1249,11 @@ function Inner() {
       else if (stepSync() === "running") setStepSync("error");
       else if (stepSource() === "running") setStepSource("error");
     } finally {
-      finishAbortableFlow(controller);
-      clearSourceSyncSlowTimer();
-      setBusy(false);
+      if (isCurrentFlow(flow)) {
+        finishAbortableFlow(flow);
+        clearSourceSyncSlowTimer();
+        setBusy(false);
+      }
     }
   };
 

@@ -15,7 +15,7 @@
     "deploy/node-postgres"
   ],
   "scripts": {
-    "check": "bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
@@ -23,6 +23,7 @@
     "test": "bun test ./tests",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
+    "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "test:scripts": "bun test ./tests/scripts",
     "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",

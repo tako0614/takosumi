@@ -400,7 +400,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.httpsConnection": "HTTPS source access",
   "new.sourceAccess.sshConnection": "SSH source access",
   "new.sourceAccess.defaultDisplayName": "{name} source access",
-  "new.name": "Display name",
+  "new.name": "Service name",
   "new.vars.projectName": "Resource prefix",
   "new.vars.inputsTitle": "Advanced settings",
   "new.vars.inputsBody":
@@ -492,6 +492,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.spaceRequired": "Select a Workspace.",
   "new.error.urlRequired": "Enter a Git URL.",
   "new.error.nameRequired": "Enter a name.",
+  "new.error.nameInvalid":
+    "Use lowercase letters, numbers, and hyphens only for the service name.",
   "new.error.configMissing": "Add configuration is not available yet.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",

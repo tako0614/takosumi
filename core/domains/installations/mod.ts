@@ -152,6 +152,13 @@ export class InstallationsService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `installation @${space.handle}/${request.name} (${request.environment}) already exists`,
+        {
+          reason: "duplicate_installation",
+          installationId: existing.id,
+          spaceId: request.spaceId,
+          name: request.name,
+          environment: request.environment,
+        },
       );
     }
     const nowIso = this.#now().toISOString();

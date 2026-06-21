@@ -18,11 +18,17 @@ export type OpenTofuControllerErrorCode = DeployControlErrorCode;
 
 export class OpenTofuControllerError extends Error {
   readonly code: OpenTofuControllerErrorCode;
+  readonly details: unknown;
 
-  constructor(code: OpenTofuControllerErrorCode, message: string) {
+  constructor(
+    code: OpenTofuControllerErrorCode,
+    message: string,
+    details?: unknown,
+  ) {
     super(message);
     this.name = "OpenTofuControllerError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -44,8 +50,9 @@ export function requireNonEmptyString(
 export function mapVaultError(error: unknown): unknown {
   if (!(error instanceof ConnectionVaultError)) return error;
   const groups = error.missingEnvGroups;
-  const suffix = groups && groups.length > 0
-    ? `: provide one of [${groups.map((group) => group.join("+")).join(", ")}]`
-    : "";
+  const suffix =
+    groups && groups.length > 0
+      ? `: provide one of [${groups.map((group) => group.join("+")).join(", ")}]`
+      : "";
   return new OpenTofuControllerError(error.code, `${error.message}${suffix}`);
 }

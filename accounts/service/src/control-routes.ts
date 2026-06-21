@@ -153,6 +153,10 @@ import { base64UrlEncodeBytes } from "./encoding.ts";
 /** 64 MiB cap on a single local Capsule upload archive. */
 const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 type PublicInstallationInput = PublicInstallation &
   Partial<Pick<Installation, "installType" | "currentOutputSnapshotId">>;
 
@@ -843,6 +847,9 @@ function controllerErrorResponse(error: unknown): Response {
       code,
       error instanceof Error ? error.message : String(error),
       DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
+      undefined,
+      {},
+      isRecord(error) ? error.details : undefined,
     );
   }
   return errorJson("internal_error", "internal error", 500);
