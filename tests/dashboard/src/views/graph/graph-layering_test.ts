@@ -120,11 +120,11 @@ describe("extractRunId", () => {
 describe("graph view copy", () => {
   test("uses service-connection wording instead of graph theory jargon", () => {
     expect(en["graph.title"]).toBe("Service connections");
-    expect(en["graph.layer"]).toBe("Review order {n}");
+    expect(en["graph.layer"]).toBe("Setup order {n}");
     expect(en["graph.cycle"]).toBe("Needs connection review");
     expect(en["graph.dependsOn"]).toBe("Uses {names}");
     expect(ja["graph.title"]).toBe("サービス連携");
-    expect(ja["graph.layer"]).toBe("確認順 {n}");
+    expect(ja["graph.layer"]).toBe("設定順 {n}");
     expect(ja["graph.cycle"]).toBe("連携の見直しが必要");
     expect(ja["graph.dependsOn"]).toBe("{names} を利用");
   });

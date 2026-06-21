@@ -40,14 +40,13 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.activity": "History",
   "nav.manage": "Manage",
   "nav.accountSection": "Account",
-  "nav.advanced": "Advanced",
   "nav.notifications": "Notifications",
-  "nav.spaceSettings": "Workspace settings",
+  "nav.spaceSettings": "Team settings",
   "nav.spaceSettingsShort": "Settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back",
-  "nav.deployContext": "Deploy / manage",
+  "nav.deployContext": "Service hosting",
   "shell.skipToContent": "Skip to content",
   "shell.userMenu": "User menu",
   "shell.signOut": "Sign out",
@@ -59,15 +58,15 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.dark": "Dark",
 
   // --- space switcher -------------------------------------------------------
-  "space.label": "Workspace",
-  "space.loadFailed": "Failed to load Workspaces — {message}",
-  "space.none": "No Workspaces",
-  "space.new": "New Workspace",
+  "space.label": "Team",
+  "space.loadFailed": "Failed to load teams — {message}",
+  "space.none": "No teams",
+  "space.new": "New team",
   "space.handleLabel": "Handle (without @, letters/digits/hyphen)",
   "space.handlePlaceholder": "my-space",
   "space.handleRequired": "Enter a handle.",
-  "space.select": "Select a Workspace",
-  "space.selectMessage": "Pick a Workspace from the switcher in the top bar.",
+  "space.select": "Select a team",
+  "space.selectMessage": "Pick a team from the switcher in the top bar.",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -206,16 +205,16 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deps.title": "Connected services",
   "app.deps.dependsOn": "Services this uses",
   "app.deps.usedBy": "Used by",
-  "app.source.title": "Source",
+  "app.source.title": "App source",
   "app.source.name": "Name",
-  "app.source.url": "Git URL",
-  "app.source.refPath": "Ref / Path",
+  "app.source.url": "Source URL",
+  "app.source.refPath": "Version / folder",
   "app.source.status": "Source status",
   "app.source.loading": "Loading source info.",
-  "app.info.title": "Technical details",
+  "app.info.title": "Support info",
   "app.info.id": "ID",
   "app.info.generation": "Restore point",
-  "app.info.deployment": "Current deployment",
+  "app.info.deployment": "Current state",
   "app.info.installConfig": "Install settings",
   "app.deploys.title": "Update history",
   "app.deploys.subtitle":
@@ -228,8 +227,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Create a backup when you need a recovery point or export before making changes.",
   "app.deploys.backup": "Create backup",
   "app.deploys.backupCreated": "Backup created: {id}",
-  "app.recentRuns.title": "Recent runs",
-  "app.recentRuns.empty": "No recent runs.",
+  "app.recentRuns.title": "Recent checks",
+  "app.recentRuns.empty": "No recent checks.",
   "app.recentRuns.open": "Details",
   "app.recentActivity.title": "Recent updates",
   "app.recentActivity.empty": "No recent updates.",
@@ -238,7 +237,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.bindings.title": "Connected cloud accounts",
   "app.bindings.subtitle":
     "Accounts and services this service uses. Usually no change is needed.",
-  "app.bindings.add": "Add service",
+  "app.bindings.add": "Add connection",
   "app.bindings.aliasPlaceholder": "alias (optional)",
   "app.bindings.selectConnection": "Select a connection",
   "app.bindings.remove": "Remove",
@@ -297,7 +296,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.changes.create": "Create",
   "run.changes.update": "Update",
   "run.changes.delete": "Delete",
-  "run.resources.kicker": "Plan contents",
+  "run.resources.kicker": "Change preview",
   "run.resources.title": "Resources that will change",
   "run.resources.count": "{n} resources",
   "run.resources.more": "{n} more resources are included in this plan.",
@@ -308,9 +307,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.title": "Support details",
   "run.details.runId": "Execution ID",
   "run.details.type": "Type",
-  "run.details.policy": "Policy",
+  "run.details.policy": "Safety check",
   "run.details.installation": "Service",
-  "run.details.sourceSnapshot": "Pinned source",
+  "run.details.sourceSnapshot": "Source version",
   "run.details.dependencySnapshot": "Pinned connected inputs",
   "run.details.baseGeneration": "Previous state",
   "run.details.planDigest": "Change verification ID",
@@ -318,8 +317,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.started": "Started",
   "run.details.finished": "Finished",
   "run.details.error": "Error",
-  "run.inputs.title": "Inputs from dependencies",
-  "run.inputs.empty": "No dependency-injected inputs detected.",
+  "run.inputs.title": "Values from connected services",
+  "run.inputs.empty": "No values were received from connected services.",
   "run.connections.title": "Connections",
   "run.connections.reviewTitle": "External services for this review",
   "run.connections.reviewBody":
@@ -334,8 +333,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.connections.empty": "No connection resolution info.",
   "run.diagnostics.title": "Diagnostics",
   "run.diagnostics.empty": "No diagnostics.",
-  "run.audit.title": "Audit log",
-  "run.audit.empty": "No audit events.",
+  "run.audit.title": "Activity record",
+  "run.audit.empty": "No activity records.",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
@@ -357,11 +356,11 @@ export const en: Record<keyof typeof ja, string> = {
     "{label} contains unsupported characters or is too long.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
-  "new.git.url": "Install link or Git URL",
-  "new.git.advanced": "Advanced source settings",
+  "new.git.url": "Install link",
+  "new.git.advanced": "Source details",
   "new.git.ref": "Version",
   "new.git.path": "Folder",
-  "new.sourceAccess.title": "Private repository",
+  "new.sourceAccess.title": "Private app source",
   "new.sourceAccess.body":
     "Public repositories need no credential. For a private source, save a read-only HTTPS token or select saved source access.",
   "new.sourceAccess.mode": "Source access",
@@ -371,13 +370,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.connection": "Saved source access",
   "new.sourceAccess.selectConnection": "Select saved source access",
   "new.sourceAccess.noConnections":
-    "No verified source access is available in this Workspace yet.",
+    "No verified source access is available in this team yet.",
   "new.sourceAccess.username": "Username",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "Read-only repository token",
   "new.sourceAccess.saveToken": "Save token",
   "new.sourceAccess.tokenBody":
-    "The token is stored as write-only source access and is used only while checking this Workspace's source.",
+    "The token is stored as write-only source access and is used only while checking this team's source.",
   "new.sourceAccess.errorTokenRequired": "Enter an access token.",
   "new.sourceAccess.errorSaveToken":
     "Save the private repository token before checking the source.",
@@ -448,22 +447,22 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.selectConnection": "Select a connection",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.errorOperatorManaged":
-    "{provider} is not available in this Workspace yet.",
+    "{provider} is not available in this team yet.",
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody": "Set up the connection to continue.",
   "new.providers.setupMissing": "Set up required connection",
   "new.providers.operatorMissingTitle":
     "This service is not available here yet",
   "new.providers.operatorMissingBody":
-    "A required service connection has not been enabled for this Workspace.",
-  "new.providers.operatorMissingNext": "Ask a Workspace admin to enable it.",
-  "new.step.technical": "Technical progress",
-  "new.step.register": "Register source",
+    "A required service connection has not been enabled for this team.",
+  "new.providers.operatorMissingNext": "Ask a team admin to enable it.",
+  "new.step.technical": "Setup progress",
+  "new.step.register": "Prepare service",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create service",
   "new.step.plan": "Review changes",
-  "new.error.spaceRequired": "Select a Workspace.",
-  "new.error.urlRequired": "Enter a Git URL.",
+  "new.error.spaceRequired": "Select a team.",
+  "new.error.urlRequired": "Enter an install link.",
   "new.error.nameRequired": "Enter a name.",
   "new.error.nameInvalid":
     "Use lowercase letters, numbers, and hyphens only for the service name.",
@@ -473,14 +472,14 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.sourceFetchFailed":
     "Takosumi could not fetch the Git contents. Check the URL, version, folder, or private-repository connection. Detail: {message}",
   "new.error.alreadyExists":
-    "“{name}” is already added to this Workspace. Open it from the service list.",
+    "“{name}” is already added to this team. Open it from the service list.",
   "new.error.notRunnable":
     "This inspection result is not runnable yet. Resolve the listed changes, then check again.",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "Advanced workspace settings",
+  "spaceSettings.title": "Team settings",
   "spaceSettings.subtitle":
-    "Workspace administration tools for members, recovery, sharing, and policy.",
+    "Administration tools for members, recovery, and sharing.",
   "spaceSettings.tab.general": "General",
   "spaceSettings.tab.members": "Members",
   "spaceSettings.tab.connections": "Connections",
@@ -492,9 +491,9 @@ export const en: Record<keyof typeof ja, string> = {
   "spaceSettings.general.type": "Type",
   "spaceSettings.general.owner": "Owner",
   "spaceSettings.general.updated": "Updated",
-  "spaceSettings.general.advancedDetails": "Workspace advanced settings",
-  "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
-  "spaceSettings.general.saved": "Workspace settings saved.",
+  "spaceSettings.general.advancedDetails": "Support details",
+  "spaceSettings.general.policyAdvanced": "Policy JSON (support)",
+  "spaceSettings.general.saved": "Team settings saved.",
   "spaceSettings.general.nameRequired": "Enter a display name.",
   "spaceSettings.general.policyObject": "Policy JSON must be an object.",
   "spaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
@@ -508,7 +507,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.status.invited": "Invited",
   "members.status.suspended": "Removed",
   "members.subtitle":
-    "Members of this Workspace and their roles. Inviting, role changes, and removal are owner/admin only.",
+    "Members of this team and their roles. Inviting, role changes, and removal are owner/admin only.",
   "members.invite.title": "Invite a member",
   "members.invite.subtitle":
     "Enter the Google email for someone who has already signed in to Takosumi Cloud.",
@@ -528,7 +527,7 @@ export const en: Record<keyof typeof ja, string> = {
     "The last owner cannot be removed. Appoint another owner first.",
   "members.remove": "Remove",
   "members.removeConfirm": "Remove this member? ({account})",
-  "members.empty": "This Workspace has no members yet.",
+  "members.empty": "This team has no members yet.",
   "members.viewerNote":
     "Only owners and admins can invite, change roles, or remove members.",
 
@@ -538,12 +537,12 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.providerConnections.title": "External service connections",
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
-  "conn.providerConnections.ownership": "Ownership",
+  "conn.providerConnections.ownership": "Managed by",
   "conn.providerConnections.status": "Status",
   "conn.ownership.ownKey": "Your credentials",
   "conn.ownership.takosProvided": "Operator managed",
   "conn.scope.operator": "Operator managed",
-  "conn.scope.space": "Workspace",
+  "conn.scope.space": "Team",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.return.title": "Continue adding {name}",
@@ -596,27 +595,32 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.guided.pastePlaceholder": "Paste the token here",
   "conn.guided.connect": "Connect",
   "conn.guided.connecting": "Connecting...",
+  "conn.custom.summary": "Other connections",
+  "conn.custom.body":
+    "Only use this when the service you need is not listed above.",
+  "conn.custom.use": "Use a custom connection",
+  "conn.custom.back": "Back to listed services",
   "conn.advanced.summary": "Advanced (raw fields)",
   "conn.advanced.register": "Register values directly",
   "conn.register": "Register connection",
   "conn.registering": "Registering...",
   "conn.genericEnv.providerName": "External service name",
-  "conn.genericEnv.envName": "Env variable name",
+  "conn.genericEnv.envName": "Value name",
   "conn.genericEnv.value": "Value",
   "conn.genericEnv.valuePlaceholder": "Paste the value",
-  "conn.genericEnv.addRow": "Add env variable",
+  "conn.genericEnv.addRow": "Add value",
   "conn.genericEnv.providerRequired": "Enter an external service name.",
   "conn.genericEnv.cloudflareGuided":
     "Register Cloudflare via the provider above (it has a guided flow).",
   "conn.genericEnv.nameRequired":
-    "Rows with a value need an env variable name.",
-  "conn.genericEnv.oneRequired": "Enter at least one env variable.",
+    "Rows with a value need a value name.",
+  "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid provider.",
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
   "conn.list.title": "Connection details",
   "conn.list.empty":
-    "This Workspace has no connections yet. Add one with the form above.",
+    "This team has no connections yet. Add one with the form above.",
   "conn.test": "Test connection",
   "conn.testing": "Testing...",
   "conn.test.notReady": "The connection is not ready yet (status: {status}).",
@@ -626,7 +630,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Manage backups for this Workspace's settings and deployed state. Service data exports appear only for services that support them.",
+    "Manage backups for this team's settings and deployed state. Service data exports appear only for services that support them.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
@@ -640,13 +644,13 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.serviceDataSummary":
     "service data {exported} / unsupported {unsupported} / missing {missing}",
   "backups.empty.title": "No backups yet",
-  "backups.empty.message": "Create this Workspace's first backup.",
+  "backups.empty.message": "Create this team's first backup.",
 
   // --- shared values -------------------------------------------------------------
   "shares.subtitle":
-    "Explicitly share a service's public values across Workspaces.",
+    "Explicitly share a service's public values across teams.",
   "shares.create.title": "Create a share",
-  "shares.create.toSpace": "Target Workspace",
+  "shares.create.toSpace": "Target team",
   "shares.create.producer": "Source service",
   "shares.create.selectPlaceholder": "Select",
   "shares.create.outputs": "Shared values",
@@ -712,10 +716,10 @@ export const en: Record<keyof typeof ja, string> = {
   // --- activity -------------------------------------------------------------------
   "activity.title": "History",
   "activity.subtitle":
-    "Recent service and account events. Technical audit details are available inside each item.",
+    "Recent service and account events. Support details are available inside each item.",
   "activity.details": "Support details",
   "activity.empty.title": "No activity yet",
-  "activity.empty.message": "Operations in this Workspace are recorded here.",
+  "activity.empty.message": "Operations in this team are recorded here.",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Batch update",
@@ -731,15 +735,16 @@ export const en: Record<keyof typeof ja, string> = {
   // --- graph ---------------------------------------------------------------------
   "graph.title": "Service connections",
   "graph.subtitle": "How services use values from other services.",
-  "graph.layer": "Review order {n}",
+  "graph.layer": "Setup order {n}",
   "graph.cycle": "Needs connection review",
   "graph.dependsOn": "Uses {names}",
   "graph.empty.title": "No services",
-  "graph.empty.message": "This Workspace has no services yet.",
+  "graph.empty.message": "This team has no services yet.",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
   "account.subtitle": "Sign-in info, session, language, and appearance.",
+  "account.manage.title": "Common settings",
   "account.profile.title": "Sign-in info",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "Display name",
@@ -762,8 +767,8 @@ export const en: Record<keyof typeof ja, string> = {
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",
   "billing.subtitle":
-    "Review plans, credits, usage, and payment settings for this space.",
-  "billing.mode.disabled": "Billing is disabled for this Workspace.",
+    "Review plans, credits, usage, and payment settings for this team.",
+  "billing.mode.disabled": "Billing is disabled for this team.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a credit balance.",
   "billing.loading": "Loading billing status...",

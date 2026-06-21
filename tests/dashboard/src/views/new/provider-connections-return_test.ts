@@ -137,9 +137,7 @@ describe("/new Provider Connections return context", () => {
     expect(en["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
     );
-    expect(en["new.providers.operatorMissingNext"]).toContain(
-      "Workspace admin",
-    );
+    expect(en["new.providers.operatorMissingNext"]).toContain("team admin");
     expect(ja["new.providers.operatorMissingBody"]).not.toContain("運営側");
     expect(ja["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
@@ -354,11 +352,13 @@ describe("/new Provider Connections return context", () => {
   test("ProviderConnection ownership remains available inside friendly connection details", () => {
     expect(connectionsTabSource).toContain("providerConnectionOwnershipLabel");
     expect(connectionsTabSource).toContain(
-      "providerConnectionOwnershipLabel(d.ownership)",
+      "providerConnectionOwnershipLabel(connection.ownership)",
     );
     expect(connectionsTabSource).toContain('class="wc-inline-details"');
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
-    expect(connectionsTabSource).toContain('header: t("common.actions")');
+    expect(connectionsTabSource).toContain('class="wc-conn-actions"');
+    expect(connectionsTabSource).not.toContain("providerConnectionColumns");
+    expect(connectionsTabSource).not.toContain("<DataTable");
     expect(connectionsTabSource).toContain(
       '<summary>{t("conn.list.title")}</summary>',
     );

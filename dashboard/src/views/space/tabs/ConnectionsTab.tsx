@@ -57,8 +57,6 @@ import {
   Button,
   Card,
   CardHeader,
-  type Column,
-  DataTable,
   EmptyState,
   FormField,
   Input,
@@ -444,74 +442,65 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     void remove.run(connection.id);
   };
 
-  const providerConnectionColumns: readonly Column<ProviderConnection>[] = [
-    {
-      header: t("conn.providerConnections.name"),
-      cell: (d) => (
-        <div class="wc-conn-main">
-          <span>{d.displayName}</span>
-          <details class="wc-inline-details">
-            <summary>{t("common.details")}</summary>
-            <code class="wc-code">{d.id}</code>
-          </details>
-        </div>
-      ),
-    },
-    {
-      header: t("conn.providerConnections.provider"),
-      cell: (d) => (
-        <div class="wc-conn-main">
-          <span>{providerConnectionProviderLabel(d)}</span>
-          <details class="wc-inline-details">
-            <summary>{t("common.details")}</summary>
-            <code class="wc-code">{d.providerSource}</code>
-            <span class="wc-conn-detail-line">
-              {providerConnectionOwnershipLabel(d.ownership)}
-            </span>
-            <Show when={connectionEnvNames(d.id).length > 0}>
-              <span class="wc-conn-detail-line">
-                {connectionEnvNames(d.id).join(", ")}
+  const providerConnectionList = () => (
+    <ul class="wc-conn-list">
+      <For each={providerConnections() ?? []}>
+        {(connection) => (
+          <li class="wc-conn-row">
+            <div class="wc-conn-head">
+              <span class="wc-conn-name">
+                {connection.displayName || providerConnectionProviderLabel(connection)}
               </span>
-            </Show>
-          </details>
-        </div>
-      ),
-    },
-    {
-      header: t("conn.providerConnections.status"),
-      cell: (d) => (
-        <Badge tone={providerConnectionTone(d.status)}>
-          {providerConnectionStatusLabel(d.status)}
-        </Badge>
-      ),
-    },
-    {
-      header: t("common.actions"),
-      cell: (d) => (
-        <div class="wc-conn-actions">
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            onClick={() => void runTest(d.id)}
-            busy={testBusyId() === d.id}
-          >
-            {testBusyId() === d.id ? t("conn.testing") : t("conn.test")}
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            type="button"
-            onClick={() => void confirmRemoveProviderConnection(d)}
-            disabled={remove.busy()}
-            icon={<Trash size={14} />}
-          >
-            {t("common.delete")}
-          </Button>
-        </div>
-      ),
-    },
-  ];
+              <Badge tone={providerConnectionTone(connection.status)}>
+                {providerConnectionStatusLabel(connection.status)}
+              </Badge>
+            </div>
+            <div class="wc-conn-meta">
+              <span>{providerConnectionProviderLabel(connection)}</span>
+            </div>
+            <details class="wc-inline-details">
+              <summary>{t("common.details")}</summary>
+              <code class="wc-code">{connection.id}</code>
+              <span class="wc-conn-detail-line">
+                {connection.providerSource}
+              </span>
+              <span class="wc-conn-detail-line">
+                {providerConnectionOwnershipLabel(connection.ownership)}
+              </span>
+              <Show when={connectionEnvNames(connection.id).length > 0}>
+                <span class="wc-conn-detail-line">
+                  {connectionEnvNames(connection.id).join(", ")}
+                </span>
+              </Show>
+            </details>
+            <div class="wc-conn-actions">
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void runTest(connection.id)}
+                busy={testBusyId() === connection.id}
+              >
+                {testBusyId() === connection.id
+                  ? t("conn.testing")
+                  : t("conn.test")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                type="button"
+                onClick={() => void confirmRemoveProviderConnection(connection)}
+                disabled={remove.busy()}
+                icon={<Trash size={14} />}
+              >
+                {t("common.delete")}
+              </Button>
+            </div>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
 
   const rawConnectionList = () => (
     <div class="wc-card-stack">
@@ -681,11 +670,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
           <Show when={testError()}>
             {(m) => <Toast tone="error">{m()}</Toast>}
           </Show>
-          <DataTable
-            columns={providerConnectionColumns}
-            rows={providerConnections() ?? []}
-            rowKey={(d) => d.id}
-          />
+          {providerConnectionList()}
           <Show when={(connections() ?? []).length > 0}>
             <details class="connection-advanced">
               <summary>{t("conn.list.title")}</summary>
@@ -723,9 +708,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               <For each={PROVIDERS}>
                 {(p) => <option value={p.provider}>{p.label}</option>}
               </For>
-              <option value={GENERIC_ENV_PROVIDER_OPTION}>
-                {t("conn.add.genericEnvOption")}
-              </option>
             </Select>
           </FormField>
 
@@ -740,6 +722,31 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               autocomplete="off"
             />
           </FormField>
+
+          <Show when={!isGenericEnvProvider()}>
+            <details class="connection-advanced">
+              <summary>{t("conn.custom.summary")}</summary>
+              <p class="muted">{t("conn.custom.body")}</p>
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
+              >
+                {t("conn.custom.use")}
+              </Button>
+            </details>
+          </Show>
+          <Show when={isGenericEnvProvider()}>
+            <div class="wc-form-actions">
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
+              >
+                {t("conn.custom.back")}
+              </Button>
+            </div>
+          </Show>
 
           <Show
             when={isGenericEnvProvider()}

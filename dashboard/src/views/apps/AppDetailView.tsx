@@ -519,7 +519,10 @@ function OutputValue(props: { readonly value: unknown }): JSX.Element {
           >
             {t("app.output.openPublicLink")}
           </Button>
-          <code>{props.value as string}</code>
+          <details class="wb-inline-details">
+            <summary>{t("app.output.url")}</summary>
+            <code>{props.value as string}</code>
+          </details>
         </span>
       </Match>
       <Match when={typeof props.value === "string"}>
