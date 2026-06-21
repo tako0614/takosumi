@@ -38,7 +38,7 @@ export const ja = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "サービス",
   "nav.add": "追加",
-  "nav.connections": "接続",
+  "nav.connections": "クラウドアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "履歴",
   "nav.manage": "管理",
@@ -69,8 +69,7 @@ export const ja = {
   "space.handlePlaceholder": "my-space",
   "space.handleRequired": "ハンドルを入力してください。",
   "space.select": "チームを選択してください",
-  "space.selectMessage":
-    "右上のチーム選択からチームを選ぶと表示されます。",
+  "space.selectMessage": "右上のチーム選択からチームを選ぶと表示されます。",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -344,25 +343,23 @@ export const ja = {
   "new.title": "サービスを追加",
   "new.subtitle":
     "おすすめから選ぶか、アプリのインストールリンクを貼り付けます。",
-  "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "おすすめサービス",
   "new.catalog.select": "これを追加",
-  "new.advancedImport.open": "インストールリンクを使う",
-  "new.advancedImport.close": "リンク入力を閉じる",
-  "new.advancedImport.title": "インストールリンクで追加",
+  "new.advancedImport.open": "手動で追加",
+  "new.advancedImport.close": "おすすめに戻る",
+  "new.advancedImport.title": "手動で追加",
   "new.advancedImport.subtitle":
     "アプリページのインストールリンク、または詳しい人向けの Git URL を貼り付けます。",
   "new.selection.subtitle":
     "まず内容を確認します。デプロイは承認後に実行されます。",
-  "new.selection.sourceDetails": "取得元の詳細",
   "new.catalogInput.title": "サービス設定",
   "new.catalogInput.errorRequired": "{label} を入力してください。",
   "new.catalogInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
-  "new.git.url": "インストールリンク",
+  "new.git.url": "アプリのリンク / Git URL",
   "new.git.advanced": "取得元の詳細設定",
   "new.git.ref": "バージョン",
   "new.git.path": "フォルダ",
@@ -449,7 +446,7 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "外部サービス接続",
+  "new.providers.title": "接続するクラウドアカウント",
   "new.providers.alias": "alias: {alias}",
   "new.providers.selectConnection": "接続を選択",
   "new.providers.errorConnection":
@@ -486,8 +483,7 @@ export const ja = {
 
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "チーム設定",
-  "spaceSettings.subtitle":
-    "メンバー、復元、共有などの管理用設定です。",
+  "spaceSettings.subtitle": "メンバー、復元、共有などの管理用設定です。",
   "spaceSettings.tab.general": "一般",
   "spaceSettings.tab.members": "メンバー",
   "spaceSettings.tab.connections": "接続",
@@ -543,7 +539,7 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle": "外部サービスに接続します。保存した値は再表示されません。",
-  "conn.providerConnections.title": "外部サービス接続",
+  "conn.providerConnections.title": "クラウドアカウント",
   "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.ownership": "管理元",
@@ -654,8 +650,7 @@ export const ja = {
   "backups.serviceDataSummary":
     "サービスデータ {exported} 件 / 未対応 {unsupported} 件 / 不足 {missing} 件",
   "backups.empty.title": "まだバックアップがありません",
-  "backups.empty.message":
-    "このチームの最初のバックアップを作成できます。",
+  "backups.empty.message": "このチームの最初のバックアップを作成できます。",
 
   // --- shared values -------------------------------------------------------------
   "shares.subtitle": "チーム間でサービスの公開値を明示的に共有します。",
@@ -696,7 +691,7 @@ export const ja = {
     "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.viewRaw": "すべての履歴を見る →",
+  "notif.viewRaw": "サポート履歴を見る →",
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
@@ -756,8 +751,8 @@ export const ja = {
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
-  "account.subtitle": "サインイン情報・セッション・言語・表示の設定です。",
-  "account.manage.title": "よく使う設定",
+  "account.subtitle": "サインイン情報と言語・表示の設定です。",
+  "account.manage.title": "高度な管理",
   "account.profile.title": "サインイン情報",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "表示名",

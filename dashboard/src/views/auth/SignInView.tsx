@@ -107,12 +107,10 @@ export function SignInPanel() {
   const isEnabled = (p: Provider): boolean => enabled()[p] === true;
   const hasEnabledProvider = (): boolean =>
     PROVIDERS.some((p) => isEnabled(p.id));
-  const providerSubText = (p: Provider): string => {
+  const providerSubText = (p: Provider): string | undefined => {
     if (!providersLoaded()) return t("auth.providerChecking");
     if (providersLoadFailed()) return t("auth.providerRetryNeeded");
-    return isEnabled(p)
-      ? t("auth.googleAccount")
-      : t("auth.providerUnavailable");
+    return isEnabled(p) ? undefined : t("auth.providerUnavailable");
   };
 
   const select = (p: Provider) => {
@@ -179,7 +177,9 @@ export function SignInPanel() {
               <span class="sign-in-label">
                 {t("auth.continueWith", { provider: p.name })}
               </span>
-              <span class="sign-in-sub-text">{providerSubText(p.id)}</span>
+              <Show when={providerSubText(p.id)}>
+                {(subText) => <span class="sign-in-sub-text">{subText()}</span>}
+              </Show>
             </span>
             <svg
               class="sign-in-arrow"

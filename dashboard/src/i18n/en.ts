@@ -35,7 +35,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Services",
   "nav.add": "Add",
-  "nav.connections": "Connections",
+  "nav.connections": "Cloud accounts",
   "nav.billing": "Billing",
   "nav.activity": "History",
   "nav.manage": "Manage",
@@ -339,24 +339,22 @@ export const en: Record<keyof typeof ja, string> = {
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
   "new.subtitle": "Choose a starter or paste an app install link.",
-  "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.store.aria": "Recommended services",
   "new.store.title": "Recommended services",
   "new.catalog.select": "Add this",
-  "new.advancedImport.open": "Use an install link",
-  "new.advancedImport.close": "Hide link input",
-  "new.advancedImport.title": "Add with an install link",
+  "new.advancedImport.open": "Add manually",
+  "new.advancedImport.close": "Back to recommendations",
+  "new.advancedImport.title": "Add manually",
   "new.advancedImport.subtitle":
     "Paste an app-page install link, or a Git URL for advanced setup.",
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
-  "new.selection.sourceDetails": "Source details",
   "new.catalogInput.title": "Service setup",
   "new.catalogInput.errorRequired": "Enter {label}.",
   "new.catalogInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
-  "new.git.url": "Install link",
+  "new.git.url": "App link / Git URL",
   "new.git.advanced": "Source details",
   "new.git.ref": "Version",
   "new.git.path": "Folder",
@@ -442,7 +440,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.existing.body":
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
   "new.existing.open": "Open existing service",
-  "new.providers.title": "External service connections",
+  "new.providers.title": "Cloud account to use",
   "new.providers.alias": "alias: {alias}",
   "new.providers.selectConnection": "Select a connection",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
@@ -534,7 +532,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
     "Connect external services. Saved values are never shown again.",
-  "conn.providerConnections.title": "External service connections",
+  "conn.providerConnections.title": "Cloud accounts",
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
   "conn.providerConnections.ownership": "Managed by",
@@ -612,8 +610,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.providerRequired": "Enter an external service name.",
   "conn.genericEnv.cloudflareGuided":
     "Register Cloudflare via the provider above (it has a guided flow).",
-  "conn.genericEnv.nameRequired":
-    "Rows with a value need a value name.",
+  "conn.genericEnv.nameRequired": "Rows with a value need a value name.",
   "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid provider.",
   "conn.error.tokenRequired": "Paste a token.",
@@ -647,8 +644,7 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.empty.message": "Create this team's first backup.",
 
   // --- shared values -------------------------------------------------------------
-  "shares.subtitle":
-    "Explicitly share a service's public values across teams.",
+  "shares.subtitle": "Explicitly share a service's public values across teams.",
   "shares.create.title": "Create a share",
   "shares.create.toSpace": "Target team",
   "shares.create.producer": "Source service",
@@ -684,7 +680,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.empty.message": "Events appear here when you add or deploy services.",
   "notif.attention": "{n} events need attention.",
   "notif.badge.attention": "Attention",
-  "notif.viewRaw": "View all history →",
+  "notif.viewRaw": "View support history →",
   "notif.event.installCreated": "Added service “{name}”",
   "notif.event.installCreatedEnv": "Environment: {env}",
   "notif.event.planReady": "{operation} is ready",
@@ -743,8 +739,8 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
-  "account.subtitle": "Sign-in info, session, language, and appearance.",
-  "account.manage.title": "Common settings",
+  "account.subtitle": "Sign-in info, language, and appearance.",
+  "account.manage.title": "Advanced management",
   "account.profile.title": "Sign-in info",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "Display name",

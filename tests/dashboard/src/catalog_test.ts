@@ -15,13 +15,23 @@ describe("dashboard catalog", () => {
     expect(CATALOG.map((entry) => entry.id)).not.toContain("takos");
   });
 
-  test("starter copy does not imply a public URL is always produced", () => {
+  test("the first Worker starter is browser-openable after apply", () => {
     const hello = CATALOG.find(
       (entry) => entry.id === "cloudflare-hello-worker",
     );
-    expect(hello?.description.en.toLowerCase()).not.toContain(
-      "public url is output",
+    expect(hello).toBeDefined();
+    expect(hello?.description.en.toLowerCase()).toContain("workers.dev");
+    expect(
+      hello?.inputs.map((field) => [field.name, field.required]),
+    ).toContainEqual(["workersSubdomain", true]);
+    const template = defaultTemplateRegistry.require(
+      "cloudflare-hello-worker",
+      "1.0.0",
     );
+    expect(template.policy.allowedResourceTypes).toContain(
+      "cloudflare_workers_script_subdomain",
+    );
+    expect(template.outputs.public.url?.from).toBe("url");
   });
 
   test("visible cards resolve to seeded official template configs", () => {

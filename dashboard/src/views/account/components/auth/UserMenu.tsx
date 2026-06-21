@@ -4,7 +4,7 @@
  */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { CreditCard, LogOut, Plug, ScrollText, UserCircle2 } from "lucide-solid";
+import { CreditCard, LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
   readSession,
@@ -90,20 +90,6 @@ export default function UserMenu() {
             onClick={() => setOpen(false)}
           >
             <CreditCard size={16} /> {t("nav.billing")}
-          </a>
-          <a
-            class="user-menu-item"
-            href="/connections"
-            onClick={() => setOpen(false)}
-          >
-            <Plug size={16} /> {t("nav.connections")}
-          </a>
-          <a
-            class="user-menu-item"
-            href="/activity"
-            onClick={() => setOpen(false)}
-          >
-            <ScrollText size={16} /> {t("nav.activity")}
           </a>
           <div
             class="user-menu-lang"

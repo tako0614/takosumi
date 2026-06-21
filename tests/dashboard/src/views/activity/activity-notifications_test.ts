@@ -38,8 +38,8 @@ describe("History and notifications", () => {
 
   test("notifications link to history without advertising raw audit logs", () => {
     expect(notificationsSource).toContain('href="/activity"');
-    expect(en["notif.viewRaw"]).toBe("View all history →");
-    expect(ja["notif.viewRaw"]).toBe("すべての履歴を見る →");
+    expect(en["notif.viewRaw"]).toBe("View support history →");
+    expect(ja["notif.viewRaw"]).toBe("サポート履歴を見る →");
     expect(en["notif.viewRaw"].toLowerCase()).not.toContain("raw");
     expect(en["notif.viewRaw"].toLowerCase()).not.toContain("audit");
     expect(ja["notif.viewRaw"]).not.toContain("生");

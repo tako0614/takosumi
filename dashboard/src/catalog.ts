@@ -53,21 +53,21 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "worker",
     provider: "cloudflare",
     suggestedName: "hello",
-    badge: { ja: "Cloudflare / Worker", en: "Cloudflare / Worker" },
-    name: { ja: "Hello Worker", en: "Hello Worker" },
+    badge: { ja: "Webアプリ", en: "Web app" },
+    name: { ja: "小さなWebアプリを公開", en: "Deploy a tiny web app" },
     description: {
-      ja: "ビルドなしで小さな Cloudflare Worker を作ります。最初の接続テストに向いています。",
-      en: "Creates a tiny no-build Cloudflare Worker. Good for the first connection test.",
+      ja: "すぐ開ける小さなWebアプリを workers.dev に作ります。",
+      en: "Creates a tiny browser-openable web app on workers.dev.",
     },
     inputs: [
       {
         name: "appName",
         required: true,
         defaultValue: "service-name-with-space",
-        label: { ja: "Worker 名", en: "Worker name" },
+        label: { ja: "公開名", en: "Public name" },
         helper: {
-          ja: "Cloudflare 上に作成される script 名です。",
-          en: "The script name created in Cloudflare.",
+          ja: "公開URLにも使われる名前です。",
+          en: "Also used in the public URL.",
         },
         placeholder: "hello-worker",
       },
@@ -81,6 +81,19 @@ export const CATALOG: readonly CatalogEntry[] = [
         },
         placeholder: "0123abcd...",
       },
+      {
+        name: "workersSubdomain",
+        required: true,
+        label: {
+          ja: "Workers サブドメイン",
+          en: "Workers subdomain",
+        },
+        helper: {
+          ja: "Cloudflare の *.workers.dev の先頭部分です。例: my-team",
+          en: "The first part of your Cloudflare *.workers.dev address, for example: my-team.",
+        },
+        placeholder: "my-team",
+      },
     ],
   },
   {
@@ -92,8 +105,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "storage",
     provider: "cloudflare",
     suggestedName: "r2-storage",
-    badge: { ja: "Cloudflare / ストレージ", en: "Cloudflare / Storage" },
-    name: { ja: "Cloudflare R2 バケット", en: "Cloudflare R2 bucket" },
+    badge: { ja: "ファイル保存", en: "File storage" },
+    name: { ja: "ファイル保存場所を作成", en: "Create file storage" },
     description: {
       ja: "ファイルやバックアップ用の保存場所を作ります。",
       en: "Creates storage for files or backups.",
@@ -136,8 +149,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "site",
     provider: "cloudflare",
     suggestedName: "static-site",
-    badge: { ja: "Cloudflare / Web", en: "Cloudflare / Web" },
-    name: { ja: "Cloudflare Pages サイト", en: "Cloudflare Pages site" },
+    badge: { ja: "Webサイト", en: "Website" },
+    name: { ja: "静的サイトをホスト", en: "Host a static website" },
     description: {
       ja: "静的サイトを置く場所を用意します。",
       en: "Creates a home for a static website.",
@@ -177,8 +190,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "storage",
     provider: "aws",
     suggestedName: "s3-storage",
-    badge: { ja: "AWS / ストレージ", en: "AWS / Storage" },
-    name: { ja: "AWS S3 バケット", en: "AWS S3 bucket" },
+    badge: { ja: "ファイル保存", en: "File storage" },
+    name: { ja: "AWSに保存場所を作成", en: "Create storage on AWS" },
     description: {
       ja: "AWS にファイル置き場を作ります。アプリの保存先やバックアップにも使えます。",
       en: "Creates AWS storage for files, app data, or backups.",

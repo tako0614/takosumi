@@ -2,9 +2,8 @@
  * First-party starter Capsule module: cloudflare-hello-worker.
  *
  * A runnable Cloudflare Worker with NO build step — the Worker source is baked
- * inline in `module/main.tf`, so `tofu apply` creates a real Worker script.
- * Public ingress is projected by the dispatcher/custom-route layer, not by this
- * module.
+ * inline in `module/main.tf`, so `tofu apply` creates a real Worker script and
+ * enables its workers.dev URL.
  * Keep this object in sync with `module/main.tf`.
  */
 
@@ -15,7 +14,7 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   name: "Hello Worker (starter)",
   version: "1.0.0",
   description:
-    "Deploys a tiny inline Cloudflare Worker (no build). It reports the Worker name and accepts an optional projected public URL.",
+    "Deploys a tiny inline Cloudflare Worker (no build) and enables a workers.dev URL.",
   source: {
     localModulePath: "/app/templates/cloudflare-hello-worker/module",
   },
@@ -32,12 +31,12 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
       required: false,
       description: "Script name.",
     },
-    publicUrl: {
+    workersSubdomain: {
       type: "string",
-      title: "Public URL",
-      required: false,
+      title: "Workers subdomain",
+      required: true,
       description:
-        "Optional URL projected by dispatcher/custom-route configuration after apply.",
+        "The Cloudflare Workers subdomain for the account, without .workers.dev.",
     },
   },
   outputs: {
@@ -48,7 +47,10 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   },
   policy: {
     allowedProviders: ["cloudflare/cloudflare"],
-    allowedResourceTypes: ["cloudflare_workers_script"],
+    allowedResourceTypes: [
+      "cloudflare_workers_script",
+      "cloudflare_workers_script_subdomain",
+    ],
     destructiveChanges: { requireExplicitConfirmation: true },
   },
 };

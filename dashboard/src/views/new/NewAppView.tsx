@@ -861,6 +861,16 @@ function Inner() {
     compatibility() !== null && providerRows().some(providerNeedsConnection);
   const missingProviderRows = () =>
     providerRows().filter(providerNeedsConnection);
+  const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
+    const candidates = providerConnectionsForProvider(
+      row.provider,
+      row.ownershipOptions,
+    );
+    if (candidates.length !== 1) return true;
+    return row.connectionId !== candidates[0]?.id;
+  };
+  const providerRowsRequiringChoice = () =>
+    providerRows().filter(providerRowNeedsVisibleChoice);
   const missingOwnKeyProviderRows = () =>
     missingProviderRows().filter(rowAllowsOwnKey);
   const missingOperatorManagedProviderRows = () =>
@@ -1048,13 +1058,6 @@ function Inner() {
     activeTab() !== "git" && Boolean(gitUrl().trim());
   const sourceSummaryTitle = () =>
     gitUrl().trim() ? name().trim() || capsuleNameFromUrl(gitUrl()) : "";
-  const sourceSummaryMeta = () =>
-    gitUrl().trim()
-      ? t("new.flow.sourceMeta", {
-          ref: displayRef(effectiveRef()),
-          path: path().trim() || ".",
-        })
-      : "";
   const retryAfterSyncWait = () => {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
@@ -1339,6 +1342,13 @@ function Inner() {
         : s === "error"
           ? "is-error"
           : "";
+  const showSetupProgress = () =>
+    checkingCompatibility() ||
+    busy() ||
+    sourceSyncSlow() ||
+    [stepSource(), stepSync(), stepInstall(), stepPlan()].some(
+      (step) => step === "running" || step === "error",
+    );
 
   const gitFields = () => (
     <>
@@ -1632,12 +1642,8 @@ function Inner() {
                   else setError(proceedBlocker());
                 }}
               >
-                <Show when={usingSelectedService()} fallback={gitFields()}>
-                  <details class="wb-disclosure wb-source-advanced">
-                    <summary>{t("new.selection.sourceDetails")}</summary>
-                    <p class="wb-note">{sourceSummaryMeta()}</p>
-                    {gitFields()}
-                  </details>
+                <Show when={!usingSelectedService()}>
+                  {gitFields()}
                 </Show>
 
                 <Show when={selectedCatalogEntry()}>
@@ -1647,6 +1653,21 @@ function Inner() {
                         <h3>{t("new.catalogInput.title")}</h3>
                       </div>
                       <div class="av-service-setup-grid">
+                        <FormField label={t("new.name")}>
+                          <Input
+                            id="new-capsule-name"
+                            name="name"
+                            type="text"
+                            value={name()}
+                            onInput={(e) => {
+                              setName(e.currentTarget.value);
+                              resetCompatibility();
+                            }}
+                            placeholder="my-app"
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </FormField>
                         <For each={entry().inputs}>
                           {(field) => (
                             <FormField
@@ -1721,23 +1742,6 @@ function Inner() {
                 >
                   <summary>{t("new.vars.inputsTitle")}</summary>
                   <p class="wb-note">{t("new.vars.inputsBody")}</p>
-                  <Show when={selectedCatalogEntry()}>
-                    <FormField label={t("new.name")}>
-                      <Input
-                        id="new-capsule-name"
-                        name="name"
-                        type="text"
-                        value={name()}
-                        onInput={(e) => {
-                          setName(e.currentTarget.value);
-                          resetCompatibility();
-                        }}
-                        placeholder="my-app"
-                        autocomplete="off"
-                        spellcheck={false}
-                      />
-                    </FormField>
-                  </Show>
                   <div class="wb-variable-list">
                     <For each={inputVariables()}>
                       {(row, index) => (
@@ -1909,13 +1913,17 @@ function Inner() {
                   )}
                 </Show>
 
-                <Show when={compatibility() && providerRows().length > 0}>
+                <Show
+                  when={
+                    compatibility() && providerRowsRequiringChoice().length > 0
+                  }
+                >
                   <section class="wb-inline-panel">
                     <div class="wb-compat-head">
                       <h3 class="tg-card-title">{t("new.providers.title")}</h3>
                     </div>
                     <div class="wb-provider-grid">
-                      <For each={providerRows()}>
+                      <For each={providerRowsRequiringChoice()}>
                         {(row, index) => {
                           const options = () =>
                             providerConnectionsForProvider(
@@ -2088,7 +2096,7 @@ function Inner() {
                 </Show>
               </form>
 
-              <Show when={stepSource() !== "idle"} fallback={null}>
+              <Show when={showSetupProgress()} fallback={null}>
                 <details class="wb-disclosure">
                   <summary>{t("new.step.technical")}</summary>
                   <ol class="wb-steps">
