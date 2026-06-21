@@ -373,6 +373,11 @@ production で hosted Takosumi access を開く前に、real Cloudflare substrat
 | `TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF`                 | provider credentials / control-plane tokens / state backend credentials が diagnostics、audit payload、Output、tenant Worker bindings に漏れないことの live evidence |
 | `TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST`              | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
 
+Prometheus scrape を使う operator は `TAKOSUMI_METRICS_SCRAPE_TOKEN` を secret として push する。
+platform worker は `/metrics` を in-process deploy-control service へ転送し、 token 未設定時は dashboard SPA に
+fall back せず fail-closed にする。Deploy overview evidence はこの scrape token か operator monitoring system の
+同等 credential で取得した production fresh sample を根拠にする。
+
 operator は7証跡を `takosumi.production-hardening-evidence@v1` manifest にまとめ、repo 側 validator で
 shape、coverage、commit-pinned evidence ref、証跡ファイル本体の digest を確認してから realized config へ反映する:
 

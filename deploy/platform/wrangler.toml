@@ -195,6 +195,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
 #   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
+#   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
 # Optional (AI Gateway; set one secret per profile apiKeyEnv):
