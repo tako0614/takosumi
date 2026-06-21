@@ -232,49 +232,22 @@ function ServiceList(props: {
                 </Show>
               </div>
             </button>
-            <div class="av-service-actions">
-              <Show
-                when={props.launchUrls.get(inst.id)}
-                fallback={
-                  <>
-                    <span class="av-service-link-state">
-                      {t("apps.noOpenLink")}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => props.openDetail(inst)}
-                    >
-                      {t("apps.viewDetails")}
-                    </Button>
-                  </>
-                }
-              >
-                {(url) => (
-                  <>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      icon={<ExternalLink size={14} />}
-                      href={url()}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      {t("apps.openApp")}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => props.openDetail(inst)}
-                    >
-                      {t("apps.viewDetails")}
-                    </Button>
-                  </>
-                )}
-              </Show>
-            </div>
+            <Show when={props.launchUrls.get(inst.id)}>
+              {(url) => (
+                <div class="av-service-actions">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<ExternalLink size={14} />}
+                    href={url()}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {t("apps.openApp")}
+                  </Button>
+                </div>
+              )}
+            </Show>
           </li>
         )}
       </For>

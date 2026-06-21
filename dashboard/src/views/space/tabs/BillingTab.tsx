@@ -172,10 +172,6 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       cell: (r) => formatBillingNumber(r.estimatedCredits),
     },
     {
-      header: "Run",
-      cell: (r) => <code class="wc-code">{r.runId}</code>,
-    },
-    {
       header: t("billing.reservations.expires"),
       cell: (r) => formatDateTime(r.expiresAt),
     },
@@ -193,14 +189,6 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     {
       header: t("billing.usage.credits"),
       cell: (e) => formatBillingNumber(e.credits),
-    },
-    {
-      header: "Run",
-      cell: (e) => (
-        <Show when={e.runId} fallback={<span class="muted">—</span>}>
-          {(runId) => <code class="wc-code">{runId()}</code>}
-        </Show>
-      ),
     },
     {
       header: t("billing.usage.created"),
@@ -277,10 +265,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
                 },
               ]}
             />
-            <Show
-              when={canOpenPortal()}
-              fallback={<p class="muted">{t("billing.portalUnavailable")}</p>}
-            >
+            <Show when={canOpenPortal()}>
               <div class="wc-form-actions">
                 <Button
                   variant="secondary"
