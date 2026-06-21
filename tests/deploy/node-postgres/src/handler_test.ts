@@ -73,6 +73,19 @@ test("node-postgres ignores retired GitHub OAuth env", () => {
   expect(config.upstreamOAuth).toBeUndefined();
 });
 
+test("node-postgres ignores non-Google first-party upstream OAuth env", () => {
+  const config = parseEnv({
+    TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+    TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "upstream-subject-secret",
+    TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_ID: "apple-client",
+    TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_SECRET: "apple-secret",
+    TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_REDIRECT_URI:
+      "https://accounts.example/sign-in/callback",
+  });
+
+  expect(config.upstreamOAuth).toBeUndefined();
+});
+
 test("node-postgres rejects retired custom OIDC GitHub provider id", () => {
   expect(() =>
     parseEnv({

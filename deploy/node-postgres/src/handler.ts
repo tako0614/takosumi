@@ -404,8 +404,6 @@ function parseUpstreamOAuth(
       ),
     });
   }
-  const apple = parseAppleUpstreamProvider(env);
-  if (apple) providers.push(apple);
   const oidc = parseCustomOidcUpstreamProvider(env);
   if (oidc) providers.push(oidc);
 
@@ -485,66 +483,6 @@ function parseBuiltinProviderOverrides(
   const userInfoEndpoint = optional(env, `${prefix}USERINFO_ENDPOINT`);
   if (userInfoEndpoint) result.userInfoEndpoint = userInfoEndpoint;
   return result;
-}
-
-/**
- * Apple Sign-In is wired through the generic OIDC provider since the
- * accounts-service package does not currently ship a dedicated Apple
- * provider helper. Operators configure issuer + endpoints explicitly.
- */
-function parseAppleUpstreamProvider(
-  env: Record<string, string | undefined>,
-): UpstreamOAuthClientRegistration | undefined {
-  const clientId = optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_ID");
-  const clientSecret = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_SECRET",
-  );
-  const redirectUri = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_REDIRECT_URI",
-  );
-  const scopes = splitList(env.TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_SCOPES);
-  if (!clientId && !clientSecret && !redirectUri && scopes.length === 0) {
-    return undefined;
-  }
-  if (!clientId || !redirectUri) {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_CLIENT_ID and _REDIRECT_URI are required when configuring apple upstream OAuth",
-    );
-  }
-  const issuer =
-    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_ISSUER") ??
-    "https://appleid.apple.com";
-  const authorizationEndpoint =
-    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_AUTHORIZATION_ENDPOINT") ??
-    "https://appleid.apple.com/auth/authorize";
-  const tokenEndpoint =
-    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_TOKEN_ENDPOINT") ??
-    "https://appleid.apple.com/auth/token";
-  const userInfoEndpoint =
-    optional(env, "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_USERINFO_ENDPOINT") ??
-    "https://appleid.apple.com/auth/userinfo";
-  const subjectClaim = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_UPSTREAM_APPLE_SUBJECT_CLAIM",
-  );
-  return {
-    providerId: "apple",
-    clientId,
-    ...(clientSecret ? { clientSecret } : {}),
-    redirectUri,
-    ...(scopes.length > 0 ? { scopes } : {}),
-    provider: customOidcOAuthProvider({
-      id: "apple",
-      issuer,
-      authorizationEndpoint,
-      tokenEndpoint,
-      userInfoEndpoint,
-      ...(scopes.length > 0 ? { defaultScopes: scopes } : {}),
-      ...(subjectClaim ? { subjectClaim } : {}),
-    }),
-  };
 }
 
 function parseCustomOidcUpstreamProvider(
