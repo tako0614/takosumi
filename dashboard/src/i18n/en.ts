@@ -212,6 +212,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.recentRuns.title": "Recent runs",
   "app.recentRuns.empty": "No recent runs.",
   "app.recentRuns.open": "Details",
+  "app.recentActivity.title": "Recent updates",
+  "app.recentActivity.empty": "No recent updates.",
+  "app.recentActivity.open": "Details",
+  "app.recentActivity.releaseActivation": "App activation",
   "app.bindings.title": "External service connections",
   "app.bindings.subtitle":
     "Choose the external service connection OpenTofu should use. Usually no change is needed.",

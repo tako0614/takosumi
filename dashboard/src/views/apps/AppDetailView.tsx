@@ -30,6 +30,7 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
+  type ActivityEvent,
   type ControlApiError,
   type InstallationProviderConnectionBinding,
   type InstallationProviderConnectionBindings,
@@ -151,13 +152,14 @@ function Inner() {
     Object.entries(currentDeployment()?.outputsPublic ?? {}),
   );
 
-  /** Recent run events for THIS app (activity carries metadata.installationId). */
-  const recentRuns = createMemo(() =>
+  /** Recent run/release events for THIS app (activity carries metadata.installationId). */
+  const recentActivity = createMemo(() =>
     (activity() ?? [])
       .filter(
         (event) =>
-          event.targetType === "run" &&
-          event.metadata.installationId === installationId(),
+          event.metadata.installationId === installationId() &&
+          (event.targetType === "run" ||
+            event.action.startsWith("release_activation.")),
       )
       .slice(0, 8),
   );
@@ -304,7 +306,7 @@ function Inner() {
                       onBackup={() => void backup.run()}
                       backupError={backup.error()}
                       backupResult={backup.result()}
-                      recentRuns={recentRuns()}
+                      recentActivity={recentActivity()}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -638,12 +640,7 @@ function DeploysTab(props: {
   readonly onBackup: () => void;
   readonly backupError: string | null;
   readonly backupResult: BackupRecord | undefined;
-  readonly recentRuns: readonly {
-    readonly targetId: string;
-    readonly action: string;
-    readonly createdAt: string;
-    readonly metadata: Record<string, unknown>;
-  }[];
+  readonly recentActivity: readonly ActivityEvent[];
 }) {
   return (
     <>
@@ -745,27 +742,25 @@ function DeploysTab(props: {
       </Card>
 
       <Card>
-        <CardHeader title={t("app.recentRuns.title")} />
+        <CardHeader title={t("app.recentActivity.title")} />
         <Show
-          when={props.recentRuns.length > 0}
-          fallback={<p class="muted">{t("app.recentRuns.empty")}</p>}
+          when={props.recentActivity.length > 0}
+          fallback={<p class="muted">{t("app.recentActivity.empty")}</p>}
         >
           <ul class="av-run-list">
-            <For each={props.recentRuns}>
+            <For each={props.recentActivity}>
               {(event) => (
                 <li class="av-run-row">
-                  <span class="av-run-action">
-                    {operationLabel(
-                      typeof event.metadata.operation === "string"
-                        ? event.metadata.operation
-                        : undefined,
-                    )}
-                  </span>
-                  <RunEventBadge action={event.action} />
+                  <span class="av-run-action">{activityEventTitle(event)}</span>
+                  <ActivityEventBadge action={event.action} />
                   <span class="muted">{formatDateTime(event.createdAt)}</span>
-                  <A href={`/runs/${encodeURIComponent(event.targetId)}`}>
-                    {t("app.recentRuns.open")} →
-                  </A>
+                  <Show when={activityRunId(event)}>
+                    {(runId) => (
+                      <A href={`/runs/${encodeURIComponent(runId())}`}>
+                        {t("app.recentActivity.open")} →
+                      </A>
+                    )}
+                  </Show>
                 </li>
               )}
             </For>
@@ -776,17 +771,38 @@ function DeploysTab(props: {
   );
 }
 
-/** Compact badge for a run.* activity verb on the recent-runs strip. */
-function RunEventBadge(props: { readonly action: string }) {
+function activityEventTitle(event: ActivityEvent): string {
+  if (event.action.startsWith("release_activation.")) {
+    return t("app.recentActivity.releaseActivation");
+  }
+  return operationLabel(
+    typeof event.metadata.operation === "string"
+      ? event.metadata.operation
+      : undefined,
+  );
+}
+
+function activityRunId(event: ActivityEvent): string | undefined {
+  if (event.runId) return event.runId;
+  if (event.targetType === "run") return event.targetId;
+  const applyRunId = event.metadata.applyRunId;
+  return typeof applyRunId === "string" ? applyRunId : undefined;
+}
+
+/** Compact badge for run.* / release_activation.* activity verbs. */
+function ActivityEventBadge(props: { readonly action: string }) {
   const status = () => {
     switch (props.action) {
       case "run.failed":
+      case "release_activation.failed":
         return "failed";
       case "run.applied":
+      case "release_activation.succeeded":
         return "succeeded";
       case "run.plan_created":
         return "waiting_approval";
       case "run.approved":
+      case "release_activation.pending":
         return "running";
       default:
         return undefined;
