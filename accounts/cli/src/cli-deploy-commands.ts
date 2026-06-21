@@ -111,13 +111,37 @@ export async function runDeploy(
   );
 
   const followRun = deploy.applyRun ?? deploy.planRun ?? deploy.run;
-  const run = await pollRun(flags, followRun.id, io);
+  let run = await pollRun(flags, followRun.id, io);
   io.stdout(
     `run ${run.id} ${run.status}${run.policyStatus ? ` (policy: ${run.policyStatus})` : ""}`,
   );
-  return run.status === "succeeded" || run.status === "waiting_approval"
-    ? 0
-    : 1;
+  if (options.planOnly || deploy.applyRun) {
+    return run.status === "succeeded" || run.status === "waiting_approval"
+      ? 0
+      : 1;
+  }
+  if (run.status === "failed" || run.status === "cancelled") return 1;
+  if (run.status === "waiting_approval") {
+    await requestDeployControl({
+      options: flags,
+      method: "POST",
+      path: `${API_V1_PREFIX}/runs/${encodeURIComponent(run.id)}/approve`,
+      body: { reason: "takosumi deploy auto-apply" },
+    });
+  }
+  const apply = (await requestDeployControl({
+    options: flags,
+    method: "POST",
+    path: `${API_V1_PREFIX}/runs/${encodeURIComponent(run.id)}/apply`,
+    body: {},
+  })) as { readonly run?: RunRecord; readonly applyRun?: RunRecord };
+  const applyRun = apply.applyRun ?? apply.run;
+  if (!applyRun) throw new Error("deploy-control apply returned no run");
+  run = await pollRun(flags, applyRun.id, io);
+  io.stdout(
+    `run ${run.id} ${run.status}${run.policyStatus ? ` (policy: ${run.policyStatus})` : ""}`,
+  );
+  return run.status === "succeeded" ? 0 : 1;
 }
 
 export async function runDeployLogs(

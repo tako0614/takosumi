@@ -7657,8 +7657,24 @@ test("deploy resolves @handle space flags before upload and deploy", async () =>
       return Response.json({
         installation: { id: "inst_1", name: "my-app" },
         run: { id: "run_plan", status: "queued", type: "plan" },
-        applyRun: { id: "run_apply", status: "queued", type: "apply" },
+        planRun: { id: "run_plan", status: "queued", type: "plan" },
         created: true,
+      });
+    }
+    if (request.method === "GET" && url.pathname === "/api/v1/runs/run_plan") {
+      return Response.json({
+        id: "run_plan",
+        status: "succeeded",
+        type: "plan",
+        policyStatus: "passed",
+      });
+    }
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/v1/runs/run_plan/apply"
+    ) {
+      return Response.json({
+        run: { id: "run_apply", status: "queued", type: "apply" },
       });
     }
     if (request.method === "GET" && url.pathname === "/api/v1/runs/run_apply") {
@@ -7705,6 +7721,8 @@ test("deploy resolves @handle space flags before upload and deploy", async () =>
       "GET /api/v1/spaces",
       "POST /api/v1/spaces/space_me/uploads",
       "POST /api/v1/deploy",
+      "GET /api/v1/runs/run_plan",
+      "POST /api/v1/runs/run_plan/apply",
       "GET /api/v1/runs/run_apply",
     ]);
     expect(

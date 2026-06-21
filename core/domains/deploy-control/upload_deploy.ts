@@ -25,7 +25,6 @@ import type {
 import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
 import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
-import { applyExpectedGuardFromPlanRun } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { InstallationsService } from "../installations/mod.ts";
 import { validateInstallationProviderEnvBindings } from "../connections/mod.ts";
@@ -122,29 +121,12 @@ export async function deployUpload(
       { sourceSnapshotId: snapshot.id },
     );
     const run = await deps.controller.getRun(planResponse.planRun.id);
-    let applyRun: DeployResponse["applyRun"];
-    if (
-      !request.planOnly &&
-      request.autoApprove !== false &&
-      run.status === "succeeded"
-    ) {
-      const apply = await deps.controller.createApplyRun(
-        {
-          planRunId: planResponse.planRun.id,
-          expected: applyExpectedGuardFromPlanRun(planResponse.planRun),
-        },
-        context,
-      );
-      applyRun = await deps.controller.getRun(apply.applyRun.id);
-    }
-
-    const status = deployStatus(run, applyRun);
+    const status = deployStatus(run);
     installation = await reconcileUploadInstallationStatus({
       deps,
       installation,
       created,
       status,
-      applyRun,
     });
 
     return {
@@ -152,7 +134,6 @@ export async function deployUpload(
       installConfigId,
       run,
       planRun: run,
-      ...(applyRun ? { applyRun } : {}),
       status,
       created,
     };
@@ -185,13 +166,7 @@ async function putProviderConnections(input: {
 
 function deployStatus(
   planRun: DeployResponse["run"],
-  applyRun: DeployResponse["applyRun"],
 ): NonNullable<DeployResponse["status"]> {
-  if (applyRun) {
-    if (applyRun.status === "succeeded") return "applied";
-    if (applyRun.status === "failed") return "failed";
-    return "applying";
-  }
   if (planRun.status === "waiting_approval") return "waiting_approval";
   if (planRun.status === "failed") return "failed";
   return "planned";
@@ -202,17 +177,11 @@ async function reconcileUploadInstallationStatus(input: {
   readonly installation: Installation;
   readonly created: boolean;
   readonly status: NonNullable<DeployResponse["status"]>;
-  readonly applyRun: DeployResponse["applyRun"];
 }): Promise<Installation> {
   if (input.created && input.status === "failed") {
     return await input.deps.installations.patchInstallationStatus(
       input.installation.id,
       "error",
-    );
-  }
-  if (input.applyRun?.status === "succeeded") {
-    return await input.deps.installations.getInstallation(
-      input.installation.id,
     );
   }
   return input.installation;
