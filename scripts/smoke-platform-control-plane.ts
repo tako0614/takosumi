@@ -79,6 +79,10 @@ export interface PlatformControlPlaneSmokeResult {
   readonly deploymentVerified: boolean;
   readonly destroyVerified: boolean;
   readonly connectionRevoked?: boolean;
+  readonly timedOutRunId?: string;
+  readonly runCancellationStatus?: "cancelled" | "already_terminal" | "failed";
+  readonly runCancellationError?: string;
+  readonly connectionRevokeSkippedReason?: string;
   readonly error?: string;
   readonly nextAction?: string;
   readonly inputs: {
@@ -280,6 +284,14 @@ export async function runPlatformControlPlaneSmoke(
   let destroyApplyRunId: string | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
+  let timedOutRunId: string | undefined;
+  let runCancellationStatus:
+    | "cancelled"
+    | "already_terminal"
+    | "failed"
+    | undefined;
+  let runCancellationError: string | undefined;
+  let connectionRevokeSkippedReason: string | undefined;
   let failure: unknown;
 
   try {
@@ -381,13 +393,31 @@ export async function runPlatformControlPlaneSmoke(
       inputs: publicInputSummary(options),
     };
   } catch (error) {
+    if (error instanceof RunPollTimeoutError) {
+      timedOutRunId = error.runId;
+      const cancellation = await cancelRunAfterPollTimeout(
+        options,
+        error.runId,
+      );
+      runCancellationStatus = cancellation.status;
+      runCancellationError = cancellation.error;
+      if (cancellation.status === "failed") {
+        connectionRevokeSkippedReason =
+          "run did not reach a terminal state and cancel did not confirm terminal ownership";
+      }
+    }
     await markPendingSmokeInstallationError(options, {
       spaceId,
       installationId,
     }).catch(() => undefined);
     failure = error;
   } finally {
-    if (connectionId && !options.keepConnection && !connectionRevoked) {
+    if (
+      connectionId &&
+      !options.keepConnection &&
+      !connectionRevoked &&
+      !connectionRevokeSkippedReason
+    ) {
       connectionRevoked = await revokeConnection(options, connectionId);
     }
   }
@@ -403,6 +433,10 @@ export async function runPlatformControlPlaneSmoke(
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
+    timedOutRunId,
+    runCancellationStatus,
+    runCancellationError,
+    connectionRevokeSkippedReason,
     error: failure,
   });
 }
@@ -421,6 +455,13 @@ function failedResult(
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
+    readonly timedOutRunId?: string;
+    readonly runCancellationStatus?:
+      | "cancelled"
+      | "already_terminal"
+      | "failed";
+    readonly runCancellationError?: string;
+    readonly connectionRevokeSkippedReason?: string;
     readonly error: unknown;
   },
 ): PlatformControlPlaneSmokeResult {
@@ -447,9 +488,15 @@ function failedResult(
     deploymentVerified: false,
     destroyVerified: false,
     connectionRevoked: input.connectionRevoked,
+    timedOutRunId: input.timedOutRunId,
+    runCancellationStatus: input.runCancellationStatus,
+    runCancellationError: input.runCancellationError,
+    connectionRevokeSkippedReason: input.connectionRevokeSkippedReason,
     error: publicErrorMessage(input.error),
     nextAction:
-      "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.",
+      input.connectionRevokeSkippedReason !== undefined
+        ? "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke."
+        : "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.",
     inputs: publicInputSummary(options),
   };
 }
@@ -460,6 +507,13 @@ function failPolicy(): never {
 
 function publicPolicyStatus(run: RunRecord): SmokeCheckStatus {
   return run.policyStatus === "deny" ? "denied" : "passed";
+}
+
+class RunPollTimeoutError extends Error {
+  constructor(readonly runId: string) {
+    super(`run ${runId} did not reach a terminal state`);
+    this.name = "RunPollTimeoutError";
+  }
 }
 
 async function resolveSpaceId(
@@ -748,7 +802,42 @@ async function pollRun(
     }
     await sleep(options.pollIntervalMs);
   }
-  throw new Error(`run ${runId} did not reach a terminal state`);
+  throw new RunPollTimeoutError(runId);
+}
+
+async function cancelRunAfterPollTimeout(
+  options: PlatformControlPlaneSmokeOptions,
+  runId: string,
+): Promise<{
+  readonly status: "cancelled" | "already_terminal" | "failed";
+  readonly error?: string;
+}> {
+  try {
+    const current = await requestJson<{ readonly run: RunRecord }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}`,
+    });
+    if (TERMINAL_RUN_STATUSES.has(current.run.status)) {
+      return { status: "already_terminal" };
+    }
+    const cancelled = await requestJson<{ readonly run: RunRecord }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "POST",
+      path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}/cancel`,
+      body: {},
+    });
+    if (TERMINAL_RUN_STATUSES.has(cancelled.run.status)) {
+      return { status: "cancelled" };
+    }
+    return {
+      status: "failed",
+      error: `cancel returned non-terminal status ${cancelled.run.status}`,
+    };
+  } catch (error) {
+    return { status: "failed", error: publicErrorMessage(error) };
+  }
 }
 
 function assertRunSucceeded(run: RunRecord, phase: string): void {
@@ -1123,7 +1212,11 @@ async function runSelfTest(): Promise<void> {
   const failed = failedResult(options, {
     spaceId: "space_selftest",
     connectionId: "conn_selftest",
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
     connectionRevoked: true,
+    timedOutRunId: "run_selftest",
+    runCancellationStatus: "cancelled",
     error: new Error(
       "GET /api/v1/spaces failed with Bearer secret-token token=secret cookie=session",
     ),
