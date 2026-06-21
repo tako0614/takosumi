@@ -183,96 +183,26 @@ function Inner() {
           <Match when={installations()}>
             {(list) => (
               <>
-                <WorkspaceStartPanel
-                  serviceCount={list().length}
-                  deployedCount={deployedCount()}
-                  attentionCount={attentionCount()}
-                />
                 <Show
-                  when={list().length > 0}
+                  when={list().length === 0}
                   fallback={
-                    <EmptyState
-                      ink
-                      icon={<Boxes size={28} />}
-                      title={t("apps.empty.title")}
-                      message={t("apps.empty.message")}
-                      action={
-                        <Button
-                          variant="primary"
-                          href="/new"
-                          icon={<Plus size={16} />}
-                        >
-                          {t("apps.empty.cta")}
-                        </Button>
-                      }
-                    />
+                    <>
+                      <WorkspaceSummaryBar
+                        serviceCount={list().length}
+                        deployedCount={deployedCount()}
+                        attentionCount={attentionCount()}
+                      />
+                      <ServiceGrid
+                        installations={list()}
+                        dependsOn={dependsOn()}
+                        staleReasons={staleReasons()}
+                        launchUrls={launchUrls() ?? new Map()}
+                        openDetail={openDetail}
+                      />
+                    </>
                   }
                 >
-                  <ul class="av-grid">
-                    <For each={list()}>
-                      {(inst) => (
-                        <li>
-                          <button
-                            type="button"
-                            class="av-card"
-                            onClick={() => openDetail(inst)}
-                          >
-                            <div class="av-card-head">
-                              <span class="av-card-name">{inst.name}</span>
-                              <StatusBadge
-                                status={effectiveInstallationStatus(inst)}
-                                label={installationStatusLabel}
-                                tone={installationTone}
-                              />
-                            </div>
-                            <Show
-                              when={(dependsOn().get(inst.id) ?? []).length > 0}
-                            >
-                              <p class="av-card-meta">
-                                {t("apps.dependsOn", {
-                                  names: (dependsOn().get(inst.id) ?? []).join(
-                                    ", ",
-                                  ),
-                                })}
-                              </p>
-                            </Show>
-                            <Show
-                              when={
-                                effectiveInstallationStatus(inst) === "stale" &&
-                                staleReasons().get(inst.id)
-                              }
-                            >
-                              {(reason) => (
-                                <p class="av-card-meta av-card-warn">
-                                  {t("apps.staleReason", { reason: reason() })}
-                                </p>
-                              )}
-                            </Show>
-                            <Show when={inst.currentDeploymentId}>
-                              <p class="av-card-meta">
-                                <Badge tone="info">outputs</Badge>
-                              </p>
-                            </Show>
-                          </button>
-                          <Show when={launchUrls()?.get(inst.id)}>
-                            {(url) => (
-                              <div class="av-card-foot">
-                                <Button
-                                  variant="primary"
-                                  size="sm"
-                                  href={url()}
-                                  target="_blank"
-                                  rel="noreferrer noopener"
-                                >
-                                  {t("apps.openApp")} ↗
-                                </Button>
-                              </div>
-                            )}
-                          </Show>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
+                  <WorkspaceStartPanel />
                 </Show>
               </>
             )}
@@ -283,32 +213,117 @@ function Inner() {
   );
 }
 
-function WorkspaceStartPanel(props: {
+function ServiceGrid(props: {
+  readonly installations: readonly Installation[];
+  readonly dependsOn: ReadonlyMap<string, readonly string[]>;
+  readonly staleReasons: ReadonlyMap<string, string>;
+  readonly launchUrls: ReadonlyMap<string, string>;
+  readonly openDetail: (inst: Installation) => void;
+}) {
+  return (
+    <ul class="av-grid">
+      <For each={props.installations}>
+        {(inst) => (
+          <li>
+            <button
+              type="button"
+              class="av-card"
+              onClick={() => props.openDetail(inst)}
+            >
+              <div class="av-card-head">
+                <span class="av-card-name">{inst.name}</span>
+                <StatusBadge
+                  status={effectiveInstallationStatus(inst)}
+                  label={installationStatusLabel}
+                  tone={installationTone}
+                />
+              </div>
+              <Show when={(props.dependsOn.get(inst.id) ?? []).length > 0}>
+                <p class="av-card-meta">
+                  {t("apps.dependsOn", {
+                    names: (props.dependsOn.get(inst.id) ?? []).join(", "),
+                  })}
+                </p>
+              </Show>
+              <Show
+                when={
+                  effectiveInstallationStatus(inst) === "stale" &&
+                  props.staleReasons.get(inst.id)
+                }
+              >
+                {(reason) => (
+                  <p class="av-card-meta av-card-warn">
+                    {t("apps.staleReason", { reason: reason() })}
+                  </p>
+                )}
+              </Show>
+              <Show when={inst.currentDeploymentId}>
+                <p class="av-card-meta">
+                  <Badge tone="info">outputs</Badge>
+                </p>
+              </Show>
+            </button>
+            <Show when={props.launchUrls.get(inst.id)}>
+              {(url) => (
+                <div class="av-card-foot">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    href={url()}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {t("apps.openApp")} ↗
+                  </Button>
+                </div>
+              )}
+            </Show>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+function WorkspaceSummaryBar(props: {
   readonly serviceCount: number;
   readonly deployedCount: number;
   readonly attentionCount: number;
 }) {
-  const hasServices = () => props.serviceCount > 0;
+  return (
+    <section class="av-summary" aria-label={t("apps.summary.aria")}>
+      <div class="av-summary-metrics">
+        <span class="av-summary-metric">
+          <span class="av-summary-label">{t("apps.summary.total")}</span>
+          <strong>{props.serviceCount}</strong>
+        </span>
+        <span class="av-summary-metric">
+          <span class="av-summary-label">{t("apps.summary.deployed")}</span>
+          <strong>{props.deployedCount}</strong>
+        </span>
+      </div>
+      <Show
+        when={props.attentionCount > 0}
+        fallback={<Badge tone="ok">{t("apps.summary.clear")}</Badge>}
+      >
+        <Badge tone="warn">
+          {t("apps.summary.needsAttention", { n: props.attentionCount })}
+        </Badge>
+      </Show>
+    </section>
+  );
+}
+
+function WorkspaceStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
       <div class="av-start-copy">
         <span class="av-start-kicker">{t("apps.start.kicker")}</span>
-        <h2 class="av-start-title">
-          {hasServices()
-            ? t("apps.start.titleWithServices", { n: props.serviceCount })
-            : t("apps.start.titleEmpty")}
-        </h2>
-        <p class="av-start-sub">
-          {hasServices()
-            ? t("apps.start.bodyWithServices", {
-                deployed: props.deployedCount,
-                attention: props.attentionCount,
-              })
-            : t("apps.start.bodyEmpty")}
-        </p>
+        <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
+        <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
         <div class="av-start-actions">
           <Button variant="primary" href="/new" icon={<Plus size={16} />}>
-            {hasServices() ? t("apps.start.addAnother") : t("apps.start.add")}
+            {t("apps.start.add")}
           </Button>
           <Button
             variant="secondary"
