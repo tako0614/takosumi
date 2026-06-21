@@ -157,6 +157,11 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
 # stay public.
 # TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL = "deepseek/chat"
 # TAKOSUMI_AI_GATEWAY_PROFILES = '[{"id":"deepseek","provider":"deepseek","baseUrl":"https://provider.example/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY","models":[{"publicModel":"deepseek/chat","upstreamModel":"deepseek-chat","endpoints":["chat.completions"],"default":true}]}]'
+# Optional post-apply release activation bridge. This generic webhook hands
+# already-filtered, non-sensitive apply evidence to an operator/Cloud
+# materializer that owns app publication (for example Worker/assets/container
+# promotion). It does not implement provider-specific publication in OSS.
+# TAKOSUMI_RELEASE_ACTIVATOR_URL = "https://materializer.example.com/activate"
 # Production hardening evidence gate. In observe mode the internal gate reports
 # missing/drifted evidence but does not return 503. Platform readiness access must
 # stay closed in observe mode: TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="open"
@@ -183,6 +188,8 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
 #   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
+# Optional release activation webhook:
+#   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
 # Optional (AI Gateway; set one secret per profile apiKeyEnv):
 #   TAKOSUMI_AI_GATEWAY_*_API_KEY                  upstream model provider key
 # Optional (billing; set both when hosted billing is enabled):

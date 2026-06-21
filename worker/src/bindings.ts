@@ -39,6 +39,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * operator-scoped Connections (`takos_provided`).
    */
   readonly TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS?: string;
+  /**
+   * Optional operator/Cloud release activation webhook. The URL may be a plain
+   * Worker var; the token must be configured as a secret binding. This generic
+   * bridge does not implement provider-specific publication in the OSS worker.
+   */
+  readonly TAKOSUMI_RELEASE_ACTIVATOR_URL?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATOR_TOKEN?: string;
   readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
   readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;

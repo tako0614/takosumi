@@ -11,15 +11,16 @@
 
 ## Artifact Matrix
 
-| Artifact                             | Owning path                                                              | Build / publish behavior                                    | Promotion evidence                                              |
-| ------------------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
-| Platform worker script               | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/core` | built by Wrangler deploy from source                        | commit SHA, wrangler dry-run/deploy output, worker version id   |
-| Dashboard SPA                        | `takosumi/dashboard`                                                     | `bun run build`; served through worker `ASSETS`             | dashboard build output, asset digest / deploy log               |
-| Runner container                     | `takosumi/runner/Dockerfile`                                             | built by Cloudflare Containers during deploy                | image digest / Cloudflare Container smoke evidence              |
-| D1 migrations / schema               | `takosumi/core/adapters/storage`                                         | applied by platform deploy / migration runner               | migration transcript, schema mirror test                        |
-| Provider Catalog seed / policy packs | schema/store/policy packages and `docs/core-spec.md`                     | shipped with platform worker and DB seed/migration          | provider catalog seed diff, provider catalog policy evidence    |
-| Custom provider runner policy        | runner image / operator boundary policy                                  | shipped with runner and policy code                         | secret-backed provider policy / egress / custom runner class evidence |
-| Official OpenTofu modules            | `takosumi/opentofu-modules`                                              | shipped as repo source; consumed by SourceSnapshot / runner | commit SHA, fixture plan evidence where available               |
+| Artifact                             | Owning path                                                              | Build / publish behavior                                    | Promotion evidence                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Platform worker script               | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/core` | built by Wrangler deploy from source                        | commit SHA, wrangler dry-run/deploy output, worker version id                           |
+| Dashboard SPA                        | `takosumi/dashboard`                                                     | `bun run build`; served through worker `ASSETS`             | dashboard build output, asset digest / deploy log                                       |
+| Runner container                     | `takosumi/runner/Dockerfile`                                             | built by Cloudflare Containers during deploy                | image digest / Cloudflare Container smoke evidence                                      |
+| D1 migrations / schema               | `takosumi/core/adapters/storage`                                         | applied by platform deploy / migration runner               | migration transcript, schema mirror test                                                |
+| Provider Catalog seed / policy packs | schema/store/policy packages and `docs/core-spec.md`                     | shipped with platform worker and DB seed/migration          | provider catalog seed diff, provider catalog policy evidence                            |
+| Custom provider runner policy        | runner image / operator boundary policy                                  | shipped with runner and policy code                         | secret-backed provider policy / egress / custom runner class evidence                   |
+| Release activator materializer       | operator/Cloud deployment outside OSS                                    | optional webhook target for post-apply app publication      | activation success/failure surfacing, app URL/health proof, no rollback of apply ledger |
+| Official OpenTofu modules            | `takosumi/opentofu-modules`                                              | shipped as repo source; consumed by SourceSnapshot / runner | commit SHA, fixture plan evidence where available                                       |
 
 Takosumi does not publish a separate npm or OCI product artifact for the
 control plane. The operator deploys one Cloudflare Worker at
@@ -54,7 +55,11 @@ bun run check:legacy-names
 ```
 
 If runner image, queue, Durable Object, or binding config changed, add staging
-Cloudflare Container smoke and platform hardening-gate evidence.
+Cloudflare Container smoke and platform hardening-gate evidence. If app
+publication is enabled through `TAKOSUMI_RELEASE_ACTIVATOR_URL`, add release
+activation materializer evidence: successful activation, failed/pending
+activation surfacing, and proof that the OpenTofu apply ledger remains committed
+independently of app publication status.
 
 ## Promotion Record
 
@@ -65,6 +70,7 @@ Release sign-off record includes:
 - worker version id after deploy
 - dashboard build summary
 - runner image digest or Cloudflare Container smoke reference
+- release activation materializer reference when enabled
 - D1 migration transcript when schema changed
 - targeted test / typecheck summary
 - rollback worker version id and previous commit SHA
