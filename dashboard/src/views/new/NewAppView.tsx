@@ -287,6 +287,8 @@ function slugInputValue(value: string): string {
 function spaceSuffix(value: string | null): string {
   return (value ?? "")
     .replace(/^space_/u, "")
+    .replace(/[^a-z0-9-]+/giu, "-")
+    .replace(/^-+|-+$/gu, "")
     .slice(0, 6)
     .toLowerCase();
 }
@@ -698,7 +700,7 @@ function Inner() {
     }
     return null;
   };
-  const shouldOpenExtraInputs = () => inputVariables().length > 0;
+  const shouldOpenServiceAdvanced = () => inputVariables().length > 0;
   const installReturnVariables = (): Readonly<Record<string, string>> => {
     const variables: Record<string, string> = {};
     if (supportsProjectNameInput()) {
@@ -758,6 +760,17 @@ function Inner() {
     }
     return hints.size === 1 ? Array.from(hints)[0] : undefined;
   };
+  const catalogInputHasImplicitValue = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) =>
+    field.required &&
+    !catalogInputTouched()[catalogInputKey(entry.id, field.name)] &&
+    catalogScopeHintValue(entry, field) !== undefined;
+  const visibleCatalogInputs = (entry: CatalogEntry) =>
+    entry.inputs.filter((field) => !catalogInputHasImplicitValue(entry, field));
+  const advancedCatalogInputs = (entry: CatalogEntry) =>
+    entry.inputs.filter((field) => catalogInputHasImplicitValue(entry, field));
   const sourceGitConnections = () =>
     visibleConnections().filter(
       (connection) =>
@@ -1724,7 +1737,7 @@ function Inner() {
                             spellcheck={false}
                           />
                         </FormField>
-                        <For each={entry().inputs}>
+                        <For each={visibleCatalogInputs(entry())}>
                           {(field) => (
                             <FormField
                               label={field.label[locale()]}
@@ -1773,94 +1786,130 @@ function Inner() {
                   </FormField>
                 </Show>
 
-                <Show when={supportsProjectNameInput()}>
-                  <FormField label={t("new.vars.projectName")}>
-                    <Input
-                      id="new-project-name"
-                      name="project_name"
-                      type="text"
-                      value={projectNameVariable()}
-                      onInput={(e) => {
-                        setResourcePrefixTouched(true);
-                        setResourcePrefix(e.currentTarget.value);
-                        resetCompatibility();
-                      }}
-                      placeholder="takos-production"
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </FormField>
-                </Show>
-
                 <details
                   class="wb-disclosure wb-input-vars"
-                  open={shouldOpenExtraInputs()}
+                  open={shouldOpenServiceAdvanced()}
                 >
-                  <summary>{t("new.vars.inputsTitle")}</summary>
-                  <p class="wb-note">{t("new.vars.inputsBody")}</p>
-                  <div class="wb-variable-list">
-                    <For each={inputVariables()}>
-                      {(row, index) => (
-                        <div class="wb-variable-row">
-                          <FormField label={t("new.vars.inputName")}>
-                            <Input
-                              name={`varName:${index()}`}
-                              type="text"
-                              value={row.name}
-                              onInput={(e) =>
-                                updateInputVariable(index(), {
-                                  name: e.currentTarget.value,
-                                })
-                              }
-                              placeholder="region"
-                              autocomplete="off"
-                              spellcheck={false}
-                            />
-                          </FormField>
-                          <FormField label={t("new.vars.inputValue")}>
-                            <Input
-                              name={`varValue:${index()}`}
-                              type="text"
-                              value={row.value}
-                              onInput={(e) =>
-                                updateInputVariable(index(), {
-                                  value: e.currentTarget.value,
-                                })
-                              }
-                              placeholder="ap-northeast-1"
-                              autocomplete="off"
-                              spellcheck={false}
-                            />
-                          </FormField>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            icon={<Trash size={16} />}
-                            onClick={() => removeInputVariable(index())}
-                          >
-                            {t("new.vars.removeInput")}
-                          </Button>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                  <div class="wb-form-actions">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      icon={<Plus size={16} />}
-                      onClick={addInputVariable}
-                    >
-                      {t("new.vars.addInput")}
-                    </Button>
-                  </div>
-                  <Show when={inputVariableError()}>
-                    {(message) => (
-                      <p class="wb-error" role="alert">
-                        {message()}
-                      </p>
+                  <summary>{t("new.serviceAdvanced.title")}</summary>
+                  <Show when={selectedCatalogEntry()}>
+                    {(entry) => (
+                      <Show when={advancedCatalogInputs(entry()).length > 0}>
+                        <section class="wb-stack">
+                          <For each={advancedCatalogInputs(entry())}>
+                            {(field) => (
+                              <FormField
+                                label={field.label[locale()]}
+                                hint={field.helper?.[locale()]}
+                                required={field.required}
+                              >
+                                <Input
+                                  id={`catalog-input-advanced-${entry().id}-${field.name}`}
+                                  name={`catalogInputAdvanced:${field.name}`}
+                                  type="text"
+                                  value={catalogInputValue(entry(), field)}
+                                  onInput={(e) =>
+                                    updateCatalogInputValue(
+                                      entry(),
+                                      field,
+                                      e.currentTarget.value,
+                                    )
+                                  }
+                                  placeholder={field.placeholder ?? ""}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                            )}
+                          </For>
+                        </section>
+                      </Show>
                     )}
                   </Show>
+                  <Show when={supportsProjectNameInput()}>
+                    <FormField label={t("new.vars.projectName")}>
+                      <Input
+                        id="new-project-name"
+                        name="project_name"
+                        type="text"
+                        value={projectNameVariable()}
+                        onInput={(e) => {
+                          setResourcePrefixTouched(true);
+                          setResourcePrefix(e.currentTarget.value);
+                          resetCompatibility();
+                        }}
+                        placeholder="takos-production"
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </FormField>
+                  </Show>
+                  <section class="wb-stack">
+                    <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
+                    <p class="wb-note">{t("new.vars.inputsBody")}</p>
+                    <div class="wb-variable-list">
+                      <For each={inputVariables()}>
+                        {(row, index) => (
+                          <div class="wb-variable-row">
+                            <FormField label={t("new.vars.inputName")}>
+                              <Input
+                                name={`varName:${index()}`}
+                                type="text"
+                                value={row.name}
+                                onInput={(e) =>
+                                  updateInputVariable(index(), {
+                                    name: e.currentTarget.value,
+                                  })
+                                }
+                                placeholder="region"
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                            <FormField label={t("new.vars.inputValue")}>
+                              <Input
+                                name={`varValue:${index()}`}
+                                type="text"
+                                value={row.value}
+                                onInput={(e) =>
+                                  updateInputVariable(index(), {
+                                    value: e.currentTarget.value,
+                                  })
+                                }
+                                placeholder="ap-northeast-1"
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              icon={<Trash size={16} />}
+                              onClick={() => removeInputVariable(index())}
+                            >
+                              {t("new.vars.removeInput")}
+                            </Button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                    <div class="wb-form-actions">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        icon={<Plus size={16} />}
+                        onClick={addInputVariable}
+                      >
+                        {t("new.vars.addInput")}
+                      </Button>
+                    </div>
+                    <Show when={inputVariableError()}>
+                      {(message) => (
+                        <p class="wb-error" role="alert">
+                          {message()}
+                        </p>
+                      )}
+                    </Show>
+                  </section>
                 </details>
 
                 <Show when={!configs.loading && configList().length === 0}>
@@ -1914,47 +1963,34 @@ function Inner() {
                             <p class="wb-note">{t("new.compat.patchHelp")}</p>
                           </Show>
                           <Show when={result().diagnostics.length > 0}>
-                            <ul class="wb-diagnostics">
-                              <For each={result().diagnostics}>
-                                {(diagnostic) => {
-                                  const display =
-                                    compatibilityDiagnosticDisplay(diagnostic);
-                                  return (
-                                    <li
-                                      class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
-                                    >
-                                      {display.message}
-                                      <Show
-                                        when={
-                                          display.detail && !display.technical
-                                        }
+                            <details class="wb-disclosure">
+                              <summary>{t("new.compat.details")}</summary>
+                              <ul class="wb-diagnostics">
+                                <For each={result().diagnostics}>
+                                  {(diagnostic) => {
+                                    const display =
+                                      compatibilityDiagnosticDisplay(
+                                        diagnostic,
+                                      );
+                                    return (
+                                      <li
+                                        class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
                                       >
-                                        {(detail) => (
-                                          <span class="muted">
-                                            {" "}
-                                            — {detail()}
-                                          </span>
-                                        )}
-                                      </Show>
-                                      <Show
-                                        when={
-                                          display.detail && display.technical
-                                        }
-                                      >
-                                        {(detail) => (
-                                          <details class="wb-inline-details">
-                                            <summary>
-                                              {t("common.details")}
-                                            </summary>
-                                            <p>{detail()}</p>
-                                          </details>
-                                        )}
-                                      </Show>
-                                    </li>
-                                  );
-                                }}
-                              </For>
-                            </ul>
+                                        {display.message}
+                                        <Show when={display.detail}>
+                                          {(detail) => (
+                                            <span class="muted">
+                                              {" "}
+                                              — {detail()}
+                                            </span>
+                                          )}
+                                        </Show>
+                                      </li>
+                                    );
+                                  }}
+                                </For>
+                              </ul>
+                            </details>
                           </Show>
                         </section>
                       ) : (

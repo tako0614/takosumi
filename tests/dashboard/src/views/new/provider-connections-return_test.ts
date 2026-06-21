@@ -140,7 +140,9 @@ describe("/new Provider Connections return context", () => {
     expect(en["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
     );
-    expect(en["new.providers.operatorMissingNext"]).toContain("team admin");
+    expect(en["new.providers.operatorMissingNext"]).toContain(
+      "workspace admin",
+    );
     expect(ja["new.providers.operatorMissingBody"]).not.toContain(
       "Provider Connection",
     );

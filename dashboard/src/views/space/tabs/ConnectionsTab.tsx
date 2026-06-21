@@ -642,42 +642,20 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               </Select>
             </FormField>
 
-            <FormField label={t("conn.add.displayName")}>
-              <Input
-                id="connection-display-name"
-                name="displayName"
-                type="text"
-                value={displayName()}
-                onInput={(e) => setDisplayName(e.currentTarget.value)}
-                placeholder={t("conn.add.displayNamePlaceholder")}
-                autocomplete="off"
-              />
-            </FormField>
-
-            <Show when={!isGenericEnvProvider()}>
-              <details class="connection-advanced">
-                <summary>{t("conn.custom.summary")}</summary>
-                <p class="muted">{t("conn.custom.body")}</p>
-                <Button
-                  variant="secondary"
-                  type="button"
-                  onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
-                >
-                  {t("conn.custom.use")}
-                </Button>
-              </details>
-            </Show>
-            <Show when={isGenericEnvProvider()}>
-              <div class="wc-form-actions">
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
-                >
-                  {t("conn.custom.back")}
-                </Button>
-              </div>
-            </Show>
+            <details class="connection-advanced">
+              <summary>{t("conn.add.optionalSettings")}</summary>
+              <FormField label={t("conn.add.displayName")}>
+                <Input
+                  id="connection-display-name"
+                  name="displayName"
+                  type="text"
+                  value={displayName()}
+                  onInput={(e) => setDisplayName(e.currentTarget.value)}
+                  placeholder={t("conn.add.displayNamePlaceholder")}
+                  autocomplete="off"
+                />
+              </FormField>
+            </details>
 
             <Show
               when={isGenericEnvProvider()}
@@ -889,6 +867,15 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             >
               {/* Generic own-key Provider Connection editor. */}
               <div class="wc-guided">
+                <div class="wc-form-actions">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
+                  >
+                    {t("conn.custom.back")}
+                  </Button>
+                </div>
                 <form
                   class="wc-form"
                   onSubmit={(e) => {
@@ -980,6 +967,19 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                   <ActionError error={createGenericEnvProvider.error} />
                 </form>
               </div>
+            </Show>
+            <Show when={!isGenericEnvProvider()}>
+              <details class="connection-advanced">
+                <summary>{t("conn.custom.summary")}</summary>
+                <p class="muted">{t("conn.custom.body")}</p>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
+                >
+                  {t("conn.custom.use")}
+                </Button>
+              </details>
             </Show>
           </div>
         </Card>

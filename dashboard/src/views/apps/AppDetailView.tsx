@@ -576,8 +576,8 @@ function DeploysTab(props: {
     <>
       <Card>
         <CardHeader
-          title={t("app.deploys.title")}
-          subtitle={t("app.deploys.subtitle")}
+          title={t("app.deploys.reviewTitle")}
+          subtitle={t("app.deploys.reviewSubtitle")}
           actions={
             <div class="av-actions">
               <Button
@@ -621,60 +621,65 @@ function DeploysTab(props: {
             </p>
           )}
         </Show>
-        <Switch>
-          <Match when={props.loading}>
-            <p class="muted">{t("common.loading")}</p>
-          </Match>
-          <Match when={props.error}>
-            <p class="wa-error">
-              {t("common.fetchFailed", { message: props.error! })}
-            </p>
-          </Match>
-          <Match when={props.history.length === 0}>
-            <p class="muted">{t("app.deploys.empty")}</p>
-          </Match>
-          <Match when={props.history.length > 0}>
-            <ul class="wa-deploy-history">
-              <For each={props.history}>
-                {(deployment) => {
-                  const isCurrent = () => deployment.id === props.currentId;
-                  return (
-                    <li class="wa-deploy-row">
-                      <span class="wa-deploy-when">
-                        {formatDateTime(deployment.createdAt)}
-                      </span>
-                      <Show when={isCurrent()}>
-                        <Badge tone="ok">{t("status.deployment.active")}</Badge>
-                      </Show>
-                      <Show when={!isCurrent()}>
-                        <StatusBadge
-                          status={deployment.status}
-                          label={deploymentStatusLabel}
-                          tone={deploymentTone}
-                        />
-                      </Show>
-                      <Show when={!isCurrent()}>
-                        <details class="wb-inline-details">
-                          <summary>{t("app.deploys.restoreMenu")}</summary>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            type="button"
-                            icon={<RotateCcw size={14} />}
-                            disabled={props.rollbackBusy}
-                            onClick={() => props.onRollback(deployment.id)}
-                          >
-                            {t("app.deploys.restore")}
-                          </Button>
-                        </details>
-                      </Show>
-                    </li>
-                  );
-                }}
-              </For>
-            </ul>
-          </Match>
-        </Switch>
+        <details class="wb-disclosure">
+          <summary>{t("app.deploys.title")}</summary>
+          <Switch>
+            <Match when={props.loading}>
+              <p class="muted">{t("common.loading")}</p>
+            </Match>
+            <Match when={props.error}>
+              <p class="wa-error">
+                {t("common.fetchFailed", { message: props.error! })}
+              </p>
+            </Match>
+            <Match when={props.history.length === 0}>
+              <p class="muted">{t("app.deploys.empty")}</p>
+            </Match>
+            <Match when={props.history.length > 0}>
+              <ul class="wa-deploy-history">
+                <For each={props.history}>
+                  {(deployment) => {
+                    const isCurrent = () => deployment.id === props.currentId;
+                    return (
+                      <li class="wa-deploy-row">
+                        <span class="wa-deploy-when">
+                          {formatDateTime(deployment.createdAt)}
+                        </span>
+                        <Show when={isCurrent()}>
+                          <Badge tone="ok">
+                            {t("status.deployment.active")}
+                          </Badge>
+                        </Show>
+                        <Show when={!isCurrent()}>
+                          <StatusBadge
+                            status={deployment.status}
+                            label={deploymentStatusLabel}
+                            tone={deploymentTone}
+                          />
+                        </Show>
+                        <Show when={!isCurrent()}>
+                          <details class="wb-inline-details">
+                            <summary>{t("app.deploys.restoreMenu")}</summary>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              type="button"
+                              icon={<RotateCcw size={14} />}
+                              disabled={props.rollbackBusy}
+                              onClick={() => props.onRollback(deployment.id)}
+                            >
+                              {t("app.deploys.restore")}
+                            </Button>
+                          </details>
+                        </Show>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ul>
+            </Match>
+          </Switch>
+        </details>
         <details class="wb-disclosure">
           <summary>{t("app.deploys.advancedActions")}</summary>
           <p class="muted">{t("app.deploys.advancedActionsBody")}</p>
@@ -702,32 +707,33 @@ function DeploysTab(props: {
         </details>
       </Card>
 
-      <Card>
-        <CardHeader title={t("app.recentActivity.title")} />
-        <Show
-          when={props.recentActivity.length > 0}
-          fallback={<p class="muted">{t("app.recentActivity.empty")}</p>}
-        >
-          <ul class="av-run-list">
-            <For each={props.recentActivity}>
-              {(event) => (
-                <li class="av-run-row">
-                  <span class="av-run-action">{activityEventTitle(event)}</span>
-                  <ActivityEventBadge action={event.action} />
-                  <span class="muted">{formatDateTime(event.createdAt)}</span>
-                  <Show when={activityRunId(event)}>
-                    {(runId) => (
-                      <A href={`/runs/${encodeURIComponent(runId())}`}>
-                        {t("app.recentActivity.open")} →
-                      </A>
-                    )}
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Show>
-      </Card>
+      <Show when={props.recentActivity.length > 0}>
+        <details class="wb-disclosure">
+          <summary>{t("app.recentActivity.title")}</summary>
+          <Card>
+            <ul class="av-run-list">
+              <For each={props.recentActivity}>
+                {(event) => (
+                  <li class="av-run-row">
+                    <span class="av-run-action">
+                      {activityEventTitle(event)}
+                    </span>
+                    <ActivityEventBadge action={event.action} />
+                    <span class="muted">{formatDateTime(event.createdAt)}</span>
+                    <Show when={activityRunId(event)}>
+                      {(runId) => (
+                        <A href={`/runs/${encodeURIComponent(runId())}`}>
+                          {t("app.recentActivity.open")} →
+                        </A>
+                      )}
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Card>
+        </details>
+      </Show>
     </>
   );
 }

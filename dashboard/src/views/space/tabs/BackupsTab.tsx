@@ -49,26 +49,29 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
       header: t("backups.col.contents"),
       cell: (backup) => (
         <div>
-          <strong>{t("backups.col.artifact")}</strong>
-          <div class="wb-subline">
-            {formatBytes(backup.sizeBytes)}
-            {backup.serviceData
-              ? ` · ${t("backups.serviceDataSummary", {
-                  exported: backup.serviceData.exportedCount,
-                  unsupported: backup.serviceData.unsupportedCount,
-                  missing: backup.serviceData.missingCount,
-                })}`
-              : ""}
-          </div>
+          <strong>{t("backups.restorePoint")}</strong>
+          <div class="wb-subline">{formatBytes(backup.sizeBytes)}</div>
+          <details class="wb-inline-details">
+            <summary>{t("common.details")}</summary>
+            <div class="wb-subline">
+              {t("backups.col.source")}:{" "}
+              {backup.createdByRunId
+                ? t("backups.col.run")
+                : t("backups.manual")}
+            </div>
+            <Show when={backup.serviceData}>
+              {(serviceData) => (
+                <div class="wb-subline">
+                  {t("backups.serviceDataSummary", {
+                    exported: serviceData().exportedCount,
+                    unsupported: serviceData().unsupportedCount,
+                    missing: serviceData().missingCount,
+                  })}
+                </div>
+              )}
+            </Show>
+          </details>
         </div>
-      ),
-    },
-    {
-      header: t("backups.col.source"),
-      cell: (backup) => (
-        <span>
-          {backup.createdByRunId ? t("backups.col.run") : t("backups.manual")}
-        </span>
       ),
     },
   ];

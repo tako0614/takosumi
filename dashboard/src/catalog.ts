@@ -74,10 +74,10 @@ export const CATALOG: readonly CatalogEntry[] = [
       {
         name: "accountId",
         required: true,
-        label: { ja: "Cloudflare アカウント ID", en: "Cloudflare account ID" },
+        label: { ja: "Cloudflare アカウント", en: "Cloudflare account" },
         helper: {
-          ja: "Cloudflare ダッシュボードのアカウント情報から確認できます。",
-          en: "Find this in your Cloudflare dashboard account details.",
+          ja: "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          en: "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
         },
         placeholder: "0123abcd...",
       },
@@ -85,12 +85,12 @@ export const CATALOG: readonly CatalogEntry[] = [
         name: "workersSubdomain",
         required: true,
         label: {
-          ja: "Workers サブドメイン",
-          en: "Workers subdomain",
+          ja: "公開サブドメイン",
+          en: "Public subdomain",
         },
         helper: {
-          ja: "Cloudflare の *.workers.dev の先頭部分です。例: my-team",
-          en: "The first part of your Cloudflare *.workers.dev address, for example: my-team.",
+          ja: "公開URLの先頭部分です。例: my-team",
+          en: "The first part of the public URL, for example: my-team.",
         },
         placeholder: "my-team",
       },
@@ -126,7 +126,11 @@ export const CATALOG: readonly CatalogEntry[] = [
       {
         name: "accountId",
         required: true,
-        label: { ja: "Cloudflare アカウント ID", en: "Cloudflare account ID" },
+        label: { ja: "Cloudflare アカウント", en: "Cloudflare account" },
+        helper: {
+          ja: "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          en: "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
+        },
         placeholder: "0123abcd...",
       },
       {
@@ -170,7 +174,11 @@ export const CATALOG: readonly CatalogEntry[] = [
       {
         name: "accountId",
         required: true,
-        label: { ja: "Cloudflare アカウント ID", en: "Cloudflare account ID" },
+        label: { ja: "Cloudflare アカウント", en: "Cloudflare account" },
+        helper: {
+          ja: "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          en: "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
+        },
         placeholder: "0123abcd...",
       },
       {

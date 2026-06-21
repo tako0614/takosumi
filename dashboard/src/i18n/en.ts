@@ -37,11 +37,11 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.add": "Add",
   "nav.connections": "Cloud accounts",
   "nav.billing": "Billing",
-  "nav.activity": "History",
+  "nav.activity": "Activity log",
   "nav.manage": "Manage",
   "nav.accountSection": "Account",
   "nav.notifications": "Notifications",
-  "nav.spaceSettings": "Team settings",
+  "nav.spaceSettings": "Workspace settings",
   "nav.spaceSettingsShort": "Settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
@@ -58,11 +58,11 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.dark": "Dark",
 
   // --- space switcher -------------------------------------------------------
-  "space.label": "Team",
-  "space.loadFailed": "Failed to load teams — {message}",
-  "space.none": "No teams",
-  "space.select": "Select a team",
-  "space.selectMessage": "Pick a team from the switcher in the top bar.",
+  "space.label": "Workspace",
+  "space.loadFailed": "Failed to load workspaces — {message}",
+  "space.none": "No workspaces",
+  "space.select": "Select a workspace",
+  "space.selectMessage": "Pick a workspace from the switcher in the top bar.",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -201,12 +201,15 @@ export const en: Record<keyof typeof ja, string> = {
   "app.source.refPath": "Version / folder",
   "app.source.status": "Source status",
   "app.source.loading": "Loading source info.",
-  "app.info.title": "Support info",
+  "app.info.title": "Details",
   "app.info.id": "ID",
   "app.info.generation": "Restore point",
   "app.info.deployment": "Current state",
   "app.info.installConfig": "Install settings",
   "app.deploys.title": "Update history",
+  "app.deploys.reviewTitle": "Update service",
+  "app.deploys.reviewSubtitle":
+    "Check available changes before deploying them.",
   "app.deploys.subtitle":
     "Past deployed states. Pick an older one to review a change that restores it.",
   "app.deploys.empty": "No deploys yet.",
@@ -295,15 +298,15 @@ export const en: Record<keyof typeof ja, string> = {
   "run.changes.create": "Create",
   "run.changes.update": "Update",
   "run.changes.delete": "Delete",
-  "run.resources.kicker": "Support details",
-  "run.resources.title": "Technical change details",
+  "run.resources.kicker": "Details",
+  "run.resources.title": "Resource details",
   "run.resources.count": "{n} changes",
   "run.resources.more": "{n} more technical changes are included in this plan.",
   "run.resources.actionCreate": "Create",
   "run.resources.actionUpdate": "Update",
   "run.resources.actionDelete": "Delete",
   "run.resources.actionReplace": "Replace",
-  "run.details.title": "Support details",
+  "run.details.title": "Execution details",
   "run.details.runId": "Execution ID",
   "run.details.type": "Type",
   "run.details.policy": "Safety check",
@@ -366,13 +369,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.connection": "Saved source access",
   "new.sourceAccess.selectConnection": "Select saved source access",
   "new.sourceAccess.noConnections":
-    "No verified source access is available in this team yet.",
+    "No verified source access is available in this workspace yet.",
   "new.sourceAccess.username": "Username",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "Read-only repository token",
   "new.sourceAccess.saveToken": "Save token",
   "new.sourceAccess.tokenBody":
-    "The token is stored as write-only source access and is used only while checking this team's source.",
+    "The token is stored as write-only source access and is used only while checking this workspace's source.",
   "new.sourceAccess.errorTokenRequired": "Enter an access token.",
   "new.sourceAccess.errorSaveToken":
     "Save the private repository token before checking the source.",
@@ -384,6 +387,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Service name",
   "new.vars.projectName": "Resource prefix",
+  "new.serviceAdvanced.title": "Advanced service settings",
   "new.vars.inputsTitle": "Other inputs",
   "new.vars.inputsBody":
     "Add non-secret inputs only when the app asks for something not shown above.",
@@ -413,6 +417,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This is taking a little longer. You can continue when it finishes.",
   "new.progress.status": "Status: {status}",
   "new.compat.title": "Check",
+  "new.compat.details": "Check details",
   "new.compat.readyBrief": "Ready to continue.",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
@@ -443,7 +448,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.selectConnection": "Select a connection",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.errorOperatorManaged":
-    "{provider} is not available in this team yet.",
+    "{provider} is not available in this workspace yet.",
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody": "Set up the connection to continue.",
   "new.providers.setupMissing": "Set up required connection",
@@ -451,13 +456,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.operatorMissingBody":
     "This service needs a cloud account connection before it can be added.",
   "new.providers.operatorMissingNext":
-    "Open cloud accounts or ask a team admin to add one.",
+    "Open cloud accounts or ask a workspace admin to add one.",
   "new.step.technical": "Setup progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch contents",
   "new.step.create": "Create service",
   "new.step.plan": "Review changes",
-  "new.error.spaceRequired": "Select a team.",
+  "new.error.spaceRequired": "Select a workspace.",
   "new.error.urlRequired": "Enter an install link.",
   "new.error.nameRequired": "Enter a name.",
   "new.error.nameInvalid":
@@ -468,14 +473,14 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.sourceFetchFailed":
     "Takosumi could not fetch the Git contents. Check the URL, version, folder, or private-repository connection. Detail: {message}",
   "new.error.alreadyExists":
-    "“{name}” is already added to this team. Open it from the service list.",
+    "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":
-    "This inspection result is not runnable yet. Resolve the listed changes, then check again.",
+    "This service cannot be added yet. Resolve the listed items, then check again.",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "Team settings",
+  "spaceSettings.title": "Workspace settings",
   "spaceSettings.subtitle":
-    "Manage the team name, members, cloud accounts, and usage controls.",
+    "Manage the workspace name, members, cloud accounts, and usage controls.",
   "spaceSettings.tab.general": "General",
   "spaceSettings.tab.members": "Members",
   "spaceSettings.tab.connections": "Connections",
@@ -488,9 +493,9 @@ export const en: Record<keyof typeof ja, string> = {
   "spaceSettings.general.type": "Type",
   "spaceSettings.general.owner": "Owner",
   "spaceSettings.general.updated": "Updated",
-  "spaceSettings.general.advancedDetails": "Support details",
-  "spaceSettings.general.policyAdvanced": "Policy JSON (support)",
-  "spaceSettings.general.saved": "Team settings saved.",
+  "spaceSettings.general.advancedDetails": "Advanced details",
+  "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
+  "spaceSettings.general.saved": "Workspace settings saved.",
   "spaceSettings.general.nameRequired": "Enter a display name.",
   "spaceSettings.general.policyObject": "Policy JSON must be an object.",
   "spaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
@@ -504,7 +509,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.status.invited": "Invited",
   "members.status.suspended": "Removed",
   "members.subtitle":
-    "Members of this team and their roles. Inviting, role changes, and removal are owner/admin only.",
+    "Members of this workspace and their roles. Inviting, role changes, and removal are owner/admin only.",
   "members.invite.title": "Invite a member",
   "members.invite.subtitle":
     "Enter the email for someone who has already signed in to this Takosumi.",
@@ -524,7 +529,7 @@ export const en: Record<keyof typeof ja, string> = {
     "The last owner cannot be removed. Appoint another owner first.",
   "members.remove": "Remove",
   "members.removeConfirm": "Remove this member? ({account})",
-  "members.empty": "This team has no members yet.",
+  "members.empty": "This workspace has no members yet.",
   "members.viewerNote":
     "Only owners and admins can invite, change roles, or remove members.",
 
@@ -552,6 +557,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.add.close": "Close",
   "conn.add.provider": "Service",
   "conn.add.genericEnvOption": "Use custom credentials",
+  "conn.add.optionalSettings": "Optional settings",
   "conn.add.displayName": "Display name (optional)",
   "conn.add.displayNamePlaceholder": "Production Cloudflare",
   "conn.provider.cloudflare.label": "Cloudflare",
@@ -613,7 +619,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.fieldRequired": "{field} is required.",
   "conn.list.title": "Connection details",
   "conn.list.empty":
-    "This team has no connections yet. Add one with the form above.",
+    "This workspace has no connections yet. Add one with the form above.",
   "conn.test": "Test connection",
   "conn.testing": "Testing...",
   "conn.test.notReady": "The connection is not ready yet (status: {status}).",
@@ -622,13 +628,13 @@ export const en: Record<keyof typeof ja, string> = {
     "Really delete {name}? Its stored credentials are deleted too. This cannot be undone.",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle":
-    "Manage backups for this team's settings and deployed state. Service data exports appear only for services that support them.",
+  "backups.subtitle": "Manage restore points for this workspace.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
   "backups.col.contents": "Contents",
   "backups.col.artifact": "Settings backup",
+  "backups.restorePoint": "Restore point",
   "backups.col.serviceData": "Service data",
   "backups.col.source": "Source",
   "backups.col.run": "Execution",
@@ -637,12 +643,12 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.serviceDataSummary":
     "service data {exported} / unsupported {unsupported} / missing {missing}",
   "backups.empty.title": "No backups yet",
-  "backups.empty.message": "Create this team's first backup.",
+  "backups.empty.message": "Create this workspace's first backup.",
 
   // --- shared values -------------------------------------------------------------
-  "shares.subtitle": "Explicitly share a service's public values across teams.",
+  "shares.subtitle": "Manage public values another workspace can use.",
   "shares.create.title": "Create a share",
-  "shares.create.toSpace": "Target team",
+  "shares.create.toSpace": "Target workspace",
   "shares.create.producer": "Source service",
   "shares.create.selectPlaceholder": "Select",
   "shares.create.outputs": "Shared values",
@@ -652,7 +658,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.create.outputAlias": "Display as",
   "shares.create.sensitiveValue": "Sensitive value",
   "shares.create.sensitiveReason": "Reason for sharing sensitive values",
-  "shares.create.sensitivePlaceholder": "ticket / approval reason",
+  "shares.create.sensitivePlaceholder": "Why this value needs to be shared",
   "shares.create.cta": "Create share",
   "shares.error.outputsRequired": "Enter at least one value name to share.",
   "shares.error.reasonRequired": "Enter a reason for sharing sensitive values.",
@@ -676,8 +682,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.empty.message": "Events appear here when you add or deploy services.",
   "notif.attention": "{n} events need attention.",
   "notif.badge.attention": "Attention",
-  "notif.supportSummary": "Support details",
-  "notif.viewRaw": "Open history →",
+  "notif.supportSummary": "Event data",
+  "notif.viewRaw": "Open activity log →",
   "notif.event.installCreated": "Added service “{name}”",
   "notif.event.installCreatedEnv": "Environment: {env}",
   "notif.event.planReady": "{operation} is ready",
@@ -707,12 +713,12 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.groupCreated": "Started a grouped update",
 
   // --- activity -------------------------------------------------------------------
-  "activity.title": "History",
+  "activity.title": "Activity log",
   "activity.subtitle":
-    "Recent service and account events. Support details are available inside each item.",
-  "activity.details": "Support details",
+    "Recorded service and account events, newest first. Event data is available inside each item.",
+  "activity.details": "Event data",
   "activity.empty.title": "No activity yet",
-  "activity.empty.message": "Operations in this team are recorded here.",
+  "activity.empty.message": "Operations in this workspace are recorded here.",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Batch update",
@@ -732,7 +738,7 @@ export const en: Record<keyof typeof ja, string> = {
   "graph.cycle": "Needs connection review",
   "graph.dependsOn": "Uses {names}",
   "graph.empty.title": "No services",
-  "graph.empty.message": "This team has no services yet.",
+  "graph.empty.message": "This workspace has no services yet.",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",
@@ -746,7 +752,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.session.title": "Current session",
   "account.session.id": "Session ID",
   "account.session.userAgent": "Browser",
-  "account.session.details": "Support info",
+  "account.session.details": "Sign-in details",
   "account.session.signOut": "Sign out of this browser",
   "account.session.signOutConfirm": "Sign out of this browser?",
   "account.session.otherNote":
@@ -755,15 +761,17 @@ export const en: Record<keyof typeof ja, string> = {
   "account.language.body": "Choose the dashboard display language.",
   "account.theme.title": "Appearance",
   "account.theme.body": "Choose light, dark, or your device setting.",
+  "account.preferences.title": "Display settings",
+  "account.preferences.body": "Change language and appearance.",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",
   "billing.subtitle":
-    "Review plans, credits, usage, and payment settings for this team.",
+    "Review plans, credits, usage, and payment settings for this workspace.",
   "billing.usageQuotaTitle": "Usage / quota",
   "billing.usageQuotaSubtitle":
-    "Review this team's quota mode, available capacity, and usage.",
-  "billing.mode.disabled": "Billing is disabled for this team.",
+    "Review this workspace's quota mode, available capacity, and usage.",
+  "billing.mode.disabled": "Billing is disabled for this workspace.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a credit balance.",
   "billing.loading": "Loading billing status...",
@@ -771,10 +779,11 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.error.unknown": "Unknown error",
   "billing.balance.title": "Balance",
   "billing.balance.available": "Available credits",
-  "billing.balance.reserved": "Reserved credits",
+  "billing.balance.reserved": "Pending use",
   "billing.quota.title": "Quota",
   "billing.quota.available": "Available capacity",
-  "billing.quota.reserved": "Reserved capacity",
+  "billing.quota.reserved": "Pending use",
+  "billing.pendingUse.title": "Pending use",
   "billing.plans.title": "Plans",
   "billing.plans.loading": "Loading plans...",
   "billing.plans.error": "Could not load plans: {message}",
@@ -786,7 +795,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.packs.title": "Credit packs",
   "billing.packs.credits": "{n} credits",
   "billing.packs.buy": "Buy",
-  "billing.portal": "Manage payment & invoices (Stripe)",
+  "billing.portal": "Manage payment and invoices",
   "billing.portalUnavailable":
     "Payment management is unavailable while billing is disabled or no plans are open.",
   "billing.portalOpening": "Opening...",

@@ -40,11 +40,11 @@ export const ja = {
   "nav.add": "追加",
   "nav.connections": "クラウドアカウント",
   "nav.billing": "お支払い",
-  "nav.activity": "履歴",
+  "nav.activity": "アクティビティログ",
   "nav.manage": "管理",
   "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
-  "nav.spaceSettings": "チーム設定",
+  "nav.spaceSettings": "ワークスペース設定",
   "nav.spaceSettingsShort": "設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
@@ -61,11 +61,12 @@ export const ja = {
   "theme.dark": "ダーク",
 
   // --- space switcher -------------------------------------------------------
-  "space.label": "チーム",
-  "space.loadFailed": "チームの取得に失敗しました — {message}",
-  "space.none": "チームがありません",
-  "space.select": "チームを選択してください",
-  "space.selectMessage": "右上のチーム選択からチームを選ぶと表示されます。",
+  "space.label": "ワークスペース",
+  "space.loadFailed": "ワークスペースの取得に失敗しました — {message}",
+  "space.none": "ワークスペースがありません",
+  "space.select": "ワークスペースを選択してください",
+  "space.selectMessage":
+    "右上のワークスペース選択からワークスペースを選ぶと表示されます。",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -204,12 +205,15 @@ export const ja = {
   "app.source.refPath": "バージョン / フォルダ",
   "app.source.status": "取得状態",
   "app.source.loading": "ソース情報を読み込み中です。",
-  "app.info.title": "サポート情報",
+  "app.info.title": "詳細情報",
   "app.info.id": "ID",
   "app.info.generation": "復元ポイント",
   "app.info.deployment": "現在の状態",
   "app.info.installConfig": "追加設定",
   "app.deploys.title": "更新履歴",
+  "app.deploys.reviewTitle": "サービスを更新",
+  "app.deploys.reviewSubtitle":
+    "変更がある場合は内容を確認してからデプロイできます。",
   "app.deploys.subtitle":
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
@@ -299,15 +303,15 @@ export const ja = {
   "run.changes.create": "作成",
   "run.changes.update": "変更",
   "run.changes.delete": "削除",
-  "run.resources.kicker": "サポート詳細",
-  "run.resources.title": "技術的な変更詳細",
+  "run.resources.kicker": "詳細",
+  "run.resources.title": "リソース詳細",
   "run.resources.count": "{n} 件",
   "run.resources.more": "ほか {n} 件の技術的な変更が含まれています。",
   "run.resources.actionCreate": "作成",
   "run.resources.actionUpdate": "変更",
   "run.resources.actionDelete": "削除",
   "run.resources.actionReplace": "置換",
-  "run.details.title": "サポート詳細",
+  "run.details.title": "実行の詳細",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "安全確認",
@@ -372,13 +376,13 @@ export const ja = {
   "new.sourceAccess.connection": "保存済みの取得元アクセス",
   "new.sourceAccess.selectConnection": "保存済みの取得元アクセスを選択",
   "new.sourceAccess.noConnections":
-    "このチームには、検証済みの取得元アクセスがまだありません。",
+    "このワークスペースには、検証済みの取得元アクセスがまだありません。",
   "new.sourceAccess.username": "ユーザー名",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "読み取り専用リポジトリ token",
   "new.sourceAccess.saveToken": "token を保存",
   "new.sourceAccess.tokenBody":
-    "token は書き込み専用の取得元接続として保存され、このチームの取得元確認にだけ使われます。",
+    "token は書き込み専用の取得元接続として保存され、このワークスペースの取得元確認にだけ使われます。",
   "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
   "new.sourceAccess.errorSaveToken":
     "取得元を確認する前に、非公開リポジトリの token を保存してください。",
@@ -391,6 +395,7 @@ export const ja = {
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "サービス名",
   "new.vars.projectName": "リソース接頭辞",
+  "new.serviceAdvanced.title": "詳細なサービス設定",
   "new.vars.inputsTitle": "その他の入力",
   "new.vars.inputsBody":
     "上にない非 secret の入力をアプリから求められた場合だけ使います。",
@@ -420,6 +425,7 @@ export const ja = {
   "new.progress.slow": "少し時間がかかっています。完了すると次に進めます。",
   "new.progress.status": "実行状態: {status}",
   "new.compat.title": "確認",
+  "new.compat.details": "確認の詳細",
   "new.compat.readyBrief": "確認できました。",
   "new.compat.ready": "このまま追加できます",
   "new.compat.auto": "自動調整して追加できます",
@@ -451,7 +457,7 @@ export const ja = {
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.errorOperatorManaged":
-    "{provider} はこのチームではまだ利用できません。",
+    "{provider} はこのワークスペースではまだ利用できません。",
   "new.providers.missingTitle": "接続の設定が必要です",
   "new.providers.missingBody": "接続を設定すると続けられます。",
   "new.providers.setupMissing": "必要な接続を設定",
@@ -459,13 +465,13 @@ export const ja = {
   "new.providers.operatorMissingBody":
     "このサービスを追加するにはクラウドアカウント接続が必要です。",
   "new.providers.operatorMissingNext":
-    "クラウドアカウント画面を開くか、チーム管理者に接続の追加を依頼してください。",
+    "クラウドアカウント画面を開くか、ワークスペース管理者に接続の追加を依頼してください。",
   "new.step.technical": "確認の進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "中身を取得",
   "new.step.create": "サービスを作成",
   "new.step.plan": "変更を確認",
-  "new.error.spaceRequired": "チームを選択してください。",
+  "new.error.spaceRequired": "ワークスペースを選択してください。",
   "new.error.urlRequired": "インストールリンクを入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
   "new.error.nameInvalid":
@@ -476,14 +482,14 @@ export const ja = {
   "new.error.sourceFetchFailed":
     "Git の中身を取得できませんでした。URL、バージョン、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
   "new.error.alreadyExists":
-    "「{name}」はこのチームに既に追加されています。一覧から既存サービスを開いてください。",
+    "「{name}」はこのワークスペースに既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "チーム設定",
+  "spaceSettings.title": "ワークスペース設定",
   "spaceSettings.subtitle":
-    "チーム名、メンバー、クラウドアカウント、使用量設定を管理します。",
+    "ワークスペース名、メンバー、クラウドアカウント、使用量設定を管理します。",
   "spaceSettings.tab.general": "一般",
   "spaceSettings.tab.members": "メンバー",
   "spaceSettings.tab.connections": "接続",
@@ -496,9 +502,9 @@ export const ja = {
   "spaceSettings.general.type": "種別",
   "spaceSettings.general.owner": "オーナー",
   "spaceSettings.general.updated": "更新日時",
-  "spaceSettings.general.advancedDetails": "サポート向け詳細設定",
-  "spaceSettings.general.policyAdvanced": "ポリシー JSON（サポート向け）",
-  "spaceSettings.general.saved": "チーム設定を保存しました。",
+  "spaceSettings.general.advancedDetails": "詳細情報",
+  "spaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
+  "spaceSettings.general.saved": "ワークスペース設定を保存しました。",
   "spaceSettings.general.nameRequired": "表示名を入力してください。",
   "spaceSettings.general.policyObject":
     "ポリシー JSON は object にしてください。",
@@ -514,7 +520,7 @@ export const ja = {
   "members.status.invited": "招待中",
   "members.status.suspended": "削除済み",
   "members.subtitle":
-    "このチームのメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。",
+    "このワークスペースのメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。",
   "members.invite.title": "メンバーを招待",
   "members.invite.subtitle":
     "この Takosumi に一度ログイン済みの相手のメールアドレスを入力してください。",
@@ -534,7 +540,7 @@ export const ja = {
     "最後のオーナーは削除できません。先に別のオーナーを指名してください。",
   "members.remove": "削除",
   "members.removeConfirm": "このメンバーを削除しますか？（{account}）",
-  "members.empty": "このチームにはまだメンバーがいません。",
+  "members.empty": "このワークスペースにはまだメンバーがいません。",
   "members.viewerNote":
     "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
 
@@ -561,6 +567,7 @@ export const ja = {
   "conn.add.close": "閉じる",
   "conn.add.provider": "接続先",
   "conn.add.genericEnvOption": "任意の接続情報を使う",
+  "conn.add.optionalSettings": "任意の設定",
   "conn.add.displayName": "表示名（任意）",
   "conn.add.displayNamePlaceholder": "本番 Cloudflare",
   "conn.provider.cloudflare.label": "Cloudflare",
@@ -624,7 +631,7 @@ export const ja = {
   "conn.error.fieldRequired": "{field} は必須です。",
   "conn.list.title": "接続の詳細",
   "conn.list.empty":
-    "このチームにはまだ接続がありません。上のフォームから追加できます。",
+    "このワークスペースにはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
   "conn.testing": "確認中...",
   "conn.test.notReady": "接続はまだ利用できません（状態: {status}）。",
@@ -633,13 +640,13 @@ export const ja = {
     "本当に {name} を削除しますか？保存された認証情報も削除され、取り消せません。",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle":
-    "チームの設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応しているサービスでのみ表示されます。",
+  "backups.subtitle": "復元に使う保存ポイントを管理します。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
   "backups.col.contents": "内容",
   "backups.col.artifact": "設定バックアップ",
+  "backups.restorePoint": "復元ポイント",
   "backups.col.serviceData": "サービスデータ",
   "backups.col.source": "作成元",
   "backups.col.run": "実行",
@@ -648,12 +655,13 @@ export const ja = {
   "backups.serviceDataSummary":
     "サービスデータ {exported} 件 / 未対応 {unsupported} 件 / 不足 {missing} 件",
   "backups.empty.title": "まだバックアップがありません",
-  "backups.empty.message": "このチームの最初のバックアップを作成できます。",
+  "backups.empty.message":
+    "このワークスペースの最初のバックアップを作成できます。",
 
   // --- shared values -------------------------------------------------------------
-  "shares.subtitle": "チーム間でサービスの公開値を明示的に共有します。",
+  "shares.subtitle": "別のワークスペースから使える公開値を管理します。",
   "shares.create.title": "共有を作成",
-  "shares.create.toSpace": "共有先チーム",
+  "shares.create.toSpace": "共有先ワークスペース",
   "shares.create.producer": "共有元サービス",
   "shares.create.selectPlaceholder": "選択してください",
   "shares.create.outputs": "共有する値",
@@ -663,7 +671,7 @@ export const ja = {
   "shares.create.outputAlias": "表示名",
   "shares.create.sensitiveValue": "機微な値",
   "shares.create.sensitiveReason": "機微な値を共有する理由",
-  "shares.create.sensitivePlaceholder": "チケット番号 / 承認理由",
+  "shares.create.sensitivePlaceholder": "共有が必要な理由",
   "shares.create.cta": "共有を作成",
   "shares.error.outputsRequired":
     "共有する値の名前を 1 つ以上入力してください。",
@@ -689,8 +697,8 @@ export const ja = {
     "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.supportSummary": "サポート詳細",
-  "notif.viewRaw": "履歴を開く →",
+  "notif.supportSummary": "記録データ",
+  "notif.viewRaw": "アクティビティログを開く →",
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
@@ -720,13 +728,13 @@ export const ja = {
   "notif.event.groupCreated": "まとめての更新を開始しました",
 
   // --- activity -------------------------------------------------------------------
-  "activity.title": "履歴",
+  "activity.title": "アクティビティログ",
   "activity.subtitle":
-    "最近のサービスやアカウントの出来事です。サポート詳細は各項目から確認できます。",
-  "activity.details": "サポート詳細",
-  "activity.empty.title": "まだ履歴がありません",
+    "サービスやアカウントの出来事を新しい順に記録します。詳細データは各項目から確認できます。",
+  "activity.details": "記録データ",
+  "activity.empty.title": "まだ記録はありません",
   "activity.empty.message":
-    "このチームで操作が行われると、ここに記録されます。",
+    "このワークスペースで操作が行われると、ここに記録されます。",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "まとめての更新",
@@ -746,7 +754,7 @@ export const ja = {
   "graph.cycle": "連携の見直しが必要",
   "graph.dependsOn": "{names} を利用",
   "graph.empty.title": "サービスがありません",
-  "graph.empty.message": "このチームにはまだサービスがありません。",
+  "graph.empty.message": "このワークスペースにはまだサービスがありません。",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
@@ -760,7 +768,7 @@ export const ja = {
   "account.session.title": "現在のセッション",
   "account.session.id": "セッション ID",
   "account.session.userAgent": "ブラウザ",
-  "account.session.details": "サポート情報",
+  "account.session.details": "サインイン詳細",
   "account.session.signOut": "このブラウザからサインアウト",
   "account.session.signOutConfirm": "このブラウザからサインアウトしますか？",
   "account.session.otherNote":
@@ -769,15 +777,17 @@ export const ja = {
   "account.language.body": "ダッシュボードの表示言語を選びます。",
   "account.theme.title": "表示",
   "account.theme.body": "ライト / ダーク / 端末設定に合わせた表示を選べます。",
+  "account.preferences.title": "表示設定",
+  "account.preferences.body": "言語と見た目を変更できます。",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",
   "billing.subtitle":
-    "このチームのプラン、クレジット、使用量、支払い設定を確認します。",
+    "このワークスペースのプラン、クレジット、使用量、支払い設定を確認します。",
   "billing.usageQuotaTitle": "使用量 / 上限",
   "billing.usageQuotaSubtitle":
-    "このチームの上限モード、利用可能な容量、使用量を確認します。",
-  "billing.mode.disabled": "このチームでは課金は無効です。",
+    "このワークスペースの上限モード、利用可能な容量、使用量を確認します。",
+  "billing.mode.disabled": "このワークスペースでは課金は無効です。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce": "デプロイにはクレジット残高が必要です。",
   "billing.loading": "課金状態を読み込み中です...",
@@ -785,10 +795,11 @@ export const ja = {
   "billing.error.unknown": "不明なエラー",
   "billing.balance.title": "残高",
   "billing.balance.available": "利用可能クレジット",
-  "billing.balance.reserved": "予約中クレジット",
+  "billing.balance.reserved": "反映待ちの使用量",
   "billing.quota.title": "上限",
   "billing.quota.available": "利用可能な容量",
-  "billing.quota.reserved": "予約中の容量",
+  "billing.quota.reserved": "反映待ちの使用量",
+  "billing.pendingUse.title": "反映待ちの使用量",
   "billing.plans.title": "プラン",
   "billing.plans.loading": "プランを読み込み中です...",
   "billing.plans.error": "プランを読み込めませんでした: {message}",
@@ -800,7 +811,7 @@ export const ja = {
   "billing.packs.title": "クレジットパック",
   "billing.packs.credits": "{n} クレジット",
   "billing.packs.buy": "購入する",
-  "billing.portal": "支払い方法と請求の管理（Stripe）",
+  "billing.portal": "支払い方法と請求を管理",
   "billing.portalUnavailable":
     "課金が無効、または受付中のプランがないため、支払い管理は利用できません。",
   "billing.portalOpening": "開いています...",
