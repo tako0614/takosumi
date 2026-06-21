@@ -65,7 +65,7 @@ import {
   isUrlString,
   outputLabel,
 } from "../../lib/installations-ui.ts";
-import { formatDateTime, t } from "../../i18n/index.ts";
+import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   Badge,
@@ -85,7 +85,7 @@ import {
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
 export default function AppDetailView() {
-  return <Page>{() => <Inner />}</Page>;
+  return <Page title={t("app.installationSub")}>{() => <Inner />}</Page>;
 }
 
 function Inner() {
@@ -133,6 +133,17 @@ function Inner() {
   const consumers = createMemo(() =>
     dependencyRows(installation(), graph(), "consumer"),
   );
+
+  createEffect(() => {
+    const inst = installation();
+    if (inst) {
+      setDocumentTitle(inst.name);
+      return;
+    }
+    if (installation.error) {
+      setDocumentTitle(t("app.notFound"));
+    }
+  });
 
   const deploymentHistory = createMemo(() =>
     [...(deployments() ?? [])].sort((a, b) =>

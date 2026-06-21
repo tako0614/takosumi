@@ -219,7 +219,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.source.name": "Name",
   "app.source.url": "Git URL",
   "app.source.refPath": "Ref / Path",
-  "app.source.status": "Status",
+  "app.source.status": "Source status",
   "app.source.loading": "Loading source info.",
   "app.info.title": "Capsule info",
   "app.info.id": "ID",
