@@ -9,7 +9,14 @@
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Boxes, Network, Plus } from "lucide-solid";
+import {
+  Boxes,
+  Cloud,
+  GitBranch,
+  Network,
+  PlayCircle,
+  Plus,
+} from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
@@ -113,6 +120,13 @@ function Inner() {
     () => (installations() ?? []).filter(needsAttention).length,
   );
 
+  const deployedCount = createMemo(
+    () =>
+      (installations() ?? []).filter(
+        (inst) => effectiveInstallationStatus(inst) === "active",
+      ).length,
+  );
+
   const openDetail = (inst: Installation) =>
     navigate(`/capsules/${encodeURIComponent(inst.id)}`);
 
@@ -168,96 +182,172 @@ function Inner() {
           </Match>
           <Match when={installations()}>
             {(list) => (
-              <Show
-                when={list().length > 0}
-                fallback={
-                  <EmptyState
-                    ink
-                    icon={<Boxes size={28} />}
-                    title={t("apps.empty.title")}
-                    message={t("apps.empty.message")}
-                    action={
-                      <Button
-                        variant="primary"
-                        href="/new"
-                        icon={<Plus size={16} />}
-                      >
-                        {t("apps.empty.cta")}
-                      </Button>
-                    }
-                  />
-                }
-              >
-                <ul class="av-grid">
-                  <For each={list()}>
-                    {(inst) => (
-                      <li>
-                        <button
-                          type="button"
-                          class="av-card"
-                          onClick={() => openDetail(inst)}
+              <>
+                <WorkspaceStartPanel
+                  serviceCount={list().length}
+                  deployedCount={deployedCount()}
+                  attentionCount={attentionCount()}
+                />
+                <Show
+                  when={list().length > 0}
+                  fallback={
+                    <EmptyState
+                      ink
+                      icon={<Boxes size={28} />}
+                      title={t("apps.empty.title")}
+                      message={t("apps.empty.message")}
+                      action={
+                        <Button
+                          variant="primary"
+                          href="/new"
+                          icon={<Plus size={16} />}
                         >
-                          <div class="av-card-head">
-                            <span class="av-card-name">{inst.name}</span>
-                            <StatusBadge
-                              status={effectiveInstallationStatus(inst)}
-                              label={installationStatusLabel}
-                              tone={installationTone}
-                            />
-                          </div>
-                          <Show
-                            when={(dependsOn().get(inst.id) ?? []).length > 0}
+                          {t("apps.empty.cta")}
+                        </Button>
+                      }
+                    />
+                  }
+                >
+                  <ul class="av-grid">
+                    <For each={list()}>
+                      {(inst) => (
+                        <li>
+                          <button
+                            type="button"
+                            class="av-card"
+                            onClick={() => openDetail(inst)}
                           >
-                            <p class="av-card-meta">
-                              {t("apps.dependsOn", {
-                                names: (dependsOn().get(inst.id) ?? []).join(
-                                  ", ",
-                                ),
-                              })}
-                            </p>
-                          </Show>
-                          <Show
-                            when={
-                              effectiveInstallationStatus(inst) === "stale" &&
-                              staleReasons().get(inst.id)
-                            }
-                          >
-                            {(reason) => (
-                              <p class="av-card-meta av-card-warn">
-                                {t("apps.staleReason", { reason: reason() })}
+                            <div class="av-card-head">
+                              <span class="av-card-name">{inst.name}</span>
+                              <StatusBadge
+                                status={effectiveInstallationStatus(inst)}
+                                label={installationStatusLabel}
+                                tone={installationTone}
+                              />
+                            </div>
+                            <Show
+                              when={(dependsOn().get(inst.id) ?? []).length > 0}
+                            >
+                              <p class="av-card-meta">
+                                {t("apps.dependsOn", {
+                                  names: (dependsOn().get(inst.id) ?? []).join(
+                                    ", ",
+                                  ),
+                                })}
                               </p>
+                            </Show>
+                            <Show
+                              when={
+                                effectiveInstallationStatus(inst) === "stale" &&
+                                staleReasons().get(inst.id)
+                              }
+                            >
+                              {(reason) => (
+                                <p class="av-card-meta av-card-warn">
+                                  {t("apps.staleReason", { reason: reason() })}
+                                </p>
+                              )}
+                            </Show>
+                            <Show when={inst.currentDeploymentId}>
+                              <p class="av-card-meta">
+                                <Badge tone="info">outputs</Badge>
+                              </p>
+                            </Show>
+                          </button>
+                          <Show when={launchUrls()?.get(inst.id)}>
+                            {(url) => (
+                              <div class="av-card-foot">
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  href={url()}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                >
+                                  {t("apps.openApp")} ↗
+                                </Button>
+                              </div>
                             )}
                           </Show>
-                          <Show when={inst.currentDeploymentId}>
-                            <p class="av-card-meta">
-                              <Badge tone="info">outputs</Badge>
-                            </p>
-                          </Show>
-                        </button>
-                        <Show when={launchUrls()?.get(inst.id)}>
-                          {(url) => (
-                            <div class="av-card-foot">
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                href={url()}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                              >
-                                {t("apps.openApp")} ↗
-                              </Button>
-                            </div>
-                          )}
-                        </Show>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-              </Show>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              </>
             )}
           </Match>
         </Switch>
       </Show>
     </AppShell>
+  );
+}
+
+function WorkspaceStartPanel(props: {
+  readonly serviceCount: number;
+  readonly deployedCount: number;
+  readonly attentionCount: number;
+}) {
+  const hasServices = () => props.serviceCount > 0;
+  return (
+    <section class="av-start" aria-label={t("apps.start.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("apps.start.kicker")}</span>
+        <h2 class="av-start-title">
+          {hasServices()
+            ? t("apps.start.titleWithServices", { n: props.serviceCount })
+            : t("apps.start.titleEmpty")}
+        </h2>
+        <p class="av-start-sub">
+          {hasServices()
+            ? t("apps.start.bodyWithServices", {
+                deployed: props.deployedCount,
+                attention: props.attentionCount,
+              })
+            : t("apps.start.bodyEmpty")}
+        </p>
+        <div class="av-start-actions">
+          <Button variant="primary" href="/new" icon={<Plus size={16} />}>
+            {hasServices() ? t("apps.start.addAnother") : t("apps.start.add")}
+          </Button>
+          <Button
+            variant="secondary"
+            href="/workspace/settings/connections"
+            icon={<Cloud size={16} />}
+          >
+            {t("apps.start.connections")}
+          </Button>
+        </div>
+      </div>
+      <ol class="av-start-steps">
+        <li>
+          <span class="av-start-step-icon">
+            <GitBranch size={16} />
+          </span>
+          <span>
+            <strong>{t("apps.start.stepSource")}</strong>
+            <small>{t("apps.start.stepSourceSub")}</small>
+          </span>
+        </li>
+        <li>
+          <span class="av-start-step-icon">
+            <Cloud size={16} />
+          </span>
+          <span>
+            <strong>{t("apps.start.stepConnection")}</strong>
+            <small>{t("apps.start.stepConnectionSub")}</small>
+          </span>
+        </li>
+        <li>
+          <span class="av-start-step-icon">
+            <PlayCircle size={16} />
+          </span>
+          <span>
+            <strong>{t("apps.start.stepDeploy")}</strong>
+            <small>{t("apps.start.stepDeploySub")}</small>
+          </span>
+        </li>
+      </ol>
+    </section>
   );
 }

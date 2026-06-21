@@ -163,6 +163,25 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.graphLink": "Dependency graph",
+  "apps.start.aria": "Workspace deployment overview",
+  "apps.start.kicker": "Workspace",
+  "apps.start.titleEmpty": "Deploy your first service",
+  "apps.start.titleWithServices": "{n} services in this Workspace",
+  "apps.start.bodyEmpty":
+    "Add a Git source, connect the cloud account it needs, then review and deploy the change.",
+  "apps.start.bodyWithServices":
+    "{deployed} deployed. {attention} need attention. Add another source or review the latest activity.",
+  "apps.start.add": "Add from Git",
+  "apps.start.addAnother": "Add another service",
+  "apps.start.connections": "Cloud connections",
+  "apps.start.stepSource": "Git source",
+  "apps.start.stepSourceSub": "Use a repository, ref, and module path.",
+  "apps.start.stepConnection": "Cloud connection",
+  "apps.start.stepConnectionSub":
+    "Keep provider keys in Takosumi, not in the repo.",
+  "apps.start.stepDeploy": "Review and deploy",
+  "apps.start.stepDeploySub":
+    "Plan first, approve, then open the public output.",
 
   // --- Capsule detail ------------------------------------------------------
   "app.installationSub": "Capsule",
