@@ -129,6 +129,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.
   const [values, setValues] = createSignal<Record<string, string>>({});
   const [helperToken, setHelperToken] = createSignal("");
+  const [helperCloudflareAccountId, setHelperCloudflareAccountId] =
+    createSignal("");
   const [oauthBusy, setOauthBusy] = createSignal(false);
 
   const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
@@ -170,6 +172,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const clearForm = () => {
     setValues({});
     setHelperToken("");
+    setHelperCloudflareAccountId("");
     setDisplayName("");
     setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
@@ -205,11 +208,24 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (!helper || !d) throw new Error(t("conn.error.invalidProvider"));
     const token = helperToken().trim();
     if (!token) throw new Error(t("conn.error.tokenRequired"));
+    const cloudflareAccountId = helperCloudflareAccountId().trim();
+    if (d.provider === "cloudflare" && !cloudflareAccountId) {
+      throw new Error(
+        t("conn.error.fieldRequired", {
+          field: t("conn.provider.cloudflare.accountId.label"),
+        }),
+      );
+    }
+    const submitValues: Record<string, string> = { [helper.envName]: token };
+    if (cloudflareAccountId) {
+      submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId;
+    }
     const connection = await createConnection({
       spaceId: spaceId(),
       provider: d.provider,
       displayName: displayName().trim() || undefined,
-      values: { [helper.envName]: token },
+      scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues),
+      values: submitValues,
     });
     await afterConnectionCreated(connection);
   });
@@ -664,6 +680,31 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                             spellcheck={false}
                           />
                         </FormField>
+                        <Show when={descriptor()?.provider === "cloudflare"}>
+                          <FormField
+                            label={t(
+                              "conn.provider.cloudflare.accountId.label",
+                            )}
+                            required
+                          >
+                            <Input
+                              id="connection-helper-cloudflare-account-id"
+                              name="helperCloudflareAccountId"
+                              type="text"
+                              value={helperCloudflareAccountId()}
+                              onInput={(e) =>
+                                setHelperCloudflareAccountId(
+                                  e.currentTarget.value,
+                                )
+                              }
+                              placeholder={t(
+                                "conn.provider.cloudflare.accountId.placeholder",
+                              )}
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                        </Show>
                         <div class="wc-form-actions">
                           <Button
                             variant="primary"
