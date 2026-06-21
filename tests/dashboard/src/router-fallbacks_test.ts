@@ -59,9 +59,29 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     // The redirect destination must be a real route, not another dead link.
     expect(paths).toContain("/sign-in");
     // A spot-check of pre-existing routes the fix must not disturb.
-    for (const p of ["/", "/home", "/installations", "/account"]) {
+    for (const p of [
+      "/",
+      "/home",
+      "/installations",
+      "/connections",
+      "/billing",
+      "/advanced/workspace",
+      "/account",
+    ]) {
       expect(paths).toContain(p);
     }
+  });
+
+  test("normal connection and billing routes stay first-class", () => {
+    expect(source).toContain(
+      '<Route path="/connections" component={ConnectionsView} />',
+    );
+    expect(source).toContain(
+      '<Route path="/billing" component={BillingView} />',
+    );
+    expect(source).toContain(
+      '<Route path="/advanced/workspace" component={AdvancedWorkspaceView} />',
+    );
   });
 
   test("Navigate is imported from @solidjs/router", () => {

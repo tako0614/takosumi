@@ -1,16 +1,16 @@
 /**
- * Primary navigation — the Installation-centric IA. Five everyday destinations; the
- * former "詳細・上級設定" fold is gone because expert surfaces now live INSIDE
- * the screens they relate to (Capsule detail tabs, Workspace settings tabs) instead of
- * as parallel top-level pages. Notifications ride on the TopBar bell.
+ * Primary navigation for the normal Takosumi Cloud surface. Technical workspace
+ * settings stay available from advanced routes, but the main chrome leads with
+ * the service-hosting tasks ordinary users need every day.
  */
 import { A, useLocation } from "@solidjs/router";
 import {
   Activity,
   ArrowLeft,
+  CreditCard,
   Home,
+  Plug,
   Plus,
-  Settings2,
   UserCircle2,
 } from "lucide-solid";
 import { Show } from "solid-js";
@@ -39,12 +39,9 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
+  { href: "/connections", labelKey: "nav.connections", icon: Plug },
+  { href: "/billing", labelKey: "nav.billing", icon: CreditCard },
   { href: "/activity", labelKey: "nav.activity", icon: Activity },
-  {
-    href: "/workspace/settings",
-    labelKey: "nav.spaceSettings",
-    icon: Settings2,
-  },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 
