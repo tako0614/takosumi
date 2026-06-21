@@ -41,7 +41,6 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.accountSection": "Account",
   "nav.advanced": "Advanced",
   "nav.notifications": "Notifications",
-  "nav.notificationsShort": "Alerts",
   "nav.spaceSettings": "Workspace settings",
   "nav.spaceSettingsShort": "Settings",
   "nav.account": "Account",
@@ -165,16 +164,12 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.add": "Add service",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
-  "apps.empty.title": "No services yet",
-  "apps.empty.message": "Start from an example or add one from a source URL.",
-  "apps.empty.cta": "Add service",
   "apps.openApp": "Open service",
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
   "apps.reviewChanges": "Review update",
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
-  "apps.graphLink": "Service map",
   "apps.summary.aria": "Service status",
   "apps.summary.title": "Your services",
   "apps.summary.body": "{deployed} of {total} services are deployed.",
@@ -184,15 +179,10 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.kicker": "No services yet",
   "apps.start.titleEmpty": "Add a service you want to use",
   "apps.start.bodyEmpty":
-    "Start from an example, an app-page install link, or a source URL.",
-  "apps.start.add": "Add service",
-  "apps.start.connections": "Cloud connections",
+    "Start with an example. App-page install links are also supported.",
   "apps.start.optionCatalog": "Start with an example",
   "apps.start.optionCatalogSub":
     "Pick a ready-made setup, then add only the connections it needs.",
-  "apps.start.optionLink": "Add from a link or URL",
-  "apps.start.optionLinkSub":
-    "Use an app-page install link or an OpenTofu/Terraform source URL.",
 
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "Service",
@@ -352,48 +342,29 @@ export const en: Record<keyof typeof ja, string> = {
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
   "new.subtitle": "Choose a starter or paste an app install link.",
-  "new.guide.aria": "Add service guidance",
-  "new.guide.kicker": "Add service",
-  "new.guide.title": "Choose what you want to add",
-  "new.guide.choose":
-    "Pick a starter, or paste an install link from an app page.",
-  "new.guide.check":
-    "Takosumi will check it first and only ask for connections this service needs.",
-  "new.guide.checking":
-    "Takosumi is checking the source. When it finishes, only the next needed action appears.",
-  "new.guide.connect":
-    "Set up the external service connection this service needs, then continue from here.",
-  "new.guide.ready":
-    "You can review the addition next. Nothing is deployed until you approve it on the review screen.",
-  "new.guide.needsFix":
-    "Some items need to be fixed before this can be added. Check the inspection result below.",
-  "new.steps.aria": "Add service progress",
-  "new.steps.choose": "Choose",
-  "new.steps.check": "Check",
-  "new.steps.connect": "Connect",
-  "new.steps.review": "Review",
-  "new.flow.source": "What will be added",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.store.aria": "Recommended services",
   "new.store.title": "Recommended services",
-  "new.tab.catalog": "Recommended",
-  "new.tab.git": "Link / URL",
   "new.catalog.intro":
-    "Choose what you want to add. Nothing is added until you check it.",
-  "new.catalog.readyStarter": "Starter",
+    "Choose what you want to host. Takosumi will ask only for the setup each service needs.",
+  "new.catalog.provider": "Uses {provider}",
   "new.catalog.select": "Add this",
-  "new.advancedImport.open": "Add from a link or source",
+  "new.advancedImport.open": "Use an install link",
   "new.advancedImport.close": "Hide link input",
-  "new.advancedImport.title": "Add from a link or source",
+  "new.advancedImport.title": "Add with an install link",
   "new.advancedImport.subtitle":
-    "Paste an app-page install link or a source URL.",
-  "new.selection.title": "Selected service",
+    "Paste an app-page install link, or a Git URL for advanced setup.",
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
-  "new.selection.change": "Change source",
   "new.selection.sourceDetails": "Source details",
+  "new.catalogInput.title": "Service setup",
+  "new.catalogInput.body":
+    "Fill in the minimum settings for this service. Secrets and API keys stay in external service connections.",
+  "new.catalogInput.errorRequired": "Enter {label}.",
+  "new.catalogInput.errorUnsafeValue":
+    "{label} contains unsupported characters or is too long.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
-  "new.git.url": "Install link or source URL",
+  "new.git.url": "Install link or Git URL",
   "new.git.advanced": "Advanced source settings",
   "new.git.ref": "Version",
   "new.git.path": "Folder",
@@ -440,16 +411,9 @@ export const en: Record<keyof typeof ja, string> = {
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.vars.errorProjectNameReserved":
     "Use the Resource prefix field for project_name.",
+  "new.vars.errorCatalogReserved":
+    "Use the Service setup field for “{name}”.",
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
-  "new.managed.notice":
-    "Takosumi will check this first. If another connection is needed, it will ask next.",
-  "new.managed.needCredential":
-    "Adding this needs an external service connection that is not available in this Workspace yet.",
-  "new.managed.connectFirst": "Set up a connection",
-  "new.managed.byoTitle": "Use your own cloud connection",
-  "new.managed.byoBody":
-    "If this service uses AWS, GCP, Kubernetes, Cloudflare, or another provider, add or select the required connection.",
-  "new.managed.byoLink": "Set up a connection",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
     "The link was missing a safe HTTPS Git source, or it included source material that cannot be opened in the browser. Choose an example or paste the Git URL manually.",
@@ -490,12 +454,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.title": "External service connections",
   "new.providers.subtitle":
     "Choose the connections this service will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
-  "new.providers.noneRequired":
-    "This service does not require extra connections for the first review.",
   "new.providers.alias": "alias: {alias}",
   "new.providers.advanced": "Connection details",
   "new.providers.selectConnection": "Select a connection",
-  "new.providers.manageConnections": "Manage connections",
   "new.providers.errorConnection": "Select a ready connection for {provider}.",
   "new.providers.errorOperatorManaged":
     "{provider} is not available in this Workspace yet.",

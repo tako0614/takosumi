@@ -32,7 +32,8 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).toContain("const ADVANCED");
     expect(sidebarSource).toContain('labelKey: "nav.home"');
     expect(sidebarSource).toContain('labelKey: "nav.add"');
-    expect(sidebarSource).toContain('labelKey: "nav.notifications"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.notifications"');
+    expect(sidebarSource).not.toContain('href: "/notifications"');
     expect(sidebarSource).toContain('aria-label={t("nav.accountSection")}');
     expect(sidebarSource).toContain('class="sidebar-advanced"');
     expect(sidebarSource).toContain('class="sidebar-section-label"');
@@ -45,10 +46,10 @@ describe("dashboard shell navigation layout", () => {
   test("keeps mobile tabs focused on everyday destinations", () => {
     expect(mobileTabsSource).toContain('href: "/"');
     expect(mobileTabsSource).toContain('href: "/new"');
-    expect(mobileTabsSource).toContain('href: "/notifications"');
     expect(mobileTabsSource).toContain('href: "/account"');
+    expect(mobileTabsSource).not.toContain('href: "/notifications"');
     expect(mobileTabsSource).not.toContain('href: "/connections"');
     expect(mobileTabsSource).not.toContain("icon: Plug");
-    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
+    expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
   });
 });
