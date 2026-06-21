@@ -364,6 +364,9 @@
     min-width: 0;
     font-size: var(--tg-fs-xs);
   }
+  .topbar-create-space {
+    display: none;
+  }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)
       calc(

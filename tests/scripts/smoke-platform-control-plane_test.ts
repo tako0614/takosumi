@@ -15,6 +15,8 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
       appName: "takosumi-smoke-test",
       cloudflareAccountIdFile:
         "/operator/.secrets/staging/CLOUDFLARE_ACCOUNT_ID",
+      cloudflareWorkersSubdomainFile:
+        "/operator/.secrets/staging/CLOUDFLARE_WORKERS_SUBDOMAIN",
       sessionTokenFile:
         "/operator/.secrets/staging/TAKOSUMI_ACCOUNT_SESSION_TOKEN",
       cloudflareApiTokenFile: "/operator/.secrets/staging/CLOUDFLARE_API_TOKEN",
@@ -46,6 +48,7 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(result.inputs.cloudflareAccountIdDigest).toMatch(
     /^sha256:[0-9a-f]{64}$/,
   );
+  expect(result.inputs.cloudflareWorkersSubdomainSource).toBe("file");
   expect(json).not.toContain("cf-account-secret-ish");
   expect(json).not.toContain("CLOUDFLARE_ACCOUNT_ID");
   expect(json).not.toContain("TAKOSUMI_ACCOUNT_SESSION_TOKEN");
@@ -59,6 +62,7 @@ test("platform control-plane smoke infers production environment from URL", asyn
       url: "https://app.takosumi.com",
       space: "@smoke-production",
       cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
     },
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
@@ -78,6 +82,7 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
       space: "space_test",
       appName: "takosumi-smoke-test",
       cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
     },
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
@@ -115,15 +120,18 @@ test("platform control-plane smoke resolves secret sources from environment", as
     {
       TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
       CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "takosumi-smoke",
     },
   );
 
   expect(options.accountSessionTokenSource).toBe("env");
   expect(options.cloudflareApiTokenSource).toBe("env");
   expect(options.cloudflareAccountIdSource).toBe("arg");
+  expect(options.cloudflareWorkersSubdomainSource).toBe("env");
   expect(options.accountSessionToken).toBe("<redacted>");
   expect(options.cloudflareApiToken).toBe("<redacted>");
   expect(options.cloudflareAccountId).toBe("<redacted>");
+  expect(options.cloudflareWorkersSubdomain).toBe("<redacted>");
 });
 
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {

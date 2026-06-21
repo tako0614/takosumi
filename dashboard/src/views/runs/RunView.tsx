@@ -506,6 +506,13 @@ function Inner() {
   const providerRows = createMemo(() =>
     providerResolutionRows(run.latest, providerConnectionsById()),
   );
+  const diagnosticRows = createMemo(() => logs()?.diagnostics ?? []);
+  const showDiagnosticsPanel = createMemo(
+    () =>
+      diagnosticRows().length > 0 ||
+      Boolean(logs.error) ||
+      (logs.loading && run.latest?.status === "failed"),
+  );
 
   const approve = createAction(async () => {
     await approveRun(runId());
@@ -1029,57 +1036,50 @@ function Inner() {
                 </details>
               </Show>
 
-              {/* ===== diagnostics — open automatically when failed ===== */}
-              <Card>
-                <CardHeader title={t("run.diagnostics.title")} />
-                <Switch>
-                  <Match when={logs.loading}>
-                    <Skeleton variant="row" count={2} />
-                  </Match>
-                  <Match when={logs.error}>
-                    <p class="wa-error">
-                      {t("common.fetchFailed", {
-                        message: (logs.error as ControlApiError).message,
-                      })}
-                    </p>
-                  </Match>
-                  <Match when={logs()}>
-                    {(l) => (
+              {/* ===== diagnostics — shown only when there is signal ===== */}
+              <Show when={showDiagnosticsPanel()}>
+                <Card>
+                  <CardHeader title={t("run.diagnostics.title")} />
+                  <Switch>
+                    <Match when={logs.loading}>
+                      <Skeleton variant="row" count={2} />
+                    </Match>
+                    <Match when={logs.error}>
+                      <p class="wa-error">
+                        {t("common.fetchFailed", {
+                          message: (logs.error as ControlApiError).message,
+                        })}
+                      </p>
+                    </Match>
+                    <Match when={diagnosticRows().length > 0}>
                       <Show
-                        when={l().diagnostics.length > 0}
+                        when={r().status !== "failed"}
                         fallback={
-                          <p class="muted">{t("run.diagnostics.empty")}</p>
+                          <ul class="wa-diags">
+                            <For each={diagnosticRows()}>
+                              {(d) => <DiagnosticRow diagnostic={d} />}
+                            </For>
+                          </ul>
                         }
                       >
-                        <Show
-                          when={r().status !== "failed"}
-                          fallback={
-                            <ul class="wa-diags">
-                              <For each={l().diagnostics}>
-                                {(d) => <DiagnosticRow diagnostic={d} />}
-                              </For>
-                            </ul>
-                          }
-                        >
-                          <details class="wb-disclosure">
-                            <summary>
-                              {t("common.details")}{" "}
-                              <Badge tone="muted">
-                                {l().diagnostics.length}
-                              </Badge>
-                            </summary>
-                            <ul class="wa-diags">
-                              <For each={l().diagnostics}>
-                                {(d) => <DiagnosticRow diagnostic={d} />}
-                              </For>
-                            </ul>
-                          </details>
-                        </Show>
+                        <details class="wb-disclosure">
+                          <summary>
+                            {t("common.details")}{" "}
+                            <Badge tone="muted">
+                              {diagnosticRows().length}
+                            </Badge>
+                          </summary>
+                          <ul class="wa-diags">
+                            <For each={diagnosticRows()}>
+                              {(d) => <DiagnosticRow diagnostic={d} />}
+                            </For>
+                          </ul>
+                        </details>
                       </Show>
-                    )}
-                  </Match>
-                </Switch>
-              </Card>
+                    </Match>
+                  </Switch>
+                </Card>
+              </Show>
 
               {/* ===== expert details (folded) ===== */}
               <details class="wb-disclosure">

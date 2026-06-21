@@ -20,6 +20,13 @@ const mobileTabsSource = readFileSync(
   ),
   "utf8",
 );
+const spaceSwitcherSource = readFileSync(
+  resolve(
+    here,
+    "../../../../../../../dashboard/src/views/account/components/shell/SpaceSwitcher.tsx",
+  ),
+  "utf8",
+);
 const shellCssSource = readFileSync(
   resolve(here, "../../../../../../../dashboard/src/styles/shell.css"),
   "utf8",
@@ -34,6 +41,7 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).toContain('labelKey: "nav.add"');
     expect(sidebarSource).not.toContain('labelKey: "nav.notifications"');
     expect(sidebarSource).not.toContain('labelKey: "nav.connections"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.billing"');
     expect(sidebarSource).not.toContain('labelKey: "nav.activity"');
     expect(sidebarSource).not.toContain('href: "/notifications"');
     expect(sidebarSource).toContain('aria-label={t("nav.accountSection")}');
@@ -53,5 +61,8 @@ describe("dashboard shell navigation layout", () => {
     expect(mobileTabsSource).not.toContain('href: "/connections"');
     expect(mobileTabsSource).not.toContain("icon: Plug");
     expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
+    expect(spaceSwitcherSource).toContain("topbar-create-space");
+    expect(shellCssSource).toContain(".topbar-create-space");
+    expect(shellCssSource).toContain("display: none;");
   });
 });

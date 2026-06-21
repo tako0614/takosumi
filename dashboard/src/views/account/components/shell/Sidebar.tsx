@@ -4,13 +4,7 @@
  * the service-hosting tasks ordinary users need every day.
  */
 import { A, useLocation } from "@solidjs/router";
-import {
-  ArrowLeft,
-  CreditCard,
-  Home,
-  Plus,
-  UserCircle2,
-} from "lucide-solid";
+import { ArrowLeft, Home, Plus, UserCircle2 } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";
@@ -40,7 +34,6 @@ const PRIMARY: NavItem[] = [
 ];
 
 const ACCOUNT: NavItem[] = [
-  { href: "/billing", labelKey: "nav.billing", icon: CreditCard },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 

@@ -60,6 +60,15 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).not.toContain("change.after");
   });
 
+  test("does not render an empty diagnostics card on normal run reviews", () => {
+    expect(runViewSource).toContain("const diagnosticRows = createMemo");
+    expect(runViewSource).toContain("const showDiagnosticsPanel = createMemo");
+    expect(runViewSource).toContain("<Show when={showDiagnosticsPanel()}>");
+    expect(runViewSource).not.toContain(
+      '<p class="muted">{t("run.diagnostics.empty")}</p>',
+    );
+  });
+
   test("keeps the copy explicit that credentials are not displayed", () => {
     expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
       "credential values are not shown",

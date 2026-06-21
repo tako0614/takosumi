@@ -63,7 +63,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.store.title")');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     expect(newAppViewSource).toContain('t("new.advancedImport.title")');
-    expect(newAppViewSource).toContain('t("new.selection.sourceDetails")');
+    expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
+    expect(newAppViewSource).not.toContain("sourceSummaryMeta");
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
     expect(newAppViewSource).not.toContain('t("new.catalog.provider"');
@@ -71,11 +72,15 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en["new.store.title"]).toBe("Recommended services");
-    expect(en["new.advancedImport.open"].toLowerCase()).toContain("link");
+    expect(en["new.advancedImport.open"].toLowerCase()).toContain("manually");
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja["new.store.title"]).toBe("おすすめサービス");
-    expect(ja["new.advancedImport.open"]).toContain("リンク");
+    expect(ja["new.advancedImport.open"]).toContain("手動");
+    expect(en).not.toHaveProperty("new.flow.sourceMeta");
+    expect(ja).not.toHaveProperty("new.flow.sourceMeta");
+    expect(en).not.toHaveProperty("new.selection.sourceDetails");
+    expect(ja).not.toHaveProperty("new.selection.sourceDetails");
   });
 
   test("catalog exposes multiple runnable service choices backed by official configs", () => {
@@ -110,6 +115,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-service-setup"');
     expect(newAppViewSource).toContain('t("new.catalogInput.title")');
     expect(newAppViewSource).not.toContain('t("new.catalogInput.body")');
+    expect(newAppViewSource).toContain('<FormField label={t("new.name")}>');
     expect(newAppViewSource).toContain("name={`catalogInput:${field.name}`}");
     expect(newAppViewSource).toContain("clearSelectedCatalog");
     expect(newAppViewSource).toContain("defaultGitInstallConfig()?.id");
@@ -134,8 +140,9 @@ describe("/new flow guidance", () => {
 
   test("keeps external connection UI hidden unless there is something to choose", () => {
     expect(newAppViewSource).toContain(
-      "compatibility() && providerRows().length > 0",
+      "providerRowsRequiringChoice().length > 0",
     );
+    expect(newAppViewSource).toContain("providerRowNeedsVisibleChoice");
     expect(newAppViewSource).not.toContain('t("new.providers.noneRequired")');
     expect(newAppViewSource).not.toContain(
       't("new.providers.manageConnections")',
@@ -148,5 +155,12 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.providers.manageConnections");
     expect(en).not.toHaveProperty("new.providers.subtitle");
     expect(ja).not.toHaveProperty("new.providers.subtitle");
+  });
+
+  test("shows setup progress only while it is actionable", () => {
+    expect(newAppViewSource).toContain("const showSetupProgress = ()");
+    expect(newAppViewSource).toContain("step === \"running\" || step === \"error\"");
+    expect(newAppViewSource).toContain("showSetupProgress()");
+    expect(newAppViewSource).not.toContain('stepSource() !== "idle"');
   });
 });
