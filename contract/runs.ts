@@ -51,6 +51,24 @@ export interface RunChangeSummary {
   readonly destroy?: number;
 }
 
+/**
+ * Public, value-free resource projection from `tofu show -json tfplan`.
+ * It intentionally carries only address/type/action tokens and sanitized
+ * provider scope metadata. Raw before/after values and provider secrets never
+ * appear on Run records.
+ */
+export interface RunPlanResource {
+  readonly address: string;
+  readonly type: string;
+  readonly actions: readonly string[];
+  readonly scope?: {
+    readonly cloudflareAccountId?: string;
+    readonly cloudflareZoneId?: string;
+    readonly awsAccountId?: string;
+    readonly awsRegion?: string;
+  };
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -68,8 +86,10 @@ export interface Run {
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
-  /** Non-secret OpenTofu plan counts. Resource addresses and values stay in logs/artifacts. */
+  /** Non-secret OpenTofu plan counts. Raw resource values stay in artifacts. */
   readonly summary?: RunChangeSummary;
+  /** Non-secret resource/action review lines. No raw resource values. */
+  readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
