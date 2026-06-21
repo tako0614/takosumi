@@ -5,6 +5,7 @@ import {
   safeParseOpenTofuRunQueueMessage,
 } from "../../../worker/src/run_queue_consumer.ts";
 import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
+import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
 import type {
   CloudflareWorkerEnv,
   QueueBatch,
@@ -46,10 +47,7 @@ function recordingMessage(
 
 const FAKE_ENV = {} as unknown as CloudflareWorkerEnv;
 
-function batchOf(
-  message: QueueMessage,
-  queue = "takosumi-runs",
-): QueueBatch {
+function batchOf(message: QueueMessage, queue = "takosumi-runs"): QueueBatch {
   return { queue, messages: [message] };
 }
 
@@ -175,6 +173,35 @@ test("environment-scoped run queues dispatch and ack", async () => {
   expect(dispatchCalls).toBe(1);
   expect(exhaustedCalls).toBe(0);
   expect(message.acked()).toBe(1);
+});
+
+test("run queue consumer records queue age metrics from requestedAt", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const deps: ConsumeOpenTofuRunDeps = {
+    dispatch: () => Promise.resolve(),
+    markRetriesExhausted: () => Promise.resolve(),
+    metricSink: () => Promise.resolve(observability),
+  };
+  const message = recordingMessage({
+    ...validBody("plan"),
+    requestedAt: new Date(Date.now() - 2_500).toISOString(),
+  });
+
+  await consumeOpenTofuRunBatch(batchOf(message), FAKE_ENV, deps);
+
+  const metrics = await observability.listMetrics({
+    name: "takosumi_runner_queue_age_seconds",
+  });
+  expect(metrics).toHaveLength(1);
+  expect(metrics[0]?.kind).toBe("gauge");
+  expect(metrics[0]?.value).toBeGreaterThanOrEqual(0);
+  expect(metrics[0]?.tags).toMatchObject({
+    environment: "development",
+    operationKind: "plan",
+    runtime_cell_id: "platform-default",
+    space_id: "space_1",
+    status: "dequeued",
+  });
 });
 
 test("environment-scoped OpenTofu DLQs mark retries exhausted and ack", async () => {

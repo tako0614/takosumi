@@ -110,6 +110,38 @@ test("request correlation records HTTP server trace spans", async () => {
   });
 });
 
+test("request correlation records API request duration metrics", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const app = new Hono();
+  const monotonicValues = [10_000, 12_500];
+  registerRequestCorrelation(app, {
+    metricSink: observability,
+    metricTags: { environment: "test", runtime_cell_id: "cell_test" },
+    now: () => new Date("2026-05-07T00:00:00.000Z"),
+    monotonicNow: () => monotonicValues.shift() ?? 12.5,
+  });
+  app.get("/items/:id", (c) => c.text("ok"));
+
+  const response = await app.request("/items/one", {
+    headers: { [TAKOSUMI_REQUEST_ID_HEADER]: "req_metric" },
+  });
+
+  assert.equal(response.status, 200);
+  const metrics = await observability.listMetrics({
+    name: "takosumi_api_request_duration_seconds",
+  });
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0]?.kind, "histogram");
+  assert.equal(metrics[0]?.value, 2.5);
+  assert.deepEqual(metrics[0]?.tags, {
+    environment: "test",
+    method: "GET",
+    route: "/items/:id",
+    runtime_cell_id: "cell_test",
+    status: "200",
+  });
+});
+
 test("request correlation generates ids when headers are absent", async () => {
   const logs: ApiRequestLogLine[] = [];
   const app = new Hono();

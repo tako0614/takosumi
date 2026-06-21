@@ -143,6 +143,7 @@ const containerRuntimeAvailable =
 const CONTAINER_START_TIMEOUT_MS = 30_000;
 const CONTAINER_PORT_READY_TIMEOUT_MS = 30_000;
 const CONTAINER_START_POLL_INTERVAL_MS = 250;
+const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
@@ -152,6 +153,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   entrypoint = ["/app/runner/start.sh"];
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
+  #lastStartupSeconds: number | undefined;
 
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
@@ -197,8 +199,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     const stopAfterRun = isRunDispatchRequest(request);
     try {
+      this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
-      return stopAfterRun ? await bufferedResponse(response) : response;
+      const output = stopAfterRun ? await bufferedResponse(response) : response;
+      return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
       const url = new URL(request.url);
       console.error("OpenTofu runner artifact relay failed", {
@@ -219,6 +223,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     } finally {
       if (stopAfterRun) await this.#shutdownContainerIfSupported();
+      this.#lastStartupSeconds = undefined;
     }
   }
 
@@ -290,6 +295,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async #ensureContainerReady(baseUrl: URL): Promise<void> {
+    const startedAt = monotonicNow();
     await this.#startContainerIfSupported();
     const response = await this.#containerFetch(
       new Request(containerHealthUrl(baseUrl), { method: "GET" }),
@@ -300,6 +306,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
       );
     }
+    this.#lastStartupSeconds ??= Math.max(0, monotonicNow() - startedAt) / 1000;
   }
 
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
@@ -1543,6 +1550,24 @@ function redactedErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
   const text = message && message.trim().length > 0 ? message : fallback;
   return redactString(text, { redactedValue: "[redacted]" });
+}
+
+function withRunnerStartupHeader(
+  response: Response,
+  seconds: number | undefined,
+): Response {
+  if (seconds === undefined) return response;
+  const headers = new Headers(response.headers);
+  headers.set(RUNNER_STARTUP_SECONDS_HEADER, String(seconds));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function monotonicNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
 function runnerRequestHeaders(request: Request): Headers {

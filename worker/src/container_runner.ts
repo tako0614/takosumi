@@ -24,6 +24,7 @@ import type {
   OpenTofuRunQueueMessage,
 } from "./bindings.ts";
 import { redactString } from "../../core/domains/observability/redaction.ts";
+import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each
@@ -32,11 +33,22 @@ import { redactString } from "../../core/domains/observability/redaction.ts";
  * shape. Credential values and run bodies are never logged.
  */
 const DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MS = 45_000;
+const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
 {
-  constructor(private readonly env: CloudflareWorkerEnv) {}
+  readonly #activeRunsByAction = new Map<
+    OpenTofuRunQueueMessage["action"],
+    number
+  >();
+
+  constructor(
+    private readonly env: CloudflareWorkerEnv,
+    private readonly options: {
+      readonly observability?: WorkerMetricSink;
+    } = {},
+  ) {}
 
   async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
     const result = await this.#runContainer("plan", job.planRun.id, job);
@@ -308,6 +320,7 @@ export class CloudflareContainerOpenTofuRunner
       timeout = setTimeout(() => controller.abort(), timeoutMs);
     }
     try {
+      await this.#recordActiveRuns(action, 1);
       const response = await this.env.RUNNER.get(id).fetch(
         new Request(
           `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
@@ -326,6 +339,19 @@ export class CloudflareContainerOpenTofuRunner
         ),
       );
       const { payload, redactedText } = await readResponseJsonObject(response);
+      const startupSeconds = positiveNumberHeader(
+        response.headers.get(RUNNER_STARTUP_SECONDS_HEADER),
+      );
+      if (startupSeconds !== undefined) {
+        await recordWorkerMetric({
+          observability: this.options.observability,
+          env: this.env,
+          name: "takosumi_runner_container_startup_seconds",
+          kind: "histogram",
+          value: startupSeconds,
+          tags: { operationKind: action, status: "ready" },
+        });
+      }
       if (!response.ok) {
         const detail = runnerFailureDetail(payload, redactedText);
         throw new Error(
@@ -342,7 +368,27 @@ export class CloudflareContainerOpenTofuRunner
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      await this.#recordActiveRuns(action, -1);
     }
+  }
+
+  async #recordActiveRuns(
+    action: OpenTofuRunQueueMessage["action"],
+    delta: 1 | -1,
+  ): Promise<void> {
+    const next = Math.max(
+      0,
+      (this.#activeRunsByAction.get(action) ?? 0) + delta,
+    );
+    this.#activeRunsByAction.set(action, next);
+    await recordWorkerMetric({
+      observability: this.options.observability,
+      env: this.env,
+      name: "takosumi_runner_active_runs",
+      kind: "gauge",
+      value: next,
+      tags: { operationKind: action, status: "running" },
+    });
   }
 }
 
@@ -360,6 +406,12 @@ function positiveTimeoutMs(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+function positiveNumberHeader(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function artifactPointerFromContainerResult(

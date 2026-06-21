@@ -34,6 +34,8 @@ import {
   CoordinationObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
+import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
+import { recordWorkerMetric } from "../../worker/src/metrics.ts";
 import {
   driftSweep,
   type DriftSweepOperations,
@@ -128,7 +130,11 @@ export default {
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
     }
-    return accountsWorker.fetch(request, env);
+    const accountsResponse = await accountsWorker.fetch(request, env);
+    if (isOidcMetricPath(url.pathname)) {
+      await recordPlatformOidcMetric(request, url, env, accountsResponse);
+    }
+    return accountsResponse;
   },
   queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
     return runQueueConsumer(batch, env as unknown as DeployControlEnv);
@@ -144,6 +150,59 @@ export default {
     }
   },
 };
+
+async function recordPlatformOidcMetric(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  response: Response,
+): Promise<void> {
+  try {
+    const service = await cachedDeployControlService(
+      env as unknown as DeployControlEnv,
+    );
+    await recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env: env as unknown as DeployControlEnv,
+      name: "takosumi_oidc_request_count",
+      kind: "counter",
+      value: 1,
+      tags: {
+        method: request.method,
+        route: oidcMetricRoute(url.pathname),
+        status: String(response.status),
+      },
+    });
+  } catch {
+    // Metrics are best-effort and must never break OIDC/login responses.
+  }
+}
+
+export function isOidcMetricPath(pathname: string): boolean {
+  return (
+    pathname === "/.well-known/openid-configuration" ||
+    pathname === "/oauth" ||
+    pathname.startsWith("/oauth/") ||
+    pathname === "/v1/auth" ||
+    pathname.startsWith("/v1/auth/")
+  );
+}
+
+export function oidcMetricRoute(pathname: string): string {
+  if (pathname === "/.well-known/openid-configuration") {
+    return "/.well-known/openid-configuration";
+  }
+  if (pathname === "/oauth" || pathname.startsWith("/oauth/authorize")) {
+    return "/oauth/authorize";
+  }
+  if (pathname.startsWith("/oauth/token")) return "/oauth/token";
+  if (pathname.startsWith("/oauth/userinfo")) return "/oauth/userinfo";
+  if (pathname.startsWith("/oauth/revoke")) return "/oauth/revoke";
+  if (pathname.startsWith("/oauth/introspect")) return "/oauth/introspect";
+  if (pathname.startsWith("/oauth/jwks")) return "/oauth/jwks";
+  if (pathname.startsWith("/v1/auth/upstream")) return "/v1/auth/upstream/*";
+  return pathname;
+}
 
 type PlatformDeployControlSeam = Pick<
   ReturnType<typeof createInProcessDeployControlSeam>,
