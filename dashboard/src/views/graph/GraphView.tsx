@@ -82,7 +82,6 @@ function Inner() {
         when={spaceId()}
         fallback={
           <EmptyState
-            ink
             icon={<Network size={28} />}
             title={t("space.select")}
             message={t("space.selectMessage")}
@@ -108,7 +107,6 @@ function Inner() {
                 when={g().layers.length > 0 || g().cyclic.length > 0}
                 fallback={
                   <EmptyState
-                    ink
                     icon={<Network size={28} />}
                     title={t("graph.empty.title")}
                     message={t("graph.empty.message")}

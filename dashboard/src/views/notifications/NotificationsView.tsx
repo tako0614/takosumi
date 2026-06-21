@@ -272,7 +272,6 @@ export default function NotificationsView() {
                     when={list().length > 0}
                     fallback={
                       <EmptyState
-                        ink
                         icon={<Bell />}
                         title={t("notif.empty.title")}
                         message={t("notif.empty.message")}

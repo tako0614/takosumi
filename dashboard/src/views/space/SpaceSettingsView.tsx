@@ -105,7 +105,6 @@ function Inner(props: {
         when={spaceId()}
         fallback={
           <EmptyState
-            ink
             icon={<Settings2 size={28} />}
             title={t("space.select")}
             message={t("space.selectMessage")}

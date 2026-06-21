@@ -14,6 +14,8 @@
   --tg-line-strong: #b9c2d0;
   --tg-code-bg: #eef1f5;
   --tg-code-fg: #1f2937;
+  --tg-fixed-light-bg: #ffffff;
+  --tg-fixed-light-fg: #111827;
 
   --tg-accent: #d92d20;
   --tg-accent-hover: #b42318;
@@ -98,6 +100,8 @@
   --tg-line-strong: #3d4652;
   --tg-code-bg: #20252c;
   --tg-code-fg: #f3f4f6;
+  --tg-fixed-light-bg: #ffffff;
+  --tg-fixed-light-fg: #111827;
 
   --tg-accent: #ff554a;
   --tg-accent-hover: #ff766f;

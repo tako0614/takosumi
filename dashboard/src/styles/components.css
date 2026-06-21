@@ -23,14 +23,13 @@
   align-items: center;
   gap: var(--tg-s-2);
   font-size: var(--tg-fs-xs);
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--tg-accent-text);
   padding: 4px 10px;
   background: var(--tg-accent-soft);
   border-radius: var(--tg-r-md);
   font-weight: 700;
-  font-family: var(--tg-font-mono);
+  font-family: var(--tg-font-body);
 }
 /* ----- Button ----- */
 .tg-btn {
@@ -107,7 +106,7 @@
   box-shadow: none;
 }
 .tg-btn-danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--tg-danger) 85%, #fff);
+  background: color-mix(in srgb, var(--tg-danger) 88%, var(--tg-bg-elev));
   color: var(--tg-danger-fg);
 }
 .tg-btn-sm {
@@ -189,7 +188,7 @@
   border-radius: var(--tg-r-full);
   font-size: var(--tg-fs-xs);
   font-weight: 600;
-  font-family: var(--tg-font-mono);
+  font-family: var(--tg-font-body);
   letter-spacing: 0.02em;
   background: var(--tg-bg-subtle);
   color: var(--tg-fg-muted);
@@ -516,9 +515,9 @@
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   font-weight: 700;
-  font-family: var(--tg-font-mono);
+  font-family: var(--tg-font-body);
 }
 .tg-table tbody tr:last-child td {
   border-bottom: 0;
@@ -622,7 +621,7 @@
 }
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
-  background: color-mix(in srgb, var(--tg-danger) 85%, #fff);
+  background: color-mix(in srgb, var(--tg-danger) 88%, var(--tg-bg-elev));
   color: var(--tg-danger-fg);
 }
 .btn-danger:disabled {
