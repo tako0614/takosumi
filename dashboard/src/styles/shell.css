@@ -666,8 +666,7 @@
   }
 
   .auth-theme-switcher {
-    top: var(--tg-s-3);
-    right: var(--tg-s-3);
+    display: none;
   }
 
   .auth-brand {
