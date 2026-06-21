@@ -27,6 +27,13 @@ const spaceSwitcherSource = readFileSync(
   ),
   "utf8",
 );
+const userMenuSource = readFileSync(
+  resolve(
+    here,
+    "../../../../../../../dashboard/src/views/account/components/auth/UserMenu.tsx",
+  ),
+  "utf8",
+);
 const shellCssSource = readFileSync(
   resolve(here, "../../../../../../../dashboard/src/styles/shell.css"),
   "utf8",
@@ -64,5 +71,11 @@ describe("dashboard shell navigation layout", () => {
     expect(spaceSwitcherSource).toContain("topbar-create-space");
     expect(shellCssSource).toContain(".topbar-create-space");
     expect(shellCssSource).toContain("display: none;");
+  });
+
+  test("keeps paid billing out of the shared account menu unless Cloud is running", () => {
+    expect(userMenuSource).toContain("isTakosumiCloudRuntime");
+    expect(userMenuSource).toContain('href="/billing"');
+    expect(userMenuSource).toContain('t("nav.billing")');
   });
 });

@@ -12,6 +12,7 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { currentSpaceId } from "../../lib/space-state.ts";
+import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { t } from "../../i18n/index.ts";
 import { EmptyState, PageHeader, Tabs } from "../../components/ui/index.ts";
 import GeneralTab from "./tabs/GeneralTab.tsx";
@@ -79,7 +80,9 @@ function Inner(props: {
     },
     {
       href: "/advanced/workspace/billing",
-      label: t("spaceSettings.tab.billing"),
+      label: isTakosumiCloudRuntime()
+        ? t("spaceSettings.tab.billing")
+        : t("spaceSettings.tab.usageQuota"),
     },
   ];
 
@@ -137,7 +140,9 @@ function pageTitle(tab: StandaloneTabId | undefined): string {
     case "connections":
       return t("conn.providerConnections.title");
     case "billing":
-      return t("billing.title");
+      return isTakosumiCloudRuntime()
+        ? t("billing.title")
+        : t("billing.usageQuotaTitle");
     default:
       return t("spaceSettings.title");
   }
@@ -148,7 +153,9 @@ function pageSubtitle(tab: StandaloneTabId | undefined): string {
     case "connections":
       return t("conn.subtitle");
     case "billing":
-      return t("billing.subtitle");
+      return isTakosumiCloudRuntime()
+        ? t("billing.subtitle")
+        : t("billing.usageQuotaSubtitle");
     default:
       return t("spaceSettings.subtitle");
   }

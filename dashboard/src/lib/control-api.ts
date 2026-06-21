@@ -689,6 +689,7 @@ export type ConnectionScopeKind = "operator" | "space";
 export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
+  readonly awsRegion?: string;
   readonly repoUrl?: string;
   readonly username?: string;
   readonly knownHostsEntry?: string;

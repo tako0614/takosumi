@@ -275,7 +275,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.approving": "Approving...",
   "run.deploy": "Deploy",
   "run.deploying": "Deploying...",
-  "run.deployBlocked": "Insufficient balance",
+  "run.deployBlocked": "Deploy blocked",
   "run.retryPlan": "Review changes again",
   "run.backToApp": "Back to service",
   "run.destructiveWarning":
@@ -287,7 +287,14 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cost.shortfall":
     "Your credit balance is short by about {n}, so this cannot run.",
   "run.cost.blocked": "This cannot run due to balance or limits.",
+  "run.cost.capacityNeeded": "Capacity needed: ~{n}",
+  "run.cost.capacity": "Available capacity: {n}",
+  "run.cost.capacityShortfall":
+    "This workspace is short by about {n} capacity units, so this cannot run.",
+  "run.cost.capacityBlocked": "This cannot run due to quota or limits.",
   "run.cost.billingCta": "Open billing",
+  "run.cost.operatorHelp":
+    "This workspace is blocked by quota or policy. Contact a workspace admin if you need more capacity.",
   "run.changes.title": "Changes",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
@@ -321,7 +328,6 @@ export const en: Record<keyof typeof ja, string> = {
     "One or more cloud account connections need attention before this can continue. Credential values are not shown.",
   "run.connections.provider": "External service",
   "run.connections.connection": "Connection",
-  "run.connections.ownership": "Credential source",
   "run.connections.status": "Status",
   "run.connections.statusResolved": "Ready",
   "run.connections.statusMissing": "Missing connection",
@@ -445,11 +451,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.missingTitle": "A connection is required",
   "new.providers.missingBody": "Set up the connection to continue.",
   "new.providers.setupMissing": "Set up required connection",
-  "new.providers.operatorMissingTitle":
-    "This service is not available here yet",
+  "new.providers.operatorMissingTitle": "No ready connection is available",
   "new.providers.operatorMissingBody":
-    "A required service connection has not been enabled for this team.",
-  "new.providers.operatorMissingNext": "Ask a team admin to enable it.",
+    "This service needs a Provider Connection before it can be added.",
+  "new.providers.operatorMissingNext":
+    "Open cloud accounts or ask a team admin to add one.",
   "new.step.technical": "Setup progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch contents",
@@ -473,11 +479,12 @@ export const en: Record<keyof typeof ja, string> = {
   // --- space settings ---------------------------------------------------------
   "spaceSettings.title": "Team settings",
   "spaceSettings.subtitle":
-    "Manage the team name, members, cloud accounts, and billing.",
+    "Manage the team name, members, cloud accounts, and usage controls.",
   "spaceSettings.tab.general": "General",
   "spaceSettings.tab.members": "Members",
   "spaceSettings.tab.connections": "Connections",
   "spaceSettings.tab.billing": "Billing",
+  "spaceSettings.tab.usageQuota": "Usage / quota",
   "spaceSettings.tab.backups": "Backups",
   "spaceSettings.tab.shares": "Shared values",
   "spaceSettings.general.displayName": "Display name",
@@ -504,8 +511,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Members of this team and their roles. Inviting, role changes, and removal are owner/admin only.",
   "members.invite.title": "Invite a member",
   "members.invite.subtitle":
-    "Enter the Google email for someone who has already signed in to Takosumi Cloud.",
-  "members.invite.email": "Google email",
+    "Enter the email for someone who has already signed in to this Takosumi.",
+  "members.invite.email": "Email",
   "members.invite.role": "Role",
   "members.invite.cta": "Invite",
   "members.invite.emailRequired": "Enter an email address.",
@@ -531,12 +538,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.providerConnections.title": "Cloud accounts",
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
-  "conn.providerConnections.ownership": "Managed by",
   "conn.providerConnections.status": "Status",
-  "conn.ownership.ownKey": "Your credentials",
-  "conn.ownership.takosProvided": "Operator managed",
-  "conn.scope.operator": "Operator managed",
-  "conn.scope.space": "Team",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.return.title": "Continue adding {name}",
@@ -759,6 +761,9 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.title": "Billing",
   "billing.subtitle":
     "Review plans, credits, usage, and payment settings for this team.",
+  "billing.usageQuotaTitle": "Usage / quota",
+  "billing.usageQuotaSubtitle":
+    "Review this team's quota mode, available capacity, and usage.",
   "billing.mode.disabled": "Billing is disabled for this team.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a credit balance.",
@@ -768,6 +773,9 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.balance.title": "Balance",
   "billing.balance.available": "Available credits",
   "billing.balance.reserved": "Reserved credits",
+  "billing.quota.title": "Quota",
+  "billing.quota.available": "Available capacity",
+  "billing.quota.reserved": "Reserved capacity",
   "billing.plans.title": "Plans",
   "billing.plans.loading": "Loading plans...",
   "billing.plans.error": "Could not load plans: {message}",

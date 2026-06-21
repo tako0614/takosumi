@@ -406,6 +406,9 @@ function Inner() {
   const [catalogInputValues, setCatalogInputValues] = createSignal<
     Readonly<Record<string, string>>
   >({});
+  const [catalogInputTouched, setCatalogInputTouched] = createSignal<
+    Readonly<Record<string, boolean>>
+  >({});
   const initialRef = prefill?.ref || "main";
   const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
   const [ref, setRef] = createSignal(displayRef(initialRef));
@@ -487,9 +490,14 @@ function Inner() {
     field: CatalogInputField,
     value: string,
   ) => {
+    const key = catalogInputKey(entry.id, field.name);
     setCatalogInputValues((current) => ({
       ...current,
-      [catalogInputKey(entry.id, field.name)]: value,
+      [key]: value,
+    }));
+    setCatalogInputTouched((current) => ({
+      ...current,
+      [key]: true,
     }));
     resetCompatibility();
   };
@@ -527,6 +535,7 @@ function Inner() {
     if (!selectedCatalogId()) return;
     setSelectedCatalogId(null);
     setCatalogInputValues({});
+    setCatalogInputTouched({});
     setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
   };
 
@@ -725,6 +734,29 @@ function Inner() {
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
   const visibleConnections = () => connections() ?? connections.latest ?? [];
+  const catalogScopeHintValue = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ): string | undefined => {
+    const matchingConnections = visibleConnections().filter(
+      (connection) =>
+        connection.scope === "space" &&
+        connection.status === "verified" &&
+        sameProviderFamily(entry.provider, connection.provider),
+    );
+    const hints = new Set<string>();
+    for (const connection of matchingConnections) {
+      if (entry.provider === "cloudflare" && field.name === "accountId") {
+        const value = connection.scopeHints?.accountId?.trim();
+        if (value) hints.add(value);
+      }
+      if (entry.provider === "aws" && field.name === "region") {
+        const value = connection.scopeHints?.awsRegion?.trim();
+        if (value) hints.add(value);
+      }
+    }
+    return hints.size === 1 ? Array.from(hints)[0] : undefined;
+  };
   const sourceGitConnections = () =>
     visibleConnections().filter(
       (connection) =>
@@ -1032,14 +1064,35 @@ function Inner() {
     const defaults: Record<string, string> = {};
     for (const field of entry.inputs) {
       defaults[catalogInputKey(entry.id, field.name)] =
+        catalogScopeHintValue(entry, field) ??
         catalogDefaultInputValue(entry, field, spaceId());
     }
     setCatalogInputValues(defaults);
+    setCatalogInputTouched({});
     setResourcePrefix("");
     setResourcePrefixTouched(false);
     resetCompatibility();
     setActiveTab("catalog");
   };
+
+  createEffect(() => {
+    const entry = selectedCatalogEntry();
+    if (!entry) return;
+    setCatalogInputValues((current) => {
+      let changed = false;
+      const next: Record<string, string> = { ...current };
+      for (const field of entry.inputs) {
+        const key = catalogInputKey(entry.id, field.name);
+        if (catalogInputTouched()[key]) continue;
+        if ((next[key] ?? "").trim()) continue;
+        const scopeHint = catalogScopeHintValue(entry, field);
+        if (!scopeHint) continue;
+        next[key] = scopeHint;
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  });
 
   const compatibilityRunnable = () => {
     const level = compatibility()?.level;
@@ -1642,9 +1695,7 @@ function Inner() {
                   else setError(proceedBlocker());
                 }}
               >
-                <Show when={!usingSelectedService()}>
-                  {gitFields()}
-                </Show>
+                <Show when={!usingSelectedService()}>{gitFields()}</Show>
 
                 <Show when={selectedCatalogEntry()}>
                   {(entry) => (

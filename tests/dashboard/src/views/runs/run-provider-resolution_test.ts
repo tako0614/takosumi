@@ -38,17 +38,17 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain(
       "<Show when={providerRowsNeedingAttention().length > 0}>",
     );
-    expect(runViewSource).toContain(
-      "rows={providerRowsNeedingAttention()}",
-    );
+    expect(runViewSource).toContain("rows={providerRowsNeedingAttention()}");
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
     expect(en["run.details.title"]).toBe("Support details");
     expect(ja["run.details.title"]).toBe("サポート詳細");
     expect(en["run.connections.reviewTitle"]).toBe("Connection review needed");
     expect(ja["run.connections.reviewTitle"]).toBe("接続の確認が必要です");
-    expect(en["run.connections.ownership"]).toBe("Credential source");
-    expect(ja["run.connections.ownership"]).toBe("認証情報の管理元");
+    expect(en).not.toHaveProperty("run.connections.ownership");
+    expect(ja).not.toHaveProperty("run.connections.ownership");
+    expect(runViewSource).not.toContain('t("run.connections.ownership")');
+    expect(runViewSource).not.toContain("conn.ownership.takosProvided");
   });
 
   test("shows public plan resources as the reviewable resource list", () => {
@@ -92,10 +92,14 @@ describe("Run review ProviderConnection evidence", () => {
     );
   });
 
-  test("gives blocked billing runs a recovery path from the review screen", () => {
+  test("keeps paid billing recovery Cloud-only on blocked run reviews", () => {
+    expect(runViewSource).toContain("isTakosumiCloudRuntime");
     expect(runViewSource).toContain('href="/billing"');
     expect(runViewSource).toContain('"run.cost.billingCta"');
+    expect(runViewSource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");
+    expect(en["run.cost.operatorHelp"]).toContain("workspace admin");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");
+    expect(ja["run.cost.operatorHelp"]).toContain("ワークスペース管理者");
   });
 });
