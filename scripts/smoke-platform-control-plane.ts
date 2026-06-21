@@ -48,6 +48,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly environment: string;
   readonly capsuleDir: string;
   readonly timeoutSeconds: number;
+  readonly deployTimeoutSeconds: number;
   readonly pollIntervalMs: number;
   readonly dryRun: boolean;
   readonly json: boolean;
@@ -112,6 +113,7 @@ interface CliArgs {
   readonly environment?: string;
   readonly capsuleDir?: string;
   readonly timeoutSeconds?: string;
+  readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
 }
 
@@ -123,6 +125,25 @@ interface RequestOptions {
   readonly body?: unknown;
   readonly binary?: Uint8Array;
   readonly allowEmpty?: boolean;
+  readonly timeoutMs?: number;
+}
+
+class RequestTimeoutError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`${method} ${path} did not return within ${timeoutMs}ms`);
+    this.name = "RequestTimeoutError";
+  }
+}
+
+class RunPollTimeoutError extends Error {
+  constructor(readonly runId: string) {
+    super(`run ${runId} did not reach a terminal state`);
+    this.name = "RunPollTimeoutError";
+  }
 }
 
 interface RunRecord {
@@ -232,6 +253,11 @@ export async function resolveOptions(
       args.timeoutSeconds,
       "--timeout-seconds",
       600,
+    ),
+    deployTimeoutSeconds: parsePositiveInteger(
+      args.deployTimeoutSeconds,
+      "--deploy-timeout-seconds",
+      120,
     ),
     pollIntervalMs: parsePositiveInteger(
       args.pollIntervalMs,
@@ -493,12 +519,28 @@ function failedResult(
     runCancellationError: input.runCancellationError,
     connectionRevokeSkippedReason: input.connectionRevokeSkippedReason,
     error: publicErrorMessage(input.error),
-    nextAction:
-      input.connectionRevokeSkippedReason !== undefined
-        ? "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke."
-        : "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.",
+    nextAction: failedNextAction(input),
     inputs: publicInputSummary(options),
   };
+}
+
+function failedNextAction(input: {
+  readonly installationId?: string;
+  readonly planRunId?: string;
+  readonly connectionRevokeSkippedReason?: string;
+  readonly error: unknown;
+}): string {
+  if (
+    input.error instanceof RequestTimeoutError &&
+    input.error.method === "POST" &&
+    input.error.path === `${API_PREFIX}/deploy`
+  ) {
+    return "The deploy request timed out before returning a run id. Check the scratch Space for a pending smoke Installation with this app name, mark it error if needed, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the synchronous deploy step that did not return.";
+  }
+  if (input.connectionRevokeSkippedReason !== undefined) {
+    return "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke.";
+  }
+  return "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.";
 }
 
 function failPolicy(): never {
@@ -507,13 +549,6 @@ function failPolicy(): never {
 
 function publicPolicyStatus(run: RunRecord): SmokeCheckStatus {
   return run.policyStatus === "deny" ? "denied" : "passed";
-}
-
-class RunPollTimeoutError extends Error {
-  constructor(readonly runId: string) {
-    super(`run ${runId} did not reach a terminal state`);
-    this.name = "RunPollTimeoutError";
-  }
 }
 
 async function resolveSpaceId(
@@ -703,6 +738,7 @@ async function deploySnapshot(
     token: options.accountSessionToken,
     method: "POST",
     path: `${API_PREFIX}/deploy`,
+    timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
       spaceId: input.spaceId,
       name: options.appName,
@@ -921,6 +957,15 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
     authorization: `Bearer ${options.token}`,
   };
   const init: RequestInit = { method: options.method ?? "GET", headers };
+  const controller =
+    options.timeoutMs && options.timeoutMs > 0
+      ? new AbortController()
+      : undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  if (controller) {
+    init.signal = controller.signal;
+    timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  }
   if (options.binary !== undefined) {
     headers["content-type"] = "application/zstd";
     init.body = options.binary as unknown as BodyInit;
@@ -928,7 +973,21 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(options.body);
   }
-  const response = await fetch(`${options.baseUrl}${options.path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`${options.baseUrl}${options.path}`, init);
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new RequestTimeoutError(
+        options.method ?? "GET",
+        options.path,
+        options.timeoutMs ?? 0,
+      );
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   const text = await response.text();
   const body = text.trim().length > 0 ? JSON.parse(text) : undefined;
   if (!response.ok) {
@@ -1194,6 +1253,9 @@ async function runSelfTest(): Promise<void> {
   );
   const result = dryRunResult(options);
   const serialized = JSON.stringify(result);
+  if (options.deployTimeoutSeconds !== 120) {
+    throw new Error("self-test default deploy timeout is wrong");
+  }
   if (serialized.includes("account-session-token")) {
     throw new Error("self-test leaked account session token file name");
   }
@@ -1232,6 +1294,71 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("self-test leaked secret-looking failure details");
   }
+  const deployTimeout = failedResult(options, {
+    spaceId: "space_selftest",
+    connectionId: "conn_selftest",
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
+    connectionRevoked: true,
+    error: new RequestTimeoutError("POST", `${API_PREFIX}/deploy`, 1),
+  });
+  if (
+    deployTimeout.status !== "failed" ||
+    deployTimeout.installationId !== undefined ||
+    deployTimeout.planRunId !== undefined ||
+    !deployTimeout.nextAction?.includes("before returning a run id")
+  ) {
+    throw new Error("self-test deploy timeout failed result shape is wrong");
+  }
+  const timeoutOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      deployTimeoutSeconds: "7",
+    },
+    {},
+  );
+  if (timeoutOptions.deployTimeoutSeconds !== 7) {
+    throw new Error("self-test did not parse --deploy-timeout-seconds");
+  }
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_, init) =>
+    new Promise<Response>((_, reject) => {
+      const signal = init?.signal;
+      if (!signal) return;
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    })) as typeof fetch;
+  try {
+    await requestJson({
+      baseUrl: "https://app-staging.takosumi.com",
+      token: "redacted",
+      method: "POST",
+      path: `${API_PREFIX}/deploy`,
+      timeoutMs: 1,
+      body: {},
+    });
+    throw new Error("self-test requestJson timeout did not fire");
+  } catch (error) {
+    if (!(error instanceof RequestTimeoutError)) {
+      throw error;
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
   console.log("platform control-plane smoke self-test passed");
 }
 
@@ -1258,6 +1385,7 @@ Options:
   --space-display-name <name>            display name used with --ensure-space
   --capsule-dir <path>                   default cloudflare-hello-worker module
   --timeout-seconds <n>                  default 600
+  --deploy-timeout-seconds <n>           default 120
   --poll-interval-ms <n>                 default 2000
   --keep-connection                      keep the temporary Space ProviderConnection
   --dry-run                              validate shape and print redacted plan

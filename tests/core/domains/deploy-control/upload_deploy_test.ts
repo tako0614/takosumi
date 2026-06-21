@@ -233,6 +233,29 @@ async function setup() {
   return { store, runner, sources, installations, controller };
 }
 
+async function applyUploadedDeploy(
+  store: InMemoryOpenTofuDeploymentStore,
+  controller: OpenTofuDeploymentController,
+  deploy: Awaited<ReturnType<typeof deployUpload>>,
+) {
+  const planRun =
+    (await store.getPlanRun((deploy.planRun ?? deploy.run).id)) ??
+    (() => {
+      throw new Error("upload deploy fixture plan run was not persisted");
+    })();
+  if (planRun.status === "waiting_approval") {
+    await controller.approveRun(planRun.id);
+  }
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  if (applied.applyRun.status !== "succeeded") {
+    throw new Error("upload deploy fixture did not apply");
+  }
+  return applied.applyRun;
+}
+
 test("deployUpload creates a source-less Installation and plans the upload snapshot", async () => {
   const { store, runner, sources, installations, controller } = await setup();
   const snapshot = await sources.recordUploadSnapshot({
@@ -260,12 +283,15 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
 
   expect(result.created).toBe(true);
   expect(result.installation.sourceId).toBeUndefined();
-  expect(result.installation.status).toBe("active");
+  expect(result.installation.status).toBe("pending");
+  expect(result.status).toBe("planned");
   expect(result.run.type).toBe("plan");
   expect(result.run.status).toBe("succeeded");
+  expect(result.applyRun).toBeUndefined();
 
   // The runner received the UPLOAD archive (no git clone).
   expect(runner.planJobs).toHaveLength(1);
+  expect(runner.applyJobs).toHaveLength(0);
   expect(runner.planJobs[0]?.sourceArchive).toEqual({
     objectKey: uploadArchiveObjectKey("space_test", "snap_up1"),
     digest: UPLOAD_DIGEST,
@@ -319,7 +345,7 @@ test("deployUpload marks a new upload Installation error when orchestration thro
 });
 
 test("upload-origin Installation destroy-plan reuses the active Deployment SourceSnapshot", async () => {
-  const { runner, sources, installations, controller } = await setup();
+  const { store, runner, sources, installations, controller } = await setup();
   const snapshot = await sources.recordUploadSnapshot({
     spaceId: "space_test",
     snapshotId: "snap_destroy_upload",
@@ -341,10 +367,7 @@ test("upload-origin Installation destroy-plan reuses the active Deployment Sourc
       providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
     },
   );
-  const applyRun = deploy.applyRun;
-  if (!applyRun || applyRun.status !== "succeeded") {
-    throw new Error("upload deploy fixture did not auto-apply");
-  }
+  await applyUploadedDeploy(store, controller, deploy);
 
   const destroy = await controller.createInstallationDestroyPlan(
     deploy.installation.id,
@@ -392,10 +415,7 @@ test("upload-origin restore keeps cleanup destroy-plan possible without a curren
       providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
     },
   );
-  const applyRun = deploy.applyRun;
-  if (!applyRun || applyRun.status !== "succeeded") {
-    throw new Error("upload deploy fixture did not auto-apply");
-  }
+  await applyUploadedDeploy(store, controller, deploy);
   const installation = await store.getInstallation(deploy.installation.id);
   expect(installation).toBeDefined();
   await store.putBackupRecord({
