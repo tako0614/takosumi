@@ -146,6 +146,11 @@
   flex-wrap: wrap;
   gap: var(--tg-s-3);
 }
+.wb-stack-sm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
 .wb-form-actions .tg-btn {
   min-width: 168px;
 }

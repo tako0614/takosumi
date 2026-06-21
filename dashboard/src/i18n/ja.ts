@@ -309,7 +309,7 @@ export const ja = {
   "run.resources.actionUpdate": "変更",
   "run.resources.actionDelete": "削除",
   "run.resources.actionReplace": "置換",
-  "run.details.title": "詳細（開発者向け）",
+  "run.details.title": "サポート詳細",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "ポリシー",
@@ -330,7 +330,7 @@ export const ja = {
     "この変更確認/デプロイでは、以下の外部サービス接続を使います。認証情報の値は表示しません。",
   "run.connections.provider": "外部サービス",
   "run.connections.connection": "接続",
-  "run.connections.ownership": "所有",
+  "run.connections.ownership": "認証情報の管理元",
   "run.connections.status": "状態",
   "run.connections.statusResolved": "利用できます",
   "run.connections.statusMissing": "接続が必要",
@@ -486,9 +486,9 @@ export const ja = {
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "Workspace 設定",
+  "spaceSettings.title": "詳細な Workspace 設定",
   "spaceSettings.subtitle":
-    "この Workspace のメンバー・接続・お支払い・バックアップを管理します。",
+    "メンバー、復元、共有、ポリシーなどの管理用設定です。",
   "spaceSettings.tab.general": "一般",
   "spaceSettings.tab.members": "メンバー",
   "spaceSettings.tab.connections": "接続",
@@ -640,10 +640,15 @@ export const ja = {
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
+  "backups.col.contents": "内容",
   "backups.col.artifact": "設定バックアップ",
   "backups.col.serviceData": "サービスデータ",
+  "backups.col.source": "作成元",
   "backups.col.run": "実行",
   "backups.manual": "手動",
+  "backups.detail.id": "バックアップ ID",
+  "backups.serviceDataSummary":
+    "サービスデータ {exported} 件 / 未対応 {unsupported} 件 / 不足 {missing} 件",
   "backups.empty.title": "まだバックアップがありません",
   "backups.empty.message":
     "この Workspace の最初のバックアップを作成できます。",
@@ -687,7 +692,7 @@ export const ja = {
     "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.viewRaw": "生の監査ログ（アクティビティ）を見る →",
+  "notif.viewRaw": "すべての履歴を見る →",
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
@@ -720,27 +725,28 @@ export const ja = {
   "activity.title": "履歴",
   "activity.subtitle":
     "最近のサービスやアカウントの出来事です。技術的な監査詳細は各項目から確認できます。",
-  "activity.details": "技術的な詳細",
+  "activity.details": "サポート詳細",
   "activity.empty.title": "まだ履歴がありません",
   "activity.empty.message":
     "この Workspace で操作が行われると、ここに記録されます。",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "まとめての更新",
-  "runGroup.subtitle":
-    "依存順に並んだ複数の実行グループです。まとめて承認できます。",
-  "runGroup.approveAll": "全ての実行を承認",
-  "runGroup.members": "メンバー実行",
-  "runGroup.membersEmpty": "メンバー実行はありません。",
+  "runGroup.subtitle": "複数サービスの変更をまとめて確認・承認できます。",
+  "runGroup.approveAll": "まとめて承認",
+  "runGroup.members": "この更新に含まれるサービス",
+  "runGroup.membersEmpty": "この更新に含まれるサービスはありません。",
+  "runGroup.openService": "サービスを開く",
+  "runGroup.change": "変更",
   "runGroup.groupId": "Group ID",
 
   // --- graph ---------------------------------------------------------------------
-  "graph.title": "依存グラフ",
+  "graph.title": "サービス連携",
   "graph.subtitle":
-    "サービス間の連携関係です。上の層の値を、下の層のサービスが利用します。",
-  "graph.layer": "層 {n}",
-  "graph.cycle": "循環（解決不能）",
-  "graph.dependsOn": "↑ 依存: {names}",
+    "どのサービスが他のサービスの値を使っているかを表示します。",
+  "graph.layer": "確認順 {n}",
+  "graph.cycle": "連携の見直しが必要",
+  "graph.dependsOn": "{names} を利用",
   "graph.empty.title": "サービスがありません",
   "graph.empty.message": "この Workspace にはまだサービスがありません。",
 
@@ -756,10 +762,11 @@ export const ja = {
   "account.session.title": "現在のセッション",
   "account.session.id": "セッション ID",
   "account.session.userAgent": "ブラウザ",
+  "account.session.details": "セッション詳細",
   "account.session.signOut": "このブラウザからサインアウト",
   "account.session.signOutConfirm": "このブラウザからサインアウトしますか？",
   "account.session.otherNote":
-    "他デバイスのセッション一覧とリモートサインアウトは準備中です。現在管理できるのはこのブラウザのセッションのみです。",
+    "ここでサインアウトできるのは、このブラウザのセッションのみです。",
   "account.language.title": "言語",
   "account.language.body": "ダッシュボードの表示言語を選びます。",
   "account.theme.title": "表示",
@@ -806,6 +813,7 @@ export const ja = {
   "billing.usage.quantity": "数量",
   "billing.usage.credits": "クレジット",
   "billing.usage.created": "日時",
+  "billing.ledger.title": "使用量の詳細",
   "billing.reservations.title": "クレジット予約",
   "billing.reservations.loading": "クレジット予約を読み込み中です...",
   "billing.reservations.error":

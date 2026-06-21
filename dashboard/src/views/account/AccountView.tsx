@@ -5,6 +5,7 @@
  * current browser's session can be managed (stated honestly below).
  */
 import "../../styles/wave-c.css";
+import "../../styles/wave-b.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { LogOut, Monitor, User } from "lucide-solid";
@@ -68,10 +69,6 @@ function Inner(props: { readonly session: SessionRecord }) {
           <KVList
             items={[
               {
-                label: t("account.profile.subject"),
-                value: <code class="wc-code">{props.session.subject}</code>,
-              },
-              {
                 label: t("account.profile.displayName"),
                 value: props.session.displayName ?? "—",
               },
@@ -82,12 +79,6 @@ function Inner(props: { readonly session: SessionRecord }) {
               {
                 label: t("account.profile.provider"),
                 value: props.session.provider ?? "—",
-              },
-              {
-                label: t("account.profile.expires"),
-                value: formatDateTime(
-                  new Date(props.session.expiresAt).toISOString(),
-                ),
               },
             ]}
           />
@@ -142,24 +133,6 @@ function Inner(props: { readonly session: SessionRecord }) {
               </span>
             }
           />
-          <KVList
-            items={[
-              {
-                label: t("account.session.id"),
-                value: <code class="wc-code">{props.session.sessionId}</code>,
-              },
-              {
-                label: t("account.session.userAgent"),
-                value: (
-                  <span class="muted">
-                    {typeof navigator !== "undefined"
-                      ? navigator.userAgent
-                      : "—"}
-                  </span>
-                ),
-              },
-            ]}
-          />
           <CardSection>
             <Show
               when={confirming()}
@@ -199,6 +172,39 @@ function Inner(props: { readonly session: SessionRecord }) {
               </div>
             </Show>
             <p class="muted">{t("account.session.otherNote")}</p>
+            <details class="wb-disclosure wc-advanced-settings">
+              <summary>{t("account.session.details")}</summary>
+              <KVList
+                items={[
+                  {
+                    label: t("account.profile.subject"),
+                    value: <code class="wc-code">{props.session.subject}</code>,
+                  },
+                  {
+                    label: t("account.session.id"),
+                    value: (
+                      <code class="wc-code">{props.session.sessionId}</code>
+                    ),
+                  },
+                  {
+                    label: t("account.profile.expires"),
+                    value: formatDateTime(
+                      new Date(props.session.expiresAt).toISOString(),
+                    ),
+                  },
+                  {
+                    label: t("account.session.userAgent"),
+                    value: (
+                      <span class="muted">
+                        {typeof navigator !== "undefined"
+                          ? navigator.userAgent
+                          : "—"}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </details>
           </CardSection>
         </Card>
       </div>

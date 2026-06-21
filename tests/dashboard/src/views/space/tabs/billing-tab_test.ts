@@ -19,3 +19,18 @@ test("BillingTab does not mask billing API failures as disabled or empty state",
   expect(source).not.toContain("(usage() ?? []).length > 0");
   expect(source).not.toContain("(reservations() ?? []).length > 0");
 });
+
+test("BillingTab keeps operational ledgers folded behind usage details", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  expect(source).toContain('summary>{t("billing.ledger.title")}</summary>');
+  expect(source).toContain('class="wb-disclosure av-billing-ledger"');
+  expect(source).toContain('"billing.reservations.title"');
+  expect(source).toContain('"billing.usage.title"');
+  expect(source).not.toContain(
+    '<CardHeader title={t("billing.reservations.title")} />',
+  );
+  expect(source).not.toContain(
+    '<CardHeader title={t("billing.usage.title")} />',
+  );
+});

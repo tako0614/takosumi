@@ -10,6 +10,7 @@
  * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
  * credits enter through paid checkout only.
  */
+import "../../../styles/wave-b.css";
 import {
   createMemo,
   createResource,
@@ -346,67 +347,76 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       </Card>
 
       <Card>
-        <CardHeader title={t("billing.reservations.title")} />
-        <Switch>
-          <Match when={reservations.loading}>
-            <p class="muted">{t("billing.reservations.loading")}</p>
-          </Match>
-          <Match when={reservations.error}>
-            {(error) => (
-              <Toast tone="error">
-                {t("billing.reservations.error", {
-                  message: errorMessage(error()),
-                })}
-              </Toast>
-            )}
-          </Match>
-          <Match when={reservations()}>
-            {(rows) => (
-              <Show
-                when={rows().length > 0}
-                fallback={
-                  <p class="muted">{t("billing.reservations.empty")}</p>
-                }
-              >
-                <DataTable
-                  columns={reservationColumns}
-                  rows={rows()}
-                  rowKey={(r) => r.runId}
-                />
-              </Show>
-            )}
-          </Match>
-        </Switch>
-      </Card>
+        <details class="wb-disclosure av-billing-ledger">
+          <summary>{t("billing.ledger.title")}</summary>
+          <div class="wc-stack-sm">
+            <section>
+              <h3 class="tg-card-title">{t("billing.reservations.title")}</h3>
+              <Switch>
+                <Match when={reservations.loading}>
+                  <p class="muted">{t("billing.reservations.loading")}</p>
+                </Match>
+                <Match when={reservations.error}>
+                  {(error) => (
+                    <Toast tone="error">
+                      {t("billing.reservations.error", {
+                        message: errorMessage(error()),
+                      })}
+                    </Toast>
+                  )}
+                </Match>
+                <Match when={reservations()}>
+                  {(rows) => (
+                    <Show
+                      when={rows().length > 0}
+                      fallback={
+                        <p class="muted">{t("billing.reservations.empty")}</p>
+                      }
+                    >
+                      <DataTable
+                        columns={reservationColumns}
+                        rows={rows()}
+                        rowKey={(r) => r.runId}
+                      />
+                    </Show>
+                  )}
+                </Match>
+              </Switch>
+            </section>
 
-      <Card>
-        <CardHeader title={t("billing.usage.title")} />
-        <Switch>
-          <Match when={usage.loading}>
-            <p class="muted">{t("billing.usage.loading")}</p>
-          </Match>
-          <Match when={usage.error}>
-            {(error) => (
-              <Toast tone="error">
-                {t("billing.usage.error", { message: errorMessage(error()) })}
-              </Toast>
-            )}
-          </Match>
-          <Match when={usage()}>
-            {(rows) => (
-              <Show
-                when={rows().length > 0}
-                fallback={<p class="muted">{t("billing.usage.empty")}</p>}
-              >
-                <DataTable
-                  columns={usageColumns}
-                  rows={rows()}
-                  rowKey={(_e, i) => i}
-                />
-              </Show>
-            )}
-          </Match>
-        </Switch>
+            <section>
+              <h3 class="tg-card-title">{t("billing.usage.title")}</h3>
+              <Switch>
+                <Match when={usage.loading}>
+                  <p class="muted">{t("billing.usage.loading")}</p>
+                </Match>
+                <Match when={usage.error}>
+                  {(error) => (
+                    <Toast tone="error">
+                      {t("billing.usage.error", {
+                        message: errorMessage(error()),
+                      })}
+                    </Toast>
+                  )}
+                </Match>
+                <Match when={usage()}>
+                  {(rows) => (
+                    <Show
+                      when={rows().length > 0}
+                      fallback={<p class="muted">{t("billing.usage.empty")}</p>}
+                    >
+                      <DataTable
+                        columns={usageColumns}
+                        rows={rows()}
+                        rowKey={(_e, i) => i}
+                      />
+                    </Show>
+                  )}
+                </Match>
+              </Switch>
+            </section>
+          </div>
+        </details>
       </Card>
     </div>
   );
