@@ -202,10 +202,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Addresses and values this Capsule exposes. Secrets are never shown.",
   "app.outputs.empty": "No public outputs yet. They appear after a deploy.",
   "app.outputs.none":
-    "This Capsule exposes no public addresses or outputs (infra-only modules, for example, may not emit a URL).",
+    "This Capsule exposes no public addresses or outputs. Some services only create background resources and do not emit a URL.",
   "app.nextSteps.title": "Next steps",
   "app.nextSteps.infraOnly":
-    "This Capsule has no public URL output yet. Check the latest Run, OpenTofu outputs, and Capsule docs to see whether it is infra-only or needs another Capsule dependency.",
+    "This service has no public URL yet. Check the latest deploy result and service notes to see whether it has no public screen or needs another service connected first.",
   "app.nextSteps.docs": "Open the docs →",
   "app.output.launchUrl": "Public address",
   "app.output.url": "URL",
@@ -243,7 +243,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.recentActivity.releaseActivation": "App activation",
   "app.bindings.title": "External service connections",
   "app.bindings.subtitle":
-    "Choose the external service connection OpenTofu should use. Usually no change is needed.",
+    "Choose the external service connection this service should use. Usually no change is needed.",
   "app.bindings.add": "Add service",
   "app.bindings.aliasPlaceholder": "alias (optional)",
   "app.bindings.selectConnection": "Select a connection",
@@ -259,7 +259,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.title.plan": "Review changes",
   "run.title.apply": "Deploy",
   "run.title.destroy": "Delete",
-  "run.title.other": "Run",
+  "run.title.other": "Operation",
   "run.summary.planning": "Reviewing the changes…",
   "run.summary.queued": "Waiting to run…",
   "run.summary.waitingApproval":
@@ -277,7 +277,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Check the diagnostics and logs below for the cause.",
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
-  "run.summary.fallback": "Run status: {status}",
+  "run.summary.fallback": "Status: {status}",
   "run.approve": "Approve this change",
   "run.approving": "Approving...",
   "run.deploy": "Deploy",
@@ -287,7 +287,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.backToApp": "Back to service",
   "run.destructiveWarning":
     "This change replaces or deletes existing resources. Running it may lose data.",
-  "run.destructiveConfirm": "Run, accepting the destructive changes",
+  "run.destructiveConfirm": "Proceed, accepting the destructive changes",
   "run.stop": "Cancel",
   "run.cost.required": "Credits needed: ~{n}",
   "run.cost.balance": "Balance: {n}",
@@ -308,14 +308,14 @@ export const en: Record<keyof typeof ja, string> = {
   "run.resources.actionDelete": "Delete",
   "run.resources.actionReplace": "Replace",
   "run.details.title": "Details (for developers)",
-  "run.details.runId": "Run ID",
+  "run.details.runId": "Execution ID",
   "run.details.type": "Type",
   "run.details.policy": "Policy",
   "run.details.installation": "Capsule",
-  "run.details.sourceSnapshot": "Source snapshot",
-  "run.details.dependencySnapshot": "Dependency snapshot",
-  "run.details.baseGeneration": "Base state generation",
-  "run.details.planDigest": "Plan digest",
+  "run.details.sourceSnapshot": "Pinned source",
+  "run.details.dependencySnapshot": "Pinned connected inputs",
+  "run.details.baseGeneration": "Previous state",
+  "run.details.planDigest": "Change verification ID",
   "run.details.created": "Created",
   "run.details.started": "Started",
   "run.details.finished": "Finished",
@@ -325,8 +325,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.connections.title": "Connections",
   "run.connections.reviewTitle": "External services for this review",
   "run.connections.reviewBody":
-    "Takosumi will use these Provider Connections for this review/deploy. Credential values are not shown.",
-  "run.connections.provider": "Provider",
+    "Takosumi will use these external service connections for this review/deploy. Credential values are not shown.",
+  "run.connections.provider": "External service",
   "run.connections.connection": "Connection",
   "run.connections.ownership": "Ownership",
   "run.connections.status": "Status",
@@ -350,7 +350,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.flow.nextSource": "Choose an example or paste a source URL.",
   "new.flow.nextCheck":
-    "Run the source check. Takosumi will only ask for connections this service needs.",
+    "Start the source check. Takosumi will only ask for connections this service needs.",
   "new.flow.nextConnect":
     "Set up the missing cloud connection, then return here to continue.",
   "new.flow.nextReview":
@@ -376,36 +376,35 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.path": "Folder",
   "new.sourceAccess.title": "Private repository",
   "new.sourceAccess.body":
-    "Public repositories need no credential. For a private source, save a read-only HTTPS token or select a saved source connection.",
+    "Public repositories need no credential. For a private source, save a read-only HTTPS token or select saved source access.",
   "new.sourceAccess.mode": "Source access",
   "new.sourceAccess.public": "Public repository",
-  "new.sourceAccess.existing": "Use a saved source connection",
+  "new.sourceAccess.existing": "Use saved source access",
   "new.sourceAccess.token": "Save an HTTPS token",
-  "new.sourceAccess.connection": "Source connection",
-  "new.sourceAccess.selectConnection": "Select a source connection",
+  "new.sourceAccess.connection": "Saved source access",
+  "new.sourceAccess.selectConnection": "Select saved source access",
   "new.sourceAccess.noConnections":
-    "No verified source connections are available in this Workspace yet.",
+    "No verified source access is available in this Workspace yet.",
   "new.sourceAccess.username": "Username",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "Read-only repository token",
   "new.sourceAccess.saveToken": "Save token",
   "new.sourceAccess.tokenBody":
-    "The token is stored as a write-only Source connection and is only exposed to the Git fetch step for this Workspace.",
+    "The token is stored as write-only source access and is used only while checking this Workspace's source.",
   "new.sourceAccess.errorTokenRequired": "Enter an access token.",
   "new.sourceAccess.errorSaveToken":
     "Save the private repository token before checking the source.",
-  "new.sourceAccess.errorSelectConnection":
-    "Select a verified source connection.",
+  "new.sourceAccess.errorSelectConnection": "Select verified source access.",
   "new.sourceAccess.errorConnectionUnavailable":
-    "The selected source connection is no longer available.",
-  "new.sourceAccess.httpsConnection": "HTTPS source connection",
-  "new.sourceAccess.sshConnection": "SSH source connection",
+    "The selected source access is no longer available.",
+  "new.sourceAccess.httpsConnection": "HTTPS source access",
+  "new.sourceAccess.sshConnection": "SSH source access",
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
   "new.vars.inputsTitle": "Advanced settings",
   "new.vars.inputsBody":
-    "Optional non-secret variables for this Capsule. Put tokens, passwords, and API keys in Provider Connections instead.",
+    "Optional non-secret variables for this Capsule. Put tokens, passwords, and API keys in external service connections instead.",
   "new.vars.inputName": "Variable",
   "new.vars.inputValue": "Value",
   "new.vars.addInput": "Add input",
@@ -413,7 +412,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.vars.errorNameRequired":
     "Enter a variable name or remove the empty row.",
   "new.vars.errorUnsafeName":
-    "“{name}” cannot be passed as a link/input variable. Use Provider Connections for secrets.",
+    "“{name}” cannot be passed as a link/input variable. Use external service connections for secrets.",
   "new.vars.errorUnsafeValue":
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.vars.errorProjectNameReserved":
@@ -426,7 +425,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.managed.connectFirst": "Set up a connection",
   "new.managed.byoTitle": "Use your own cloud connection",
   "new.managed.byoBody":
-    "Add or select the Provider Connection this Capsule needs for AWS, GCP, Kubernetes, Cloudflare, or another provider.",
+    "Add or select the external service connection this Capsule needs for AWS, GCP, Kubernetes, Cloudflare, or another provider.",
   "new.managed.byoLink": "Set up a connection",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
@@ -439,7 +438,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Takosumi is fetching the Git contents and checking whether this can be added to this Workspace. Keep this page open.",
   "new.progress.slow":
     "This is taking a little longer than usual. Large repositories and cold starts can take time; when it finishes, Takosumi will only ask for the connections that are needed.",
-  "new.progress.status": "Run status: {status}",
+  "new.progress.status": "Status: {status}",
   "new.compat.title": "Inspection result",
   "new.compat.ready": "Can be added as is",
   "new.compat.auto": "Can be added with automatic adjustments",
@@ -460,7 +459,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
   "new.proceed": "Review and add",
-  "new.proceedHint": "Run “Check and continue” first.",
+  "new.proceedHint": "Use “Check and continue” first.",
   "new.providers.title": "External service connections",
   "new.providers.subtitle":
     "Choose the connections this service will use before the first review. If a required connection is missing, Takosumi stops and asks instead of silently using another connection.",
@@ -609,13 +608,13 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.register": "Register connection",
   "conn.registering": "Registering...",
   "conn.genericEnv.intro":
-    "Register credentials for any OpenTofu provider (AWS / GCP / Kubernetes / …) as environment variables (NAME=value). Values are write-only; only the env names remain visible.",
-  "conn.genericEnv.providerName": "Provider name",
+    "Register credentials for any external service (AWS / GCP / Kubernetes / …) as environment variables (NAME=value). Values are write-only; only the env names remain visible.",
+  "conn.genericEnv.providerName": "External service name",
   "conn.genericEnv.envName": "Env variable name",
   "conn.genericEnv.value": "Value",
   "conn.genericEnv.valuePlaceholder": "Paste the value",
   "conn.genericEnv.addRow": "Add env variable",
-  "conn.genericEnv.providerRequired": "Enter a provider name.",
+  "conn.genericEnv.providerRequired": "Enter an external service name.",
   "conn.genericEnv.cloudflareGuided":
     "Register Cloudflare via the provider above (it has a guided flow).",
   "conn.genericEnv.nameRequired":
@@ -636,26 +635,26 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Manage this Workspace's control/state backups. Service-data archives appear only for Capsules that provide an export.",
+    "Manage backups for this Workspace's settings and deployed state. Service data exports appear only for Capsules that support them.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
-  "backups.col.artifact": "Control artifact",
+  "backups.col.artifact": "Settings backup",
   "backups.col.serviceData": "Service data",
-  "backups.col.run": "Run",
+  "backups.col.run": "Execution",
   "backups.manual": "manual",
   "backups.empty.title": "No backups yet",
   "backups.empty.message": "Create this Workspace's first backup.",
 
   // --- output shares -------------------------------------------------------------
   "shares.subtitle":
-    "Explicitly share a Capsule's projected outputs across Workspaces.",
+    "Explicitly share a service's public values across Workspaces.",
   "shares.create.title": "Create a share",
   "shares.create.toSpace": "Target Workspace",
-  "shares.create.producer": "Producer Capsule",
+  "shares.create.producer": "Source Capsule",
   "shares.create.selectPlaceholder": "Select",
-  "shares.create.outputs": "Outputs",
-  "shares.create.addOutput": "Add output",
+  "shares.create.outputs": "Shared values",
+  "shares.create.addOutput": "Add shared value",
   "shares.create.removeOutput": "Remove",
   "shares.create.sensitiveReason": "Reason for sharing sensitive outputs",
   "shares.create.cta": "Create share",
@@ -664,7 +663,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Enter a reason for sharing sensitive outputs.",
   "shares.col.direction": "Direction",
   "shares.col.installation": "Capsule",
-  "shares.col.outputs": "Outputs",
+  "shares.col.outputs": "Shared values",
   "shares.col.status": "Status",
   "shares.approve": "Approve",
   "shares.revoke": "Revoke",
@@ -672,7 +671,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.status.pending": "Pending approval",
   "shares.status.revoked": "Revoked",
   "shares.list.title": "Shares",
-  "shares.empty": "No OutputShares yet.",
+  "shares.empty": "No shares yet.",
 
   // --- notifications -------------------------------------------------------------
   "notif.title": "Notifications",
@@ -721,16 +720,16 @@ export const en: Record<keyof typeof ja, string> = {
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Grouped update",
   "runGroup.subtitle":
-    "A group of runs ordered by dependencies. Approve them together.",
-  "runGroup.approveAll": "Approve all runs",
-  "runGroup.members": "Member runs",
-  "runGroup.membersEmpty": "No member runs.",
+    "A group of executions ordered by dependencies. Approve them together.",
+  "runGroup.approveAll": "Approve all executions",
+  "runGroup.members": "Member executions",
+  "runGroup.membersEmpty": "No member executions.",
   "runGroup.groupId": "Group ID",
 
   // --- graph ---------------------------------------------------------------------
   "graph.title": "Dependency graph",
   "graph.subtitle":
-    "The dependency DAG between Capsules — producers above, consumers below.",
+    "How services are connected. Values from upper layers are used by services below.",
   "graph.layer": "Layer {n}",
   "graph.cycle": "Cycle (unresolvable)",
   "graph.dependsOn": "↑ depends on {names}",

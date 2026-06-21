@@ -207,10 +207,10 @@ export const ja = {
   "app.outputs.empty":
     "まだ公開された出力はありません。デプロイすると表示されます。",
   "app.outputs.none":
-    "この Capsule は公開アドレス・出力を持ちません（インフラのみのモジュールなどではアドレスが出ないことがあります）。",
+    "この Capsule は公開アドレス・出力を持ちません。公開画面を持たないサービスではアドレスが出ないことがあります。",
   "app.nextSteps.title": "次にやること",
   "app.nextSteps.infraOnly":
-    "この Capsule にはまだ公開 URL の出力がありません。最新 Run、OpenTofu outputs、Capsule docs を確認し、infra-only なのか別 Capsule への依存が必要なのかを確認してください。",
+    "このサービスにはまだ公開 URL がありません。最新の実行結果とサービスの説明を確認し、公開画面を持たない構成なのか、別サービスとの連携が必要なのかを確認してください。",
   "app.nextSteps.docs": "ドキュメントを開く →",
   "app.output.launchUrl": "公開アドレス",
   "app.output.url": "アドレス",
@@ -248,7 +248,7 @@ export const ja = {
   "app.recentActivity.releaseActivation": "アプリ公開",
   "app.bindings.title": "外部サービス接続",
   "app.bindings.subtitle":
-    "OpenTofu が使う外部サービス接続を選びます。通常は変更不要です。",
+    "このサービスが利用する外部サービス接続を選びます。通常は変更不要です。",
   "app.bindings.add": "接続先を追加",
   "app.bindings.aliasPlaceholder": "alias（任意）",
   "app.bindings.selectConnection": "接続を選択",
@@ -313,14 +313,14 @@ export const ja = {
   "run.resources.actionDelete": "削除",
   "run.resources.actionReplace": "置換",
   "run.details.title": "詳細（開発者向け）",
-  "run.details.runId": "Run ID",
+  "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "ポリシー",
   "run.details.installation": "Capsule",
-  "run.details.sourceSnapshot": "Source snapshot",
-  "run.details.dependencySnapshot": "Dependency snapshot",
-  "run.details.baseGeneration": "Base state generation",
-  "run.details.planDigest": "Plan digest",
+  "run.details.sourceSnapshot": "取得元の固定情報",
+  "run.details.dependencySnapshot": "連携入力の固定情報",
+  "run.details.baseGeneration": "元の状態",
+  "run.details.planDigest": "変更内容の検証 ID",
   "run.details.created": "作成",
   "run.details.started": "開始",
   "run.details.finished": "終了",
@@ -330,8 +330,8 @@ export const ja = {
   "run.connections.title": "接続",
   "run.connections.reviewTitle": "この確認で使う外部サービス",
   "run.connections.reviewBody":
-    "この変更確認/デプロイでは、以下の Provider Connection を使います。認証情報の値は表示しません。",
-  "run.connections.provider": "Provider",
+    "この変更確認/デプロイでは、以下の外部サービス接続を使います。認証情報の値は表示しません。",
+  "run.connections.provider": "外部サービス",
   "run.connections.connection": "接続",
   "run.connections.ownership": "所有",
   "run.connections.status": "状態",
@@ -381,36 +381,36 @@ export const ja = {
   "new.git.path": "フォルダ",
   "new.sourceAccess.title": "非公開リポジトリ",
   "new.sourceAccess.body":
-    "公開リポジトリなら認証情報は不要です。非公開の取得元では、読み取り専用の HTTPS token を保存するか、保存済みの取得元接続を選んでください。",
+    "公開リポジトリなら認証情報は不要です。非公開の取得元では、読み取り専用の HTTPS token を保存するか、保存済みの取得元アクセスを選んでください。",
   "new.sourceAccess.mode": "取得元アクセス",
   "new.sourceAccess.public": "公開リポジトリ",
-  "new.sourceAccess.existing": "保存済みの取得元接続を使う",
+  "new.sourceAccess.existing": "保存済みの取得元アクセスを使う",
   "new.sourceAccess.token": "HTTPS token を保存する",
-  "new.sourceAccess.connection": "取得元接続",
-  "new.sourceAccess.selectConnection": "取得元接続を選択",
+  "new.sourceAccess.connection": "保存済みの取得元アクセス",
+  "new.sourceAccess.selectConnection": "保存済みの取得元アクセスを選択",
   "new.sourceAccess.noConnections":
-    "この Workspace には、検証済みの取得元接続がまだありません。",
+    "この Workspace には、検証済みの取得元アクセスがまだありません。",
   "new.sourceAccess.username": "ユーザー名",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "読み取り専用リポジトリ token",
   "new.sourceAccess.saveToken": "token を保存",
   "new.sourceAccess.tokenBody":
-    "token は書き込み専用の Source connection として保存され、この Workspace の Git fetch step にだけ渡されます。",
+    "token は書き込み専用の取得元接続として保存され、この Workspace の取得元確認にだけ使われます。",
   "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
   "new.sourceAccess.errorSaveToken":
     "取得元を確認する前に、非公開リポジトリの token を保存してください。",
   "new.sourceAccess.errorSelectConnection":
-    "検証済みの取得元接続を選択してください。",
+    "検証済みの取得元アクセスを選択してください。",
   "new.sourceAccess.errorConnectionUnavailable":
-    "選択した取得元接続は現在利用できません。",
-  "new.sourceAccess.httpsConnection": "HTTPS 取得元接続",
-  "new.sourceAccess.sshConnection": "SSH 取得元接続",
+    "選択した取得元アクセスは現在利用できません。",
+  "new.sourceAccess.httpsConnection": "HTTPS 取得元アクセス",
+  "new.sourceAccess.sshConnection": "SSH 取得元アクセス",
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
   "new.vars.inputsTitle": "詳細設定",
   "new.vars.inputsBody":
-    "この Capsule に渡す任意の非 secret 変数です。トークン、パスワード、API キーは Provider Connection に入れてください。",
+    "この Capsule に渡す任意の非 secret 変数です。トークン、パスワード、API キーは外部サービス接続に入れてください。",
   "new.vars.inputName": "変数名",
   "new.vars.inputValue": "値",
   "new.vars.addInput": "入力を追加",
@@ -418,7 +418,7 @@ export const ja = {
   "new.vars.errorNameRequired":
     "変数名を入力するか、空の行を削除してください。",
   "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力変数として渡せません。secret は Provider Connection を使ってください。",
+    "「{name}」はリンク/入力変数として渡せません。secret は外部サービス接続を使ってください。",
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
@@ -431,7 +431,7 @@ export const ja = {
   "new.managed.connectFirst": "接続を設定する",
   "new.managed.byoTitle": "自分のクラウド接続を使う",
   "new.managed.byoBody":
-    "この Capsule に必要な AWS / GCP / Kubernetes / Cloudflare などの Provider Connection を追加または選択してください。",
+    "この Capsule に必要な AWS / GCP / Kubernetes / Cloudflare などの外部サービス接続を追加または選択してください。",
   "new.managed.byoLink": "接続を設定する",
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
   "new.deeplink.invalidBody":
@@ -618,13 +618,13 @@ export const ja = {
   "conn.register": "接続を登録",
   "conn.registering": "登録中...",
   "conn.genericEnv.intro":
-    "AWS / GCP / Kubernetes など任意の OpenTofu プロバイダの認証情報を、環境変数（NAME=value）として登録します。値は書き込み専用で、保存後は env 名のみ表示されます。",
-  "conn.genericEnv.providerName": "プロバイダ名",
+    "AWS / GCP / Kubernetes など任意の外部サービスの認証情報を、環境変数（NAME=value）として登録します。値は書き込み専用で、保存後は env 名のみ表示されます。",
+  "conn.genericEnv.providerName": "外部サービス名",
   "conn.genericEnv.envName": "環境変数名",
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "環境変数を追加",
-  "conn.genericEnv.providerRequired": "プロバイダ名を入力してください。",
+  "conn.genericEnv.providerRequired": "外部サービス名を入力してください。",
   "conn.genericEnv.cloudflareGuided":
     "Cloudflare は上のプロバイダから登録してください（専用フローがあります）。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
@@ -644,27 +644,26 @@ export const ja = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Workspace の control/state backup を管理します。service-data archive は export を提供する Capsule でのみ表示されます。",
+    "Workspace の設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応している Capsule でのみ表示されます。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
-  "backups.col.artifact": "Control artifact",
-  "backups.col.serviceData": "Service data",
-  "backups.col.run": "Run",
+  "backups.col.artifact": "設定バックアップ",
+  "backups.col.serviceData": "サービスデータ",
+  "backups.col.run": "実行",
   "backups.manual": "手動",
   "backups.empty.title": "まだバックアップがありません",
   "backups.empty.message":
     "この Workspace の最初のバックアップを作成できます。",
 
   // --- output shares -------------------------------------------------------------
-  "shares.subtitle":
-    "Workspace 間で Capsule の projected output を明示的に共有します。",
+  "shares.subtitle": "Workspace 間でサービスの公開値を明示的に共有します。",
   "shares.create.title": "共有を作成",
   "shares.create.toSpace": "共有先 Workspace",
-  "shares.create.producer": "Producer Capsule",
+  "shares.create.producer": "共有元 Capsule",
   "shares.create.selectPlaceholder": "選択してください",
-  "shares.create.outputs": "Outputs",
-  "shares.create.addOutput": "output を追加",
+  "shares.create.outputs": "共有する値",
+  "shares.create.addOutput": "共有する値を追加",
   "shares.create.removeOutput": "削除",
   "shares.create.sensitiveReason": "sensitive output を共有する理由",
   "shares.create.cta": "共有を作成",
@@ -674,7 +673,7 @@ export const ja = {
     "sensitive output を共有する理由を入力してください。",
   "shares.col.direction": "方向",
   "shares.col.installation": "Capsule",
-  "shares.col.outputs": "Outputs",
+  "shares.col.outputs": "共有する値",
   "shares.col.status": "状態",
   "shares.approve": "承認",
   "shares.revoke": "取り消し",
@@ -682,7 +681,7 @@ export const ja = {
   "shares.status.pending": "承認待ち",
   "shares.status.revoked": "取り消し済み",
   "shares.list.title": "共有一覧",
-  "shares.empty": "OutputShare はまだありません。",
+  "shares.empty": "共有はまだありません。",
 
   // --- notifications -------------------------------------------------------------
   "notif.title": "通知",
@@ -733,16 +732,16 @@ export const ja = {
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "まとめての更新",
   "runGroup.subtitle":
-    "依存順に並んだ複数の Run のグループです。まとめて承認できます。",
-  "runGroup.approveAll": "全ての Run を承認",
-  "runGroup.members": "メンバー Run",
-  "runGroup.membersEmpty": "メンバー Run はありません。",
+    "依存順に並んだ複数の実行グループです。まとめて承認できます。",
+  "runGroup.approveAll": "全ての実行を承認",
+  "runGroup.members": "メンバー実行",
+  "runGroup.membersEmpty": "メンバー実行はありません。",
   "runGroup.groupId": "Group ID",
 
   // --- graph ---------------------------------------------------------------------
   "graph.title": "依存グラフ",
   "graph.subtitle":
-    "Capsule 間の依存 DAG。上の層が producer、下の層が consumer です。",
+    "サービス間の連携関係です。上の層の値を、下の層のサービスが利用します。",
   "graph.layer": "層 {n}",
   "graph.cycle": "循環（解決不能）",
   "graph.dependsOn": "↑ 依存: {names}",
