@@ -380,6 +380,12 @@
   .wb-form-actions .tg-btn {
     flex: 1 1 100%;
   }
+  .wb-install-form.wb-install-source-form
+    > .wb-form-actions:has(.tg-btn + .tg-btn)
+    .tg-btn {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 /* ===== Members: invite form + action cell ===== */

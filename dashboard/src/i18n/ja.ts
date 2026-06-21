@@ -323,6 +323,27 @@ export const ja = {
   "new.title": "サービスを追加",
   "new.subtitle":
     "サンプルから始めるか、Git の取得元 URL を指定して追加します。",
+  "new.flow.aria": "サービス追加の進行状況",
+  "new.flow.kicker": "追加フロー",
+  "new.flow.title": "デプロイ前に取得元を確認します",
+  "new.flow.source": "現在の取得元",
+  "new.flow.sourceEmpty": "取得元はまだ選択されていません。",
+  "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
+  "new.flow.nextSource": "サンプルを選ぶか、Git URL を入力してください。",
+  "new.flow.nextCheck":
+    "取得元を確認します。必要な接続がある場合だけ Takosumi が案内します。",
+  "new.flow.nextConnect":
+    "不足しているクラウド接続を設定すると、この画面に戻って続けられます。",
+  "new.flow.nextReview":
+    "次は追加内容の確認です。確認画面で承認するまでデプロイされません。",
+  "new.flow.stepSource": "取得元",
+  "new.flow.stepSourceSub": "Git URL、バージョン、フォルダ",
+  "new.flow.stepCheck": "確認",
+  "new.flow.stepCheckSub": "plan 作成前に検査",
+  "new.flow.stepConnect": "接続",
+  "new.flow.stepConnectSub": "選択した外部サービスだけ使う",
+  "new.flow.stepReview": "レビュー",
+  "new.flow.stepReviewSub": "plan を確認してからデプロイ",
   "new.tab.catalog": "サンプル",
   "new.tab.git": "取得元 URL",
   "new.catalog.intro":
@@ -386,10 +407,15 @@ export const ja = {
   "new.providers.manageConnections": "接続を管理",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
+  "new.providers.errorOperatorManaged":
+    "{provider} には、この Workspace でまだ利用できない運営管理の接続が必要です。",
   "new.providers.missingTitle": "接続の設定が必要です",
   "new.providers.missingBody":
     "このサービスは下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
   "new.providers.setupMissing": "必要な接続を設定",
+  "new.providers.operatorMissingTitle": "運営管理の接続がまだ利用できません",
+  "new.providers.operatorMissingBody":
+    "このサービスは Takosumi Cloud 管理の接続を前提にしています。この Workspace ではまだ有効化されていないため、運営側で利用可能になるまで追加を続行できません。",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
   "new.step.create": "サービスを作成",
