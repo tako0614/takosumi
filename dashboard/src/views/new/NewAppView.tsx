@@ -301,32 +301,10 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
   return "";
 }
 
-function controlErrorDetails(error: ControlApiError | undefined): unknown {
-  const body = error?.body;
-  if (!body || typeof body !== "object" || !("error" in body)) return undefined;
-  const payload = (body as { readonly error?: unknown }).error;
-  if (!payload || typeof payload !== "object" || !("details" in payload)) {
-    return undefined;
-  }
-  return (payload as { readonly details?: unknown }).details;
-}
-
-function isDuplicateInstallationError(
+function isDuplicateServiceError(
   error: ControlApiError | undefined,
 ): boolean {
-  const details = controlErrorDetails(error);
-  if (
-    details &&
-    typeof details === "object" &&
-    (details as { readonly reason?: unknown }).reason ===
-      "duplicate_installation"
-  ) {
-    return true;
-  }
-  return (
-    error?.status === 409 &&
-    /installation\s+.+\s+already exists/iu.test(error.message)
-  );
+  return error?.isDuplicateService ?? false;
 }
 
 function runStatusLabel(status: RunStatus): string {
@@ -1226,7 +1204,7 @@ function Inner() {
             message: apiError.message,
           }),
         );
-      } else if (isDuplicateInstallationError(apiError)) {
+      } else if (isDuplicateServiceError(apiError)) {
         setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
         const existing = await findExistingInstallation(
