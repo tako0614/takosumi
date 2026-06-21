@@ -133,11 +133,17 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"new.providers.operatorMissingTitle"');
     expect(newAppViewSource).toContain('"new.providers.errorOperatorManaged"');
     expect(newAppViewSource).toContain('"new.providers.operatorMissingNext"');
+    expect(en["new.providers.operatorMissingBody"]).not.toContain(
+      "Provider Connection",
+    );
     expect(en["new.providers.operatorMissingBody"]).not.toContain("operator");
     expect(en["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
     );
     expect(en["new.providers.operatorMissingNext"]).toContain("team admin");
+    expect(ja["new.providers.operatorMissingBody"]).not.toContain(
+      "Provider Connection",
+    );
     expect(ja["new.providers.operatorMissingBody"]).not.toContain("運営側");
     expect(ja["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
@@ -353,7 +359,9 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
     expect(connectionsTabSource).toContain('class="wc-conn-actions"');
     expect(connectionsTabSource).toContain("providerConnections.loading");
-    expect(connectionsTabSource).not.toContain("providerConnectionOwnershipLabel");
+    expect(connectionsTabSource).not.toContain(
+      "providerConnectionOwnershipLabel",
+    );
     expect(connectionsTabSource).not.toContain('class="wc-inline-details"');
     expect(connectionsTabSource).not.toContain(
       '<code class="wc-code">{connection.id}</code>',

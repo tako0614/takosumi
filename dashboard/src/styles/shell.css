@@ -110,15 +110,6 @@
   min-height: 34px;
   font-size: var(--tg-fs-xs);
 }
-.sidebar-footer {
-  margin-top: auto;
-  padding-top: var(--tg-s-4);
-  border-top: 1px solid var(--tg-line);
-}
-.sidebar-link-sub {
-  color: var(--tg-fg-subtle);
-  font-size: var(--tg-fs-xs);
-}
 .sidebar-link-label {
   display: flex;
   flex-direction: column;
@@ -159,31 +150,6 @@
   font-family: var(--tg-font-body);
   font-size: var(--tg-fs-sm);
 }
-.topbar-space-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  min-width: 280px;
-  max-width: calc(100vw - 24px);
-  background: var(--tg-bg-elev);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  box-shadow: var(--tg-shadow-lg);
-  padding: var(--tg-s-4);
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-}
-.topbar-space-pop-label {
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-muted);
-}
-.topbar-space-pop-actions {
-  display: flex;
-  gap: var(--tg-s-2);
-}
-.topbar-space-pop-error,
 .topbar-space-error {
   color: var(--tg-danger);
   font-size: var(--tg-fs-xs);
@@ -363,9 +329,6 @@
     max-width: none;
     min-width: 0;
     font-size: var(--tg-fs-xs);
-  }
-  .topbar-create-space {
-    display: none;
   }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)

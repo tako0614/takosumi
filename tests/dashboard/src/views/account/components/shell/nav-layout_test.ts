@@ -51,6 +51,7 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('labelKey: "nav.billing"');
     expect(sidebarSource).not.toContain('labelKey: "nav.activity"');
     expect(sidebarSource).not.toContain('href: "/notifications"');
+    expect(sidebarSource).not.toContain("takosumi.com/docs");
     expect(sidebarSource).toContain('aria-label={t("nav.accountSection")}');
     expect(sidebarSource).not.toContain('class="sidebar-advanced"');
     expect(sidebarSource).toContain('class="sidebar-section-label"');
@@ -68,14 +69,15 @@ describe("dashboard shell navigation layout", () => {
     expect(mobileTabsSource).not.toContain('href: "/connections"');
     expect(mobileTabsSource).not.toContain("icon: Plug");
     expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
-    expect(spaceSwitcherSource).toContain("topbar-create-space");
-    expect(shellCssSource).toContain(".topbar-create-space");
-    expect(shellCssSource).toContain("display: none;");
+    expect(spaceSwitcherSource).not.toContain("topbar-create-space");
+    expect(spaceSwitcherSource).not.toContain("createSpace");
+    expect(shellCssSource).not.toContain(".topbar-create-space");
   });
 
   test("keeps paid billing out of the shared account menu unless Cloud is running", () => {
     expect(userMenuSource).toContain("isTakosumiCloudRuntime");
     expect(userMenuSource).toContain('href="/billing"');
     expect(userMenuSource).toContain('t("nav.billing")');
+    expect(userMenuSource).toContain("takosumi.com/docs");
   });
 });

@@ -61,10 +61,6 @@ export const en: Record<keyof typeof ja, string> = {
   "space.label": "Team",
   "space.loadFailed": "Failed to load teams — {message}",
   "space.none": "No teams",
-  "space.new": "New team",
-  "space.handleLabel": "Handle (without @, letters/digits/hyphen)",
-  "space.handlePlaceholder": "my-space",
-  "space.handleRequired": "Enter a handle.",
   "space.select": "Select a team",
   "space.selectMessage": "Pick a team from the switcher in the top bar.",
 
@@ -291,10 +287,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cost.capacity": "Available capacity: {n}",
   "run.cost.capacityShortfall":
     "This workspace is short by about {n} capacity units, so this cannot run.",
-  "run.cost.capacityBlocked": "This cannot run due to quota or limits.",
+  "run.cost.capacityBlocked": "This workspace cannot run this action.",
   "run.cost.billingCta": "Open billing",
-  "run.cost.operatorHelp":
-    "This workspace is blocked by quota or policy. Contact a workspace admin if you need more capacity.",
+  "run.cost.operatorHelp": "Ask an admin if you need this action enabled.",
   "run.changes.title": "Changes",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
@@ -388,9 +383,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Service name",
   "new.vars.projectName": "Resource prefix",
-  "new.vars.inputsTitle": "Advanced settings",
+  "new.vars.inputsTitle": "Other inputs",
   "new.vars.inputsBody":
-    "Optional non-secret advanced values for this service. Put tokens, passwords, and API keys in external service connections instead.",
+    "Add non-secret inputs only when the app asks for something not shown above.",
   "new.vars.inputName": "Variable",
   "new.vars.inputValue": "Value",
   "new.vars.addInput": "Add input",
@@ -453,7 +448,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.setupMissing": "Set up required connection",
   "new.providers.operatorMissingTitle": "No ready connection is available",
   "new.providers.operatorMissingBody":
-    "This service needs a Provider Connection before it can be added.",
+    "This service needs a cloud account connection before it can be added.",
   "new.providers.operatorMissingNext":
     "Open cloud accounts or ask a team admin to add one.",
   "new.step.technical": "Setup progress",
@@ -552,6 +547,8 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.saved.testCta": "Verify connection",
   "conn.saved.returnCta": "Back to add",
   "conn.add.title": "Add a connection",
+  "conn.add.open": "Add connection",
+  "conn.add.close": "Close",
   "conn.add.provider": "Service",
   "conn.add.genericEnvOption": "Use custom credentials",
   "conn.add.displayName": "Display name (optional)",

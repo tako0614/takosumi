@@ -154,9 +154,11 @@ describe("/new flow guidance", () => {
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
+    expect(newAppViewSource).toContain("const shouldOpenExtraInputs = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
     expect(newAppViewSource).toContain("selectedCatalogVariableNames");
+    expect(newAppViewSource).toContain("open={shouldOpenExtraInputs()}");
     expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
     expect(newAppViewSource).toContain("name={`varName:${index()}`}");
     expect(newAppViewSource).toContain("name={`varValue:${index()}`}");
@@ -165,6 +167,8 @@ describe("/new flow guidance", () => {
     expect(ja["new.vars.errorCatalogReserved"]).toContain("サービス設定");
     expect(en["new.vars.inputsBody"].toLowerCase()).toContain("non-secret");
     expect(ja["new.vars.inputsBody"]).toContain("非 secret");
+    expect(en["new.vars.inputsTitle"]).not.toBe("Advanced settings");
+    expect(ja["new.vars.inputsTitle"]).not.toBe("詳細設定");
   });
 
   test("keeps external connection UI hidden unless there is something to choose", () => {

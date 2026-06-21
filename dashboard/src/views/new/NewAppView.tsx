@@ -698,6 +698,7 @@ function Inner() {
     }
     return null;
   };
+  const shouldOpenExtraInputs = () => inputVariables().length > 0;
   const installReturnVariables = (): Readonly<Record<string, string>> => {
     const variables: Record<string, string> = {};
     if (supportsProjectNameInput()) {
@@ -1789,7 +1790,7 @@ function Inner() {
 
                 <details
                   class="wb-disclosure wb-input-vars"
-                  open={inputVariables().length > 0}
+                  open={shouldOpenExtraInputs()}
                 >
                   <summary>{t("new.vars.inputsTitle")}</summary>
                   <p class="wb-note">{t("new.vars.inputsBody")}</p>
