@@ -124,9 +124,15 @@ bun run cli -- secrets apply \
   --secrets-dir ../takosumi-private/.secrets/production
 cd ..
 
+TAKOSUMI_BUILDX_BUILDER=takosumi-remote \
+WRANGLER_DOCKER_BIN="$PWD/scripts/wrangler-docker-buildx-wrapper.sh" \
+  bunx wrangler@latest deploy \
+  --config takosumi-private/platform/wrangler.toml
+
 bun run check:takosumi-billing-readiness -- \
   --private-root takosumi-private \
   --environment production \
+  --checkout-smoke \
   --out-file evidence/billing-readiness-production.json
 ```
 
@@ -135,9 +141,13 @@ lookup key and writes only the non-secret Takosumi billing plan catalog. It read
 the Stripe secret key from an operator-private secret file or an explicit
 operator env var, and must not print or write the secret. `write:takosumi-billing-config`
 only writes non-secret plan catalog and redirect allowlist vars into the
-realized Wrangler config. Stripe API keys and webhook signing secrets must go
+realized Wrangler config. Deploy `takosumi-private/platform/wrangler.toml`
+after writing those vars; otherwise the live billing plan projection still sees
+the previous Worker config. Stripe API keys and webhook signing secrets must go
 through `write:takosumi-stripe-secret` and the operator secret apply command; do
-not place secret values in `wrangler.toml` or evidence files.
+not place secret values in `wrangler.toml` or evidence files. The readiness
+preflight uses `--checkout-smoke` after deploy so every configured plan proves it
+can create a Stripe Checkout Session through the live worker.
 
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
