@@ -8,14 +8,7 @@ import "../../styles/wave-c.css";
 import "../../styles/wave-b.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import {
-  CreditCard,
-  LogOut,
-  Monitor,
-  Plug,
-  ScrollText,
-  User,
-} from "lucide-solid";
+import { LogOut, Monitor, User } from "lucide-solid";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
@@ -86,33 +79,6 @@ function Inner(props: { readonly session: SessionRecord }) {
             ]}
           />
         </Card>
-
-        <details class="wb-disclosure wc-advanced-settings">
-          <summary>{t("account.manage.title")}</summary>
-          <div class="wc-quick-links">
-            <Button
-              variant="secondary"
-              href="/billing"
-              icon={<CreditCard size={16} />}
-            >
-              {t("nav.billing")}
-            </Button>
-            <Button
-              variant="secondary"
-              href="/connections"
-              icon={<Plug size={16} />}
-            >
-              {t("nav.connections")}
-            </Button>
-            <Button
-              variant="secondary"
-              href="/activity"
-              icon={<ScrollText size={16} />}
-            >
-              {t("nav.activity")}
-            </Button>
-          </div>
-        </details>
 
         <Card>
           <CardHeader

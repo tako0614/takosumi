@@ -10,11 +10,7 @@ import {
   createSignal,
   Show,
 } from "solid-js";
-import {
-  listSpaces,
-  type PolicyConfig,
-  updateSpace,
-} from "../../../lib/control-api.ts";
+import { listSpaces, updateSpace } from "../../../lib/control-api.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -24,7 +20,6 @@ import {
   FormField,
   Input,
   KVList,
-  Textarea,
   Toast,
 } from "../../../components/ui/index.ts";
 
@@ -34,7 +29,6 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
     (spaces() ?? []).find((item) => item.id === props.spaceId),
   );
   const [displayNameDraft, setDisplayNameDraft] = createSignal("");
-  const [policyDraft, setPolicyDraft] = createSignal("{}");
   const [saving, setSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [saveMessage, setSaveMessage] = createSignal<string | null>(null);
@@ -43,7 +37,6 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
     const current = space();
     if (!current) return;
     setDisplayNameDraft(current.displayName);
-    setPolicyDraft(JSON.stringify(current.policy ?? {}, null, 2));
     setSaveError(null);
     setSaveMessage(null);
   });
@@ -57,27 +50,11 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
       setSaveError(t("spaceSettings.general.nameRequired"));
       return;
     }
-    let policy: PolicyConfig;
-    try {
-      const parsed = JSON.parse(policyDraft());
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed)
-      ) {
-        setSaveError(t("spaceSettings.general.policyObject"));
-        return;
-      }
-      policy = parsed as PolicyConfig;
-    } catch {
-      setSaveError(t("spaceSettings.general.policyInvalid"));
-      return;
-    }
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
     try {
-      await updateSpace(current.id, { displayName, policy });
+      await updateSpace(current.id, { displayName });
       await refetch();
       setSaveMessage(t("spaceSettings.general.saved"));
     } catch (err) {
@@ -132,15 +109,6 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                       },
                     ]}
                   />
-                  <FormField label={t("spaceSettings.general.policyAdvanced")}>
-                    <Textarea
-                      class="wc-policy-editor"
-                      spellcheck={false}
-                      rows={10}
-                      value={policyDraft()}
-                      onInput={(e) => setPolicyDraft(e.currentTarget.value)}
-                    />
-                  </FormField>
                 </details>
                 <div class="wc-form-actions">
                   <Button variant="primary" type="submit" busy={saving()}>

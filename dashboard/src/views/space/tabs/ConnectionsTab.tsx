@@ -26,8 +26,6 @@ import { ArrowLeft, Link, Plug, Plus, Trash } from "lucide-solid";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
-  connectionStatusLabel,
-  connectionTone,
   providerConnectionStatusLabel,
   providerConnectionTone,
 } from "../../../lib/labels.ts";
@@ -45,13 +43,12 @@ import {
   type ProviderConnection,
   createConnection,
   isOAuthUnavailable,
-  listConnections,
   listProviderConnections,
   revokeConnection,
   startCloudflareOAuth,
   testConnection,
 } from "../../../lib/control-api.ts";
-import { type MessageKey, t } from "../../../i18n/index.ts";
+import { t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -62,7 +59,6 @@ import {
   Input,
   Select,
   Skeleton,
-  StatusBadge,
   Toast,
 } from "../../../components/ui/index.ts";
 
@@ -73,25 +69,6 @@ const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
 interface EnvPair {
   readonly name: string;
   readonly value: string;
-}
-
-const SCOPE_KEY: Record<string, MessageKey> = {
-  operator: "conn.scope.operator",
-  space: "conn.scope.space",
-};
-
-function scopeLabel(scope: string | undefined): string {
-  if (!scope) return t("conn.scope.space");
-  const key = SCOPE_KEY[scope];
-  return key ? t(key) : scope;
-}
-
-function providerConnectionOwnershipLabel(
-  ownership: ProviderConnection["ownership"],
-): string {
-  return ownership === "takos_provided"
-    ? t("conn.ownership.takosProvided")
-    : t("conn.ownership.ownKey");
 }
 
 function providerTail(providerSource: string): string {
@@ -113,7 +90,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const { confirm } = useConfirmDialog();
   const spaceId = () => props.spaceId;
 
-  const [connections, { refetch }] = createResource(spaceId, listConnections);
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(spaceId, listProviderConnections);
   const [lastCreatedConnectionName, setLastCreatedConnectionName] =
@@ -125,7 +101,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     createSignal(false);
 
   const refreshConnections = async () => {
-    await Promise.all([refetch(), refetchProviderConnections()]);
+    await refetchProviderConnections();
   };
 
   const afterConnectionCreated = async (connection: Connection) => {
@@ -396,17 +372,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     await refreshConnections();
   });
 
-  const confirmRemove = async (c: Connection) => {
-    const ok = await confirm({
-      title: t("conn.remove.confirmTitle"),
-      message: t("conn.remove.confirmMessage", { name: c.displayName ?? c.id }),
-      confirmText: t("common.delete"),
-      danger: true,
-    });
-    if (!ok) return;
-    void remove.run(c.id);
-  };
-
   const providerConnectionForConnectionId = (connectionId: string | null) =>
     (providerConnections() ?? []).find(
       (connection) => connection.id === connectionId,
@@ -418,15 +383,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     lastCreatedVerifiedHint();
   const shouldOfferInstallReturn = () =>
     !lastCreatedConnectionId() || lastCreatedReady();
-  const connectionById = createMemo(
-    () =>
-      new Map(
-        (connections() ?? []).map((connection) => [connection.id, connection]),
-      ),
-  );
-  const connectionEnvNames = (connectionId: string): readonly string[] =>
-    connectionById().get(connectionId)?.envNames ?? [];
-
   const confirmRemoveProviderConnection = async (
     connection: ProviderConnection,
   ) => {
@@ -449,7 +405,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
           <li class="wc-conn-row">
             <div class="wc-conn-head">
               <span class="wc-conn-name">
-                {connection.displayName || providerConnectionProviderLabel(connection)}
+                {connection.displayName ||
+                  providerConnectionProviderLabel(connection)}
               </span>
               <Badge tone={providerConnectionTone(connection.status)}>
                 {providerConnectionStatusLabel(connection.status)}
@@ -458,21 +415,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             <div class="wc-conn-meta">
               <span>{providerConnectionProviderLabel(connection)}</span>
             </div>
-            <details class="wc-inline-details">
-              <summary>{t("common.details")}</summary>
-              <code class="wc-code">{connection.id}</code>
-              <span class="wc-conn-detail-line">
-                {connection.providerSource}
-              </span>
-              <span class="wc-conn-detail-line">
-                {providerConnectionOwnershipLabel(connection.ownership)}
-              </span>
-              <Show when={connectionEnvNames(connection.id).length > 0}>
-                <span class="wc-conn-detail-line">
-                  {connectionEnvNames(connection.id).join(", ")}
-                </span>
-              </Show>
-            </details>
             <div class="wc-conn-actions">
               <Button
                 variant="secondary"
@@ -500,59 +442,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         )}
       </For>
     </ul>
-  );
-
-  const rawConnectionList = () => (
-    <div class="wc-card-stack">
-      <ul class="wc-conn-list">
-        <For each={connections() ?? []}>
-          {(c) => (
-            <li class="wc-conn-row">
-              <div class="wc-conn-head">
-                <span class="wc-conn-name">{c.displayName ?? c.id}</span>
-                <StatusBadge
-                  status={c.status}
-                  label={connectionStatusLabel}
-                  tone={connectionTone}
-                />
-              </div>
-              <div class="wc-conn-meta">
-                <span>{c.provider}</span>
-                <span aria-hidden="true">·</span>
-                <Badge tone="muted">{scopeLabel(c.scope)}</Badge>
-                <Show when={c.envNames.length > 0}>
-                  <span aria-hidden="true">·</span>
-                  <code>{c.envNames.join(", ")}</code>
-                </Show>
-              </div>
-              <div class="wc-conn-actions">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => void runTest(c.id)}
-                  busy={testBusyId() === c.id}
-                >
-                  {testBusyId() === c.id ? t("conn.testing") : t("conn.test")}
-                </Button>
-                <Show when={c.status !== "revoked"}>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    type="button"
-                    onClick={() => void confirmRemove(c)}
-                    disabled={remove.busy()}
-                    icon={<Trash size={14} />}
-                  >
-                    {t("common.delete")}
-                  </Button>
-                </Show>
-              </div>
-            </li>
-          )}
-        </For>
-      </ul>
-    </div>
   );
 
   return (
@@ -671,12 +560,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             {(m) => <Toast tone="error">{m()}</Toast>}
           </Show>
           {providerConnectionList()}
-          <Show when={(connections() ?? []).length > 0}>
-            <details class="connection-advanced">
-              <summary>{t("conn.list.title")}</summary>
-              {rawConnectionList()}
-            </details>
-          </Show>
         </Card>
       </Show>
       <Show when={providerConnections.error}>
@@ -1046,42 +929,22 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
         </div>
       </Card>
 
-      {/* ----- list ----- */}
-      <Switch>
-        <Match when={connections.loading}>
-          <Skeleton variant="card" count={2} />
-        </Match>
-        <Match when={connections.error}>
-          <Toast tone="error">
-            {t("common.fetchFailed", {
-              message: (connections.error as ControlApiError).message,
-            })}
-          </Toast>
-        </Match>
-        <Match when={connections()}>
-          {(list) => (
-            <Show
-              when={
-                list().length > 0 && (providerConnections() ?? []).length === 0
-              }
-              fallback={
-                <Show when={(providerConnections() ?? []).length === 0}>
-                  <EmptyState
-                    icon={<Plug size={26} />}
-                    title={t("spaceSettings.tab.connections")}
-                    message={t("conn.list.empty")}
-                  />
-                </Show>
-              }
-            >
-              <Card>
-                <CardHeader title={t("conn.list.title")} />
-                {rawConnectionList()}
-              </Card>
-            </Show>
-          )}
-        </Match>
-      </Switch>
+      <Show when={providerConnections.loading}>
+        <Skeleton variant="card" count={2} />
+      </Show>
+      <Show
+        when={
+          !providerConnections.loading &&
+          !providerConnections.error &&
+          (providerConnections() ?? []).length === 0
+        }
+      >
+        <EmptyState
+          icon={<Plug size={26} />}
+          title={t("spaceSettings.tab.connections")}
+          message={t("conn.list.empty")}
+        />
+      </Show>
     </div>
   );
 }

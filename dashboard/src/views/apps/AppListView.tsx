@@ -15,19 +15,16 @@ import {
   type ControlApiError,
   getDeployment,
   type Installation,
-  listActivity,
   listInstallations,
 } from "../../lib/control-api.ts";
 import {
   effectiveInstallationStatus,
   launchUrlFromOutputs,
   needsAttention,
-  staleReasonFromActivity,
 } from "../../lib/installations-ui.ts";
 import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  Badge,
   Button,
   EmptyState,
   PageHeader,
@@ -45,23 +42,6 @@ function Inner() {
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
 
   const [installations] = createResource(spaceId, listInstallations);
-  const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
-
-  const staleReasons = createMemo(() => {
-    const map = new Map<string, string>();
-    for (const event of activity() ?? []) {
-      if (
-        event.action !== "installation.stale" ||
-        event.targetType !== "installation" ||
-        map.has(event.targetId)
-      ) {
-        continue;
-      }
-      const reason = staleReasonFromActivity(event);
-      if (reason) map.set(event.targetId, reason);
-    }
-    return map;
-  });
 
   // Launch URL per app, from its current Deployment's public outputs.
   const [launchUrls] = createResource(installations, async (list) => {
@@ -91,12 +71,6 @@ function Inner() {
     () => (installations() ?? []).filter(needsAttention).length,
   );
 
-  const deployedCount = createMemo(
-    () =>
-      (installations() ?? []).filter(
-        (inst) => effectiveInstallationStatus(inst) === "active",
-      ).length,
-  );
   const showAddServiceAction = createMemo(() => {
     const list = installations();
     return Boolean(list && list.length > 0);
@@ -159,19 +133,11 @@ function Inner() {
                 <Show
                   when={list().length === 0}
                   fallback={
-                    <>
-                      <ServiceLauncherHeader
-                        serviceCount={list().length}
-                        deployedCount={deployedCount()}
-                        attentionCount={attentionCount()}
-                      />
-                      <ServiceList
-                        installations={list()}
-                        staleReasons={staleReasons()}
-                        launchUrls={launchUrls() ?? new Map()}
-                        openDetail={openDetail}
-                      />
-                    </>
+                    <ServiceList
+                      installations={list()}
+                      launchUrls={launchUrls() ?? new Map()}
+                      openDetail={openDetail}
+                    />
                   }
                 >
                   <WorkspaceStartPanel />
@@ -187,7 +153,6 @@ function Inner() {
 
 function ServiceList(props: {
   readonly installations: readonly Installation[];
-  readonly staleReasons: ReadonlyMap<string, string>;
   readonly launchUrls: ReadonlyMap<string, string>;
   readonly openDetail: (inst: Installation) => void;
 }) {
@@ -217,20 +182,7 @@ function ServiceList(props: {
                   tone={installationTone}
                 />
               </div>
-              <div class="av-service-meta">
-                <Show
-                  when={
-                    effectiveInstallationStatus(inst) === "stale" &&
-                    props.staleReasons.get(inst.id)
-                  }
-                >
-                  {(reason) => (
-                    <span class="av-service-warn">
-                      {t("apps.staleReason", { reason: reason() })}
-                    </span>
-                  )}
-                </Show>
-              </div>
+              <div class="av-service-meta" aria-hidden="true" />
             </button>
             <Show when={props.launchUrls.get(inst.id)}>
               {(url) => (
@@ -252,36 +204,6 @@ function ServiceList(props: {
         )}
       </For>
     </ul>
-  );
-}
-
-function ServiceLauncherHeader(props: {
-  readonly serviceCount: number;
-  readonly deployedCount: number;
-  readonly attentionCount: number;
-}) {
-  return (
-    <section class="av-summary" aria-label={t("apps.summary.aria")}>
-      <div class="av-summary-copy">
-        <h2>{t("apps.summary.title")}</h2>
-        <p>
-          {t("apps.summary.body", {
-            total: props.serviceCount,
-            deployed: props.deployedCount,
-          })}
-        </p>
-      </div>
-      <div class="av-summary-actions">
-        <Show
-          when={props.attentionCount > 0}
-          fallback={<Badge tone="ok">{t("apps.summary.clear")}</Badge>}
-        >
-          <Badge tone="warn">
-            {t("apps.summary.needsAttention", { n: props.attentionCount })}
-          </Badge>
-        </Show>
-      </div>
-    </section>
   );
 }
 

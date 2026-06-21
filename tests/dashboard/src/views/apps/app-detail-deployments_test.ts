@@ -62,6 +62,17 @@ describe("Installation detail deployment surface", () => {
     );
   });
 
+  test("keeps provider binding editing behind advanced service settings", () => {
+    expect(source).toContain("function boundConnectionLabel");
+    expect(source).toContain('t("app.bindings.none")');
+    expect(source).toContain('t("app.bindings.editAdvanced")');
+    expect(source).toMatch(
+      /<summary>\{t\("app\.bindings\.editAdvanced"\)\}<\/summary>[\s\S]*placeholder="registry\.opentofu\.org\/cloudflare\/cloudflare"/,
+    );
+    expect(source).not.toContain("conn.ownership.takosProvided");
+    expect(source).not.toContain("conn.ownership.ownKey");
+  });
+
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
     expect(source).toContain('<Page title={t("app.installationSub")}');
     expect(source).toContain("setDocumentTitle(inst.name)");

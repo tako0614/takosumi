@@ -30,18 +30,21 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).not.toContain('t("apps.start.stepDeploy")');
   });
 
-  test("uses a launcher summary for workspaces that already have services", () => {
-    expect(appListSource).toContain("function ServiceLauncherHeader");
-    expect(appListSource).toContain("<ServiceLauncherHeader");
+  test("keeps existing workspaces focused on the service cards", () => {
+    expect(appListSource).not.toContain("function ServiceLauncherHeader");
+    expect(appListSource).not.toContain("<ServiceLauncherHeader");
     expect(appListSource).toContain("<ServiceList");
     expect(appListSource).toContain('class="av-service-grid"');
     expect(appListSource).toContain('class="av-service-card"');
-    expect(appListSource).toContain('t("apps.summary.title")');
-    expect(appListSource).toContain('t("apps.summary.body"');
-    expect(appListSource).toContain('t("apps.summary.clear")');
+    expect(appListSource).not.toContain('t("apps.summary.title")');
+    expect(appListSource).not.toContain('t("apps.summary.body"');
+    expect(appListSource).not.toContain('t("apps.summary.clear")');
     expect(appListSource).not.toContain('t("apps.graphLink")');
     expect(appListSource).not.toContain('t("apps.dependsOn"');
     expect(appListSource).not.toContain("getSpaceGraph");
+    expect(appListSource).not.toContain("listActivity");
+    expect(appListSource).not.toContain("staleReasonFromActivity");
+    expect(appListSource).not.toContain('t("apps.staleReason"');
     expect(appListSource).not.toContain("apps.start.titleWithServices");
     expect(appListSource).not.toContain("apps.start.bodyWithServices");
   });
@@ -51,8 +54,10 @@ describe("AppListView Workspace starter", () => {
     expect(en).not.toHaveProperty("apps.start.stepSource");
     expect(ja).not.toHaveProperty("apps.start.add");
     expect(ja).not.toHaveProperty("apps.start.stepSource");
-    expect(en["apps.summary.clear"]).toContain("No attention");
-    expect(ja["apps.summary.clear"]).toContain("要対応なし");
+    expect(en).not.toHaveProperty("apps.staleReason");
+    expect(ja).not.toHaveProperty("apps.staleReason");
+    expect(en).not.toHaveProperty("apps.summary.clear");
+    expect(ja).not.toHaveProperty("apps.summary.clear");
     expect(en["apps.subtitle"]).not.toContain("manage");
     expect(ja["apps.subtitle"]).not.toContain("管理");
     expect(en).not.toHaveProperty("apps.start.optionLink");
@@ -61,7 +66,7 @@ describe("AppListView Workspace starter", () => {
 
   test("keeps the starter responsive on mobile", () => {
     expect(appViewsCssSource).toContain(".av-start");
-    expect(appViewsCssSource).toContain(".av-summary");
+    expect(appViewsCssSource).not.toContain(".av-summary");
     expect(appViewsCssSource).toContain(".av-service-grid");
     expect(appViewsCssSource).toContain(".av-service-card");
     expect(appViewsCssSource).toContain(".av-service-actions .tg-btn");
