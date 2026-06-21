@@ -20,9 +20,10 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
     expect(appListSource).toContain("when={list().length === 0}");
     expect(appListSource).toContain('href="/new"');
+    expect(appListSource).toContain('href="/new?mode=link"');
+    expect(appListSource).toContain('t("apps.start.optionCatalog")');
+    expect(appListSource).toContain('t("apps.start.optionLink")');
     expect(appListSource).not.toContain('href="/connections"');
-    expect(appListSource).not.toContain('t("apps.start.optionCatalog")');
-    expect(appListSource).not.toContain('t("apps.start.optionLink")');
     expect(appListSource).not.toContain('t("apps.start.stepSource")');
     expect(appListSource).not.toContain('t("apps.start.stepConnection")');
     expect(appListSource).not.toContain('t("apps.start.stepDeploy")');
@@ -51,6 +52,8 @@ describe("AppListView Workspace starter", () => {
     expect(ja["apps.summary.clear"]).toContain("要対応なし");
     expect(en["apps.subtitle"]).not.toContain("manage");
     expect(ja["apps.subtitle"]).not.toContain("管理");
+    expect(en["apps.start.optionLink"]).toContain("link");
+    expect(ja["apps.start.optionLink"]).toContain("リンク");
   });
 
   test("keeps the starter responsive on mobile", () => {
@@ -70,7 +73,8 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain('t("apps.noOpenLink")');
     expect(appListSource).toContain("icon={<ExternalLink size={14} />}");
     expect(appListSource).toContain('target="_blank"');
-    expect(appListSource).toContain('window.open(url, "_blank"');
+    expect(appListSource).toContain("onClick={() => props.openDetail(inst)}");
+    expect(appListSource).not.toContain("window.open");
     expect(appListSource).toContain('t("apps.viewDetails")');
   });
 });

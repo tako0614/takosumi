@@ -7,10 +7,12 @@ import { A, useLocation } from "@solidjs/router";
 import {
   Activity,
   ArrowLeft,
+  Bell,
   CreditCard,
   Home,
   Plug,
   Plus,
+  Settings,
   UserCircle2,
 } from "lucide-solid";
 import { Show } from "solid-js";
@@ -39,13 +41,17 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
+  { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
 ];
 
-const MANAGE: NavItem[] = [
-  { href: "/connections", labelKey: "nav.connections", icon: Plug },
+const ACCOUNT: NavItem[] = [
   { href: "/billing", labelKey: "nav.billing", icon: CreditCard },
-  { href: "/activity", labelKey: "nav.activity", icon: Activity },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
+];
+
+const ADVANCED: NavItem[] = [
+  { href: "/connections", labelKey: "nav.connections", icon: Plug },
+  { href: "/activity", labelKey: "nav.activity", icon: Activity },
 ];
 
 export default function Sidebar() {
@@ -54,6 +60,7 @@ export default function Sidebar() {
     item.end
       ? loc.pathname === item.href
       : loc.pathname === item.href || loc.pathname.startsWith(item.href + "/");
+  const advancedOpen = () => ADVANCED.some(isActive);
 
   return (
     <aside class="sidebar">
@@ -85,9 +92,12 @@ export default function Sidebar() {
           </A>
         ))}
       </nav>
-      <nav class="sidebar-nav sidebar-nav-secondary" aria-label={t("nav.manage")}>
-        <span class="sidebar-section-label">{t("nav.manage")}</span>
-        {MANAGE.map((item) => (
+      <nav
+        class="sidebar-nav sidebar-nav-secondary"
+        aria-label={t("nav.accountSection")}
+      >
+        <span class="sidebar-section-label">{t("nav.accountSection")}</span>
+        {ACCOUNT.map((item) => (
           <A
             href={item.href}
             class="sidebar-link"
@@ -98,6 +108,24 @@ export default function Sidebar() {
           </A>
         ))}
       </nav>
+      <details class="sidebar-advanced" open={advancedOpen()}>
+        <summary class="sidebar-advanced-summary">
+          <Settings size={16} />
+          <span>{t("nav.advanced")}</span>
+        </summary>
+        <nav class="sidebar-nav" aria-label={t("nav.advanced")}>
+          {ADVANCED.map((item) => (
+            <A
+              href={item.href}
+              class="sidebar-link sidebar-link-subtle"
+              classList={{ active: isActive(item) }}
+            >
+              <item.icon size={18} />
+              <span class="sidebar-link-label">{t(item.labelKey)}</span>
+            </A>
+          ))}
+        </nav>
+      </details>
       <div class="sidebar-footer">
         <a
           href="https://takosumi.com/docs"

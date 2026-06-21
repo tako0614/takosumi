@@ -1003,15 +1003,30 @@ function Inner() {
                     </div>
                   </details>
                 </Show>
-                <PlanResourceReview resources={planResources()} />
+                <Show when={planResources().some(isActionablePlanResource)}>
+                  <details class="wb-disclosure">
+                    <summary>
+                      {t("run.resources.title")}{" "}
+                      <Badge tone="muted">
+                        {t("run.resources.count", {
+                          n: planResources().filter(isActionablePlanResource)
+                            .length,
+                        })}
+                      </Badge>
+                    </summary>
+                    <PlanResourceReview resources={planResources()} />
+                  </details>
+                </Show>
               </Card>
 
               <Show when={providerRows().length > 0}>
-                <Card>
-                  <CardHeader title={t("run.connections.reviewTitle")} />
-                  <p class="wa-notice">{t("run.connections.reviewBody")}</p>
-                  <ProviderResolutionTable rows={providerRows()} />
-                </Card>
+                <details class="wb-disclosure">
+                  <summary>{t("run.connections.reviewTitle")}</summary>
+                  <Card>
+                    <p class="wa-notice">{t("run.connections.reviewBody")}</p>
+                    <ProviderResolutionTable rows={providerRows()} />
+                  </Card>
+                </details>
               </Show>
 
               {/* ===== diagnostics — open automatically when failed ===== */}

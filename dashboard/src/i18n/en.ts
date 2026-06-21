@@ -38,6 +38,8 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.billing": "Billing",
   "nav.activity": "History",
   "nav.manage": "Manage",
+  "nav.accountSection": "Account",
+  "nav.advanced": "Advanced",
   "nav.notifications": "Notifications",
   "nav.notificationsShort": "Alerts",
   "nav.spaceSettings": "Workspace settings",
@@ -254,6 +256,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.bindings.remove": "Remove",
   "app.bindings.errorProvider": "Enter the service for connection {index}.",
   "app.bindings.errorConnection": "Select a ready connection for {provider}.",
+  "app.settings.removeTitle": "Need to remove this service?",
+  "app.settings.removeBody":
+    "Deletion is available from a separate review screen so you can inspect what will be removed first.",
+  "app.settings.removeCta": "Open delete options",
   "app.danger.destroyTitle": "Delete this service",
   "app.danger.destroyBody":
     "Deletion first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
@@ -361,6 +367,11 @@ export const en: Record<keyof typeof ja, string> = {
     "You can review the addition next. Nothing is deployed until you approve it on the review screen.",
   "new.guide.needsFix":
     "Some items need to be fixed before this can be added. Check the inspection result below.",
+  "new.steps.aria": "Add service progress",
+  "new.steps.choose": "Choose",
+  "new.steps.check": "Check",
+  "new.steps.connect": "Connect",
+  "new.steps.review": "Review",
   "new.flow.source": "What will be added",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.store.aria": "Recommended services",
@@ -375,7 +386,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.advancedImport.close": "Hide link input",
   "new.advancedImport.title": "Add from a link or source",
   "new.advancedImport.subtitle":
-    "Paste an app-page install link. Developer source URLs are supported from here too.",
+    "Paste an app-page install link or a source URL.",
+  "new.selection.title": "Selected service",
+  "new.selection.subtitle": "Check it first. Deploy happens after review.",
+  "new.selection.change": "Change source",
+  "new.selection.sourceDetails": "Source details",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
   "new.git.url": "Install link or source URL",

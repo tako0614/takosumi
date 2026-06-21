@@ -123,6 +123,25 @@
   flex-wrap: wrap;
   margin-top: var(--tg-s-1);
 }
+.wc-conn-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.wc-inline-details {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+.wc-inline-details > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+.wc-conn-detail-line {
+  display: block;
+  margin-top: 3px;
+  color: var(--tg-fg-subtle);
+}
 
 /* ===== Notifications feed ===== */
 .wc-notif-list {
