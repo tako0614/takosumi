@@ -162,7 +162,7 @@ export const ja = {
   "apps.attentionView": "通知を確認",
   "apps.empty.title": "まだサービスがありません",
   "apps.empty.message":
-    "サンプルから始めるか、Git の取得元 URL から追加できます。",
+    "サンプルから始めるか、取得元 URL から追加できます。",
   "apps.empty.cta": "サービスを追加",
   "apps.openApp": "出力を開く",
   "apps.reviewChanges": "変更を確認",
@@ -178,17 +178,17 @@ export const ja = {
   "apps.start.kicker": "Workspace",
   "apps.start.titleEmpty": "最初のサービスをデプロイ",
   "apps.start.bodyEmpty":
-    "Git の取得元を追加し、必要なクラウド接続を選び、変更内容を確認してデプロイします。",
-  "apps.start.add": "Git から追加",
+    "取得元を追加し、必要なクラウド接続を選び、変更内容を確認してデプロイします。",
+  "apps.start.add": "取得元から追加",
   "apps.start.connections": "クラウド接続",
-  "apps.start.stepSource": "Git の取得元",
-  "apps.start.stepSourceSub": "リポジトリ、ref、module path を指定します。",
+  "apps.start.stepSource": "取得元",
+  "apps.start.stepSourceSub": "リポジトリ、バージョン、フォルダを指定します。",
   "apps.start.stepConnection": "クラウド接続",
   "apps.start.stepConnectionSub":
-    "provider key は repo ではなく Takosumi に保存します。",
+    "認証情報は取得元ではなく Takosumi に保存します。",
   "apps.start.stepDeploy": "確認してデプロイ",
   "apps.start.stepDeploySub":
-    "先に plan を確認し、承認してから公開出力を開きます。",
+    "先に変更内容を確認し、承認してから公開出力を開きます。",
 
   // --- Capsule detail ------------------------------------------------------
   "app.installationSub": "Capsule",
@@ -343,14 +343,14 @@ export const ja = {
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
   "new.subtitle":
-    "サンプルから始めるか、Git の取得元 URL を指定して追加します。",
+    "サンプルから始めるか、取得元 URL を指定して追加します。",
   "new.flow.aria": "サービス追加の進行状況",
   "new.flow.kicker": "追加フロー",
   "new.flow.title": "デプロイ前に取得元を確認します",
   "new.flow.source": "現在の取得元",
   "new.flow.sourceEmpty": "取得元はまだ選択されていません。",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
-  "new.flow.nextSource": "サンプルを選ぶか、Git URL を入力してください。",
+  "new.flow.nextSource": "サンプルを選ぶか、取得元 URL を入力してください。",
   "new.flow.nextCheck":
     "取得元を確認します。必要な接続がある場合だけ Takosumi が案内します。",
   "new.flow.nextConnect":
@@ -358,13 +358,13 @@ export const ja = {
   "new.flow.nextReview":
     "次は追加内容の確認です。確認画面で承認するまでデプロイされません。",
   "new.flow.stepSource": "取得元",
-  "new.flow.stepSourceSub": "Git URL、バージョン、フォルダ",
+  "new.flow.stepSourceSub": "取得元、バージョン、フォルダ",
   "new.flow.stepCheck": "確認",
-  "new.flow.stepCheckSub": "plan 作成前に検査",
+  "new.flow.stepCheckSub": "追加前に検査",
   "new.flow.stepConnect": "接続",
   "new.flow.stepConnectSub": "選択した外部サービスだけ使う",
   "new.flow.stepReview": "レビュー",
-  "new.flow.stepReviewSub": "plan を確認してからデプロイ",
+  "new.flow.stepReviewSub": "内容を確認してからデプロイ",
   "new.tab.catalog": "サンプル",
   "new.tab.git": "取得元 URL",
   "new.catalog.intro":
@@ -405,7 +405,7 @@ export const ja = {
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
-  "new.vars.inputsTitle": "OpenTofu 入力",
+  "new.vars.inputsTitle": "詳細設定",
   "new.vars.inputsBody":
     "この Capsule に渡す任意の非 secret 変数です。トークン、パスワード、API キーは Provider Connection に入れてください。",
   "new.vars.inputName": "変数名",
