@@ -110,13 +110,13 @@ repo.
    ```bash
    cd takosumi/dashboard && bun install && bun run build
    cd ../..
-   bunx wrangler deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
+   bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
    ```
 
 3. Deploy staging:
 
    ```bash
-   bunx wrangler deploy --config takosumi-private/platform/wrangler.staging.toml
+   bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.staging.toml
    ```
 
 4. Probe the staging platform surface:
@@ -184,8 +184,8 @@ repo.
    ```bash
    cd takosumi/dashboard && bun run build
    cd ../..
-   bunx wrangler deploy --dry-run --config takosumi-private/platform/wrangler.toml
-   bunx wrangler deploy --config takosumi-private/platform/wrangler.toml
+   bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.toml
+   bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.toml
    ```
 
    Production starts with `TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="closed"`.
