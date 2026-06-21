@@ -64,7 +64,7 @@ describe("/new Provider Connections return context", () => {
     );
     expect(
       newAppViewSource.match(/href=\{providerConnectionsHref\(\)\}/g) ?? [],
-    ).toHaveLength(4);
+    ).toHaveLength(3);
   });
 
   test("connections tab renders and preserves a safe install return target", () => {
@@ -97,6 +97,18 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain("shouldOfferInstallReturn()");
     expect(connectionsTabSource).toContain(
       "!lastCreatedConnectionId() || lastCreatedReady()",
+    );
+  });
+
+  test("/new does not send operator-managed-only requirements to own-key setup", () => {
+    expect(newAppViewSource).toContain("rowRequiresOperatorManagedOnly");
+    expect(newAppViewSource).toContain("missingOperatorManagedProviderRows");
+    expect(newAppViewSource).toContain("missingOwnKeyProviderRows");
+    expect(newAppViewSource).toContain(
+      '"new.providers.operatorMissingTitle"',
+    );
+    expect(newAppViewSource).toContain(
+      '"new.providers.errorOperatorManaged"',
     );
   });
 
@@ -219,6 +231,17 @@ describe("/new Provider Connections return context", () => {
     );
     expect(connectionsHelperSource).not.toContain("API トークン");
     expect(connectionsHelperSource).not.toContain("アカウント ID");
+  });
+
+  test("ProviderConnection ownership table reflects the backend projection", () => {
+    expect(connectionsTabSource).toContain(
+      "providerConnectionOwnershipLabel",
+    );
+    expect(connectionsTabSource).toContain('d.ownership === "takos_provided"');
+    expect(connectionsTabSource).toContain("d.ownership");
+    expect(connectionsTabSource).not.toContain(
+      'cell: (d) => <Badge tone="neutral">{t("conn.ownership.ownKey")}</Badge>',
+    );
   });
 
   test("deep-linked detail views import their view CSS explicitly", () => {
