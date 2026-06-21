@@ -341,35 +341,35 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
-  "new.subtitle": "Start from an example or add one from a source URL.",
+  "new.subtitle": "Choose an example or paste a source link.",
   "new.flow.aria": "Add service progress",
-  "new.flow.kicker": "Add flow",
-  "new.flow.title": "Check the source before anything is deployed",
-  "new.flow.source": "Current source",
-  "new.flow.sourceEmpty": "No source selected yet.",
+  "new.flow.kicker": "How it adds",
+  "new.flow.title": "Review it before adding",
+  "new.flow.source": "What will be added",
+  "new.flow.sourceEmpty": "Nothing selected yet.",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
   "new.flow.nextSource": "Choose an example or paste a source URL.",
   "new.flow.nextCheck":
-    "Start the source check. Takosumi will only ask for connections this service needs.",
+    "Takosumi will check it and only ask for connections this service needs.",
   "new.flow.nextConnect":
     "Set up the missing cloud connection, then return here to continue.",
   "new.flow.nextReview":
     "Review the changes next. Nothing is deployed until you confirm it on the review screen.",
-  "new.flow.stepSource": "Source",
-  "new.flow.stepSourceSub": "Source, version, and folder",
+  "new.flow.stepSource": "Input",
+  "new.flow.stepSourceSub": "URL and version",
   "new.flow.stepCheck": "Check",
-  "new.flow.stepCheckSub": "Check before adding",
+  "new.flow.stepCheckSub": "See if it can be added",
   "new.flow.stepConnect": "Connect",
-  "new.flow.stepConnectSub": "Use only selected external services",
+  "new.flow.stepConnectSub": "Only what is needed",
   "new.flow.stepReview": "Review",
-  "new.flow.stepReviewSub": "Confirm before deploy",
+  "new.flow.stepReviewSub": "Approve and add",
   "new.tab.catalog": "Examples",
   "new.tab.git": "Source URL",
   "new.catalog.intro":
-    "Examples you can add. Picking one only pre-fills the source.",
+    "Picking one fills in the form. It will not be added yet.",
   "new.catalog.select": "Use this example",
   "new.deeplink.summary":
-    "A link filled in the source for “{capsule}”. Review it before adding.",
+    "A link filled in “{capsule}”. Review it before adding.",
   "new.git.url": "Source URL",
   "new.git.advanced": "Choose version and folder",
   "new.git.ref": "Version",
@@ -419,13 +419,13 @@ export const en: Record<keyof typeof ja, string> = {
     "Use the Resource prefix field for project_name.",
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.managed.notice":
-    "Takosumi checks whether this can be added. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
+    "Takosumi will check this first. If another connection is needed, it will ask next.",
   "new.managed.needCredential":
     "Adding this needs an external service connection that is not available in this Workspace yet.",
   "new.managed.connectFirst": "Set up a connection",
   "new.managed.byoTitle": "Use your own cloud connection",
   "new.managed.byoBody":
-    "Add or select the external service connection this Capsule needs for AWS, GCP, Kubernetes, Cloudflare, or another provider.",
+    "If this service uses AWS, GCP, Kubernetes, Cloudflare, or another provider, add or select the required connection.",
   "new.managed.byoLink": "Set up a connection",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":

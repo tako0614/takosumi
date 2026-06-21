@@ -571,25 +571,60 @@ button.tg-tab {
 
   .av-new-flow {
     grid-template-columns: 1fr;
-    gap: var(--tg-s-3);
+    gap: var(--tg-s-2);
     padding: var(--tg-s-3);
+    border-radius: var(--tg-r-md);
+    margin-bottom: var(--tg-s-3);
+  }
+
+  .av-new-flow-kicker {
+    margin-bottom: 4px;
+    font-size: 11px;
+  }
+
+  .av-new-flow h2 {
+    font-size: var(--tg-fs-lg);
+  }
+
+  .av-new-flow p {
+    font-size: var(--tg-fs-xs);
+    line-height: 1.55;
+  }
+
+  .av-new-source {
+    margin-top: var(--tg-s-3);
+    padding: var(--tg-s-2);
+  }
+
+  .av-new-source code {
+    display: block;
+    width: 100%;
+    font-size: var(--tg-fs-xs);
+    line-height: 1.45;
   }
 
   .av-new-flow-steps {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .av-new-flow-step {
     grid-template-columns: 1fr;
     justify-items: center;
-    gap: var(--tg-s-2);
-    padding: var(--tg-s-2);
+    gap: 6px;
+    padding: 8px 6px;
     text-align: center;
+    border-radius: var(--tg-r-sm);
   }
 
   .av-new-flow-icon {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
+  }
+
+  .av-new-flow-step strong {
+    font-size: var(--tg-fs-xs);
+    line-height: 1.25;
   }
 
   .av-new-flow-step small {
