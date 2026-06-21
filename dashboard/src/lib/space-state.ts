@@ -27,6 +27,16 @@ const [currentSpaceId, setCurrentSpaceIdSignal] = createSignal(readInitial());
 
 export { currentSpaceId };
 
+export function selectAvailableSpaceId(
+  current: string,
+  spaces: readonly { id: string }[],
+): string {
+  if (spaces.length === 0) return "";
+  const trimmed = current.trim();
+  if (trimmed && spaces.some((space) => space.id === trimmed)) return trimmed;
+  return spaces[0]!.id;
+}
+
 /** Set (and persist) the current Space id. Pass "" to clear. */
 export function setCurrentSpaceId(spaceId: string): void {
   const next = spaceId.trim();

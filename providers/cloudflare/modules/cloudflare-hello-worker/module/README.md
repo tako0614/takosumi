@@ -2,8 +2,9 @@
 
 A runnable Cloudflare Worker with **no build step** — the Worker source is
 baked inline, so `tofu apply` creates a real Worker script without a separate
-build. Public ingress is projected by dispatcher/custom-route configuration
-outside this module.
+build. This starter is primarily a connection/apply smoke test. Public ingress
+is projected by dispatcher/custom-route configuration outside this module, so
+it does not guarantee a browser-openable URL by itself.
 
 - Provider: `cloudflare/cloudflare` (v5). Authentication is via environment
   variables minted by Takosumi at dispatch (`CLOUDFLARE_API_TOKEN`,

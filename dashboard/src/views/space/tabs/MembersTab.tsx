@@ -106,16 +106,16 @@ export default function MembersTab(props: {
       (m) => m.status === "active" && m.roles.includes("owner"),
     ).length;
 
-  const [inviteAccount, setInviteAccount] = createSignal("");
+  const [inviteEmail, setInviteEmail] = createSignal("");
   const [inviteRole, setInviteRole] = createSignal<ControlSpaceRole>("member");
   const invite = createAction(async () => {
-    const account = inviteAccount().trim();
-    if (!account) throw new Error(t("members.invite.accountRequired"));
+    const email = inviteEmail().trim();
+    if (!email) throw new Error(t("members.invite.emailRequired"));
     await inviteMember(props.spaceId, {
-      accountId: account,
+      email,
       role: inviteRole(),
     });
-    setInviteAccount("");
+    setInviteEmail("");
     setInviteRole("member");
     await refetch();
   });
@@ -248,13 +248,13 @@ export default function MembersTab(props: {
                 void invite.run();
               }}
             >
-              <FormField label={t("members.invite.account")}>
+              <FormField label={t("members.invite.email")}>
                 <Input
-                  type="text"
-                  value={inviteAccount()}
-                  onInput={(e) => setInviteAccount(e.currentTarget.value)}
-                  placeholder="alice"
-                  autocomplete="off"
+                  type="email"
+                  value={inviteEmail()}
+                  onInput={(e) => setInviteEmail(e.currentTarget.value)}
+                  placeholder="alice@example.com"
+                  autocomplete="email"
                   spellcheck={false}
                 />
               </FormField>

@@ -316,6 +316,31 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsHelperSource).not.toContain("アカウント ID");
   });
 
+  test("connections tab exposes common OpenTofu provider env recipes before custom env", () => {
+    for (const provider of [
+      "cloudflare",
+      "aws",
+      "gcp",
+      "hcloud",
+      "s3-compatible",
+    ]) {
+      expect(connectionsHelperSource).toContain(`provider: "${provider}"`);
+    }
+    for (const envName of [
+      "CLOUDFLARE_API_TOKEN",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "GOOGLE_CREDENTIALS",
+      "GOOGLE_CLOUD_PROJECT",
+      "HCLOUD_TOKEN",
+      "AWS_ENDPOINT_URL_S3",
+    ]) {
+      expect(connectionsHelperSource).toContain(`envName: "${envName}"`);
+    }
+    expect(en["conn.provider.aws.label"]).toBe("AWS");
+    expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
+  });
+
   test("ProviderConnection ownership table reflects the backend projection", () => {
     expect(connectionsTabSource).toContain("providerConnectionOwnershipLabel");
     expect(connectionsTabSource).toContain('d.ownership === "takos_provided"');

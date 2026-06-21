@@ -350,6 +350,12 @@ export interface AccountsStore extends AppInstallationLedgerStore {
     | TakosumiAccountRecord
     | undefined
     | Promise<TakosumiAccountRecord | undefined>;
+  findAccountByVerifiedEmail(
+    email: string,
+  ):
+    | TakosumiAccountRecord
+    | undefined
+    | Promise<TakosumiAccountRecord | undefined>;
   linkUpstreamIdentity(record: UpstreamIdentityRecord): void | Promise<void>;
   findUpstreamIdentity(input: {
     providerId: string;
@@ -745,6 +751,20 @@ export class InMemoryAccountsStore implements AccountsStore {
 
   findAccount(subject: TakosumiSubject): TakosumiAccountRecord | undefined {
     return this.#accounts.get(subject);
+  }
+
+  findAccountByVerifiedEmail(email: string): TakosumiAccountRecord | undefined {
+    const normalized = normalizeAccountEmail(email);
+    if (!normalized) return undefined;
+    for (const account of this.#accounts.values()) {
+      if (
+        account.emailVerified === true &&
+        normalizeAccountEmail(account.email) === normalized
+      ) {
+        return account;
+      }
+    }
+    return undefined;
   }
 
   saveLedgerAccount(record: LedgerAccountRecord): void {
@@ -1370,4 +1390,9 @@ function upstreamIdentityKey(input: {
   return [input.providerId, input.upstreamIssuer, input.upstreamSubject].join(
     "\n",
   );
+}
+
+function normalizeAccountEmail(email: string | undefined): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
 }

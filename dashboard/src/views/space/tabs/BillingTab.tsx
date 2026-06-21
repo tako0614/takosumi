@@ -10,7 +10,15 @@
  * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
  * credits enter through paid checkout only.
  */
-import { createMemo, createResource, createSignal, For, Show } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  Show,
+  Switch,
+} from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
   type CreditReservation,
@@ -54,7 +62,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     listSpaceCreditReservations,
   );
 
-  const mode = createMemo(() => billing()?.settings?.mode ?? "disabled");
+  const mode = createMemo(() => billing()?.settings?.mode);
   const balance = createMemo(() => billing()?.balance);
   const subscriptions = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "subscription"),
@@ -62,10 +70,17 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   const packs = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "pack"),
   );
-  const hasBillingCatalog = createMemo(() => (plans() ?? []).length > 0);
+  const hasBillingCatalog = createMemo(() => (plans()?.length ?? 0) > 0);
   const canOpenPortal = createMemo(
-    () => mode() !== "disabled" && hasBillingCatalog(),
+    () => mode() !== undefined && mode() !== "disabled" && hasBillingCatalog(),
   );
+  const billingSubtitle = createMemo(() => {
+    if (billing.loading) return t("billing.loading");
+    if (billing.error)
+      return t("billing.error", { message: errorMessage(billing.error) });
+    const currentMode = mode() ?? "disabled";
+    return t(MODE_KEY[currentMode] ?? "billing.mode.disabled");
+  });
 
   // One-time checkout-result banner (the Stripe redirect lands back here with
   // ?checkout=success|cancelled). Read once, then strip from the URL.
@@ -235,36 +250,52 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       <Card>
         <CardHeader
           title={t("billing.balance.title")}
-          subtitle={t(MODE_KEY[mode()] ?? "billing.mode.disabled")}
+          subtitle={billingSubtitle()}
         />
-        <KVList
-          items={[
-            {
-              label: t("billing.balance.available"),
-              value: formatBillingNumber(balance()?.availableCredits ?? 0),
-            },
-            {
-              label: t("billing.balance.reserved"),
-              value: formatBillingNumber(balance()?.reservedCredits ?? 0),
-            },
-          ]}
-        />
-        <Show
-          when={canOpenPortal()}
-          fallback={<p class="muted">{t("billing.portalUnavailable")}</p>}
-        >
-          <div class="wc-form-actions">
-            <Button
-              variant="secondary"
-              type="button"
-              busy={portalBusy()}
-              onClick={() => void openPortal()}
-              icon={<ExternalLink size={16} />}
+        <Switch>
+          <Match when={billing.loading}>
+            <p class="muted">{t("billing.loading")}</p>
+          </Match>
+          <Match when={billing.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.error", { message: errorMessage(error()) })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={billing()}>
+            <KVList
+              items={[
+                {
+                  label: t("billing.balance.available"),
+                  value: formatBillingNumber(balance()?.availableCredits ?? 0),
+                },
+                {
+                  label: t("billing.balance.reserved"),
+                  value: formatBillingNumber(balance()?.reservedCredits ?? 0),
+                },
+              ]}
+            />
+            <Show
+              when={canOpenPortal()}
+              fallback={<p class="muted">{t("billing.portalUnavailable")}</p>}
             >
-              {portalBusy() ? t("billing.portalOpening") : t("billing.portal")}
-            </Button>
-          </div>
-        </Show>
+              <div class="wc-form-actions">
+                <Button
+                  variant="secondary"
+                  type="button"
+                  busy={portalBusy()}
+                  onClick={() => void openPortal()}
+                  icon={<ExternalLink size={16} />}
+                >
+                  {portalBusy()
+                    ? t("billing.portalOpening")
+                    : t("billing.portal")}
+                </Button>
+              </div>
+            </Show>
+          </Match>
+        </Switch>
         <Show when={portalError()}>
           {(m) => <Toast tone="error">{m()}</Toast>}
         </Show>
@@ -272,27 +303,43 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
       <Card>
         <CardHeader title={t("billing.plans.title")} />
-        <Show when={hasBillingCatalog()}>
-          <p class="muted av-plan-policy">{t("billing.plans.nonRefundable")}</p>
-        </Show>
-        <Show
-          when={hasBillingCatalog()}
-          fallback={<p class="muted">{t("billing.plans.none")}</p>}
-        >
-          <Show when={subscriptions().length > 0}>
-            <ul class="av-plan-list">
-              <For each={subscriptions()}>{planCard}</For>
-            </ul>
-          </Show>
-          <Show when={packs().length > 0}>
-            <h3 class="tg-card-title av-plan-section">
-              {t("billing.packs.title")}
-            </h3>
-            <ul class="av-plan-list">
-              <For each={packs()}>{planCard}</For>
-            </ul>
-          </Show>
-        </Show>
+        <Switch>
+          <Match when={plans.loading}>
+            <p class="muted">{t("billing.plans.loading")}</p>
+          </Match>
+          <Match when={plans.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.plans.error", { message: errorMessage(error()) })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={plans()}>
+            <Show when={hasBillingCatalog()}>
+              <p class="muted av-plan-policy">
+                {t("billing.plans.nonRefundable")}
+              </p>
+            </Show>
+            <Show
+              when={hasBillingCatalog()}
+              fallback={<p class="muted">{t("billing.plans.none")}</p>}
+            >
+              <Show when={subscriptions().length > 0}>
+                <ul class="av-plan-list">
+                  <For each={subscriptions()}>{planCard}</For>
+                </ul>
+              </Show>
+              <Show when={packs().length > 0}>
+                <h3 class="tg-card-title av-plan-section">
+                  {t("billing.packs.title")}
+                </h3>
+                <ul class="av-plan-list">
+                  <For each={packs()}>{planCard}</For>
+                </ul>
+              </Show>
+            </Show>
+          </Match>
+        </Switch>
         <Show when={checkoutError()}>
           {(m) => <Toast tone="error">{m()}</Toast>}
         </Show>
@@ -300,33 +347,75 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
       <Card>
         <CardHeader title={t("billing.reservations.title")} />
-        <Show
-          when={(reservations() ?? []).length > 0}
-          fallback={<p class="muted">{t("billing.reservations.empty")}</p>}
-        >
-          <DataTable
-            columns={reservationColumns}
-            rows={reservations() ?? []}
-            rowKey={(r) => r.runId}
-          />
-        </Show>
+        <Switch>
+          <Match when={reservations.loading}>
+            <p class="muted">{t("billing.reservations.loading")}</p>
+          </Match>
+          <Match when={reservations.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.reservations.error", {
+                  message: errorMessage(error()),
+                })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={reservations()}>
+            {(rows) => (
+              <Show
+                when={rows().length > 0}
+                fallback={
+                  <p class="muted">{t("billing.reservations.empty")}</p>
+                }
+              >
+                <DataTable
+                  columns={reservationColumns}
+                  rows={rows()}
+                  rowKey={(r) => r.runId}
+                />
+              </Show>
+            )}
+          </Match>
+        </Switch>
       </Card>
 
       <Card>
         <CardHeader title={t("billing.usage.title")} />
-        <Show
-          when={(usage() ?? []).length > 0}
-          fallback={<p class="muted">{t("billing.usage.empty")}</p>}
-        >
-          <DataTable
-            columns={usageColumns}
-            rows={usage() ?? []}
-            rowKey={(_e, i) => i}
-          />
-        </Show>
+        <Switch>
+          <Match when={usage.loading}>
+            <p class="muted">{t("billing.usage.loading")}</p>
+          </Match>
+          <Match when={usage.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.usage.error", { message: errorMessage(error()) })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={usage()}>
+            {(rows) => (
+              <Show
+                when={rows().length > 0}
+                fallback={<p class="muted">{t("billing.usage.empty")}</p>}
+              >
+                <DataTable
+                  columns={usageColumns}
+                  rows={rows()}
+                  rowKey={(_e, i) => i}
+                />
+              </Show>
+            )}
+          </Match>
+        </Switch>
       </Card>
     </div>
   );
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return t("billing.error.unknown");
 }
 
 function formatBillingNumber(value: number): string {

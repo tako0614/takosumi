@@ -120,6 +120,27 @@ test("PostgresAccountsStore maps account terms acceptance", async () => {
     createdAt: 1_000,
     updatedAt: 2_000,
   });
+
+  client.queuedRows.push([
+    {
+      subject: "tsub_member",
+      email: "member@example.test",
+      email_verified: true,
+      display_name: "Member",
+      terms_version: null,
+      terms_accepted_at: null,
+      terms_accepted_source: null,
+      created_at: new Date(3_000),
+      updated_at: new Date(4_000),
+    },
+  ]);
+  const member = await store.findAccountByVerifiedEmail(
+    " MEMBER@example.test ",
+  );
+  expect(client.calls[2].sql).toContain("email_verified");
+  expect(client.calls[2].sql).toContain("lower");
+  expect(client.calls[2].args).toContain("member@example.test");
+  expect(member?.subject).toEqual("tsub_member");
 });
 
 test("PostgresAccountsStore maps upstream identities through Drizzle", async () => {

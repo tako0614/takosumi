@@ -1,9 +1,11 @@
-# Takosumi Service Graph v1
+# Capsule Runtime Service Projection
 
 > This document describes an output-projected runtime contract/profile for services exposed by OpenTofu Capsules.
-> It is not a Takosumi-specific manifest, an OSS resource driver, or a managed-resource backend. Takos is a first-party
-> consumer/provider profile of this projection; generic capability tokens describe service classes, while service ids
-> and names may identify the producer.
+> It is not Takosumi's final public model, a Takosumi-specific manifest, an OSS resource driver, or a managed-resource
+> backend. The filename is retained for migration compatibility, but the customer-facing Takosumi model remains
+> Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Run /
+> StateVersion / Output / Runner / AuditEvent / Operator. Takos is a first-party consumer/provider profile of this
+> projection; generic capability tokens describe service classes, while service ids and names may identify the producer.
 
 ## 1. Purpose
 
@@ -11,7 +13,7 @@ Takosumi manages OpenTofu Capsules, Run ledgers, StateVersions, Outputs, Provide
 audit. Many Capsules also expose runtime services: HTTP APIs, MCP servers, Git endpoints, object stores, SQL endpoints,
 agent runtimes, OIDC clients, event webhooks, and billing/reporting ports.
 
-Takosumi Service Graph v1 is the runtime projection shape for those services:
+The Capsule runtime service projection is the internal/runtime projection shape for those services:
 
 - a producer Capsule exposes a **ServiceExport**;
 - a consumer Capsule requests a **ServiceBinding**;
@@ -19,8 +21,9 @@ Takosumi Service Graph v1 is the runtime projection shape for those services:
 - Takosumi records enough audit evidence to explain which Capsule exposed a service, which consumer bound to it,
   which Output generation supplied it, which Run made it current, and which grant was issued.
 
-Where a runtime service profile is needed, new docs and payloads use Service Graph v1 projection names instead of
-product-local service publication lists.
+Where a runtime service profile is needed, new docs should describe it as Output-to-runtime service projection under the
+final Capsule / Output / Run model. ServiceExport / ServiceBinding / ServiceGrant are internal wire records and
+migration vocabulary, not new top-level public Takosumi product nouns.
 
 ## 2. Ownership
 
@@ -35,8 +38,9 @@ The projection is built from Takosumi-owned records:
 | Runtime authority    | `ServiceGrant`                                                                |
 | Audit                | `Run` / `AuditEvent`                                                          |
 
-Takos consumes the graph to build its app launcher, MCP registry, file handling, storage, Git, and agent experiences.
-Takos may also expose first-party services into the graph, but it does not define the standard.
+Takos consumes these projections to build its app launcher, MCP registry, file handling, storage, Git, and agent
+experiences. Takos may also expose first-party services through the projection, but it does not define a separate
+Takosumi public standard.
 
 ## 3. Non-Goals
 

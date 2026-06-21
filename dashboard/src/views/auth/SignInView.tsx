@@ -307,6 +307,7 @@ export function SignInCallbackView() {
     provider?: string;
   }>();
   const [error, setError] = createSignal<string | null>(null);
+  const [retryHref, setRetryHref] = createSignal("/sign-in");
   const signInErrorMessage = (err: Error): string => {
     const message = err.message?.trim();
     if (!message || message === "oauth flow was not started in this tab") {
@@ -338,7 +339,15 @@ export function SignInCallbackView() {
         await refreshSession();
         nav(returnTo, { replace: true });
       })
-      .catch((err: Error) => setError(signInErrorMessage(err)));
+      .catch((err: Error) => {
+        const returnTo = rpc.auth.recallOAuthReturnTo();
+        setRetryHref(
+          returnTo === "/"
+            ? "/sign-in"
+            : `/sign-in?return=${encodeURIComponent(returnTo)}`,
+        );
+        setError(signInErrorMessage(err));
+      });
   });
 
   return (
@@ -352,7 +361,7 @@ export function SignInCallbackView() {
               {error()}
             </p>
             <a
-              href="/sign-in"
+              href={retryHref()}
               class="btn btn-secondary"
               style="margin-top: 24px;"
             >

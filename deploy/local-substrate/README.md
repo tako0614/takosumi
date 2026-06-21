@@ -27,7 +27,7 @@ probe host 経由の run ledger surface を検証する。
 
 該当 product を local-substrate の service として直起動する運用は扱わない。OpenTofu module repo は deploy control run ledger の入力として扱い、個別 product の runtime smoke は各 product repo 側で実行する。
 
-## Current smoke coverage (27 smoke-script checks)
+## Current smoke coverage (30 smoke-script checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
 
@@ -40,7 +40,7 @@ probe host 経由の run ledger surface を検証する。
 | docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
 | passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
 | deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                           |
-| workers            |    1 | `workers.cli-smoke` (Accounts + service Worker on workerd with D1/R2/Queue/DO)                      |
+| workers            |    1 | `workers.cli-smoke` (`worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal)`) |
 | route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
 | object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |
 | migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                |
