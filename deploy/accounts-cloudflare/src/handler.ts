@@ -113,6 +113,16 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATOR_URL?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATOR_TOKEN?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST?: string;
   // Shared deploy-control bearer for the in-process transport; must match the
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
@@ -1259,6 +1269,7 @@ function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
     );
   }
   requireProductionHardeningEvidence(env);
+  requireReleaseActivationEvidenceIfEnabled(env);
   return createOpenPlatformAccessPolicy(
     {
       evidenceRef: optionalString(env.TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF),
@@ -1274,14 +1285,42 @@ function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
   );
 }
 
+function requireReleaseActivationEvidenceIfEnabled(
+  env: CloudflareWorkerEnv,
+): void {
+  if (!optionalString(env.TAKOSUMI_RELEASE_ACTIVATOR_URL)) return;
+  if (!optionalString(env.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN)) {
+    throw new TypeError(
+      "Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATOR_TOKEN when TAKOSUMI_RELEASE_ACTIVATOR_URL is set",
+    );
+  }
+  requireCommitPinnedEvidencePairs(env, [
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST",
+    ],
+  ]);
+}
+
 function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
   if (optionalString(env.TAKOSUMI_PRODUCTION_HARDENING_GATE) !== "enforce") {
     throw new TypeError(
       "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
     );
   }
-  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
-  for (const [refName, digestName] of [
+  requireCommitPinnedEvidencePairs(env, [
     [
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
@@ -1310,7 +1349,15 @@ function requireProductionHardeningEvidence(env: CloudflareWorkerEnv): void {
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
     ],
-  ] as const) {
+  ]);
+}
+
+function requireCommitPinnedEvidencePairs(
+  env: CloudflareWorkerEnv,
+  pairs: readonly (readonly [string, string])[],
+): void {
+  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
+  for (const [refName, digestName] of pairs) {
     const ref = optionalString(env[refName]);
     if (!ref) {
       throw new TypeError(`Open platform readiness access requires ${refName}`);

@@ -65,6 +65,16 @@ payload, success is visible as a `release_activation.succeeded` Activity, and a
 forced materializer failure/pending response is surfaced without rolling back
 the OpenTofu apply ledger.
 
+Use the repo validator before carrying that evidence into a release record:
+
+```bash
+cd takosumi
+bun run release-activation:evidence -- --print-template \
+  > "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+bun run release-activation:evidence -- --update-digests \
+  "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+```
+
 ## Quick start
 
 ```bash

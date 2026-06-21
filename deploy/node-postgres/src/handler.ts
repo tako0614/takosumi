@@ -174,6 +174,7 @@ function parsePlatformAccess(
     "TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST",
   );
   requireProductionHardeningEvidence(env);
+  requireReleaseActivationEvidenceIfEnabled(env);
   return createOpenPlatformAccessPolicy(
     {
       ...(optional(env, "TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF")
@@ -208,6 +209,35 @@ function parsePlatformAccess(
   );
 }
 
+function requireReleaseActivationEvidenceIfEnabled(
+  env: Record<string, string | undefined>,
+): void {
+  if (!optional(env, "TAKOSUMI_RELEASE_ACTIVATOR_URL")) return;
+  if (!optional(env, "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN")) {
+    throw new TypeError(
+      "Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATOR_TOKEN when TAKOSUMI_RELEASE_ACTIVATOR_URL is set",
+    );
+  }
+  requireCommitPinnedEvidencePairs(env, [
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST",
+    ],
+    [
+      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF",
+      "TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST",
+    ],
+  ]);
+}
+
 function requireProductionHardeningEvidence(
   env: Record<string, string | undefined>,
 ): void {
@@ -216,8 +246,7 @@ function requireProductionHardeningEvidence(
       "Open platform readiness access requires TAKOSUMI_PRODUCTION_HARDENING_GATE=enforce",
     );
   }
-  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
-  for (const [refName, digestName] of [
+  requireCommitPinnedEvidencePairs(env, [
     [
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF",
       "TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST",
@@ -246,7 +275,15 @@ function requireProductionHardeningEvidence(
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF",
       "TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST",
     ],
-  ] as const) {
+  ]);
+}
+
+function requireCommitPinnedEvidencePairs(
+  env: Record<string, string | undefined>,
+  pairs: readonly (readonly [string, string])[],
+): void {
+  const commitPinnedGitRefPattern = /^git\+.+@[0-9a-f]{40,64}#.+/i;
+  for (const [refName, digestName] of pairs) {
     const ref = optional(env, refName);
     if (!ref) {
       throw new TypeError(`Open platform readiness access requires ${refName}`);

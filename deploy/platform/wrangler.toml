@@ -162,6 +162,13 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
 # materializer that owns app publication (for example Worker/assets/container
 # promotion). It does not implement provider-specific publication in OSS.
 # TAKOSUMI_RELEASE_ACTIVATOR_URL = "https://materializer.example.com/activate"
+# When the release activator URL is configured, platform readiness access also
+# requires these commit-pinned refs/digests from
+# `takosumi.release-activation-evidence@v1`:
+#   TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF / _DIGEST
 # Production hardening evidence gate. In observe mode the internal gate reports
 # missing/drifted evidence but does not return 503. Platform readiness access must
 # stay closed in observe mode: TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="open"

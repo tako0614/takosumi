@@ -708,6 +708,27 @@ const LOCAL_READINESS_ENV: Partial<CloudflareWorkerEnv> = {
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 };
 
+const RELEASE_ACTIVATION_READINESS_ENV: Partial<CloudflareWorkerEnv> = {
+  TAKOSUMI_RELEASE_ACTIVATOR_URL: "https://materializer.example.com/activate",
+  TAKOSUMI_RELEASE_ACTIVATOR_TOKEN: "release-activator-token",
+  TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-success.md",
+  TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_DIGEST:
+    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-failure-surfacing.md",
+  TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_DIGEST:
+    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-ledger-independence.md",
+  TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_DIGEST:
+    "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF:
+    "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/release-activation-payload-boundary.md",
+  TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_DIGEST:
+    "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+};
+
 test("platform-readiness 'open' allowed on a production issuer with final audit env", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
@@ -798,6 +819,50 @@ test("platform-readiness 'open' refuses mutable production hardening refs", asyn
     body.error_description ?? "",
     /TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF must be commit-pinned git\+ ref/,
   );
+});
+
+test("platform-readiness 'open' requires release activation evidence when activator is enabled", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    ...LOCAL_READINESS_ENV,
+    TAKOSUMI_RELEASE_ACTIVATOR_URL:
+      RELEASE_ACTIVATION_READINESS_ENV.TAKOSUMI_RELEASE_ACTIVATOR_URL,
+    TAKOSUMI_RELEASE_ACTIVATOR_TOKEN:
+      RELEASE_ACTIVATION_READINESS_ENV.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN,
+  });
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
+    env,
+  );
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as {
+    error?: string;
+    error_description?: string;
+  };
+  assert.equal(body.error, "worker_configuration_error");
+  assert.match(
+    body.error_description ?? "",
+    /Open platform readiness access requires TAKOSUMI_RELEASE_ACTIVATION_SUCCESS_EVIDENCE_REF/,
+  );
+});
+
+test("platform-readiness 'open' accepts release activation evidence when activator is enabled", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    ...LOCAL_READINESS_ENV,
+    ...RELEASE_ACTIVATION_READINESS_ENV,
+  });
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/.well-known/openid-configuration"),
+    env,
+  );
+  assert.equal(response.status, 200);
 });
 
 test("platform-readiness 'open' allowed on a .test issuer (local-substrate)", async () => {
