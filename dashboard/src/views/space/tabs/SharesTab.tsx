@@ -430,7 +430,6 @@ export default function SharesTab(props: { readonly spaceId: string }) {
               when={shares.loading || (shares()?.length ?? 0) > 0}
               fallback={
                 <EmptyState
-                  ink
                   icon={<Share2 size={28} />}
                   title={t("spaceSettings.tab.shares")}
                   message={t("shares.empty")}

@@ -34,9 +34,7 @@ describe("/new flow guidance", () => {
       "nothing is deployed",
     );
     expect(en["new.guide.title"].toLowerCase()).toContain("choose");
-    expect(ja["new.guide.ready"]).toContain(
-      "承認するまでデプロイされません",
-    );
+    expect(ja["new.guide.ready"]).toContain("承認するまでデプロイされません");
     expect(ja["new.guide.title"]).toContain("選びます");
     expect(en).not.toHaveProperty("new.flow.nextReview");
     expect(ja).not.toHaveProperty("new.flow.nextReview");
@@ -51,13 +49,24 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).not.toContain(".av-new-flow-step");
   });
 
-  test("keeps the starter catalog app-like instead of exposing raw source coordinates", () => {
+  test("keeps the starter catalog app-like and the source form advanced", () => {
+    expect(newAppViewSource).toContain('class="av-store"');
+    expect(newAppViewSource).toContain('class="av-catalog-grid"');
+    expect(newAppViewSource).toContain('class="av-catalog-card"');
+    expect(newAppViewSource).toContain('t("new.store.title")');
+    expect(newAppViewSource).toContain('t("new.advancedImport.open")');
+    expect(newAppViewSource).toContain('t("new.advancedImport.title")');
     expect(newAppViewSource).toContain('t("new.catalog.readyStarter")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
+    expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en["new.tab.catalog"]).toBe("Recommended");
     expect(en["new.tab.git"]).toBe("Link / URL");
+    expect(en["new.store.title"]).toBe("Recommended services");
+    expect(en["new.advancedImport.open"].toLowerCase()).toContain("link");
     expect(ja["new.tab.catalog"]).toBe("おすすめ");
     expect(ja["new.tab.git"]).toBe("リンク / URL");
+    expect(ja["new.store.title"]).toBe("おすすめサービス");
+    expect(ja["new.advancedImport.open"]).toContain("リンク");
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {

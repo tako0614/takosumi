@@ -131,7 +131,6 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
               when={backups.loading || (backups()?.length ?? 0) > 0}
               fallback={
                 <EmptyState
-                  ink
                   icon={<Archive size={28} />}
                   title={t("backups.empty.title")}
                   message={t("backups.empty.message")}

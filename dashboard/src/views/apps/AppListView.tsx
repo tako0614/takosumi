@@ -1,19 +1,13 @@
 /**
  * Home (`/`) — the Workspace service list, the dashboard's primary surface.
  *
- * Operational list over the current compatibility Installation list: status,
- * a direct launch link resolved from public outputs, dependency hints, and a
- * needs-attention strip derived from service lifecycle status (error / stale).
+ * Service launcher over the current compatibility Installation list: open when
+ * public outputs expose a launch URL, otherwise show the service details. The
+ * control-plane state stays available deeper in the service view.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import {
-  Boxes,
-  Cloud,
-  ExternalLink,
-  LayoutGrid,
-  Plus,
-} from "lucide-solid";
+import { Boxes, ExternalLink, LayoutGrid, Plus } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
@@ -145,7 +139,6 @@ function Inner() {
         when={spaceId()}
         fallback={
           <EmptyState
-            ink
             icon={<Boxes size={28} />}
             title={t("space.select")}
             message={t("space.selectMessage")}
@@ -215,17 +208,29 @@ function ServiceList(props: {
   readonly openDetail: (inst: Installation) => void;
 }) {
   return (
-    <ul class="av-service-list">
+    <ul class="av-service-grid">
       <For each={props.installations}>
         {(inst) => (
-          <li class="av-service-row">
+          <li
+            class="av-service-card"
+            classList={{
+              "av-service-card-attention": needsAttention(inst),
+            }}
+          >
             <button
               type="button"
               class="av-service-main"
-              onClick={() => props.openDetail(inst)}
+              onClick={() => {
+                const url = props.launchUrls.get(inst.id);
+                if (url) {
+                  window.open(url, "_blank", "noopener,noreferrer");
+                  return;
+                }
+                props.openDetail(inst);
+              }}
             >
               <span class="av-service-icon" aria-hidden="true">
-                <LayoutGrid size={18} />
+                <LayoutGrid size={20} />
               </span>
               <div class="av-service-head">
                 <span class="av-service-name">{inst.name}</span>
@@ -262,9 +267,9 @@ function ServiceList(props: {
                 when={props.launchUrls.get(inst.id)}
                 fallback={
                   <>
-                    <Button variant="secondary" size="sm" type="button" disabled>
+                    <span class="av-service-link-state">
                       {t("apps.noOpenLink")}
-                    </Button>
+                    </span>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -332,9 +337,6 @@ function ServiceLauncherHeader(props: {
             {t("apps.summary.needsAttention", { n: props.attentionCount })}
           </Badge>
         </Show>
-        <Button variant="ghost" size="sm" href="/graph">
-          {t("apps.graphLink")}
-        </Button>
       </div>
     </section>
   );
@@ -351,24 +353,7 @@ function WorkspaceStartPanel() {
           <Button variant="primary" href="/new" icon={<Plus size={16} />}>
             {t("apps.start.add")}
           </Button>
-          <Button
-            variant="secondary"
-            href="/connections"
-            icon={<Cloud size={16} />}
-          >
-            {t("apps.start.connections")}
-          </Button>
         </div>
-      </div>
-      <div class="av-start-options">
-        <a href="/new" class="av-start-option">
-          <span class="av-start-option-title">{t("apps.start.optionCatalog")}</span>
-          <span>{t("apps.start.optionCatalogSub")}</span>
-        </a>
-        <a href="/new" class="av-start-option">
-          <span class="av-start-option-title">{t("apps.start.optionLink")}</span>
-          <span>{t("apps.start.optionLinkSub")}</span>
-        </a>
       </div>
     </section>
   );

@@ -7,8 +7,6 @@ interface Props {
   message?: JSX.Element;
   /** Action slot (e.g. a Button). */
   action?: JSX.Element;
-  /** Deprecated: ignored in the dashboard. Ink decoration belongs to the public site. */
-  ink?: boolean;
 }
 
 /** Empty state: icon + title + message + optional action. */

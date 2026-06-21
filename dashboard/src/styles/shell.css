@@ -493,7 +493,7 @@
   padding: 4px;
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
-  background: #fff;
+  background: var(--tg-fixed-light-bg);
   color: var(--tg-fg-muted);
   box-shadow: none;
   overflow: hidden;
@@ -607,9 +607,9 @@
   width: 34px;
   height: 34px;
   border-radius: var(--tg-r-sm);
-  background: #ffffff;
+  background: var(--tg-fixed-light-bg);
   border: 1px solid var(--tg-line);
-  color: #111827;
+  color: var(--tg-fixed-light-fg);
 }
 .sign-in-text {
   display: flex;

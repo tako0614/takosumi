@@ -1,14 +1,14 @@
 /**
  * Service detail (`/capsules/:id` + tab routes) — one service, four tabs:
  *   概要     status / public links / dependencies
- *   デプロイ  saved versions + recent activity (+ restore / backup)
- *   設定     source coordinates + provider connections (advanced, folded)
+ *   更新     saved versions + recent activity (+ review / restore / backup)
+ *   設定     source coordinates + connected cloud accounts (advanced)
  *   危険な操作 destroy (review-first)
  *
- * Replaces the flat ControlInstallationDetailView: the friendly layer leads,
- * expert material (provider connections, snapshot ids) sits in the settings tab / detail
- * sections. All mutations route through the same control-plane actions as
- * before (plan / destroy plan / rollback plan / backup / put profile).
+ * The friendly layer leads: open the service, check its status, then opt into
+ * updates/settings when needed. All mutations still route through the same
+ * control-plane actions (plan / destroy plan / rollback plan / backup / put
+ * profile).
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -276,28 +276,11 @@ function Inner() {
                         </Button>
                       )}
                     </Show>
-                    <Button
-                      variant={launchUrl() ? "secondary" : "primary"}
-                      type="button"
-                      disabled={plan.busy()}
-                      busy={plan.busy()}
-                      onClick={() => void plan.run()}
-                    >
-                      {t("apps.reviewChanges")}
-                    </Button>
                   </div>
                 }
               />
 
               <Tabs items={tabItems()} aria-label="Service sections" />
-
-              <Show when={plan.error()}>
-                {(m) => (
-                  <p class="wa-error" role="alert">
-                    {m()}
-                  </p>
-                )}
-              </Show>
 
               <div class="wa-stack">
                 <Switch>
@@ -335,6 +318,9 @@ function Inner() {
                       backupError={backup.error()}
                       backupResult={backup.result()}
                       recentActivity={recentActivity()}
+                      reviewBusy={plan.busy()}
+                      onReview={() => void plan.run()}
+                      reviewError={plan.error()}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -669,6 +655,9 @@ function DeploysTab(props: {
   readonly backupError: string | null;
   readonly backupResult: BackupRecord | undefined;
   readonly recentActivity: readonly ActivityEvent[];
+  readonly reviewBusy: boolean;
+  readonly onReview: () => void;
+  readonly reviewError: string | null;
 }) {
   return (
     <>
@@ -677,19 +666,38 @@ function DeploysTab(props: {
           title={t("app.deploys.title")}
           subtitle={t("app.deploys.subtitle")}
           actions={
-            <Button
-              variant="secondary"
-              size="sm"
-              type="button"
-              icon={<Archive size={14} />}
-              disabled={props.backupBusy}
-              busy={props.backupBusy}
-              onClick={() => props.onBackup()}
-            >
-              {t("app.deploys.backup")}
-            </Button>
+            <div class="av-actions">
+              <Button
+                variant="primary"
+                size="sm"
+                type="button"
+                disabled={props.reviewBusy}
+                busy={props.reviewBusy}
+                onClick={() => props.onReview()}
+              >
+                {t("apps.reviewChanges")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                icon={<Archive size={14} />}
+                disabled={props.backupBusy}
+                busy={props.backupBusy}
+                onClick={() => props.onBackup()}
+              >
+                {t("app.deploys.backup")}
+              </Button>
+            </div>
           }
         />
+        <Show when={props.reviewError}>
+          {(m) => (
+            <p class="wa-error" role="alert">
+              {m()}
+            </p>
+          )}
+        </Show>
         <Show when={props.backupResult}>
           {(record) => (
             <p class="wa-notice">

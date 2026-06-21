@@ -925,7 +925,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
               when={list().length > 0}
               fallback={
                 <EmptyState
-                  ink
                   icon={<Plug size={26} />}
                   title={t("spaceSettings.tab.connections")}
                   message={t("conn.list.empty")}

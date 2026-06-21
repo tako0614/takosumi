@@ -1,10 +1,12 @@
 /**
- * Add a service (`/new`) — examples + Git URL, one flow.
+ * Add a service (`/new`) — service catalog first, advanced install/source link
+ * second, one underlying flow.
  *
  * Three entry shapes, identical install path:
  *   - Examples: curated first-party / known service coordinates (src/catalog.ts).
  *     Picking one pre-fills the Git tab.
- *   - Git URL: the raw source form (the developer power path).
+ *   - Link/source import: an advanced path for app install links or raw source
+ *     URLs when a service is not in the catalog.
  *   - External install link: another site links `/install?git=…` (or the
  *     packed `?source=git::…` form); the router forwards the query here and
  *     lib/install-link.ts seeds the Git form. A link only PRE-FILLS — the
@@ -28,12 +30,7 @@ import {
   Show,
 } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
-import {
-  Download,
-  KeyRound,
-  Plus,
-  Trash,
-} from "lucide-solid";
+import { Download, KeyRound, Plus, Trash } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -1402,7 +1399,6 @@ function Inner() {
         when={spaceId()}
         fallback={
           <EmptyState
-            ink
             icon={<Download size={28} />}
             title={t("space.select")}
             message={t("space.selectMessage")}
@@ -1432,65 +1428,61 @@ function Inner() {
           </div>
         </Show>
 
-        {/* tab strip: examples | git url */}
-        <nav class="tg-tabs" aria-label="Add method">
-          <button
-            type="button"
-            class="tg-tab"
-            classList={{ active: activeTab() === "catalog" }}
-            onClick={() => setActiveTab("catalog")}
-          >
-            {t("new.tab.catalog")}
-          </button>
-          <button
-            type="button"
-            class="tg-tab"
-            classList={{ active: activeTab() === "git" }}
-            onClick={() => setActiveTab("git")}
-          >
-            {t("new.tab.git")}
-          </button>
-        </nav>
-
-        <Show when={activeTab() === "catalog"}>
-          <Card>
-            <CardHeader
-              title={t("new.tab.catalog")}
-              subtitle={t("new.catalog.intro")}
-            />
-            <ul class="av-catalog">
-              <For each={CATALOG}>
-                {(entry) => (
-                  <li class="av-catalog-item">
-                    <div class="av-catalog-text">
-                      <span class="av-catalog-name">
-                        {entry.name[locale()]}
-                      </span>
-                      <span class="av-catalog-desc">
-                        {entry.description[locale()]}
-                      </span>
-                      <span class="av-catalog-src">
-                        {t("new.catalog.readyStarter")}
-                      </span>
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      type="button"
-                      onClick={() => pickCatalogEntry(entry)}
-                    >
-                      {t("new.catalog.select")}
-                    </Button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Card>
-        </Show>
+        <section class="av-store" aria-label={t("new.store.aria")}>
+          <div class="av-store-head">
+            <div>
+              <h2>{t("new.store.title")}</h2>
+              <p>{t("new.catalog.intro")}</p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              type="button"
+              onClick={() =>
+                setActiveTab(activeTab() === "git" ? "catalog" : "git")
+              }
+            >
+              {activeTab() === "git"
+                ? t("new.advancedImport.close")
+                : t("new.advancedImport.open")}
+            </Button>
+          </div>
+          <ul class="av-catalog-grid">
+            <For each={CATALOG}>
+              {(entry) => (
+                <li class="av-catalog-card">
+                  <div class="av-catalog-icon" aria-hidden="true">
+                    <Download size={20} />
+                  </div>
+                  <div class="av-catalog-text">
+                    <span class="av-catalog-src">
+                      {t("new.catalog.readyStarter")}
+                    </span>
+                    <span class="av-catalog-name">{entry.name[locale()]}</span>
+                    <span class="av-catalog-desc">
+                      {entry.description[locale()]}
+                    </span>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    type="button"
+                    onClick={() => pickCatalogEntry(entry)}
+                  >
+                    {t("new.catalog.select")}
+                  </Button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </section>
 
         <Show when={activeTab() === "git"}>
-          <Card>
-            <CardHeader title={t("new.tab.git")} />
+          <Card class="av-import-card">
+            <CardHeader
+              title={t("new.advancedImport.title")}
+              subtitle={t("new.advancedImport.subtitle")}
+            />
             <CardSection>
               {/* Link-seeded landing: say WHERE the values came from, and that
                   confirmation is still required — the fields stay editable. */}
