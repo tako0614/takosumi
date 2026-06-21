@@ -8286,6 +8286,56 @@ test("platform-secrets apply generates missing safe secrets and pushes value fil
   }
 });
 
+test("platform-secrets apply pushes optional metrics scrape token when present", async () => {
+  const dir = await makeTempDir();
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
+    "protected-key",
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_METRICS_SCRAPE_TOKEN"),
+    "metrics-token",
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+  const stdinByName = new Map<string, string | undefined>();
+
+  try {
+    const code = await runPlatformSecrets(
+      ["apply", "--config", "/operator/wrangler.toml", "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async (args, input) => {
+        commands.push([...args]);
+        stdinByName.set(args[4] ?? "", input);
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const pushedNames = commands.map((command) => command[4]).sort();
+    expect(pushedNames).toEqual([
+      "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
+      "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
+      "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+      "TAKOSUMI_METRICS_SCRAPE_TOKEN",
+      "TAKOSUMI_SECRET_STORE_PASSPHRASE",
+    ]);
+    expect(stdinByName.get("TAKOSUMI_METRICS_SCRAPE_TOKEN")).toEqual(
+      "metrics-token",
+    );
+    const output = stdout.concat(stderr).join("\n");
+    expect(output).toContain("Pushed 5 platform secret(s)");
+    expect(output).not.toContain("metrics-token");
+  } finally {
+    await removePath(dir, { recursive: true });
+  }
+});
+
 test("platform-secrets apply fails when configured upstream OAuth client secret is missing", async () => {
   const dir = await makeTempDir();
   const config = await makeTempFile({ suffix: ".toml" });
