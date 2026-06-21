@@ -39,13 +39,11 @@ OpenAI-compatible routes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`        | forwards chat completions to an upstream |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`  | forwards embeddings to an upstream       |
 
-The request bearer must be a current `takosumi.ai.gateway` Service Graph service token for the Capsule runtime
-projection. Tokens are rotated through the current projection route. The route path still uses the legacy
-`installation-projections` name until the API migration is complete:
-
-```http
-POST /v1/installation-projections/{installationId}/services/takosumi.ai.gateway/rotate-token
-```
+The request bearer must be a current `takosumi.ai.gateway` runtime service
+token for the Capsule projection. Tokens are rotated through a Cloud-only
+operator projection route. That route is intentionally not documented as a
+stable Takosumi OSS customer API while the public model migrates to Workspace /
+Project / Capsule / StateVersion / Output terminology.
 
 Body:
 

@@ -86,14 +86,14 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en["new.store.title"]).toBe("Recommended services");
-    expect(en["new.advancedImport.open"].toLowerCase()).toContain("link");
+    expect(en["new.advancedImport.open"].toLowerCase()).toContain("own app");
     expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
       "manually",
     );
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja["new.store.title"]).toBe("おすすめサービス");
-    expect(ja["new.advancedImport.open"]).toContain("リンク");
+    expect(ja["new.advancedImport.open"]).toContain("自分のアプリ");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");

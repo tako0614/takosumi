@@ -712,22 +712,12 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 >
                   {(helper) => (
                     <>
-                      {/* Guided-token flow: provider's own token screen → paste. */}
+                      {/* Prefer OAuth when configured; keep manual tokens as fallback. */}
                       <div class="wc-guided">
-                        <div class="wc-form-actions">
-                          <Button
-                            variant="primary"
-                            href={helper().createTokenUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t("conn.guided.openProvider", {
-                              provider: descriptor()?.label ?? "",
-                            })}
-                          </Button>
-                          <Show when={oauthAvailable()}>
+                        <Show when={oauthAvailable()}>
+                          <div class="wc-form-actions">
                             <Button
-                              variant="secondary"
+                              variant="primary"
                               type="button"
                               busy={oauthBusy()}
                               onClick={() => void startOAuth()}
@@ -736,80 +726,97 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                                 provider: descriptor()?.label ?? "",
                               })}
                             </Button>
-                          </Show>
-                        </div>
-                        <details class="connection-advanced connection-help">
+                          </div>
+                        </Show>
+                        <details
+                          class="connection-advanced connection-help"
+                          open={!oauthAvailable()}
+                        >
                           <summary>{t("conn.guided.stepsSummary")}</summary>
+                          <div class="wc-form-actions">
+                            <Button
+                              variant="secondary"
+                              href={helper().createTokenUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {t("conn.guided.openProvider", {
+                                provider: descriptor()?.label ?? "",
+                              })}
+                            </Button>
+                          </div>
                           <ol class="wc-steps">
                             <For each={helper().steps}>
                               {(s) => <li>{s}</li>}
                             </For>
                           </ol>
-                        </details>
 
-                        <form
-                          class="wc-form"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void createFromHelper.run();
-                          }}
-                        >
-                          <FormField
-                            label={t("conn.guided.pasteLabel")}
-                            required
+                          <form
+                            class="wc-form"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void createFromHelper.run();
+                            }}
                           >
-                            <Input
-                              id="connection-helper-token"
-                              name="helperToken"
-                              type="password"
-                              value={helperToken()}
-                              onInput={(e) =>
-                                setHelperToken(e.currentTarget.value)
-                              }
-                              placeholder={t("conn.guided.pastePlaceholder")}
-                              autocomplete="off"
-                              spellcheck={false}
-                            />
-                          </FormField>
-                          <Show when={descriptor()?.provider === "cloudflare"}>
                             <FormField
-                              label={t(
-                                "conn.provider.cloudflare.accountId.label",
-                              )}
+                              label={t("conn.guided.pasteLabel")}
                               required
                             >
                               <Input
-                                id="connection-helper-cloudflare-account-id"
-                                name="helperCloudflareAccountId"
-                                type="text"
-                                value={helperCloudflareAccountId()}
+                                id="connection-helper-token"
+                                name="helperToken"
+                                type="password"
+                                value={helperToken()}
                                 onInput={(e) =>
-                                  setHelperCloudflareAccountId(
-                                    e.currentTarget.value,
-                                  )
+                                  setHelperToken(e.currentTarget.value)
                                 }
-                                placeholder={t(
-                                  "conn.provider.cloudflare.accountId.placeholder",
-                                )}
+                                placeholder={t("conn.guided.pastePlaceholder")}
                                 autocomplete="off"
                                 spellcheck={false}
                               />
                             </FormField>
-                          </Show>
-                          <div class="wc-form-actions">
-                            <Button
-                              variant="primary"
-                              type="submit"
-                              busy={createFromHelper.busy()}
-                              icon={<Link size={16} />}
+                            <Show
+                              when={descriptor()?.provider === "cloudflare"}
                             >
-                              {createFromHelper.busy()
-                                ? t("conn.guided.connecting")
-                                : t("conn.guided.connect")}
-                            </Button>
-                          </div>
-                          <ActionError error={createFromHelper.error} />
-                        </form>
+                              <FormField
+                                label={t(
+                                  "conn.provider.cloudflare.accountId.label",
+                                )}
+                                required
+                              >
+                                <Input
+                                  id="connection-helper-cloudflare-account-id"
+                                  name="helperCloudflareAccountId"
+                                  type="text"
+                                  value={helperCloudflareAccountId()}
+                                  onInput={(e) =>
+                                    setHelperCloudflareAccountId(
+                                      e.currentTarget.value,
+                                    )
+                                  }
+                                  placeholder={t(
+                                    "conn.provider.cloudflare.accountId.placeholder",
+                                  )}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                            </Show>
+                            <div class="wc-form-actions">
+                              <Button
+                                variant="secondary"
+                                type="submit"
+                                busy={createFromHelper.busy()}
+                                icon={<Link size={16} />}
+                              >
+                                {createFromHelper.busy()
+                                  ? t("conn.guided.connecting")
+                                  : t("conn.guided.connect")}
+                              </Button>
+                            </div>
+                            <ActionError error={createFromHelper.error} />
+                          </form>
+                        </details>
                       </div>
 
                       {/* Advanced fallback: raw multi-field form, demoted. */}
