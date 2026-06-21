@@ -1793,6 +1793,7 @@ function Inner() {
                                 <Select
                                   id={`provider-connection-${index()}`}
                                   name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
+                                  aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
                                   value={row.connectionId}
                                   onChange={(e) =>
                                     updateProviderRow(index(), {
