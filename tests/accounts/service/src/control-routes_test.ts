@@ -905,6 +905,13 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
   // load every tenant's Space via the all-spaces `listSpaces` path.
   expect(operations.calls.listSpacesByOwner).toBeDefined();
   expect(operations.calls.listSpaces).toBeUndefined();
+  // GET /spaces also synchronously ensures the first-login personal Space so
+  // an OAuth redirect cannot land the dashboard in an empty Workspace race.
+  const createCall = operations.calls.createSpace?.[0] as
+    | { ownerUserId?: string; type?: string }
+    | undefined;
+  expect(createCall?.ownerUserId).toEqual("tsub_ctrl");
+  expect(createCall?.type).toEqual("personal");
 });
 
 test("anonymous /api/v1 requests are 401", async () => {

@@ -119,7 +119,7 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
         {
           envName: "CLOUDFLARE_ACCOUNT_ID",
           label: providerCopy("conn.provider.cloudflare.accountId.label"),
-          required: false,
+          required: true,
           secret: false,
           placeholder: providerCopy(
             "conn.provider.cloudflare.accountId.placeholder",

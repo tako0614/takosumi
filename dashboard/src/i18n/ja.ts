@@ -482,7 +482,7 @@ export const ja = {
     "表示されたトークンをコピーして、ここに貼り付けます。",
   "conn.provider.cloudflare.apiToken.label": "API トークン",
   "conn.provider.cloudflare.apiToken.placeholder": "cloudflare API token",
-  "conn.provider.cloudflare.accountId.label": "アカウント ID（任意）",
+  "conn.provider.cloudflare.accountId.label": "アカウント ID",
   "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
   "conn.guided.intro":
     "{provider} に接続します。トークンは {provider} の画面で作成し、貼り付けるだけです。",

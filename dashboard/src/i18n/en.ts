@@ -472,7 +472,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Copy the token Cloudflare shows, then paste it here.",
   "conn.provider.cloudflare.apiToken.label": "API token",
   "conn.provider.cloudflare.apiToken.placeholder": "cloudflare API token",
-  "conn.provider.cloudflare.accountId.label": "Account ID (optional)",
+  "conn.provider.cloudflare.accountId.label": "Account ID",
   "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
   "conn.guided.intro":
     "Connect to {provider}. Create a token on {provider}'s own screen and paste it here.",
