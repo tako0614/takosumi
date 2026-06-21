@@ -365,9 +365,7 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
     display: grid;
     grid-template-columns: repeat(5, 1fr);
-    background: color-mix(in srgb, var(--tg-bg-elev) 96%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
     z-index: 40;
   }
