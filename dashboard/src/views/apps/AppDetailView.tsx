@@ -44,7 +44,6 @@ import {
   getSpaceGraph,
   listActivity,
   listDeployments,
-  listInstallConfigs,
   listProviderConnections,
   listSources,
   planInstallation,
@@ -111,7 +110,6 @@ function Inner() {
     getInstallationProviderConnectionSet,
   );
   const [sources] = createResource(spaceId, listSources);
-  const [configs] = createResource(spaceId, listInstallConfigs);
   const [deployments] = createResource(installationId, listDeployments);
   const [graph] = createResource(spaceId, getSpaceGraph);
   const [providerConnections] = createResource(
@@ -122,11 +120,6 @@ function Inner() {
 
   const source = createMemo(() =>
     (sources() ?? []).find((item) => item.id === installation()?.sourceId),
-  );
-  const installConfig = createMemo(() =>
-    (configs() ?? []).find(
-      (item) => item.id === installation()?.installConfigId,
-    ),
   );
   const producers = createMemo(() =>
     dependencyRows(installation(), graph(), "producer"),
@@ -216,7 +209,6 @@ function Inner() {
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
       { href: `${base}/settings`, label: t("app.tab.settings") },
-      { href: `${base}/danger`, label: t("app.tab.danger") },
     ];
   };
 
@@ -291,13 +283,6 @@ function Inner() {
                       outputsLoading={deployments.loading}
                       producers={producers()}
                       consumers={consumers()}
-                      source={source()}
-                      installation={inst()}
-                      installConfigLabel={
-                        installConfig()
-                          ? `${installConfig()!.name} · ${installConfig()!.trustLevel}`
-                          : inst().installConfigId
-                      }
                     />
                   </Match>
                   <Match when={tab() === "deploys"}>
@@ -329,6 +314,7 @@ function Inner() {
                       providerConnections={profile()?.connections}
                       availableProviderConnections={providerConnections() ?? []}
                       installationId={installationId()}
+                      dangerHref={`/capsules/${encodeURIComponent(installationId())}/danger`}
                       onSaved={() =>
                         void Promise.all([
                           refetchProfile(),
@@ -425,21 +411,6 @@ function OverviewTab(props: {
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
-  readonly source:
-    | {
-        readonly name: string;
-        readonly url: string;
-        readonly defaultRef: string;
-        readonly defaultPath: string;
-        readonly status: string;
-      }
-    | undefined;
-  readonly installation: {
-    readonly id: string;
-    readonly currentDeploymentId?: string;
-    readonly currentStateGeneration: number;
-  };
-  readonly installConfigLabel: string;
 }) {
   return (
     <>
@@ -507,62 +478,6 @@ function OverviewTab(props: {
           </div>
         </Card>
       </Show>
-
-      <details class="wb-disclosure">
-        <summary>{t("app.info.title")}</summary>
-        <KVList
-          items={[
-            ...(props.source
-              ? [
-                  { label: t("app.source.name"), value: props.source.name },
-                  {
-                    label: t("app.source.url"),
-                    value: <code>{props.source.url}</code>,
-                  },
-                  {
-                    label: t("app.source.refPath"),
-                    value: (
-                      <>
-                        <code>{props.source.defaultRef}</code>
-                        <span class="muted"> / </span>
-                        <code>{props.source.defaultPath}</code>
-                      </>
-                    ),
-                  },
-                  {
-                    label: t("app.source.status"),
-                    value: props.source.status,
-                  },
-                ]
-              : [
-                  {
-                    label: t("app.source.title"),
-                    value: t("app.source.loading"),
-                  },
-                ]),
-            {
-              label: t("app.info.id"),
-              value: <code>{props.installation.id}</code>,
-            },
-            {
-              label: t("app.info.generation"),
-              value: props.installation.currentStateGeneration,
-            },
-            {
-              label: t("app.info.deployment"),
-              value: props.installation.currentDeploymentId ? (
-                <code>{props.installation.currentDeploymentId}</code>
-              ) : (
-                <span class="muted">{t("common.none")}</span>
-              ),
-            },
-            {
-              label: t("app.info.installConfig"),
-              value: props.installConfigLabel,
-            },
-          ]}
-        />
-      </details>
     </>
   );
 }
@@ -963,6 +878,7 @@ function SettingsTab(props: {
     | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly installationId: string;
+  readonly dangerHref: string;
   readonly onSaved: () => void;
 }) {
   const [rows, setRows] = createSignal<InstallationProviderConnectionRow[]>([]);
@@ -1150,6 +1066,18 @@ function SettingsTab(props: {
           </form>
         </Card>
       </details>
+
+      <Card>
+        <CardHeader
+          title={t("app.settings.removeTitle")}
+          subtitle={t("app.settings.removeBody")}
+          actions={
+            <Button variant="secondary" href={props.dangerHref}>
+              {t("app.settings.removeCta")}
+            </Button>
+          }
+        />
+      </Card>
     </>
   );
 }

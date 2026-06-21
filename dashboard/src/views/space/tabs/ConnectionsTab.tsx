@@ -96,6 +96,21 @@ function providerConnectionOwnershipLabel(
     : t("conn.ownership.ownKey");
 }
 
+function providerTail(providerSource: string): string {
+  return providerSource.split("/").at(-1) ?? providerSource;
+}
+
+function providerConnectionProviderLabel(
+  connection: ProviderConnection,
+): string {
+  const tail = providerTail(connection.providerSource);
+  return (
+    providerDescriptor(connection.providerSource)?.label ??
+    providerDescriptor(tail)?.label ??
+    tail
+  );
+}
+
 export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const { confirm } = useConfirmDialog();
   const spaceId = () => props.spaceId;
@@ -408,19 +423,30 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
   const providerConnectionColumns: readonly Column<ProviderConnection>[] = [
     {
-      header: t("conn.providerConnections.provider"),
-      cell: (d) => <code class="wc-code">{d.providerSource}</code>,
-    },
-    {
       header: t("conn.providerConnections.name"),
-      cell: (d) => d.displayName,
+      cell: (d) => (
+        <div class="wc-conn-main">
+          <span>{d.displayName}</span>
+          <details class="wc-inline-details">
+            <summary>{t("common.details")}</summary>
+            <code class="wc-code">{d.id}</code>
+          </details>
+        </div>
+      ),
     },
     {
-      header: t("conn.providerConnections.ownership"),
+      header: t("conn.providerConnections.provider"),
       cell: (d) => (
-        <Badge tone={d.ownership === "takos_provided" ? "info" : "neutral"}>
-          {providerConnectionOwnershipLabel(d.ownership)}
-        </Badge>
+        <div class="wc-conn-main">
+          <span>{providerConnectionProviderLabel(d)}</span>
+          <details class="wc-inline-details">
+            <summary>{t("common.details")}</summary>
+            <code class="wc-code">{d.providerSource}</code>
+            <span class="wc-conn-detail-line">
+              {providerConnectionOwnershipLabel(d.ownership)}
+            </span>
+          </details>
+        </div>
       ),
     },
     {

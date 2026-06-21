@@ -26,20 +26,29 @@ const shellCssSource = readFileSync(
 );
 
 describe("dashboard shell navigation layout", () => {
-  test("keeps desktop navigation task-first with management separated", () => {
+  test("keeps desktop navigation service-first with advanced routes folded", () => {
     expect(sidebarSource).toContain("const PRIMARY");
-    expect(sidebarSource).toContain("const MANAGE");
+    expect(sidebarSource).toContain("const ACCOUNT");
+    expect(sidebarSource).toContain("const ADVANCED");
     expect(sidebarSource).toContain('labelKey: "nav.home"');
     expect(sidebarSource).toContain('labelKey: "nav.add"');
-    expect(sidebarSource).toContain('aria-label={t("nav.manage")}');
+    expect(sidebarSource).toContain('labelKey: "nav.notifications"');
+    expect(sidebarSource).toContain('aria-label={t("nav.accountSection")}');
+    expect(sidebarSource).toContain('class="sidebar-advanced"');
     expect(sidebarSource).toContain('class="sidebar-section-label"');
-    expect(en["nav.manage"]).toBe("Manage");
-    expect(ja["nav.manage"]).toBe("管理");
+    expect(en["nav.accountSection"]).toBe("Account");
+    expect(ja["nav.accountSection"]).toBe("アカウント");
+    expect(en["nav.advanced"]).toBe("Advanced");
+    expect(ja["nav.advanced"]).toBe("詳細");
   });
 
-  test("keeps mobile tabs and grid column count aligned", () => {
-    expect(mobileTabsSource).toContain('href: "/connections"');
-    expect(mobileTabsSource).toContain("icon: Plug");
-    expect(shellCssSource).toContain("grid-template-columns: repeat(5, 1fr);");
+  test("keeps mobile tabs focused on everyday destinations", () => {
+    expect(mobileTabsSource).toContain('href: "/"');
+    expect(mobileTabsSource).toContain('href: "/new"');
+    expect(mobileTabsSource).toContain('href: "/notifications"');
+    expect(mobileTabsSource).toContain('href: "/account"');
+    expect(mobileTabsSource).not.toContain('href: "/connections"');
+    expect(mobileTabsSource).not.toContain("icon: Plug");
+    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
   });
 });

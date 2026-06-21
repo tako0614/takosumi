@@ -35,6 +35,19 @@ describe("Installation detail deployment surface", () => {
     );
   });
 
+  test("keeps technical source details and deletion out of the default overview", () => {
+    expect(source).toContain("function OverviewTab");
+    expect(source).toContain("function SettingsTab");
+    expect(source).toContain('t("app.settings.removeTitle")');
+    expect(source).toContain('t("app.settings.removeCta")');
+    expect(source).not.toContain(
+      '{ href: `${base}/danger`, label: t("app.tab.danger") }',
+    );
+    expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
+      source.indexOf("function SettingsTab"),
+    );
+  });
+
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
     expect(source).toContain('<Page title={t("app.installationSub")}');
     expect(source).toContain("setDocumentTitle(inst.name)");
