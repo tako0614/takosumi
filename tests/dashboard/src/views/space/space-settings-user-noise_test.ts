@@ -18,6 +18,10 @@ const connectionsTabSource = readFileSync(
   resolve(viewRoot, "space/tabs/ConnectionsTab.tsx"),
   "utf8",
 );
+const userMenuSource = readFileSync(
+  resolve(viewRoot, "account/components/auth/UserMenu.tsx"),
+  "utf8",
+);
 
 describe("Workspace settings user-facing noise", () => {
   test("keeps recovery/share implementation routes out of the normal settings tabs", () => {
@@ -36,7 +40,9 @@ describe("Workspace settings user-facing noise", () => {
   });
 
   test("does not expose policy JSON editing on the general settings form", () => {
-    expect(generalTabSource).toContain("updateSpace(current.id, { displayName })");
+    expect(generalTabSource).toContain(
+      "updateSpace(current.id, { displayName })",
+    );
     expect(generalTabSource).not.toContain("policyDraft");
     expect(generalTabSource).not.toContain("Textarea");
     expect(generalTabSource).not.toContain("wc-policy-editor");
@@ -53,5 +59,22 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).not.toContain("{connection.providerSource}");
     expect(connectionsTabSource).not.toContain("connectionEnvNames");
     expect(connectionsTabSource).not.toContain("c.envNames.join");
+  });
+
+  test("keeps connection creation out of the default list surface once connections exist", () => {
+    expect(connectionsTabSource).toContain("const shouldShowCreateForm = ()");
+    expect(connectionsTabSource).toContain("const hasProviderConnections = ()");
+    expect(connectionsTabSource).toContain("setCreateFormOpen(true)");
+    expect(connectionsTabSource).toContain("setCreateFormOpen(false)");
+    expect(connectionsTabSource).toContain('t("conn.add.open")');
+    expect(connectionsTabSource).toContain('t("conn.add.close")');
+    expect(en["conn.add.open"]).toBe("Add connection");
+    expect(ja["conn.add.open"]).toBe("接続を追加");
+  });
+
+  test("keeps raw account subjects out of the always-visible user menu", () => {
+    expect(userMenuSource).toContain("session()?.email");
+    expect(userMenuSource).not.toContain("{sub()}</div>");
+    expect(userMenuSource).not.toContain("session()?.subject}");
   });
 });

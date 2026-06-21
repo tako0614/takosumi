@@ -64,10 +64,6 @@ export const ja = {
   "space.label": "チーム",
   "space.loadFailed": "チームの取得に失敗しました — {message}",
   "space.none": "チームがありません",
-  "space.new": "新しいチーム",
-  "space.handleLabel": "ハンドル（@なし、半角英数とハイフン）",
-  "space.handlePlaceholder": "my-space",
-  "space.handleRequired": "ハンドルを入力してください。",
   "space.select": "チームを選択してください",
   "space.selectMessage": "右上のチーム選択からチームを選ぶと表示されます。",
 
@@ -294,10 +290,10 @@ export const ja = {
   "run.cost.capacity": "利用可能な容量: {n}",
   "run.cost.capacityShortfall":
     "利用可能な容量が約 {n} 不足しているため、このまま実行できません。",
-  "run.cost.capacityBlocked": "上限または制限により、このまま実行できません。",
+  "run.cost.capacityBlocked":
+    "このワークスペースではこの操作を実行できません。",
   "run.cost.billingCta": "お支払いを開く",
-  "run.cost.operatorHelp":
-    "このワークスペースは上限またはポリシーで止まっています。必要であればワークスペース管理者に相談してください。",
+  "run.cost.operatorHelp": "必要であれば管理者に確認してください。",
   "run.changes.title": "変更内容",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
@@ -394,9 +390,9 @@ export const ja = {
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "サービス名",
   "new.vars.projectName": "リソース接頭辞",
-  "new.vars.inputsTitle": "詳細設定",
+  "new.vars.inputsTitle": "その他の入力",
   "new.vars.inputsBody":
-    "このサービスに渡す任意の非 secret 詳細値です。トークン、パスワード、API キーは外部サービス接続に入れてください。",
+    "上にない非 secret の入力をアプリから求められた場合だけ使います。",
   "new.vars.inputName": "変数名",
   "new.vars.inputValue": "値",
   "new.vars.addInput": "入力を追加",
@@ -460,7 +456,7 @@ export const ja = {
   "new.providers.setupMissing": "必要な接続を設定",
   "new.providers.operatorMissingTitle": "利用できる接続がありません",
   "new.providers.operatorMissingBody":
-    "このサービスを追加するには Provider Connection が必要です。",
+    "このサービスを追加するにはクラウドアカウント接続が必要です。",
   "new.providers.operatorMissingNext":
     "クラウドアカウント画面を開くか、チーム管理者に接続の追加を依頼してください。",
   "new.step.technical": "確認の進行状況",
@@ -560,6 +556,8 @@ export const ja = {
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
   "conn.add.title": "接続を追加",
+  "conn.add.open": "接続を追加",
+  "conn.add.close": "閉じる",
   "conn.add.provider": "接続先",
   "conn.add.genericEnvOption": "任意の接続情報を使う",
   "conn.add.displayName": "表示名（任意）",

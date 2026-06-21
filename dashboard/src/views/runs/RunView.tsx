@@ -107,50 +107,46 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
   return (
     <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
       <Show when={cost().estimatedCredits > 0}>
-        <p class="wa-cost-line">
-          {t(cloudBilling() ? "run.cost.required" : "run.cost.capacityNeeded", {
-            n: formatCredits(cost().estimatedCredits),
-          })}
-        </p>
+        <Show when={cloudBilling()}>
+          <p class="wa-cost-line">
+            {t("run.cost.required", {
+              n: formatCredits(cost().estimatedCredits),
+            })}
+          </p>
+        </Show>
       </Show>
       <Show when={cost().availableCredits !== undefined}>
-        <p class="wa-cost-line muted">
-          {t(cloudBilling() ? "run.cost.balance" : "run.cost.capacity", {
-            n: formatCredits(cost().availableCredits ?? 0),
-          })}
-        </p>
+        <Show when={cloudBilling()}>
+          <p class="wa-cost-line muted">
+            {t("run.cost.balance", {
+              n: formatCredits(cost().availableCredits ?? 0),
+            })}
+          </p>
+        </Show>
       </Show>
       <Show when={cost().blocked}>
         <p class="wa-error">
           <Show
-            when={cost().creditShortfall !== undefined}
-            fallback={
-              <>
-                {t(
-                  cloudBilling()
-                    ? "run.cost.blocked"
-                    : "run.cost.capacityBlocked",
-                )}
-              </>
-            }
+            when={cloudBilling()}
+            fallback={<>{t("run.cost.capacityBlocked")}</>}
           >
             {t(
-              cloudBilling()
+              cost().creditShortfall !== undefined
                 ? "run.cost.shortfall"
-                : "run.cost.capacityShortfall",
+                : "run.cost.blocked",
               {
                 n: formatCredits(cost().creditShortfall ?? 0),
               },
             )}
           </Show>
         </p>
-        <Show when={cost().reasons.length > 0}>
+        <Show when={cloudBilling() && cost().reasons.length > 0}>
           <ul class="wa-cost-reasons">
             <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
           </ul>
         </Show>
         <Show
-          when={isTakosumiCloudRuntime()}
+          when={cloudBilling()}
           fallback={<p class="muted">{t("run.cost.operatorHelp")}</p>}
         >
           <Button variant="secondary" size="sm" href="/billing">
@@ -824,9 +820,14 @@ function Inner() {
                 <Show
                   when={(() => {
                     const c = costInfo();
-                    return c && hasCostToShow(c) && isDeployableRun(r())
-                      ? c
-                      : undefined;
+                    if (!c || !isDeployableRun(r())) return undefined;
+                    return isTakosumiCloudRuntime()
+                      ? hasCostToShow(c)
+                        ? c
+                        : undefined
+                      : c.blocked
+                        ? c
+                        : undefined;
                   })()}
                 >
                   {(c) => <CostNotice cost={c()} />}

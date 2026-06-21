@@ -90,16 +90,6 @@ export default function Sidebar() {
           </A>
         ))}
       </nav>
-      <div class="sidebar-footer">
-        <a
-          href="https://takosumi.com/docs"
-          target="_blank"
-          rel="external noopener"
-          class="sidebar-link sidebar-link-sub"
-        >
-          {t("nav.docs")} →
-        </a>
-      </div>
     </aside>
   );
 }
