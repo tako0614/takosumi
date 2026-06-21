@@ -58,6 +58,13 @@ followed by `bash scripts/smoke.sh`. Do not treat old pass-count notes as
 current readiness evidence; record fresh output in the relevant evidence file
 when preparing a release.
 
+If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is configured for the platform under test,
+also record a fresh release activation proof outside the generic smoke count:
+the materializer receives the `takosumi.operator.release-activation@v1`
+payload, success is visible as a `release_activation.succeeded` Activity, and a
+forced materializer failure/pending response is surfaced without rolling back
+the OpenTofu apply ledger.
+
 ## Quick start
 
 ```bash

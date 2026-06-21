@@ -124,6 +124,33 @@ back the OpenTofu apply ledger; callers must surface it as "infrastructure
 applied, application activation failed/pending" rather than as a generic apply
 failure.
 
+The platform Worker can enable the generic webhook bridge with:
+
+```text
+TAKOSUMI_RELEASE_ACTIVATOR_URL
+TAKOSUMI_RELEASE_ACTIVATOR_TOKEN
+```
+
+The URL is non-secret operator config. The token is a Worker secret. Production
+URLs must be `https`; `http` is accepted only in explicit local substrate/dev
+mode. The webhook receives a `takosumi.operator.release-activation@v1` JSON
+payload with deploy-control ledger ids, Space id, Installation summary,
+Deployment summary, OutputSnapshot summary, and already-filtered non-sensitive
+outputs. This payload is an operator-controlled bridge contract, not a customer
+API surface. It must return one of:
+
+```json
+{ "status": "skipped" }
+{ "status": "pending", "message": "queued" }
+{ "status": "succeeded", "launchUrl": "https://example.com" }
+{ "status": "failed", "message": "publication failed" }
+```
+
+The webhook materializer is where product-specific publication lives:
+Cloudflare Worker upload, asset publishing, container promotion, route updates,
+or closed Takosumi Cloud managed-resource activation. Those implementations do
+not live in OSS Takosumi Core.
+
 ## Cloud-Only Exclusions
 
 The OSS API must not expose:
