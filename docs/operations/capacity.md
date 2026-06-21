@@ -71,7 +71,7 @@ capacity review で見る signal:
 
 - platform worker 5xx / latency
 - `/api/v1` read/write RPS
-- Provider Catalog read RPS and Provider Connection create/update/rotate write rate
+- CredentialRecipe/provider allowlist read RPS and ProviderConnection create/update/rotate write rate
 - source sync / compatibility / plan / apply run counts
 - queue depth, queue age, DLQ count
 - CoordinationObject lease waits and takeover count

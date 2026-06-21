@@ -4841,6 +4841,74 @@ test("POST /api/v1/spaces/:id/members lets an owner add a member", async () => {
   expect(upsertArg.accountId).toEqual("tsub_new");
 });
 
+test("POST /api/v1/spaces/:id/members resolves a verified email to an account", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAccount({
+    subject: "tsub_member_email",
+    email: "Member@Example.Test",
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [memberRow("tsub_ctrl", ["owner"])],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/members",
+    { cookie, body: { email: " member@example.test ", role: "viewer" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as { member: MemberRow };
+  expect(body.member.accountId).toEqual("tsub_member_email");
+  expect(body.member.roles).toEqual(["viewer"]);
+  const upsertArg = (
+    operations.calls.upsertMember as [Record<string, unknown>]
+  )[0];
+  expect(upsertArg.accountId).toEqual("tsub_member_email");
+});
+
+test("POST /api/v1/spaces/:id/members rejects an email that is not verified", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAccount({
+    subject: "tsub_unverified",
+    email: "pending@example.test",
+    emailVerified: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const operations = memberOperations({
+    spaceId: "space_a",
+    spaceOwner: "tsub_ctrl",
+    roster: [memberRow("tsub_ctrl", ["owner"])],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/members",
+    { cookie, body: { email: "pending@example.test", role: "member" } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(404);
+  expect(operations.calls.upsertMember).toBeUndefined();
+});
+
 test("POST /api/v1/spaces/:id/members lets an admin add a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

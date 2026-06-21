@@ -143,6 +143,37 @@ export async function findAccount(
   return row ? accountFromRow(row) : undefined;
 }
 
+export async function findAccountByVerifiedEmail(
+  client: PostgresQueryClient,
+  email: string,
+): Promise<TakosumiAccountRecord | undefined> {
+  const normalized = normalizeAccountEmail(email);
+  if (!normalized) return undefined;
+  const row = await firstDrizzle<AccountRow>(
+    client,
+    db
+      .select({
+        subject: accounts.subject,
+        email: accounts.email,
+        email_verified: accounts.emailVerified,
+        display_name: accounts.displayName,
+        terms_version: accounts.termsVersion,
+        terms_accepted_at: accounts.termsAcceptedAt,
+        terms_accepted_source: accounts.termsAcceptedSource,
+        created_at: accounts.createdAt,
+        updated_at: accounts.updatedAt,
+      })
+      .from(accounts)
+      .where(
+        and(
+          eq(accounts.emailVerified, true),
+          sql`lower(${accounts.email}) = ${normalized}`,
+        ),
+      ),
+  );
+  return row ? accountFromRow(row) : undefined;
+}
+
 export async function linkUpstreamIdentity(
   client: PostgresQueryClient,
   record: UpstreamIdentityRecord,
@@ -202,4 +233,9 @@ export async function findUpstreamIdentity(
       ),
   );
   return row ? upstreamIdentityFromRow(row) : undefined;
+}
+
+function normalizeAccountEmail(email: string | undefined): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
 }

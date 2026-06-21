@@ -1045,6 +1045,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         if (method === "POST") {
           return await addSpaceMember(
             request,
+            input.store,
             operations,
             spaceId,
             input.session.subject,
@@ -1951,6 +1952,7 @@ async function listSpaceMembers(
 
 async function addSpaceMember(
   request: Request,
+  store: AccountsStore,
   operations: ControlPlaneOperations,
   spaceId: string,
   subject: string,
@@ -1958,9 +1960,19 @@ async function addSpaceMember(
   if (!operations.members) return membersUnavailable();
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const accountId = stringValue(body.accountId) ?? stringValue(body.subject);
+  const email = stringValue(body.email);
+  const accountId =
+    email === undefined
+      ? (stringValue(body.accountId) ?? stringValue(body.subject))
+      : await resolveVerifiedMemberEmail(store, email);
   if (!accountId) {
-    return errorJson("invalid_argument", "accountId is required", 400);
+    return email === undefined
+      ? errorJson("invalid_argument", "accountId or email is required", 400)
+      : errorJson(
+          "not_found",
+          "No verified Takosumi account was found for that email.",
+          404,
+        );
   }
   const role = body.role === undefined ? "member" : controlRoleValue(body.role);
   if (!role) {
@@ -2017,6 +2029,13 @@ async function addSpaceMember(
     actor: actorFor(caller),
   });
   return jsonStatus({ member }, 201);
+}
+
+async function resolveVerifiedMemberEmail(
+  store: AccountsStore,
+  email: string,
+): Promise<string | undefined> {
+  return (await store.findAccountByVerifiedEmail(email))?.subject;
 }
 
 async function changeSpaceMemberRole(

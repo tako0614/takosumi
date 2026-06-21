@@ -63,6 +63,16 @@ describe("MembersTab access-control surface", () => {
     expect(source).toMatch(/removeMember\(props\.spaceId, member\.accountId\)/);
   });
 
+  test("invites by verified email, not by handle/account subject", () => {
+    expect(source).toContain("const [inviteEmail");
+    expect(source).toContain("email,");
+    expect(source).toContain('type="email"');
+    expect(source).toContain('autocomplete="email"');
+    expect(source).toContain('t("members.invite.email")');
+    expect(source).not.toContain("Email invites are not supported");
+    expect(source).not.toContain("inviteAccount");
+  });
+
   test("labels go through the locale dictionary (no hardcoded copy)", () => {
     expect(source).toContain('"members.role.owner"');
     expect(source).toContain('"members.role.member"');

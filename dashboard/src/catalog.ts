@@ -42,8 +42,8 @@ export const CATALOG: readonly CatalogEntry[] = [
     suggestedName: "hello",
     name: { ja: "Hello Worker（スターター）", en: "Hello Worker (starter)" },
     description: {
-      ja: "ビルド不要のスターター。apply で Cloudflare Worker script を作成し、公開 URL は dispatcher/custom route の projection がある場合だけ出力します。",
-      en: "A no-build starter: apply creates a Cloudflare Worker script. A public URL is output only when dispatcher/custom-route projection is configured.",
+      ja: "ビルド不要で Cloudflare Worker script を作る接続テスト用スターター。公開 URL が必要な場合は route/dispatcher を追加してください。",
+      en: "A no-build connection-test starter that creates a Cloudflare Worker script. Add a route/dispatcher when you need a public URL.",
     },
   },
 ];

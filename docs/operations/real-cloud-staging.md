@@ -66,7 +66,10 @@ repo.
    preflight into one `takosumi.completion-status@v1` JSON report. It parses
    JSON even when a child command exits non-zero, preserves structured
    `nextActionDetails`, and does not print secret values or child stdout/stderr.
-   It does not probe `app.takosumi.com` unless `--probe-live` is passed.
+   `--probe-live` controls only the separate live platform / public website
+   probe. The default `all` scope and `readiness` scope still run the billing
+   readiness preflight, which may call the authenticated live billing API; use a
+   narrower scope when avoiding billing network checks.
    `check:cloudflare-deploy-host` is an operator-host preflight, not a normal
    repo gate. It must pass on the machine that runs `wrangler deploy` because
    the platform worker deploy builds and uploads a Cloudflare Container image.

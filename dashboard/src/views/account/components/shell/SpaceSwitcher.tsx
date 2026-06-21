@@ -19,6 +19,7 @@ import {
 } from "../../../../lib/control-api.ts";
 import {
   currentSpaceId,
+  selectAvailableSpaceId,
   setCurrentSpaceId,
 } from "../../../../lib/space-state.ts";
 import { t } from "../../../../i18n/index.ts";
@@ -32,11 +33,13 @@ export default function SpaceSwitcher() {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
-  // When Workspaces load and none is selected yet, default to the first one so the
-  // app-list / settings views render real data on first visit.
+  // Reconcile persisted Workspace selection after sign-in. A browser can keep
+  // the previous user's localStorage value, so never keep an id that is absent
+  // from the loaded Workspace list.
   const onLoaded = (list: readonly Space[]) => {
-    if (!currentSpaceId() && list.length > 0) {
-      setCurrentSpaceId(list[0]!.id);
+    const next = selectAvailableSpaceId(currentSpaceId(), list);
+    if (next !== currentSpaceId()) {
+      setCurrentSpaceId(next);
     }
     return list;
   };

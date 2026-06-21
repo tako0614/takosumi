@@ -352,20 +352,34 @@ export class D1AccountsStore implements AccountsStore {
 
   async saveAccount(record: TakosumiAccountRecord): Promise<void> {
     const existing = await this.findAccount(record.subject);
-    await this.#put("accounts", record.subject, {
+    const next = {
       ...existing,
       ...record,
       termsVersion: record.termsVersion ?? existing?.termsVersion,
       termsAcceptedAt: record.termsAcceptedAt ?? existing?.termsAcceptedAt,
       termsAcceptedSource:
         record.termsAcceptedSource ?? existing?.termsAcceptedSource,
-    });
+    };
+    await this.#put("accounts", record.subject, next, accountIndexes(next));
   }
 
   findAccount(
     subject: TakosumiSubject,
   ): Promise<TakosumiAccountRecord | undefined> {
     return this.#get("accounts", subject);
+  }
+
+  async findAccountByVerifiedEmail(
+    email: string,
+  ): Promise<TakosumiAccountRecord | undefined> {
+    const normalized = normalizeAccountEmail(email);
+    if (!normalized) return undefined;
+    return (
+      await this.#listByIndex<TakosumiAccountRecord>(
+        "accounts_by_verified_email",
+        normalized,
+      )
+    )[0];
   }
 
   linkUpstreamIdentity(record: UpstreamIdentityRecord): Promise<void> {
@@ -1666,6 +1680,19 @@ function upstreamIdentityKey(input: {
   return [input.providerId, input.upstreamIssuer, input.upstreamSubject].join(
     "\n",
   );
+}
+
+function accountIndexes(
+  record: TakosumiAccountRecord,
+): readonly D1IndexEntry[] {
+  const email = normalizeAccountEmail(record.email);
+  if (!email || record.emailVerified !== true) return [];
+  return [{ name: "accounts_by_verified_email", key: email }];
+}
+
+function normalizeAccountEmail(email: string | undefined): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
 }
 
 function launchTokenIndexes(

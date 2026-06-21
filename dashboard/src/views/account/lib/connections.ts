@@ -82,10 +82,9 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
   }).toString();
 
 /**
- * Guided providers + their credential field sets. Cloudflare only for Phase 1:
- * CLOUDFLARE_API_TOKEN (required, secret) + CLOUDFLARE_ACCOUNT_ID (optional).
- * Everything else enters through the Provider Connection editor backed by the
- * internal provider resolver.
+ * Guided providers + their credential field sets. Cloudflare has a helper link;
+ * the other common providers use raw env fields with stable names so users
+ * don't need to fall back to the custom-env editor for normal OpenTofu cases.
  */
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   {
@@ -124,6 +123,131 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
           placeholder: providerCopy(
             "conn.provider.cloudflare.accountId.placeholder",
           ),
+        },
+      ];
+    },
+  },
+  {
+    provider: "aws",
+    get label() {
+      return providerCopy("conn.provider.aws.label");
+    },
+    get fields() {
+      return [
+        {
+          envName: "AWS_ACCESS_KEY_ID",
+          label: providerCopy("conn.provider.aws.accessKeyId.label"),
+          required: true,
+          secret: false,
+          placeholder: "AKIA...",
+        },
+        {
+          envName: "AWS_SECRET_ACCESS_KEY",
+          label: providerCopy("conn.provider.aws.secretAccessKey.label"),
+          required: true,
+          secret: true,
+          placeholder: providerCopy(
+            "conn.provider.aws.secretAccessKey.placeholder",
+          ),
+        },
+        {
+          envName: "AWS_REGION",
+          label: providerCopy("conn.provider.aws.region.label"),
+          required: true,
+          secret: false,
+          placeholder: "ap-northeast-1",
+        },
+        {
+          envName: "AWS_SESSION_TOKEN",
+          label: providerCopy("conn.provider.aws.sessionToken.label"),
+          required: false,
+          secret: true,
+          placeholder: providerCopy(
+            "conn.provider.aws.sessionToken.placeholder",
+          ),
+        },
+      ];
+    },
+  },
+  {
+    provider: "gcp",
+    get label() {
+      return providerCopy("conn.provider.gcp.label");
+    },
+    get fields() {
+      return [
+        {
+          envName: "GOOGLE_CREDENTIALS",
+          label: providerCopy("conn.provider.gcp.credentials.label"),
+          required: true,
+          secret: true,
+          placeholder: providerCopy(
+            "conn.provider.gcp.credentials.placeholder",
+          ),
+        },
+        {
+          envName: "GOOGLE_CLOUD_PROJECT",
+          label: providerCopy("conn.provider.gcp.project.label"),
+          required: true,
+          secret: false,
+          placeholder: "my-project",
+        },
+      ];
+    },
+  },
+  {
+    provider: "hcloud",
+    get label() {
+      return providerCopy("conn.provider.hcloud.label");
+    },
+    get fields() {
+      return [
+        {
+          envName: "HCLOUD_TOKEN",
+          label: providerCopy("conn.provider.hcloud.token.label"),
+          required: true,
+          secret: true,
+          placeholder: providerCopy("conn.provider.hcloud.token.placeholder"),
+        },
+      ];
+    },
+  },
+  {
+    provider: "s3-compatible",
+    get label() {
+      return providerCopy("conn.provider.s3.label");
+    },
+    get fields() {
+      return [
+        {
+          envName: "AWS_ACCESS_KEY_ID",
+          label: providerCopy("conn.provider.aws.accessKeyId.label"),
+          required: true,
+          secret: false,
+          placeholder: "R2...",
+        },
+        {
+          envName: "AWS_SECRET_ACCESS_KEY",
+          label: providerCopy("conn.provider.aws.secretAccessKey.label"),
+          required: true,
+          secret: true,
+          placeholder: providerCopy(
+            "conn.provider.aws.secretAccessKey.placeholder",
+          ),
+        },
+        {
+          envName: "AWS_REGION",
+          label: providerCopy("conn.provider.aws.region.label"),
+          required: true,
+          secret: false,
+          placeholder: "auto",
+        },
+        {
+          envName: "AWS_ENDPOINT_URL_S3",
+          label: providerCopy("conn.provider.s3.endpoint.label"),
+          required: true,
+          secret: false,
+          placeholder: "https://<account>.r2.cloudflarestorage.com",
         },
       ];
     },

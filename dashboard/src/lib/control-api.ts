@@ -931,16 +931,16 @@ export async function listMembers(
 }
 
 /**
- * Adds (or re-activates) a member by account subject
- * (`POST /api/v1/spaces/:id/members`). The membership domain has no email
- * invite / notification side-channel, so this adds an EXISTING account handle /
- * subject directly as an active member. Owner/admin only; only an owner may
- * grant `role: "owner"` (the backend rejects an admin doing so with 403).
+ * Adds (or re-activates) a member by verified account email or account subject
+ * (`POST /api/v1/spaces/:id/members`). This is not an outbound email
+ * notification flow: the target must already have signed in once so the
+ * account plane can resolve a verified email to a Takosumi subject.
  */
 export async function inviteMember(
   spaceId: string,
   input: {
-    readonly accountId: string;
+    readonly email?: string;
+    readonly accountId?: string;
     readonly role?: ControlSpaceRole;
   },
 ): Promise<PublicSpaceMember> {
@@ -949,7 +949,8 @@ export async function inviteMember(
     {
       method: "POST",
       body: {
-        accountId: input.accountId,
+        ...(input.email ? { email: input.email } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
         ...(input.role ? { role: input.role } : {}),
       },
     },
