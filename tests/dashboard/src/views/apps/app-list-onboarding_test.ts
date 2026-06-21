@@ -16,34 +16,40 @@ const appViewsCssSource = readFileSync(
 );
 
 describe("AppListView Workspace starter", () => {
-  test("keeps the first-run cloud workflow visible from home", () => {
+  test("keeps first-run home focused on choosing a service, not a deploy procedure", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
     expect(appListSource).toContain("when={list().length === 0}");
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('href="/connections"');
-    expect(appListSource).toContain('t("apps.start.stepSource")');
-    expect(appListSource).toContain('t("apps.start.stepConnection")');
-    expect(appListSource).toContain('t("apps.start.stepDeploy")');
+    expect(appListSource).toContain('t("apps.start.optionCatalog")');
+    expect(appListSource).toContain('t("apps.start.optionLink")');
+    expect(appListSource).not.toContain('t("apps.start.stepSource")');
+    expect(appListSource).not.toContain('t("apps.start.stepConnection")');
+    expect(appListSource).not.toContain('t("apps.start.stepDeploy")');
   });
 
-  test("uses a compact summary for workspaces that already have services", () => {
-    expect(appListSource).toContain("function WorkspaceSummaryBar");
-    expect(appListSource).toContain("<WorkspaceSummaryBar");
+  test("uses a launcher summary for workspaces that already have services", () => {
+    expect(appListSource).toContain("function ServiceLauncherHeader");
+    expect(appListSource).toContain("<ServiceLauncherHeader");
     expect(appListSource).toContain("<ServiceList");
     expect(appListSource).toContain('class="av-service-list"');
     expect(appListSource).toContain('class="av-service-row"');
-    expect(appListSource).toContain('t("apps.summary.total")');
-    expect(appListSource).toContain('t("apps.summary.deployed")');
+    expect(appListSource).toContain('t("apps.summary.title")');
+    expect(appListSource).toContain('t("apps.summary.body"');
     expect(appListSource).toContain('t("apps.summary.clear")');
     expect(appListSource).not.toContain("apps.start.titleWithServices");
     expect(appListSource).not.toContain("apps.start.bodyWithServices");
   });
 
-  test("keeps starter copy action-oriented in both locales", () => {
-    expect(en["apps.start.add"]).toBe("Add from source");
+  test("keeps starter copy action-oriented and non-procedural in both locales", () => {
+    expect(en["apps.start.add"]).toBe("Add service");
     expect(en["apps.start.connections"].toLowerCase()).toContain("connections");
-    expect(ja["apps.start.add"]).toContain("取得元");
+    expect(en["apps.start.optionCatalog"].toLowerCase()).toContain("example");
+    expect(en).not.toHaveProperty("apps.start.stepSource");
+    expect(ja["apps.start.add"]).toContain("サービス");
     expect(ja["apps.start.connections"]).toContain("クラウド接続");
+    expect(ja["apps.start.optionCatalog"]).toContain("サンプル");
+    expect(ja).not.toHaveProperty("apps.start.stepSource");
     expect(en["apps.summary.clear"]).toContain("No attention");
     expect(ja["apps.summary.clear"]).toContain("要対応なし");
   });
@@ -55,7 +61,16 @@ describe("AppListView Workspace starter", () => {
     expect(appViewsCssSource).toContain(".av-service-actions .tg-btn");
     expect(appViewsCssSource).toContain("grid-template-columns: 1fr;");
     expect(appViewsCssSource).toContain(".av-start-actions .tg-btn");
+    expect(appViewsCssSource).toContain(".av-start-options");
     expect(appViewsCssSource).toContain("flex: 1 1 100%;");
     expect(appViewsCssSource).toContain("flex-direction: column;");
+  });
+
+  test("keeps open as the first-class row action when a public link exists", () => {
+    expect(appListSource).toContain('t("apps.openApp")');
+    expect(appListSource).toContain('t("apps.noOpenLink")');
+    expect(appListSource).toContain('icon={<ExternalLink size={14} />}');
+    expect(appListSource).toContain('target="_blank"');
+    expect(appListSource).toContain('t("apps.viewDetails")');
   });
 });

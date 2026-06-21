@@ -87,6 +87,13 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain(
       '{pendingInstall()?.label ?? t("auth.installContextTitle")}',
     );
+    expect(signInViewSource).not.toContain("ctx.sourceLabel");
+    expect(en["auth.installContextAria"].toLowerCase()).toContain("service");
+    expect(en["auth.installContextRootPath"].toLowerCase()).not.toContain(
+      "module",
+    );
+    expect(ja["auth.installContextAria"]).toContain("サービス");
+    expect(ja["auth.installContextRootPath"]).not.toContain("module");
   });
 
   test("uses Google as the only first-party OAuth button", () => {

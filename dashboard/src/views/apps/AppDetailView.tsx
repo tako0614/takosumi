@@ -25,7 +25,7 @@ import {
   Switch,
 } from "solid-js";
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { Archive, ArrowLeft } from "lucide-solid";
+import { Archive, ArrowLeft, ExternalLink } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -63,6 +63,7 @@ import {
 import {
   effectiveInstallationStatus,
   isUrlString,
+  launchUrlFromOutputs,
   outputLabel,
 } from "../../lib/installations-ui.ts";
 import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
@@ -162,6 +163,9 @@ function Inner() {
   const publicOutputs = createMemo(() =>
     Object.entries(currentDeployment()?.outputsPublic ?? {}),
   );
+  const launchUrl = createMemo(() =>
+    launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {}),
+  );
 
   /** Recent run/release events for THIS app (activity carries metadata.installationId). */
   const recentActivity = createMemo(() =>
@@ -259,8 +263,21 @@ function Inner() {
                     <Button variant="ghost" href="/">
                       {t("app.backToList")}
                     </Button>
+                    <Show when={launchUrl()}>
+                      {(url) => (
+                        <Button
+                          variant="primary"
+                          href={url()}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          icon={<ExternalLink size={16} />}
+                        >
+                          {t("apps.openApp")}
+                        </Button>
+                      )}
+                    </Show>
                     <Button
-                      variant="primary"
+                      variant={launchUrl() ? "secondary" : "primary"}
                       type="button"
                       disabled={plan.busy()}
                       busy={plan.busy()}

@@ -39,6 +39,9 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
+];
+
+const MANAGE: NavItem[] = [
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   { href: "/billing", labelKey: "nav.billing", icon: CreditCard },
   { href: "/activity", labelKey: "nav.activity", icon: Activity },
@@ -72,6 +75,19 @@ export default function Sidebar() {
       </Show>
       <nav class="sidebar-nav" aria-label="Primary">
         {PRIMARY.map((item) => (
+          <A
+            href={item.href}
+            class="sidebar-link"
+            classList={{ active: isActive(item) }}
+          >
+            <item.icon size={18} />
+            <span class="sidebar-link-label">{t(item.labelKey)}</span>
+          </A>
+        ))}
+      </nav>
+      <nav class="sidebar-nav sidebar-nav-secondary" aria-label={t("nav.manage")}>
+        <span class="sidebar-section-label">{t("nav.manage")}</span>
+        {MANAGE.map((item) => (
           <A
             href={item.href}
             class="sidebar-link"

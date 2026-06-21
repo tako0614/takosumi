@@ -4,7 +4,7 @@
  * / advanced routes instead of occupying a primary phone tab.
  */
 import { A, useLocation } from "@solidjs/router";
-import { Bell, Home, Plus, UserCircle2 } from "lucide-solid";
+import { Bell, Home, Plug, Plus, UserCircle2 } from "lucide-solid";
 import { t } from "../../../../i18n/index.ts";
 
 export default function MobileTabs() {
@@ -12,6 +12,7 @@ export default function MobileTabs() {
   const TABS = [
     { href: "/", label: () => t("nav.home"), icon: Home, end: true },
     { href: "/new", label: () => t("nav.add"), icon: Plus },
+    { href: "/connections", label: () => t("nav.connections"), icon: Plug },
     {
       href: "/notifications",
       label: () => t("nav.notifications"),
