@@ -58,18 +58,22 @@ export WRANGLER_DOCKER_BIN="$PWD/scripts/wrangler-docker-buildx-wrapper.sh"
 bun run check:cloudflare-deploy-host
 
 # 3. staging dry-run → deploy
-bunx wrangler deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
-bunx wrangler deploy --config takosumi-private/platform/wrangler.staging.toml
+bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
+bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.staging.toml
 
 # 4. production closed dry-run → deploy
-bunx wrangler deploy --dry-run --config takosumi-private/platform/wrangler.toml
-bunx wrangler deploy --config takosumi-private/platform/wrangler.toml
+bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.toml
+bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.toml
 ```
 
 `check:cloudflare-deploy-host` は Docker/buildx が Wrangler の Cloudflare
 Containers build path に耐えるかを確認する operator preflight。デフォルトの
 `docker run --rm hello-world` が AppArmor で落ち、`--security-opt
 apparmor=unconfined` 付きだけ通る host では `wrangler deploy` を実行しない。
+同時に Wrangler 4.103.0 以上を確認する。古い Wrangler は Worker script upload
+と image push が通っても、最後の Cloudflare Containers application finalize で
+`Unauthorized` になることがあるため、real deploy は `bunx wrangler@latest ...`
+で実行する。
 Wrangler の内部 Container build はその security option を直接受け取れないため、
 `prepare:cloudflare-deploy-host` が起動する privileged BuildKit remote builder と
 `WRANGLER_DOCKER_BIN` wrapper で `docker build` を `docker buildx build --builder
@@ -85,7 +89,7 @@ docker buildx build --load --platform linux/amd64 --provenance=false \
   -f takosumi/runner/Dockerfile \
   takosumi
 
-bunx wrangler containers push takosumi-runner:<tag>
+bunx wrangler@latest containers push takosumi-runner:<tag>
 ```
 
 ```toml
