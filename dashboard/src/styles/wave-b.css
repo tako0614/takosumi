@@ -388,9 +388,7 @@
 }
 @media (max-width: 720px) {
   .wb-install-form.wb-install-source-form {
-    padding-bottom: calc(
-      var(--tg-mobile-tab-h) + 76px + env(safe-area-inset-bottom, 0px)
-    );
+    padding-bottom: 0;
   }
   .wb-output-row {
     grid-template-columns: 1fr;
@@ -409,13 +407,12 @@
     grid-template-columns: 1fr;
   }
   .wb-install-form.wb-install-source-form > .wb-form-actions {
-    position: fixed;
-    left: var(--tg-s-3);
-    right: var(--tg-s-3);
+    position: sticky;
     bottom: calc(
       var(--tg-mobile-tab-h) + var(--tg-s-2) + env(safe-area-inset-bottom, 0px)
     );
-    z-index: 45;
+    z-index: 35;
+    margin-top: var(--tg-s-2);
     padding: var(--tg-s-2);
     border: 1px solid var(--tg-line);
     border-radius: var(--tg-r-md);
