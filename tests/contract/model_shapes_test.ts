@@ -32,14 +32,29 @@ import type {
   UsageEvent,
 } from "../../contract/billing.ts";
 import type { CapsuleCompatibilityReport } from "../../contract/capsules.ts";
-import type { Dependency, DependencySnapshot } from "../../contract/dependencies.ts";
+import type {
+  Dependency,
+  DependencySnapshot,
+} from "../../contract/dependencies.ts";
 import type { Connection } from "../../contract/internal-deploy-control-api.ts";
 import type { Deployment, StateSnapshot } from "../../contract/deployments.ts";
-import type { InstallConfig, Installation } from "../../contract/installations.ts";
-import type { OutputShare, OutputSnapshot } from "../../contract/output-snapshots.ts";
+import type {
+  InstallConfig,
+  Installation,
+} from "../../contract/installations.ts";
+import type {
+  OutputShare,
+  OutputSnapshot,
+} from "../../contract/output-snapshots.ts";
 import type { Run, RunGroup } from "../../contract/runs.ts";
-import type { CredentialMintEvent, SecurityFinding } from "../../contract/security.ts";
-import { formatInstallationFullName, type Space } from "../../contract/spaces.ts";
+import type {
+  CredentialMintEvent,
+  SecurityFinding,
+} from "../../contract/security.ts";
+import {
+  formatInstallationFullName,
+  type Space,
+} from "../../contract/spaces.ts";
 
 test("Space shape", () => {
   const space: Space = {
@@ -302,9 +317,7 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
   expect(isProviderDeliveryMode("gateway")).toBe(false);
   expect(isProviderDeliveryMode("runner_token")).toBe(false);
   expect(isProviderResolutionStatus(resolution.status)).toBe(true);
-  expect(runEnvironment.providerResolutions[0]?.materialization).toBe(
-    "secret",
-  );
+  expect(runEnvironment.providerResolutions[0]?.materialization).toBe("secret");
   expect(runEnvironment.providerResolutions[0]?.envId).toBe("penv_cf_secret");
   expect(publicResolution.ownership).toBe("own_key");
   expect(runtimeGrant.serviceBindingId).toBe("sb_1");
@@ -419,6 +432,14 @@ test("single Run table covers all run kinds", () => {
     baseStateGeneration: 3,
     planDigest: "sha256:abc",
     policyStatus: "pass",
+    planResources: [
+      {
+        address: "cloudflare_workers_script.app",
+        type: "cloudflare_workers_script",
+        actions: ["delete", "create"],
+        scope: { cloudflareAccountId: "acct_public" },
+      },
+    ],
     providerResolutions: [
       {
         requirement: {
@@ -454,6 +475,10 @@ test("single Run table covers all run kinds", () => {
     createdAt: "2026-06-06T00:00:00Z",
   };
   expect(run.type).toBe("plan");
+  expect(run.planResources?.[0]?.actions).toEqual(["delete", "create"]);
+  expect(run.planResources?.[0]?.scope?.cloudflareAccountId).toBe(
+    "acct_public",
+  );
   expect(run.providerResolutions?.[0]?.status).toBe("resolved_provider_env");
   expect(group.type).toBe("space_update");
   const driftGroup: RunGroup = {

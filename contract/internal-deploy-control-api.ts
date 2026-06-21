@@ -224,6 +224,12 @@ export interface PlanRun {
    */
   readonly compatibilityReportId?: string;
   readonly summary?: PlanRunSummary;
+  /**
+   * Value-free resource/action projection from the runner's plan JSON. This is
+   * persisted for policy, billing, audit, and public review; raw resource
+   * values stay only in the encrypted plan JSON artifact.
+   */
+  readonly planResourceChanges?: readonly PlanResourceChange[];
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
