@@ -1,22 +1,14 @@
 /**
- * Curated install catalog for `/new` — entries are addressed exactly like any
- * other Git-URL capsule (url / ref / path). This is intentionally a static,
- * easily-edited list: the platform's install model is "any Git URL", so the
- * catalog is just curated starting points, not a registry with special powers.
+ * Curated install catalog for `/new`.
  *
- * Inclusion rule — an entry must be a REAL standalone capsule: installing it
- * from Takosumi alone (no separate product-specific installer)
- * must provision something via `tofu plan/apply`. Audited 2026-06 and trimmed
- * accordingly:
- *   - product-distribution repos that only publish application metadata rather
- *     than infrastructure are excluded because installing them here would plan
- *     zero resources.
- *   - product distributions such as Takos are linked from their own website via
- *     `/install?git=...`; they are not generic Takosumi starter cards.
- *   - providers/cloudflare/modules/* : first-party deployment TEMPLATES whose
- *     module/ expects a runner-built artifact and pipeline-supplied inputs
- *     (`localModulePath`, build commands) — not standalone Git capsules.
- * The catalog grows when purpose-built starter capsule repos exist.
+ * Each entry still resolves to normal Git URL / ref / path coordinates and a
+ * seeded InstallConfig. The catalog has no special deployment authority; it is
+ * just the friendly app-store layer over runnable first-party OpenTofu starter
+ * modules.
+ *
+ * Inclusion rule: a card must create real infrastructure with `tofu
+ * plan/apply`. Product distributions that only publish application metadata
+ * stay out of this generic starter catalog.
  */
 import type { Locale } from "./i18n/index.ts";
 
@@ -61,7 +53,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "worker",
     provider: "cloudflare",
     suggestedName: "hello",
-    badge: { ja: "Worker", en: "Worker" },
+    badge: { ja: "Cloudflare / Worker", en: "Cloudflare / Worker" },
     name: { ja: "Hello Worker", en: "Hello Worker" },
     description: {
       ja: "ビルドなしで小さな Cloudflare Worker を作ります。最初の接続テストに向いています。",
@@ -100,7 +92,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "storage",
     provider: "cloudflare",
     suggestedName: "r2-storage",
-    badge: { ja: "ストレージ", en: "Storage" },
+    badge: { ja: "Cloudflare / ストレージ", en: "Cloudflare / Storage" },
     name: { ja: "Cloudflare R2 バケット", en: "Cloudflare R2 bucket" },
     description: {
       ja: "ファイルやバックアップ用の保存場所を作ります。",
@@ -144,7 +136,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "site",
     provider: "cloudflare",
     suggestedName: "static-site",
-    badge: { ja: "Web", en: "Web" },
+    badge: { ja: "Cloudflare / Web", en: "Cloudflare / Web" },
     name: { ja: "Cloudflare Pages サイト", en: "Cloudflare Pages site" },
     description: {
       ja: "静的サイトを置く場所を用意します。",
@@ -185,7 +177,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     kind: "storage",
     provider: "aws",
     suggestedName: "s3-storage",
-    badge: { ja: "ストレージ", en: "Storage" },
+    badge: { ja: "AWS / ストレージ", en: "AWS / Storage" },
     name: { ja: "AWS S3 バケット", en: "AWS S3 bucket" },
     description: {
       ja: "AWS にファイル置き場を作ります。アプリの保存先やバックアップにも使えます。",

@@ -156,6 +156,12 @@ function Inner() {
   const publicOutputs = createMemo(() =>
     Object.entries(currentDeployment()?.outputsPublic ?? {}),
   );
+  const publicLinkOutputs = createMemo(() =>
+    publicOutputs().filter(([, value]) => isUrlString(value)),
+  );
+  const otherPublicOutputs = createMemo(() =>
+    publicOutputs().filter(([, value]) => !isUrlString(value)),
+  );
   const launchUrl = createMemo(() =>
     launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {}),
   );
@@ -278,7 +284,8 @@ function Inner() {
                 <Switch>
                   <Match when={tab() === "overview"}>
                     <OverviewTab
-                      publicOutputs={publicOutputs()}
+                      publicLinkOutputs={publicLinkOutputs()}
+                      otherPublicOutputs={otherPublicOutputs()}
                       hasDeployment={currentDeployment() !== undefined}
                       outputsLoading={deployments.loading}
                       producers={producers()}
@@ -364,7 +371,6 @@ function Inner() {
 interface DependencyRow {
   readonly id: string;
   readonly name: string;
-  readonly outputs: readonly { readonly from: string; readonly to: string }[];
 }
 
 function dependencyRows(
@@ -400,13 +406,13 @@ function dependencyRows(
       return {
         id: edge.id,
         name: names.get(otherId) ?? otherId,
-        outputs: Object.values(edge.outputs),
       };
     });
 }
 
 function OverviewTab(props: {
-  readonly publicOutputs: readonly [string, unknown][];
+  readonly publicLinkOutputs: readonly [string, unknown][];
+  readonly otherPublicOutputs: readonly [string, unknown][];
   readonly hasDeployment: boolean;
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
@@ -423,60 +429,51 @@ function OverviewTab(props: {
           <Match when={props.outputsLoading}>
             <p class="muted">{t("common.loading")}</p>
           </Match>
-          <Match when={props.publicOutputs.length === 0}>
-            {/* Distinguish "not deployed yet" from "deployed but this capsule
-                exposes no public outputs" — the old single message implied
-                outputs were still coming even for infra-only capsules. */}
+          <Match when={props.publicLinkOutputs.length === 0}>
             <p class="muted">
               {props.hasDeployment
                 ? t("app.outputs.none")
                 : t("app.outputs.empty")}
             </p>
           </Match>
-          <Match when={props.publicOutputs.length > 0}>
+          <Match when={props.publicLinkOutputs.length > 0}>
             <KVList
-              items={props.publicOutputs.map(([name, value]) => ({
+              items={props.publicLinkOutputs.map(([name, value]) => ({
                 label: outputLabel(name),
                 value: <OutputValue value={value} />,
               }))}
             />
           </Match>
         </Switch>
+        <Show when={props.otherPublicOutputs.length > 0}>
+          <details class="wb-disclosure">
+            <summary>{t("app.outputs.valuesTitle")}</summary>
+            <KVList
+              items={props.otherPublicOutputs.map(([name, value]) => ({
+                label: outputLabel(name),
+                value: <OutputValue value={value} />,
+              }))}
+            />
+          </details>
+        </Show>
       </Card>
 
-      {/* Post-apply next-step guidance: a deployed capsule that produced no
-          public output (infra-only) would otherwise dead-end on a green
-          "Deployed" with nothing to open. Tell the user the launch is a
-          separate step instead of implying the flow is complete. */}
-      <Show when={props.hasDeployment && props.publicOutputs.length === 0}>
-        <Card>
-          <CardHeader title={t("app.nextSteps.title")} />
-          <p>{t("app.nextSteps.infraOnly")}</p>
-          <a
-            href="https://takosumi.com/docs"
-            target="_blank"
-            rel="external noopener"
-            class="link"
-          >
-            {t("app.nextSteps.docs")}
-          </a>
-        </Card>
-      </Show>
-
       <Show when={props.producers.length > 0 || props.consumers.length > 0}>
-        <Card>
-          <CardHeader title={t("app.deps.title")} />
-          <div class="wa-dep-columns">
-            <DependencyList
-              title={t("app.deps.dependsOn")}
-              rows={props.producers}
-            />
-            <DependencyList
-              title={t("app.deps.usedBy")}
-              rows={props.consumers}
-            />
-          </div>
-        </Card>
+        <details class="wb-disclosure">
+          <summary>{t("app.deps.title")}</summary>
+          <Card>
+            <div class="wa-dep-columns">
+              <DependencyList
+                title={t("app.deps.dependsOn")}
+                rows={props.producers}
+              />
+              <DependencyList
+                title={t("app.deps.usedBy")}
+                rows={props.consumers}
+              />
+            </div>
+          </Card>
+        </details>
       </Show>
     </>
   );
@@ -498,14 +495,6 @@ function DependencyList(props: {
             {(row) => (
               <li>
                 <code>{row.name}</code>
-                <Show when={row.outputs.length > 0}>
-                  <span class="wa-dep-edge">
-                    {" "}
-                    {row.outputs
-                      .map((output) => `${output.from}→${output.to}`)
-                      .join(", ")}
-                  </span>
-                </Show>
               </li>
             )}
           </For>
@@ -655,11 +644,6 @@ function DeploysTab(props: {
                           tone={deploymentTone}
                         />
                       </Show>
-                      <span class="wa-deploy-meta">
-                        {t("app.deploys.generation", {
-                          n: deployment.stateGeneration,
-                        })}
-                      </span>
                       <Show when={!isCurrent()}>
                         <details class="wb-inline-details">
                           <summary>{t("app.deploys.restoreMenu")}</summary>

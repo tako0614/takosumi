@@ -40,6 +40,8 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain('t("apps.summary.body"');
     expect(appListSource).toContain('t("apps.summary.clear")');
     expect(appListSource).not.toContain('t("apps.graphLink")');
+    expect(appListSource).not.toContain('t("apps.dependsOn"');
+    expect(appListSource).not.toContain("getSpaceGraph");
     expect(appListSource).not.toContain("apps.start.titleWithServices");
     expect(appListSource).not.toContain("apps.start.bodyWithServices");
   });

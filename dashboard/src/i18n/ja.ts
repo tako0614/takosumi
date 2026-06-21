@@ -26,6 +26,7 @@ export const ja = {
   "common.unknown": "不明",
   "common.details": "詳細",
   "common.advanced": "詳細設定（上級者向け）",
+  "common.actions": "操作",
   "common.fetchFailed": "取得に失敗しました — {message}",
   "common.copy": "コピー",
   "common.justNow": "たった今",
@@ -172,7 +173,6 @@ export const ja = {
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",
   "apps.reviewChanges": "更新を確認",
-  "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
   "apps.summary.aria": "サービス状態",
   "apps.summary.title": "あなたのサービス",
@@ -196,25 +196,19 @@ export const ja = {
   "app.tab.danger": "危険な操作",
   "app.notFound": "サービスが見つかりません",
   "app.backToList": "一覧へ",
-  "app.outputs.title": "公開リンクと値",
-  "app.outputs.subtitle":
-    "このサービスが公開しているアドレスや値です。秘密情報は表示されません。",
-  "app.outputs.empty":
-    "まだ公開リンクはありません。デプロイすると表示されます。",
-  "app.outputs.none":
-    "このサービスには公開リンクがありません。公開画面を持たないサービスではアドレスが出ないことがあります。",
-  "app.nextSteps.title": "次にやること",
-  "app.nextSteps.infraOnly":
-    "このサービスにはまだ公開 URL がありません。最新の実行結果とサービスの説明を確認し、公開画面を持たない構成なのか、別サービスとの連携が必要なのかを確認してください。",
-  "app.nextSteps.docs": "ドキュメントを開く →",
+  "app.outputs.title": "公開リンク",
+  "app.outputs.subtitle": "開ける画面やアドレスがある場合に表示します。",
+  "app.outputs.empty": "デプロイ後に表示されます。",
+  "app.outputs.none": "このサービスには公開リンクがありません。",
+  "app.outputs.valuesTitle": "その他の値",
   "app.output.launchUrl": "公開アドレス",
   "app.output.openPublicLink": "公開リンクを開く",
   "app.output.url": "アドレス",
   "app.output.publicUrl": "公開アドレス",
   "app.output.endpoint": "エンドポイント",
   "app.output.hostname": "ホスト名",
-  "app.deps.title": "依存関係",
-  "app.deps.dependsOn": "利用しているサービス",
+  "app.deps.title": "連携しているサービス",
+  "app.deps.dependsOn": "このサービスが使うサービス",
   "app.deps.usedBy": "このサービスを使っているサービス",
   "app.source.title": "ソース",
   "app.source.name": "名前",
@@ -231,7 +225,6 @@ export const ja = {
   "app.deploys.subtitle":
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
-  "app.deploys.generation": "バージョン {n}",
   "app.deploys.restoreMenu": "その他",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.advancedActions": "その他の更新操作",
@@ -355,9 +348,6 @@ export const ja = {
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "おすすめサービス",
-  "new.catalog.intro":
-    "ホストしたいものを選びます。Takosumi はそのサービスに必要な設定だけを案内します。",
-  "new.catalog.provider": "{provider} を使います",
   "new.catalog.select": "これを追加",
   "new.advancedImport.open": "インストールリンクを使う",
   "new.advancedImport.close": "リンク入力を閉じる",
@@ -368,8 +358,6 @@ export const ja = {
     "まず内容を確認します。デプロイは承認後に実行されます。",
   "new.selection.sourceDetails": "取得元の詳細",
   "new.catalogInput.title": "サービス設定",
-  "new.catalogInput.body":
-    "このサービスに必要な最小限の設定を入力します。secret や API キーは外部サービス接続に入れます。",
   "new.catalogInput.errorRequired": "{label} を入力してください。",
   "new.catalogInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
@@ -433,12 +421,11 @@ export const ja = {
   "new.compat.recheck": "もう一度確認",
   "new.compat.checking": "確認中...",
   "new.progress.title": "取得元を確認しています",
-  "new.progress.fetching":
-    "Git の中身を取得し、この Workspace に追加できるか確認しています。このままお待ちください。",
-  "new.progress.slow":
-    "取得に少し時間がかかっています。大きいリポジトリや初回起動では時間がかかることがあります。完了すると次に必要な接続だけを案内します。",
+  "new.progress.fetching": "内容を確認しています。このままお待ちください。",
+  "new.progress.slow": "少し時間がかかっています。完了すると次に進めます。",
   "new.progress.status": "実行状態: {status}",
-  "new.compat.title": "確認結果",
+  "new.compat.title": "確認",
+  "new.compat.readyBrief": "確認できました。",
   "new.compat.ready": "このまま追加できます",
   "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
@@ -464,24 +451,20 @@ export const ja = {
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
   "new.providers.title": "外部サービス接続",
-  "new.providers.subtitle":
-    "最初の確認に進む前に、このサービスが使う接続を選びます。必要な接続が未設定の場合、Takosumi は勝手に別の接続を使わず、選択を求めて停止します。",
   "new.providers.alias": "alias: {alias}",
-  "new.providers.advanced": "接続の詳細",
   "new.providers.selectConnection": "接続を選択",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.errorOperatorManaged":
     "{provider} はこの Workspace ではまだ利用できません。",
   "new.providers.missingTitle": "接続の設定が必要です",
-  "new.providers.missingBody":
-    "このサービスは下の外部サービスを使います。接続を設定すると、この画面に戻って続きから追加できます。",
+  "new.providers.missingBody": "接続を設定すると続けられます。",
   "new.providers.setupMissing": "必要な接続を設定",
   "new.providers.operatorMissingTitle": "このサービスはまだここでは使えません",
   "new.providers.operatorMissingBody":
     "必要なサービス接続が、この Workspace ではまだ有効化されていません。",
   "new.providers.operatorMissingNext":
-    "Workspace の管理者に有効化を依頼し、その後この画面に戻って続けてください。",
+    "Workspace の管理者に有効化を依頼してください。",
   "new.step.technical": "技術的な進行状況",
   "new.step.register": "取得元を登録",
   "new.step.sync": "中身を取得",
@@ -560,11 +543,8 @@ export const ja = {
     "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
 
   // --- connections -------------------------------------------------------------
-  "conn.subtitle":
-    "外部サービスの認証情報を Workspace ごとに登録します。値は書き込み専用で、一度保存すると再表示されません。",
+  "conn.subtitle": "外部サービスに接続します。保存した値は再表示されません。",
   "conn.providerConnections.title": "外部サービス接続",
-  "conn.providerConnections.subtitle":
-    "この Workspace で使える接続です。値は書き込み専用のままです。",
   "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.ownership": "所有",
@@ -586,8 +566,6 @@ export const ja = {
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
   "conn.add.title": "接続を追加",
-  "conn.add.subtitle":
-    "接続先を選び、トークンを貼り付けるか環境変数として登録します。",
   "conn.add.provider": "接続先",
   "conn.add.genericEnvOption": "任意の接続情報を使う",
   "conn.add.displayName": "表示名（任意）",
@@ -622,10 +600,9 @@ export const ja = {
   "conn.provider.hcloud.token.placeholder": "Hetzner API トークンを貼り付け",
   "conn.provider.s3.label": "S3 互換ストレージ",
   "conn.provider.s3.endpoint.label": "S3 エンドポイント URL",
-  "conn.guided.intro":
-    "{provider} に接続します。トークンは {provider} の画面で作成し、貼り付けるだけです。",
   "conn.guided.openProvider": "{provider} を開いてトークンを作成",
   "conn.guided.oauth": "{provider} で自動接続",
+  "conn.guided.stepsSummary": "トークン作成の手順",
   "conn.guided.pasteLabel": "作成したトークンを貼り付け",
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "接続する",
@@ -634,8 +611,6 @@ export const ja = {
   "conn.advanced.register": "値を直接登録",
   "conn.register": "接続を登録",
   "conn.registering": "登録中...",
-  "conn.genericEnv.intro":
-    "AWS / GCP / Kubernetes など任意の外部サービスの認証情報を、環境変数（NAME=value）として登録します。値は書き込み専用で、保存後は env 名のみ表示されます。",
   "conn.genericEnv.providerName": "外部サービス名",
   "conn.genericEnv.envName": "環境変数名",
   "conn.genericEnv.value": "値",
@@ -649,7 +624,7 @@ export const ja = {
   "conn.error.invalidProvider": "プロバイダが不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.list.title": "登録済みの接続",
+  "conn.list.title": "接続の詳細",
   "conn.list.empty":
     "この Workspace にはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
