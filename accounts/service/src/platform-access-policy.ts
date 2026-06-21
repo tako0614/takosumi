@@ -1,9 +1,9 @@
 // Scope: this module gates ONLY the hosted platform readiness surfaces: the
-// platform-cell `materialize`/`export` installation mutations and Stripe checkout. The
+// platform-cell `materialize` installation mutation and Stripe checkout. The
 // generic Takosumi platform (OIDC sign-in, PAT issuance, upstream OAuth,
 // passkeys, generic Installations + import, PlanRuns, deployment / rollback
-// mutations, and the installation status PATCH) is NOT launch-gated and must
-// keep working while the platform readiness is closed.
+// mutations, export, and the installation status PATCH) is NOT launch-gated
+// and must keep working while the platform readiness is closed.
 
 import { isSha256HexDigest } from "./installation-helpers.ts";
 import { json, requestIdFrom } from "./http-helpers.ts";
@@ -54,7 +54,7 @@ export function createOpenPlatformAccessPolicy(
 
 // Returns a 503 launch-readiness response unless the platform readiness is open
 // with validated evidence. Call this ONLY from hosted platform readiness call
-// sites (materialize/export mutations, Stripe checkout).
+// sites (materialize mutation, Stripe checkout).
 export function platformAccessBlocked(
   policy: PlatformAccessPolicy | undefined,
 ): Response | null {
@@ -159,16 +159,17 @@ function platformReadinessSummaryLooksSensitive(summary: string): boolean {
   );
 }
 
-// Only the platform-cell `materialize`/`export` installation mutations are
-// offering surfaces. Generic deployment / deployment-plan-run / rollback
-// mutations are part of the non-gated platform and must work while the managed
-// offering is closed.
+// Only the platform-cell `materialize` installation mutation is an offering
+// surface. Export is data portability / launch evidence plumbing, so it must
+// keep working for authenticated owners while the managed offering is closed.
+// Generic deployment / deployment-plan-run / rollback mutations are also part
+// of the non-gated platform and must work while the managed offering is closed.
 export function platformGuardedInstallationMutation(
   kind: InstallationRoute["kind"],
   method: string,
 ): boolean {
   if (method === "POST") {
-    return kind === "materialize" || kind === "export";
+    return kind === "materialize";
   }
   return false;
 }
