@@ -349,7 +349,7 @@ export const ja = {
   "new.subtitle": "サンプルを選ぶか、リンクを貼り付けて追加します。",
   "new.flow.aria": "サービス追加の進行状況",
   "new.flow.kicker": "追加の流れ",
-  "new.flow.title": "追加前に内容を確認します",
+  "new.flow.title": "デプロイ前に内容を確認します",
   "new.flow.source": "追加するもの",
   "new.flow.sourceEmpty": "まだ選ばれていません。",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
@@ -405,7 +405,7 @@ export const ja = {
   "new.sourceAccess.httpsConnection": "HTTPS 取得元アクセス",
   "new.sourceAccess.sshConnection": "SSH 取得元アクセス",
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
-  "new.name": "表示名",
+  "new.name": "サービス名",
   "new.vars.projectName": "リソース接頭辞",
   "new.vars.inputsTitle": "詳細設定",
   "new.vars.inputsBody":
@@ -498,6 +498,8 @@ export const ja = {
   "new.error.spaceRequired": "Workspace を選択してください。",
   "new.error.urlRequired": "Git URL を入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
+  "new.error.nameInvalid":
+    "サービス名は半角小文字・数字・ハイフンだけで入力してください。",
   "new.error.configMissing": "追加設定がまだ利用できません。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",

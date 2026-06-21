@@ -52,6 +52,14 @@ const spaceSettingsViewSource = readFileSync(
   ),
   "utf8",
 );
+const installationsServiceSource = readFileSync(
+  resolve(here, "../../../../../core/domains/installations/mod.ts"),
+  "utf8",
+);
+const controlRoutesSource = readFileSync(
+  resolve(here, "../../../../../accounts/service/src/control-routes.ts"),
+  "utf8",
+);
 
 describe("/new Provider Connections return context", () => {
   test("all /new Provider Connections links use the return-context href", () => {
@@ -234,6 +242,32 @@ describe("/new Provider Connections return context", () => {
       newAppViewSource.match(/await putInstallationProviderConnectionSet\(/g) ??
         [],
     ).toHaveLength(1);
+  });
+
+  test("/new guards stale async add flows and validates service slugs before backend submit", () => {
+    expect(newAppViewSource).toContain("type FlowRun");
+    expect(newAppViewSource).toContain("const throwIfStaleFlow =");
+    expect(newAppViewSource).toContain("abortActiveFlow()");
+    expect(newAppViewSource).toContain("const flowInput = {");
+    expect(newAppViewSource).toContain(
+      "providerConnections: providerConnectionsPayload()",
+    );
+    expect(newAppViewSource).toContain("throwIfStaleFlow(flow)");
+    expect(newAppViewSource).toContain("INSTALLATION_NAME_PATTERN");
+    expect(newAppViewSource).toContain('"new.error.nameInvalid"');
+    expect(en["new.error.nameInvalid"]).toContain("lowercase");
+    expect(ja["new.error.nameInvalid"]).toContain("半角小文字");
+  });
+
+  test("duplicate installation errors use typed details before message fallback", () => {
+    expect(newAppViewSource).toContain("function controlErrorDetails");
+    expect(newAppViewSource).toContain('"duplicate_installation"');
+    expect(installationsServiceSource).toContain(
+      'reason: "duplicate_installation"',
+    );
+    expect(installationsServiceSource).toContain("installationId: existing.id");
+    expect(controlRoutesSource).toContain("error.details");
+    expect(controlRoutesSource).toContain("function isRecord");
   });
 
   test("/new translates known compatibility diagnostics into user-facing copy", () => {
