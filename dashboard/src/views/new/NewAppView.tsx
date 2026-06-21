@@ -1069,7 +1069,7 @@ function Inner() {
               </details>
 
               <form
-                class="wb-install-form"
+                class="wb-install-form wb-install-source-form"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (!compatibility()) void runCompatibilityCheck();
