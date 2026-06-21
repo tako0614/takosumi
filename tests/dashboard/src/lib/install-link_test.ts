@@ -4,7 +4,10 @@
  * browser-safe guards.
  */
 import { describe, expect, test } from "bun:test";
-import { capsuleNameFromUrl, parseInstallPrefill } from "../../../../dashboard/src/lib/install-link.ts";
+import {
+  capsuleNameFromUrl,
+  parseInstallPrefill,
+} from "../../../../dashboard/src/lib/install-link.ts";
 
 describe("parseInstallPrefill", () => {
   test("parses the simple git/ref/path form", () => {
@@ -40,16 +43,21 @@ describe("parseInstallPrefill", () => {
     ).toEqual({ git: "https://github.com/acme/repo.git", ref: "", path: "" });
   });
 
-  test("parses the safe project_name variable prefill", () => {
+  test("parses safe variable prefill values", () => {
     expect(
       parseInstallPrefill(
-        "?git=https://github.com/acme/repo.git&ref=main&path=deploy&var.project_name=takos-space",
+        "?git=https://github.com/acme/repo.git&ref=main&path=deploy&var.project_name=takos-space&var.domain=app.example.com&var.region=ap-northeast-1&var.account_id=acc_123",
       ),
     ).toEqual({
       git: "https://github.com/acme/repo.git",
       ref: "main",
       path: "deploy",
-      vars: { project_name: "takos-space" },
+      vars: {
+        account_id: "acc_123",
+        domain: "app.example.com",
+        project_name: "takos-space",
+        region: "ap-northeast-1",
+      },
     });
   });
 
@@ -78,16 +86,16 @@ describe("parseInstallPrefill", () => {
     });
   });
 
-  test("ignores unsupported variable prefill keys", () => {
+  test("ignores unsafe variable prefill keys and values", () => {
     expect(
       parseInstallPrefill(
-        "?git=https://github.com/acme/repo.git&var.secret=hidden&var.project_name=visible",
+        "?git=https://github.com/acme/repo.git&var.secret=hidden&var.api_key=hidden&var.bad-name=bad&var.multiline=line%0Abreak&var.zone_id=zone_123&var.project_name=visible",
       ),
     ).toEqual({
       git: "https://github.com/acme/repo.git",
       ref: "",
       path: "",
-      vars: { project_name: "visible" },
+      vars: { project_name: "visible", zone_id: "zone_123" },
     });
   });
 
