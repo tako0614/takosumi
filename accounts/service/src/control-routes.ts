@@ -36,6 +36,7 @@ import type {
   ListConnectionsResponse,
   ListDeploymentsResponse,
   ListRunnerProfilesResponse,
+  OpenTofuModuleSource,
   PlanRunResponse,
   PublicPlanRun,
   TestConnectionResponse,
@@ -140,6 +141,14 @@ import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  canTransitionAppInstallationStatus,
+  type AppInstallationStatus,
+  type InstallationRecord,
+  type SpaceKind,
+} from "./ledger.ts";
+import { appendLedgerEvent } from "./installation-ledger-events.ts";
+import { base64UrlEncodeBytes } from "./encoding.ts";
 
 /** 64 MiB cap on a single local Capsule upload archive. */
 const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
@@ -570,6 +579,7 @@ export interface ControlPlaneOperations {
     readonly bytes: Uint8Array;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
+  getSourceSnapshot(id: string): Promise<SourceSnapshot>;
   deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   // --- Billing (§28) ---
   getSpaceBilling(spaceId: string): Promise<{
@@ -1488,6 +1498,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
+      await syncDeployControlProjectionStatusFromRun({ store, run });
       return json({ run: await publicRun(operations, run) });
     }
     const leaf = segments[2];
@@ -2804,12 +2815,14 @@ async function deployUploadedSnapshot(
     ...(autoApprove !== undefined ? { autoApprove } : {}),
   };
   try {
-    return json(
-      await publicDeployResponse(
-        operations,
-        await operations.deployUpload(deployRequest),
-      ),
-    );
+    const deployResponse = await operations.deployUpload(deployRequest);
+    await syncDeployControlProjectionFromDeploy({
+      operations,
+      store,
+      sessionSubject: sessionSubject as TakosumiSubject,
+      deployResponse,
+    });
+    return json(await publicDeployResponse(operations, deployResponse));
   } catch (error) {
     logDeployUploadFailure(error, {
       method: request.method,
@@ -2825,6 +2838,383 @@ async function deployUploadedSnapshot(
     });
     throw error;
   }
+}
+
+interface DeployControlProjectionSource {
+  readonly sourceGitUrl: string;
+  readonly sourceRef: string;
+  readonly sourceCommit: string;
+  readonly planDigest: string;
+  readonly artifactDigest?: string;
+}
+
+async function syncDeployControlProjectionFromDeploy(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly sessionSubject: TakosumiSubject;
+  readonly deployResponse: DeployResponse;
+}): Promise<void> {
+  const planRunId =
+    input.deployResponse.planRun?.id ?? input.deployResponse.run.id;
+  const { planRun } = await input.operations.getPlanRun(planRunId);
+  await upsertDeployControlInstallationProjection({
+    operations: input.operations,
+    store: input.store,
+    sessionSubject: input.sessionSubject,
+    installation: input.deployResponse.installation,
+    planRun,
+    fallbackRun: input.deployResponse.planRun ?? input.deployResponse.run,
+    requestedStatus: projectionStatusFromDeploy(input.deployResponse),
+  });
+}
+
+async function syncDeployControlProjectionFromApply(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly sessionSubject: TakosumiSubject;
+  readonly planRun: PublicPlanRun;
+  readonly response: ApplyRunResponse;
+}): Promise<void> {
+  const installation =
+    input.response.installation ??
+    (input.planRun.installationId
+      ? await input.operations.installations
+          .getInstallation(input.planRun.installationId)
+          .catch(() => undefined)
+      : undefined);
+  if (!installation) return;
+  await upsertDeployControlInstallationProjection({
+    operations: input.operations,
+    store: input.store,
+    sessionSubject: input.sessionSubject,
+    installation,
+    planRun: input.planRun,
+    fallbackRun: undefined,
+    requestedStatus: projectionStatusFromRunStatus(
+      input.response.applyRun.status,
+    ),
+  });
+}
+
+async function syncDeployControlProjectionStatusFromRun(input: {
+  readonly store: AccountsStore;
+  readonly run: Run;
+}): Promise<void> {
+  if (input.run.type !== "apply" || !input.run.installationId) return;
+  const requestedStatus = projectionStatusFromRunStatus(input.run.status);
+  if (requestedStatus === "installing") return;
+  const installation = await input.store.findAppInstallation(
+    input.run.installationId,
+  );
+  if (!installation) return;
+  await saveProjectionStatusChange({
+    store: input.store,
+    installation,
+    requestedStatus,
+    reason: `deploy-control ${input.run.type} run ${input.run.status}`,
+  });
+}
+
+async function upsertDeployControlInstallationProjection(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly sessionSubject: TakosumiSubject;
+  readonly installation: PublicInstallation;
+  readonly planRun: PublicPlanRun;
+  readonly fallbackRun?: Run;
+  readonly requestedStatus: AppInstallationStatus;
+}): Promise<void> {
+  const source = await projectionSourceFromPlanRun({
+    operations: input.operations,
+    planRun: input.planRun,
+    fallbackRun: input.fallbackRun,
+  });
+  if (!source) return;
+  const existing = await input.store.findAppInstallation(input.installation.id);
+  if (existing?.status === "ready" && input.requestedStatus === "installing") {
+    return;
+  }
+  const now = Date.now();
+  const accountId =
+    existing?.accountId ??
+    (await ensureProjectionLedgerScope({
+      operations: input.operations,
+      store: input.store,
+      sessionSubject: input.sessionSubject,
+      spaceId: input.installation.spaceId,
+      now,
+    }));
+  if (!accountId) return;
+  const status = nextProjectionStatus(existing?.status, input.requestedStatus);
+  const record: InstallationRecord = {
+    installationId: input.installation.id,
+    accountId,
+    spaceId: input.installation.spaceId,
+    appId: input.installation.name,
+    sourceGitUrl: source.sourceGitUrl,
+    sourceRef: source.sourceRef,
+    sourceCommit: source.sourceCommit,
+    planDigest: source.planDigest,
+    ...(source.artifactDigest ? { artifactDigest: source.artifactDigest } : {}),
+    mode: existing?.mode ?? "self-hosted",
+    ...(existing?.runtimeBindingId
+      ? { runtimeBindingId: existing.runtimeBindingId }
+      : {}),
+    ...(existing?.billingAccountId
+      ? { billingAccountId: existing.billingAccountId }
+      : {}),
+    status,
+    createdBySubject: existing?.createdBySubject ?? input.sessionSubject,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  await input.store.saveAppInstallation(record);
+  if (!existing) {
+    await appendLedgerEvent(input.store, {
+      installationId: record.installationId,
+      eventType: "installation.created",
+      payload: {
+        appId: record.appId,
+        accountId: record.accountId,
+        spaceId: record.spaceId,
+        mode: record.mode,
+        status: record.status,
+      },
+      now,
+    });
+    return;
+  }
+  if (record.status !== existing.status) {
+    await appendProjectionStatusChangedEvent({
+      store: input.store,
+      installationId: record.installationId,
+      from: existing.status,
+      to: record.status,
+      reason: "deploy-control projection sync",
+      now,
+    });
+  }
+}
+
+async function saveProjectionStatusChange(input: {
+  readonly store: AccountsStore;
+  readonly installation: InstallationRecord;
+  readonly requestedStatus: AppInstallationStatus;
+  readonly reason: string;
+}): Promise<void> {
+  const status = nextProjectionStatus(
+    input.installation.status,
+    input.requestedStatus,
+  );
+  if (status === input.installation.status) return;
+  const now = Date.now();
+  await input.store.saveAppInstallation({
+    ...input.installation,
+    status,
+    updatedAt: now,
+  });
+  await appendProjectionStatusChangedEvent({
+    store: input.store,
+    installationId: input.installation.installationId,
+    from: input.installation.status,
+    to: status,
+    reason: input.reason,
+    now,
+  });
+}
+
+async function appendProjectionStatusChangedEvent(input: {
+  readonly store: AccountsStore;
+  readonly installationId: string;
+  readonly from: AppInstallationStatus;
+  readonly to: AppInstallationStatus;
+  readonly reason: string;
+  readonly now: number;
+}): Promise<void> {
+  await appendLedgerEvent(input.store, {
+    installationId: input.installationId,
+    eventType: "installation.status_changed",
+    payload: {
+      from: input.from,
+      to: input.to,
+      reason: input.reason,
+    },
+    now: input.now,
+  });
+}
+
+async function ensureProjectionLedgerScope(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly sessionSubject: TakosumiSubject;
+  readonly spaceId: string;
+  readonly now: number;
+}): Promise<string | undefined> {
+  const existingSpace = await input.store.findSpace(input.spaceId);
+  if (existingSpace) {
+    const existingAccount = await input.store.findLedgerAccount(
+      existingSpace.accountId,
+    );
+    if (
+      existingAccount &&
+      existingAccount.legalOwnerSubject !== input.sessionSubject
+    ) {
+      return undefined;
+    }
+    if (!existingAccount) {
+      await input.store.saveLedgerAccount({
+        accountId: existingSpace.accountId,
+        legalOwnerSubject: input.sessionSubject,
+        createdAt: input.now,
+        updatedAt: input.now,
+      });
+    }
+    return existingSpace.accountId;
+  }
+  const accountId = await projectionAccountIdForSubject(input.sessionSubject);
+  const existingAccount = await input.store.findLedgerAccount(accountId);
+  if (!existingAccount) {
+    await input.store.saveLedgerAccount({
+      accountId,
+      legalOwnerSubject: input.sessionSubject,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
+  }
+  const space = await input.operations.spaces
+    .getSpace(input.spaceId)
+    .catch(() => undefined);
+  await input.store.saveSpace({
+    spaceId: input.spaceId,
+    accountId,
+    kind: ledgerSpaceKind(space?.type),
+    ...(space?.displayName ? { displayName: space.displayName } : {}),
+    createdAt: input.now,
+    updatedAt: input.now,
+  });
+  const confirmedSpace = await input.store.findSpace(input.spaceId);
+  return confirmedSpace?.accountId === accountId ? accountId : undefined;
+}
+
+async function projectionSourceFromPlanRun(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly planRun: PublicPlanRun;
+  readonly fallbackRun?: Run;
+}): Promise<DeployControlProjectionSource | undefined> {
+  const snapshotId =
+    input.planRun.sourceSnapshotId ?? input.fallbackRun?.sourceSnapshotId;
+  const snapshot = snapshotId
+    ? await input.operations
+        .getSourceSnapshot(snapshotId)
+        .catch(() => undefined)
+    : undefined;
+  if (snapshot) {
+    return {
+      sourceGitUrl: snapshot.url,
+      sourceRef: snapshot.ref,
+      sourceCommit: snapshot.resolvedCommit || snapshot.archiveDigest,
+      planDigest:
+        input.planRun.planDigest ??
+        input.fallbackRun?.planDigest ??
+        snapshot.archiveDigest,
+      ...(input.planRun.planArtifact?.digest
+        ? { artifactDigest: input.planRun.planArtifact.digest }
+        : {}),
+    };
+  }
+  const source = (input.planRun as { readonly source?: OpenTofuModuleSource })
+    .source;
+  if (!source) return undefined;
+  const planDigest =
+    input.planRun.planDigest ??
+    input.fallbackRun?.planDigest ??
+    input.planRun.sourceDigest;
+  const artifactDigest = input.planRun.planArtifact?.digest;
+  if (source.kind === "git") {
+    return {
+      sourceGitUrl: source.url,
+      sourceRef: source.ref ?? "HEAD",
+      sourceCommit:
+        input.planRun.sourceCommit ??
+        source.commit ??
+        input.planRun.sourceDigest,
+      planDigest,
+      ...(artifactDigest ? { artifactDigest } : {}),
+    };
+  }
+  if (source.kind === "prepared") {
+    return {
+      sourceGitUrl: source.url,
+      sourceRef: "prepared",
+      sourceCommit: input.planRun.sourceCommit ?? source.digest,
+      planDigest,
+      ...(artifactDigest ? { artifactDigest } : {}),
+    };
+  }
+  return {
+    sourceGitUrl: `local:${source.path}`,
+    sourceRef: source.modulePath ?? "local",
+    sourceCommit: input.planRun.sourceCommit ?? input.planRun.sourceDigest,
+    planDigest,
+    ...(artifactDigest ? { artifactDigest } : {}),
+  };
+}
+
+function projectionStatusFromDeploy(
+  deployResponse: DeployResponse,
+): AppInstallationStatus {
+  if (
+    deployResponse.status === "failed" ||
+    deployResponse.run.status === "failed" ||
+    deployResponse.planRun?.status === "failed" ||
+    deployResponse.applyRun?.status === "failed"
+  ) {
+    return "failed";
+  }
+  if (
+    deployResponse.status === "applied" ||
+    deployResponse.applyRun?.status === "succeeded" ||
+    (deployResponse.installation.status === "active" &&
+      deployResponse.installation.currentStateGeneration > 0)
+  ) {
+    return "ready";
+  }
+  return "installing";
+}
+
+function projectionStatusFromRunStatus(
+  status: Run["status"],
+): AppInstallationStatus {
+  if (status === "succeeded") return "ready";
+  if (status === "failed" || status === "cancelled" || status === "expired") {
+    return "failed";
+  }
+  return "installing";
+}
+
+function nextProjectionStatus(
+  existing: AppInstallationStatus | undefined,
+  requested: AppInstallationStatus,
+): AppInstallationStatus {
+  if (!existing) return requested;
+  if (existing === requested) return existing;
+  if (existing === "ready" && requested === "failed") return existing;
+  if (canTransitionAppInstallationStatus(existing, requested)) return requested;
+  return existing;
+}
+
+async function projectionAccountIdForSubject(
+  subject: TakosumiSubject,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`takosumi.accounts.projection-account:${subject}`),
+  );
+  return `acct_${base64UrlEncodeBytes(new Uint8Array(digest)).slice(0, 32)}`;
+}
+
+function ledgerSpaceKind(type: SpaceType | undefined): SpaceKind {
+  return type === "organization" ? "org" : "personal";
 }
 
 function logDeployUploadFailure(
@@ -2897,6 +3287,13 @@ async function applyPlanRun(
     ...(confirmDestructive ? { confirmDestructive: true } : {}),
   };
   const response = await operations.createApplyRun(applyRequest);
+  await syncDeployControlProjectionFromApply({
+    operations,
+    store,
+    sessionSubject: sessionSubject as TakosumiSubject,
+    planRun,
+    response,
+  });
   return jsonStatus(await publicApplyActionResponse(operations, response), 201);
 }
 

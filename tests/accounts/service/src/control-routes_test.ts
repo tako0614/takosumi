@@ -370,6 +370,25 @@ function fakeOperations(
         fetchedAt: "2026-01-01T00:00:00Z",
       };
     },
+    getSourceSnapshot: async (id) => {
+      record("getSourceSnapshot", id);
+      return {
+        id,
+        origin: "upload",
+        spaceId: "space_a",
+        url: "upload://space_a",
+        ref: "upload",
+        resolvedCommit:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        path: ".",
+        archiveObjectKey: `spaces/space_a/uploads/${id}/source.tar.zst`,
+        archiveDigest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        archiveSizeBytes: 128,
+        fetchedByRunId: "upload",
+        fetchedAt: "2026-01-01T00:00:00Z",
+      };
+    },
     deployUpload: async (req) => {
       record("deployUpload", req);
       return {
@@ -392,6 +411,8 @@ function fakeOperations(
           installationId: "inst_upload",
           type: "plan",
           status: "succeeded",
+          sourceSnapshotId: req.snapshotId,
+          planDigest: `sha256:${"d".repeat(64)}`,
           createdBy: "test",
           createdAt: "2026-01-01T00:00:00Z",
         },
@@ -686,8 +707,16 @@ function fakeOperations(
         planRun: {
           id,
           spaceId: "space_a",
+          installationId: "inst_upload",
+          sourceSnapshotId: "snap_upload",
           status: "succeeded",
           operation: "create",
+          source: {
+            kind: "git",
+            url: "upload://space_a",
+            commit:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
           runnerProfileId: "rp_default",
           sourceDigest: `sha256:${"a".repeat(64)}`,
           variablesDigest: `sha256:${"b".repeat(64)}`,
@@ -1137,6 +1166,71 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       ],
       autoApprove: true,
     },
+  ]);
+  const projection = await store.findAppInstallation("inst_upload");
+  expect(projection?.status).toEqual("installing");
+  expect(projection?.spaceId).toEqual("space_a");
+  expect(projection?.createdBySubject).toEqual("tsub_ctrl");
+  expect(projection?.sourceGitUrl).toEqual("upload://space_a");
+  expect(projection?.sourceRef).toEqual("upload");
+  expect(projection?.sourceCommit).toEqual(
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
+  const events = await store.listInstallationEvents("inst_upload");
+  expect(events.map((event) => event.eventType)).toEqual([
+    "installation.created",
+  ]);
+});
+
+test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    getRun: async (id) =>
+      ({
+        id,
+        spaceId: "space_a",
+        installationId: "inst_upload",
+        type: "apply",
+        status: "succeeded",
+        planDigest: `sha256:${"d".repeat(64)}`,
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+      }) as unknown as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>,
+  });
+  const deploy = request("POST", "/api/v1/deploy", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      name: "hello",
+      snapshotId: "snap_upload",
+    },
+  });
+  const deployResponse = await handleControlRoute({
+    request: deploy.request,
+    url: deploy.url,
+    store,
+    operations,
+  });
+  expect(deployResponse?.status).toEqual(200);
+  expect((await store.findAppInstallation("inst_upload"))?.status).toEqual(
+    "installing",
+  );
+
+  const poll = request("GET", "/api/v1/runs/apply_upload", { cookie });
+  const pollResponse = await handleControlRoute({
+    request: poll.request,
+    url: poll.url,
+    store,
+    operations,
+  });
+  expect(pollResponse?.status).toEqual(200);
+  const projection = await store.findAppInstallation("inst_upload");
+  expect(projection?.status).toEqual("ready");
+  const events = await store.listInstallationEvents("inst_upload");
+  expect(events.map((event) => event.eventType)).toEqual([
+    "installation.created",
+    "installation.status_changed",
   ]);
 });
 

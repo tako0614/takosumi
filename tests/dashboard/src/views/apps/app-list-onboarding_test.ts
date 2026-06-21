@@ -38,9 +38,9 @@ describe("AppListView Workspace starter", () => {
   });
 
   test("keeps starter copy action-oriented in both locales", () => {
-    expect(en["apps.start.add"]).toBe("Add from Git");
+    expect(en["apps.start.add"]).toBe("Add from source");
     expect(en["apps.start.connections"].toLowerCase()).toContain("connections");
-    expect(ja["apps.start.add"]).toContain("Git");
+    expect(ja["apps.start.add"]).toContain("取得元");
     expect(ja["apps.start.connections"]).toContain("クラウド接続");
     expect(en["apps.summary.clear"]).toContain("No attention");
     expect(ja["apps.summary.clear"]).toContain("要対応なし");
