@@ -134,10 +134,12 @@ TAKOSUMI_RELEASE_ACTIVATOR_TOKEN
 The URL is non-secret operator config. The token is a Worker secret. Production
 URLs must be `https`; `http` is accepted only in explicit local substrate/dev
 mode. The webhook receives a `takosumi.operator.release-activation@v1` JSON
-payload with deploy-control ledger ids, Space id, Installation summary,
-Deployment summary, OutputSnapshot summary, and already-filtered non-sensitive
-outputs. This payload is an operator-controlled bridge contract, not a customer
-API surface. It must return one of:
+payload with deploy-control ledger ids, the current runtime Space /
+Installation / OutputSnapshot ids, Deployment summary, and already-filtered
+non-sensitive outputs. Those runtime ids are legacy bridge fields for the
+materializer; public readiness evidence should map them to Workspace / Project /
+Capsule / StateVersion / Output claims. This payload is an operator-controlled
+bridge contract, not a customer API surface. It must return one of:
 
 ```json
 { "status": "skipped" }

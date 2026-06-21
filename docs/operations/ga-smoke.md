@@ -90,6 +90,10 @@ non-destructive equivalent and record the final transcript in private evidence a
   enforced manifest requires container smoke, Layer 2 platform control-plane
   smoke, egress enforcement, restore rehearsal, provider catalog coverage,
   cost-attribution JSON evidence, and secret-boundary evidence.
+- `bun run release-activation:evidence` — optional post-apply publication
+  evidence gate. Required only when `TAKOSUMI_RELEASE_ACTIVATOR_URL` is enabled;
+  it proves successful activation, failed/pending activation surfacing, ledger
+  independence, and payload redaction.
 - `bun run smoke:cloudflare` — live Cloudflare integration (Layer 1).
 - `bun run smoke:platform-control-plane` — live platform control-plane loop
   (Layer 2, the GA go/no-go).

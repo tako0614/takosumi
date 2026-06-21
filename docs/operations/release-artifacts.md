@@ -61,6 +61,31 @@ activation materializer evidence: successful activation, failed/pending
 activation surfacing, and proof that the OpenTofu apply ledger remains committed
 independently of app publication status.
 
+Validate release activation evidence before promotion:
+
+```bash
+cd takosumi
+mkdir -p "$TAKOSUMI_PRIVATE/evidence"
+bun run release-activation:evidence -- --print-template \
+  > "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+
+# Fill the four evidence/*.md files and replace run ids, StateVersion / Output
+# ids, deployment ids, health URLs, and evidence refs with live operator values.
+# If the live runtime still emits Space / Installation / OutputSnapshot ids,
+# record them under `legacyRuntimeIds` rather than as the public claim shape.
+bun run release-activation:evidence -- --update-digests \
+  "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+```
+
+The release activation manifest is required only when the release activator is
+enabled. It is intentionally separate from the production hardening manifest:
+hardening proves the platform can open; release activation proves optional
+post-apply app publication is observable, redacted, and independent from the
+committed OpenTofu apply ledger. If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is set,
+platform readiness `open` also requires the validator output's four
+`TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` pairs in realized
+operator config.
+
 ## Promotion Record
 
 Release sign-off record includes:
@@ -71,6 +96,7 @@ Release sign-off record includes:
 - dashboard build summary
 - runner image digest or Cloudflare Container smoke reference
 - release activation materializer reference when enabled
+- `takosumi.release-activation-evidence@v1` validation output when enabled
 - D1 migration transcript when schema changed
 - targeted test / typecheck summary
 - rollback worker version id and previous commit SHA

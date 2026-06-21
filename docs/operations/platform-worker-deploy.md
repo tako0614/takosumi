@@ -389,6 +389,35 @@ bun run production-hardening:evidence -- --update-digests \
   "$TAKOSUMI_PRIVATE/evidence/production-hardening.json"
 ```
 
+`TAKOSUMI_RELEASE_ACTIVATOR_URL` を設定して post-apply app publication を有効化する場合は、
+hardening evidence とは別に release activation evidence も必須にする。これは platform open の証跡ではなく、
+optional materializer が apply ledger から独立して成功/失敗を記録できることの証跡:
+
+```bash
+cd takosumi
+bun run release-activation:evidence -- --print-template \
+  > "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+
+# successful activation / failed or pending activation surfacing /
+# ledger independence / payload boundary の4証跡を live 値で埋める。
+bun run release-activation:evidence -- --update-digests \
+  "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
+```
+
+`release-activation:evidence` の出力 `env` に含まれる4組の
+`TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` を realized config
+へ反映する。`TAKOSUMI_RELEASE_ACTIVATOR_URL` が設定されている場合、
+platform readiness `open` はこれらの証跡と
+`TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` が欠けると fail-closed する。
+
+validator は以下を fail-closed にする:
+
+- release activation 証跡 ref が commit-pinned `git+...@<commit>#path` ではない、または fixture / todo / localhost を指す
+- successful activation が `takosumi.operator.release-activation@v1` payload、`succeeded` status、public launch URL、200 health check を記録していない
+- failure surfacing が Activity と run timeline の両方に failed/pending activation を記録していない
+- apply ledger / StateVersion / Output / Deployment が release activation status によって rollback されないことを示していない
+- captured payload / evidence が provider credentials、runner env、secret outputs、release activator token を含まないことを示していない
+
 validator は証跡ファイル本文の意味解析はしない。operator が manifest に記録した structured evidence claim と、
 commit-pinned evidence ref、証跡ファイル本体の digest 一致を fail-closed に検証する。validator は以下を fail-closed にする:
 
