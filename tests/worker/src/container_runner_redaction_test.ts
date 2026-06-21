@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
+import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -74,6 +75,51 @@ test("container runner returns provider installation attestation from plan resul
     attestationMethod: "forced_filesystem_mirror_init",
     cliConfigDigest: PLAN_DIGEST,
   });
+});
+
+test("container runner records active run and startup metrics", async () => {
+  const observability = new InMemoryObservabilitySink();
+  const runner = new CloudflareContainerOpenTofuRunner(
+    {
+      ...envReturning(
+        {
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_metrics/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+        undefined,
+        200,
+        { "x-takosumi-runner-startup-seconds": "1.25" },
+      ),
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_RUNTIME_CELL_ID: "cell_test",
+    } as CloudflareWorkerEnv,
+    { observability },
+  );
+
+  await runner.plan({
+    planRun: { id: "plan_metrics" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  const active = await observability.listMetrics({
+    name: "takosumi_runner_active_runs",
+  });
+  expect(active.map((metric) => metric.value)).toEqual([1, 0]);
+  expect(active[0]?.tags).toMatchObject({
+    environment: "test",
+    operationKind: "plan",
+    runtime_cell_id: "cell_test",
+    status: "running",
+  });
+  const startup = await observability.listMetrics({
+    name: "takosumi_runner_container_startup_seconds",
+  });
+  expect(startup).toHaveLength(1);
+  expect(startup[0]?.kind).toBe("histogram");
+  expect(startup[0]?.value).toBe(1.25);
 });
 
 test("container runner returns provider installation attestation from apply and destroy results", async () => {
@@ -382,6 +428,7 @@ function envReturning(
   payload: Record<string, unknown>,
   onRequest?: (body: Record<string, unknown>) => void,
   status = 200,
+  headers: Record<string, string> = {},
 ): CloudflareWorkerEnv {
   return {
     RUNNER: {
@@ -392,6 +439,7 @@ function envReturning(
           return Promise.resolve(
             Response.json(payload, {
               status,
+              headers,
             }),
           );
         },

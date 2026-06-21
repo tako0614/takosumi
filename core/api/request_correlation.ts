@@ -44,6 +44,8 @@ export interface RegisterRequestCorrelationOptions {
   readonly monotonicNow?: () => number;
   readonly idFactory?: () => string;
   readonly traceSink?: Pick<ObservabilitySink, "recordTrace">;
+  readonly metricSink?: Pick<ObservabilitySink, "recordMetric">;
+  readonly metricTags?: Record<string, string>;
   readonly traceIdFactory?: () => string;
   readonly spanIdFactory?: () => string;
   readonly warn?: (message: string) => void;
@@ -88,6 +90,7 @@ export function registerRequestCorrelation(
       setCorrelationHeaders(c, correlation);
       c.header(TRACEPARENT_HEADER, renderTraceparent(trace));
       await recordRequestTrace(c, correlation, trace, startedAt, options);
+      await recordRequestMetric(c, correlation, startedAtMs, options);
       emitRequestLog(c, correlation, trace, startedAtMs, options);
     }
   });
@@ -121,12 +124,12 @@ export function requestCorrelationFromHeaders(
   headers: Headers,
   idFactory: () => string = defaultIdFactory,
 ): RequestCorrelation {
-  const requestId = normalizedHeaderValue(
-    headers.get(TAKOSUMI_REQUEST_ID_HEADER),
-  ) ?? `req_${idFactory()}`;
-  const correlationId = normalizedHeaderValue(
-    headers.get(TAKOSUMI_CORRELATION_ID_HEADER),
-  ) ?? requestId;
+  const requestId =
+    normalizedHeaderValue(headers.get(TAKOSUMI_REQUEST_ID_HEADER)) ??
+    `req_${idFactory()}`;
+  const correlationId =
+    normalizedHeaderValue(headers.get(TAKOSUMI_CORRELATION_ID_HEADER)) ??
+    requestId;
   return { requestId, correlationId };
 }
 
@@ -138,8 +141,8 @@ export function requestTraceFromHeaders(
   > = {},
 ): RequestTraceContext {
   const parsed = parseTraceparent(headers.get(TRACEPARENT_HEADER));
-  const traceId = parsed?.traceId ??
-    (options.traceIdFactory ?? randomTraceId)();
+  const traceId =
+    parsed?.traceId ?? (options.traceIdFactory ?? randomTraceId)();
   const spanId = (options.spanIdFactory ?? randomSpanId)();
   return {
     traceId,
@@ -305,6 +308,48 @@ async function recordRequestTrace(
       );
     } else {
       log.warn("service.api.trace_record_failed", { span: span.name, message });
+    }
+  }
+}
+
+async function recordRequestMetric(
+  c: Context,
+  correlation: RequestCorrelation,
+  startedAtMs: number,
+  options: RegisterRequestCorrelationOptions,
+): Promise<void> {
+  const sink = options.metricSink;
+  if (!sink) return;
+  const status = c.res.status || 404;
+  const route = routeForLog(c);
+  const durationSeconds = Math.max(
+    0,
+    ((options.monotonicNow ?? defaultMonotonicNow)() - startedAtMs) / 1000,
+  );
+  try {
+    await sink.recordMetric({
+      id: `metric_${crypto.randomUUID()}`,
+      name: "takosumi_api_request_duration_seconds",
+      kind: "histogram",
+      value: durationSeconds,
+      tags: {
+        ...(options.metricTags ?? {}),
+        method: c.req.method,
+        route,
+        status: String(status),
+      },
+      observedAt: (options.now ?? (() => new Date()))().toISOString(),
+      requestId: correlation.requestId,
+      correlationId: correlation.correlationId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (options.warn) {
+      options.warn(
+        `[takosumi-metric] failed to record ${c.req.method} ${route}: ${message}`,
+      );
+    } else {
+      log.warn("service.api.metric_record_failed", { route, message });
     }
   }
 }

@@ -729,6 +729,7 @@ export async function createTakosumiService(
   });
   const revokeDebtStore = resolveRevokeDebtStore(options);
   const workerDaemonState = createWorkerDaemonState();
+  const metricTags = serviceMetricTags(runtimeConfig, runtimeEnv);
   const workerDaemon = shouldStartWorkerDaemon(role, options)
     ? createRoleWorkerDaemon({
         role,
@@ -872,6 +873,8 @@ export async function createTakosumiService(
       ? { releaseActivator: options.releaseActivator }
       : {}),
     serviceGraphService,
+    observability: context.adapters.observability,
+    metricTags,
   });
   // RunGroups domain (Core Specification §19 / §24): space_update re-plans
   // stale Installations and space_drift_check groups read-only drift checks.
@@ -976,6 +979,8 @@ export async function createTakosumiService(
         : undefined,
       minLevel: parseApiLogLevel(runtimeEnv.TAKOSUMI_LOG_LEVEL),
       traceSink: context.adapters.observability,
+      metricSink: context.adapters.observability,
+      metricTags,
     },
   });
   // Typed in-process operate facade. Delegates to the wired OpenTofu
@@ -1187,6 +1192,24 @@ function shouldEmitHttpRequestLogs(
   if (configured === "true") return true;
   if (configured === "false") return false;
   return environment === "production" || environment === "staging";
+}
+
+function serviceMetricTags(
+  runtimeConfig: AppRuntimeConfig,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  return {
+    environment: runtimeConfig.environment ?? "local",
+    runtime_cell_id:
+      normalizedMetricTag(env.TAKOSUMI_RUNTIME_CELL_ID) ??
+      normalizedMetricTag(env.TAKOSUMI_RUNTIME_CELL) ??
+      "platform-default",
+  };
+}
+
+function normalizedMetricTag(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function processRoleFromRuntimeConfig(

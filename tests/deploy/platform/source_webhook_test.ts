@@ -6,7 +6,9 @@ import {
   handleOperatorBillingRequest,
   handlePlatformMetricsRequest,
   handleSourceWebhookRequest,
+  isOidcMetricPath,
   isPlatformMetricsPath,
+  oidcMetricRoute,
   pollAutoSyncSources,
   type OperatorBillingOperations,
   type SourcePollOperations,
@@ -322,6 +324,18 @@ test("platform metrics route does not capture dashboard paths", async () => {
     }),
   );
   expect(response).toBeUndefined();
+});
+
+test("platform OIDC metric classifier covers issuer and upstream auth paths", () => {
+  expect(isOidcMetricPath("/.well-known/openid-configuration")).toBe(true);
+  expect(isOidcMetricPath("/oauth/authorize")).toBe(true);
+  expect(isOidcMetricPath("/oauth/token")).toBe(true);
+  expect(isOidcMetricPath("/v1/auth/upstream/google/start")).toBe(true);
+  expect(isOidcMetricPath("/api/v1/installations")).toBe(false);
+  expect(oidcMetricRoute("/oauth/authorize")).toBe("/oauth/authorize");
+  expect(oidcMetricRoute("/v1/auth/upstream/google/callback")).toBe(
+    "/v1/auth/upstream/*",
+  );
 });
 
 function makeOperatorBillingOps(): {

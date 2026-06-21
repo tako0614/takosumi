@@ -42,6 +42,7 @@ import {
   PhaseMintBundle,
 } from "../../../../core/adapters/vault/mod.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
+import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import type {
   Connection,
   PlanRun,
@@ -2405,6 +2406,58 @@ test("installation apply emits generation base+1, records a StateSnapshot + Depl
   expect(installation?.status).toEqual("active");
   expect(installation?.currentStateGeneration).toEqual(1);
   expect(installation?.currentDeploymentId).toEqual(deployment?.id);
+});
+
+test("installation plan and apply record deploy operation metrics", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const observability = new InMemoryObservabilitySink();
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    observability,
+    metricTags: {
+      environment: "test",
+      runtime_cell_id: "cell_test",
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  const operationMetrics = await observability.listMetrics({
+    name: "takosumi_deploy_operation_count",
+  });
+  expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
+    capsule_id: "inst_fixture",
+    environment: "test",
+    operationKind: "plan",
+    runtime_cell_id: "cell_test",
+    space_id: "space_test",
+    status: "succeeded",
+  });
+  expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
+    capsule_id: "inst_fixture",
+    environment: "test",
+    operationKind: "apply",
+    runtime_cell_id: "cell_test",
+    space_id: "space_test",
+    status: "succeeded",
+  });
+
+  const applyDurations = await observability.listMetrics({
+    name: "takosumi_apply_duration_seconds",
+  });
+  expect(applyDurations).toHaveLength(1);
+  expect(applyDurations[0]?.kind).toBe("histogram");
+  expect(applyDurations[0]?.tags).toMatchObject({
+    capsule_id: "inst_fixture",
+    operationKind: "apply",
+    space_id: "space_test",
+    status: "succeeded",
+  });
 });
 
 test("installation apply records an OutputSnapshot and links it on the Deployment + Installation", async () => {
