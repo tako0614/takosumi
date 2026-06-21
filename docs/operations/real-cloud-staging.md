@@ -70,6 +70,10 @@ repo.
    `check:cloudflare-deploy-host` is an operator-host preflight, not a normal
    repo gate. It must pass on the machine that runs `wrangler deploy` because
    the platform worker deploy builds and uploads a Cloudflare Container image.
+   It also verifies Wrangler 4.103.0 or newer. Use `bunx wrangler@latest ...`
+   for real deploys; older Wrangler versions can upload the Worker script and
+   container image but fail the Cloudflare Containers application finalize call
+   with `Unauthorized`.
    If default Docker fails but `docker run --security-opt apparmor=unconfined`
    works, do not deploy from that host: Wrangler's internal Container build does
    not expose that flag directly. Use `prepare:cloudflare-deploy-host` plus the
@@ -86,7 +90,7 @@ repo.
      -f takosumi/runner/Dockerfile \
      takosumi
 
-   bunx wrangler containers push takosumi-runner:<tag>
+   bunx wrangler@latest containers push takosumi-runner:<tag>
    ```
 
    Then change only the operator-private realized config:
