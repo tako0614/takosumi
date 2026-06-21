@@ -4,7 +4,9 @@ import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
+  handlePlatformMetricsRequest,
   handleSourceWebhookRequest,
+  isPlatformMetricsPath,
   pollAutoSyncSources,
   type OperatorBillingOperations,
   type SourcePollOperations,
@@ -270,6 +272,56 @@ test("hardening gates route is operator bearer gated and returns 503 when enforc
   );
   expect(response.status).toBe(503);
   expect((await response.json()).ok).toBe(false);
+});
+
+test("platform metrics route is forwarded to the deploy-control seam", async () => {
+  const env = { TAKOSUMI_METRICS_SCRAPE_TOKEN: "scrape-token" } as never;
+  const forwarded: { url: string; authorization: string | null }[] = [];
+  const response = await handlePlatformMetricsRequest(
+    new Request("https://app.takosumi.com/metrics", {
+      headers: { authorization: "Bearer scrape-token" },
+    }),
+    env,
+    () => ({
+      fetch: async (input: RequestInfo | URL) => {
+        const request = input instanceof Request ? input : new Request(input);
+        forwarded.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+        });
+        return new Response("takosumi_metrics_scrape_info 1\n", {
+          status: 200,
+          headers: {
+            "content-type": "text/plain; version=0.0.4; charset=utf-8",
+          },
+        });
+      },
+    }),
+  );
+  expect(response?.status).toBe(200);
+  expect(response?.headers.get("content-type")).toContain("text/plain");
+  expect(await response?.text()).toContain("takosumi_metrics_scrape_info");
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/metrics",
+      authorization: "Bearer scrape-token",
+    },
+  ]);
+});
+
+test("platform metrics route does not capture dashboard paths", async () => {
+  expect(isPlatformMetricsPath("/metrics")).toBe(true);
+  expect(isPlatformMetricsPath("/metrics/extra")).toBe(false);
+  const response = await handlePlatformMetricsRequest(
+    new Request("https://app.takosumi.com/metrics/extra"),
+    {} as never,
+    () => ({
+      fetch: async () => {
+        throw new Error("must not be called");
+      },
+    }),
+  );
+  expect(response).toBeUndefined();
 });
 
 function makeOperatorBillingOps(): {

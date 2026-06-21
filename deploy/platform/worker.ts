@@ -45,6 +45,7 @@ import {
   createTakosumiAiGatewayConfigFromEnv,
   handleTakosumiAiGatewayRequest,
 } from "../../core/domains/ai-gateway/openai_compatible.ts";
+import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
 
 export { CoordinationObject, OpenTofuRunnerObject };
@@ -97,6 +98,8 @@ const runQueueConsumer = createDeployControlQueueConsumer();
 
 export default {
   async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+    const metricsResponse = await handlePlatformMetricsRequest(request, env);
+    if (metricsResponse) return metricsResponse;
     const url = new URL(request.url);
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
@@ -141,6 +144,27 @@ export default {
     }
   },
 };
+
+type PlatformDeployControlSeam = Pick<
+  ReturnType<typeof createInProcessDeployControlSeam>,
+  "fetch"
+>;
+
+export function isPlatformMetricsPath(pathname: string): boolean {
+  return pathname === TAKOSUMI_METRICS_PATH;
+}
+
+export async function handlePlatformMetricsRequest(
+  request: Request,
+  env: PlatformEnv,
+  seamForEnv: (
+    env: PlatformEnv,
+  ) => PlatformDeployControlSeam = deployControlSeam,
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (!isPlatformMetricsPath(url.pathname)) return undefined;
+  return await seamForEnv(env).fetch(request);
+}
 
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const INTERNAL_PLATFORM_SPACE_PREFIX = "/internal/platform/spaces/";
