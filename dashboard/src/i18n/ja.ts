@@ -163,7 +163,7 @@ export const ja = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "サービス",
-  "apps.subtitle": "追加したサービスを開く・管理する場所です。",
+  "apps.subtitle": "自分用にホストしているサービスを開く場所です。",
   "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
@@ -171,9 +171,9 @@ export const ja = {
   "apps.empty.message": "サンプルから始めるか、取得元 URL から追加できます。",
   "apps.empty.cta": "サービスを追加",
   "apps.openApp": "サービスを開く",
-  "apps.noOpenLink": "公開リンクなし",
-  "apps.viewDetails": "管理",
-  "apps.reviewChanges": "変更を確認",
+  "apps.noOpenLink": "まだ開く画面がありません",
+  "apps.viewDetails": "詳細",
+  "apps.reviewChanges": "更新を確認",
   "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
   "apps.graphLink": "サービスマップ",
@@ -199,7 +199,7 @@ export const ja = {
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "サービス",
   "app.tab.overview": "概要",
-  "app.tab.deploys": "デプロイ",
+  "app.tab.deploys": "更新",
   "app.tab.settings": "設定",
   "app.tab.danger": "危険な操作",
   "app.notFound": "サービスが見つかりません",
@@ -235,7 +235,7 @@ export const ja = {
   "app.info.generation": "復元ポイント",
   "app.info.deployment": "Current deployment",
   "app.info.installConfig": "追加設定",
-  "app.deploys.title": "デプロイ履歴",
+  "app.deploys.title": "更新履歴",
   "app.deploys.subtitle":
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
@@ -250,9 +250,9 @@ export const ja = {
   "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
-  "app.bindings.title": "外部サービス接続",
+  "app.bindings.title": "接続済みクラウドアカウント",
   "app.bindings.subtitle":
-    "このサービスが利用する外部サービス接続を選びます。通常は変更不要です。",
+    "このサービスが使うアカウントや接続先です。通常は変更不要です。",
   "app.bindings.add": "接続先を追加",
   "app.bindings.aliasPlaceholder": "alias（任意）",
   "app.bindings.selectConnection": "接続を選択",
@@ -350,7 +350,8 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
-  "new.subtitle": "おすすめから選ぶか、アプリのインストールリンクを貼り付けます。",
+  "new.subtitle":
+    "おすすめから選ぶか、アプリのインストールリンクを貼り付けます。",
   "new.guide.aria": "サービス追加の案内",
   "new.guide.kicker": "サービス追加",
   "new.guide.title": "追加したいサービスを選びます",
@@ -368,11 +369,19 @@ export const ja = {
     "追加前に直す必要がある項目があります。下の確認結果を見てください。",
   "new.flow.source": "追加するもの",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
+  "new.store.aria": "おすすめサービス",
+  "new.store.title": "おすすめサービス",
   "new.tab.catalog": "おすすめ",
   "new.tab.git": "リンク / URL",
-  "new.catalog.intro": "追加したいものを選びます。確認するまで追加はされません。",
+  "new.catalog.intro":
+    "追加したいものを選びます。確認するまで追加はされません。",
   "new.catalog.readyStarter": "スターター",
   "new.catalog.select": "これを追加",
+  "new.advancedImport.open": "リンクや取得元から追加",
+  "new.advancedImport.close": "リンク入力を閉じる",
+  "new.advancedImport.title": "リンクや取得元から追加",
+  "new.advancedImport.subtitle":
+    "アプリページのインストールリンクを貼り付けます。開発者向けには取得元 URL も使えます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
   "new.git.url": "インストールリンクまたは取得元 URL",

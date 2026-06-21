@@ -161,7 +161,6 @@ function Inner() {
         when={spaceId()}
         fallback={
           <EmptyState
-            ink
             icon={<ScrollText size={28} />}
             title={t("space.select")}
             message={t("space.selectMessage")}
@@ -189,7 +188,6 @@ function Inner() {
                 when={list().length > 0}
                 fallback={
                   <EmptyState
-                    ink
                     icon={<ScrollText size={28} />}
                     title={t("activity.empty.title")}
                     message={t("activity.empty.message")}

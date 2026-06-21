@@ -159,7 +159,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "Services",
-  "apps.subtitle": "Open and manage the services you have added.",
+  "apps.subtitle": "Open the services you host for yourself.",
   "apps.add": "Add service",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
@@ -167,9 +167,9 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.empty.message": "Start from an example or add one from a source URL.",
   "apps.empty.cta": "Add service",
   "apps.openApp": "Open service",
-  "apps.noOpenLink": "No public link",
-  "apps.viewDetails": "Manage",
-  "apps.reviewChanges": "Review changes",
+  "apps.noOpenLink": "Nothing to open yet",
+  "apps.viewDetails": "Details",
+  "apps.reviewChanges": "Review update",
   "apps.dependsOn": "Depends on: {names}",
   "apps.staleReason": "Reason: {reason}",
   "apps.graphLink": "Service map",
@@ -195,7 +195,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "Service",
   "app.tab.overview": "Overview",
-  "app.tab.deploys": "Deploys",
+  "app.tab.deploys": "Updates",
   "app.tab.settings": "Settings",
   "app.tab.danger": "Danger zone",
   "app.notFound": "Service not found",
@@ -230,7 +230,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.info.generation": "Restore point",
   "app.info.deployment": "Current deployment",
   "app.info.installConfig": "Install settings",
-  "app.deploys.title": "Deploy history",
+  "app.deploys.title": "Update history",
   "app.deploys.subtitle":
     "Past deployed states. Pick an older one to review a change that restores it.",
   "app.deploys.empty": "No deploys yet.",
@@ -245,9 +245,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.recentActivity.empty": "No recent updates.",
   "app.recentActivity.open": "Details",
   "app.recentActivity.releaseActivation": "App activation",
-  "app.bindings.title": "External service connections",
+  "app.bindings.title": "Connected cloud accounts",
   "app.bindings.subtitle":
-    "Choose the external service connection this service should use. Usually no change is needed.",
+    "Accounts and services this service uses. Usually no change is needed.",
   "app.bindings.add": "Add service",
   "app.bindings.aliasPlaceholder": "alias (optional)",
   "app.bindings.selectConnection": "Select a connection",
@@ -363,12 +363,19 @@ export const en: Record<keyof typeof ja, string> = {
     "Some items need to be fixed before this can be added. Check the inspection result below.",
   "new.flow.source": "What will be added",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
+  "new.store.aria": "Recommended services",
+  "new.store.title": "Recommended services",
   "new.tab.catalog": "Recommended",
   "new.tab.git": "Link / URL",
   "new.catalog.intro":
     "Choose what you want to add. Nothing is added until you check it.",
   "new.catalog.readyStarter": "Starter",
   "new.catalog.select": "Add this",
+  "new.advancedImport.open": "Add from a link or source",
+  "new.advancedImport.close": "Hide link input",
+  "new.advancedImport.title": "Add from a link or source",
+  "new.advancedImport.subtitle":
+    "Paste an app-page install link. Developer source URLs are supported from here too.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
   "new.git.url": "Install link or source URL",

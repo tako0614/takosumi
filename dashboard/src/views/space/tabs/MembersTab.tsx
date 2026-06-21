@@ -326,7 +326,6 @@ export default function MembersTab(props: {
             when={members.loading || (members()?.length ?? 0) > 0}
             fallback={
               <EmptyState
-                ink
                 icon={<Users size={28} />}
                 title={t("spaceSettings.tab.members")}
                 message={t("members.empty")}

@@ -22,6 +22,19 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("app.deploys.title")');
   });
 
+  test("keeps update review out of the everyday service header", () => {
+    expect(source).toContain('t("apps.openApp")');
+    expect(source).toContain("function DeploysTab");
+    expect(source).toContain("onReview={() => void plan.run()}");
+    expect(source).toContain('t("apps.reviewChanges")');
+    expect(source.indexOf('t("apps.openApp")')).toBeLessThan(
+      source.indexOf("function DeploysTab"),
+    );
+    expect(source.indexOf('t("apps.reviewChanges")')).toBeGreaterThan(
+      source.indexOf("function DeploysTab"),
+    );
+  });
+
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
     expect(source).toContain('<Page title={t("app.installationSub")}');
     expect(source).toContain("setDocumentTitle(inst.name)");
