@@ -158,7 +158,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.attentionView": "View notifications",
   "apps.empty.title": "No services yet",
   "apps.empty.message":
-    "Start from an example or add one from a Git source URL.",
+    "Start from an example or add one from a source URL.",
   "apps.empty.cta": "Add service",
   "apps.openApp": "Open output",
   "apps.reviewChanges": "Review changes",
@@ -174,17 +174,17 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.kicker": "Workspace",
   "apps.start.titleEmpty": "Deploy your first service",
   "apps.start.bodyEmpty":
-    "Add a Git source, connect the cloud account it needs, then review and deploy the change.",
-  "apps.start.add": "Add from Git",
+    "Add a source, connect the cloud account it needs, then review and deploy the change.",
+  "apps.start.add": "Add from source",
   "apps.start.connections": "Cloud connections",
-  "apps.start.stepSource": "Git source",
-  "apps.start.stepSourceSub": "Use a repository, ref, and module path.",
+  "apps.start.stepSource": "Source",
+  "apps.start.stepSourceSub": "Use a repository, version, and folder.",
   "apps.start.stepConnection": "Cloud connection",
   "apps.start.stepConnectionSub":
-    "Keep provider keys in Takosumi, not in the repo.",
+    "Keep credentials in Takosumi, not in the source.",
   "apps.start.stepDeploy": "Review and deploy",
   "apps.start.stepDeploySub":
-    "Plan first, approve, then open the public output.",
+    "Review changes first, approve, then open the public output.",
 
   // --- Capsule detail ------------------------------------------------------
   "app.installationSub": "Capsule",
@@ -337,28 +337,28 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
-  "new.subtitle": "Start from an example or add one from a Git source URL.",
+  "new.subtitle": "Start from an example or add one from a source URL.",
   "new.flow.aria": "Add service progress",
   "new.flow.kicker": "Add flow",
   "new.flow.title": "Check the source before anything is deployed",
   "new.flow.source": "Current source",
   "new.flow.sourceEmpty": "No source selected yet.",
   "new.flow.sourceMeta": "Version {ref} / folder {path}",
-  "new.flow.nextSource": "Choose an example or paste a Git URL.",
+  "new.flow.nextSource": "Choose an example or paste a source URL.",
   "new.flow.nextCheck":
     "Run the source check. Takosumi will only ask for connections this service needs.",
   "new.flow.nextConnect":
     "Set up the missing cloud connection, then return here to continue.",
   "new.flow.nextReview":
-    "Review the plan next. Nothing is deployed until you confirm it on the review screen.",
+    "Review the changes next. Nothing is deployed until you confirm it on the review screen.",
   "new.flow.stepSource": "Source",
-  "new.flow.stepSourceSub": "Git URL, version, and folder",
+  "new.flow.stepSourceSub": "Source, version, and folder",
   "new.flow.stepCheck": "Check",
-  "new.flow.stepCheckSub": "Inspect before creating a plan",
+  "new.flow.stepCheckSub": "Check before adding",
   "new.flow.stepConnect": "Connect",
   "new.flow.stepConnectSub": "Use only selected external services",
   "new.flow.stepReview": "Review",
-  "new.flow.stepReviewSub": "Confirm the plan before deploy",
+  "new.flow.stepReviewSub": "Confirm before deploy",
   "new.tab.catalog": "Examples",
   "new.tab.git": "Source URL",
   "new.catalog.intro":
@@ -399,7 +399,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
-  "new.vars.inputsTitle": "OpenTofu inputs",
+  "new.vars.inputsTitle": "Advanced settings",
   "new.vars.inputsBody":
     "Optional non-secret variables for this Capsule. Put tokens, passwords, and API keys in Provider Connections instead.",
   "new.vars.inputName": "Variable",
