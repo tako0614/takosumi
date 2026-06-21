@@ -167,6 +167,25 @@ export const ja = {
   "apps.dependsOn": "依存: {names}",
   "apps.staleReason": "理由: {reason}",
   "apps.graphLink": "依存グラフ",
+  "apps.start.aria": "Workspace のデプロイ概要",
+  "apps.start.kicker": "Workspace",
+  "apps.start.titleEmpty": "最初のサービスをデプロイ",
+  "apps.start.titleWithServices": "この Workspace のサービス: {n} 件",
+  "apps.start.bodyEmpty":
+    "Git の取得元を追加し、必要なクラウド接続を選び、変更内容を確認してデプロイします。",
+  "apps.start.bodyWithServices":
+    "デプロイ済み {deployed} 件。要対応 {attention} 件。別の取得元を追加するか、最新の状況を確認できます。",
+  "apps.start.add": "Git から追加",
+  "apps.start.addAnother": "別のサービスを追加",
+  "apps.start.connections": "クラウド接続",
+  "apps.start.stepSource": "Git の取得元",
+  "apps.start.stepSourceSub": "リポジトリ、ref、module path を指定します。",
+  "apps.start.stepConnection": "クラウド接続",
+  "apps.start.stepConnectionSub":
+    "provider key は repo ではなく Takosumi に保存します。",
+  "apps.start.stepDeploy": "確認してデプロイ",
+  "apps.start.stepDeploySub":
+    "先に plan を確認し、承認してから公開出力を開きます。",
 
   // --- Capsule detail ------------------------------------------------------
   "app.installationSub": "Capsule",
