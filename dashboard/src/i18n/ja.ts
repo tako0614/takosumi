@@ -217,6 +217,10 @@ export const ja = {
   "app.recentRuns.title": "最近の実行",
   "app.recentRuns.empty": "最近の実行はありません。",
   "app.recentRuns.open": "詳細",
+  "app.recentActivity.title": "最近の更新",
+  "app.recentActivity.empty": "最近の更新はありません。",
+  "app.recentActivity.open": "詳細",
+  "app.recentActivity.releaseActivation": "アプリ公開",
   "app.bindings.title": "外部サービス接続",
   "app.bindings.subtitle":
     "OpenTofu が使う外部サービス接続を選びます。通常は変更不要です。",
