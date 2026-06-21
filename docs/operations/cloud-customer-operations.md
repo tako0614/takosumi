@@ -83,10 +83,24 @@ procedures in the launch-readiness evidence.
 The dashboard may show empty plans or disabled billing in closed access. That is
 valid only while Takosumi Cloud remains pre-GA or closed.
 
-First run the billing readiness preflight against operator-private config and
-the live authenticated billing plan projection:
+First create or reuse Stripe prices in the operator Stripe account, write the
+non-secret Takosumi billing plan catalog, then run the billing readiness
+preflight against operator-private config and the live authenticated billing
+plan projection:
 
 ```bash
+bun run bootstrap:takosumi-stripe-billing -- \
+  --private-root takosumi-private \
+  --environment production \
+  --write-template
+
+# Edit takosumi-private/evidence/billing-plan-spec-production.json.
+
+bun run bootstrap:takosumi-stripe-billing -- \
+  --private-root takosumi-private \
+  --environment production \
+  --out-file evidence/billing-plans-production.json
+
 bun run write:takosumi-billing-config -- \
   --private-root takosumi-private \
   --environment production \
@@ -116,11 +130,14 @@ bun run check:takosumi-billing-readiness -- \
   --out-file evidence/billing-readiness-production.json
 ```
 
-`write:takosumi-billing-config` only writes non-secret plan catalog and redirect
-allowlist vars into the realized Wrangler config. Stripe API keys and webhook
-signing secrets must go through `write:takosumi-stripe-secret` and the operator
-secret apply command; do not place secret values in `wrangler.toml` or evidence
-files.
+`bootstrap:takosumi-stripe-billing` creates or reuses Stripe prices by stable
+lookup key and writes only the non-secret Takosumi billing plan catalog. It reads
+the Stripe secret key from an operator-private secret file or an explicit
+operator env var, and must not print or write the secret. `write:takosumi-billing-config`
+only writes non-secret plan catalog and redirect allowlist vars into the
+realized Wrangler config. Stripe API keys and webhook signing secrets must go
+through `write:takosumi-stripe-secret` and the operator secret apply command; do
+not place secret values in `wrangler.toml` or evidence files.
 
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
