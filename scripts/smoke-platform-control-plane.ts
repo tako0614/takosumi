@@ -33,6 +33,7 @@ const TERMINAL_RUN_STATUSES = new Set([
   "expired",
   "waiting_approval",
 ]);
+type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
@@ -57,7 +58,7 @@ export interface PlatformControlPlaneSmokeOptions {
 
 export interface PlatformControlPlaneSmokeResult {
   readonly kind: typeof PLATFORM_CONTROL_PLANE_SMOKE_KIND;
-  readonly status: "passed" | "dry_run";
+  readonly status: "passed" | "dry_run" | "failed";
   readonly generatedAt: string;
   readonly serviceUrl: string;
   readonly scratchSpaceId: string;
@@ -73,11 +74,13 @@ export interface PlatformControlPlaneSmokeResult {
   readonly applyRunId?: string;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
-  readonly capsuleGateStatus: "passed";
-  readonly policyStatus: "passed";
-  readonly deploymentVerified: true;
-  readonly destroyVerified: true;
+  readonly capsuleGateStatus: SmokeCheckStatus;
+  readonly policyStatus: SmokeCheckStatus;
+  readonly deploymentVerified: boolean;
+  readonly destroyVerified: boolean;
   readonly connectionRevoked?: boolean;
+  readonly error?: string;
+  readonly nextAction?: string;
   readonly inputs: {
     readonly accountSessionTokenSource: "env" | "file";
     readonly cloudflareApiTokenSource: "env" | "file";
@@ -168,7 +171,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   const result = await runPlatformControlPlaneSmoke(options);
   writeResult(result, options);
-  return 0;
+  return result.status === "failed" ? 1 : 0;
 }
 
 export async function resolveOptions(
@@ -275,6 +278,9 @@ export async function runPlatformControlPlaneSmoke(
   let applyRunId: string | undefined;
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
+  let capsuleGateStatus: SmokeCheckStatus = "not_reached";
+  let policyStatus: SmokeCheckStatus = "not_reached";
+  let failure: unknown;
 
   try {
     const connection = await createSpaceCloudflareConnection(options, spaceId);
@@ -288,7 +294,9 @@ export async function runPlatformControlPlaneSmoke(
     });
     installationId = deploy.installation.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
+    capsuleGateStatus = "passed";
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
+    policyStatus = publicPolicyStatus(completedPlan);
     assertRunSucceeded(completedPlan, "plan");
     const applyRun =
       deploy.applyRun ??
@@ -303,6 +311,7 @@ export async function runPlatformControlPlaneSmoke(
       ).run;
     applyRunId = applyRun.id;
     const completedApply = await pollRun(options, applyRunId);
+    policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     await assertCloudflareWorkerExists(options);
 
@@ -335,6 +344,7 @@ export async function runPlatformControlPlaneSmoke(
     });
     destroyApplyRunId = destroyApply.run.id;
     const completedDestroy = await pollRun(options, destroyApplyRunId);
+    policyStatus = publicPolicyStatus(completedDestroy);
     assertRunSucceeded(completedDestroy, "destroy apply");
     await assertCloudflareWorkerGone(options);
 
@@ -375,16 +385,81 @@ export async function runPlatformControlPlaneSmoke(
       spaceId,
       installationId,
     }).catch(() => undefined);
-    throw error;
+    failure = error;
   } finally {
     if (connectionId && !options.keepConnection && !connectionRevoked) {
       connectionRevoked = await revokeConnection(options, connectionId);
     }
   }
+  return failedResult(options, {
+    spaceId,
+    connectionId,
+    providerConnectionId,
+    installationId,
+    planRunId,
+    applyRunId,
+    destroyPlanRunId,
+    destroyApplyRunId,
+    capsuleGateStatus,
+    policyStatus,
+    connectionRevoked,
+    error: failure,
+  });
+}
+
+function failedResult(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly connectionId?: string;
+    readonly providerConnectionId?: string;
+    readonly installationId?: string;
+    readonly planRunId?: string;
+    readonly applyRunId?: string;
+    readonly destroyPlanRunId?: string;
+    readonly destroyApplyRunId?: string;
+    readonly capsuleGateStatus: SmokeCheckStatus;
+    readonly policyStatus: SmokeCheckStatus;
+    readonly connectionRevoked?: boolean;
+    readonly error: unknown;
+  },
+): PlatformControlPlaneSmokeResult {
+  return {
+    kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
+    status: "failed",
+    generatedAt: new Date().toISOString(),
+    serviceUrl: options.url,
+    scratchSpaceId: input.spaceId,
+    capsuleModule: "cloudflare-hello-worker",
+    credentialPath: "space_scoped_provider_connection",
+    steps: requiredSteps(),
+    appName: options.appName,
+    environment: options.environment,
+    connectionId: input.connectionId,
+    providerConnectionId: input.providerConnectionId,
+    installationId: input.installationId,
+    planRunId: input.planRunId,
+    applyRunId: input.applyRunId,
+    destroyPlanRunId: input.destroyPlanRunId,
+    destroyApplyRunId: input.destroyApplyRunId,
+    capsuleGateStatus: input.capsuleGateStatus,
+    policyStatus: input.policyStatus,
+    deploymentVerified: false,
+    destroyVerified: false,
+    connectionRevoked: input.connectionRevoked,
+    error: publicErrorMessage(input.error),
+    nextAction:
+      "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.",
+    inputs: publicInputSummary(options),
+  };
 }
 
 function failPolicy(): never {
   throw new Error("policyStatus denied during platform-control-plane smoke");
+}
+
+function publicPolicyStatus(run: RunRecord): SmokeCheckStatus {
+  return run.policyStatus === "deny" ? "denied" : "passed";
 }
 
 async function resolveSpaceId(
@@ -798,6 +873,17 @@ function apiErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+function publicErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
+    .replace(
+      /\b((?:token|secret|authorization|cookie)=)[^\s&]+/giu,
+      "$1<redacted>",
+    )
+    .replace(/(takosumi_session=)[^;\s]+/giu, "$1<redacted>");
+}
+
 function tarZstd(dir: string): Promise<Uint8Array> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn("tar", ["--zstd", "-cf", "-", "-C", dir, "."], {
@@ -977,9 +1063,13 @@ function writeResult(
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(
-    `${result.status === "passed" ? "PASS" : "DRY RUN"} ${result.kind}`,
-  );
+  const label =
+    result.status === "passed"
+      ? "PASS"
+      : result.status === "failed"
+        ? "FAIL"
+        : "DRY RUN";
+  console.log(`${label} ${result.kind}`);
   console.log(`service: ${result.serviceUrl}`);
   console.log(`space: ${result.scratchSpaceId}`);
   console.log(`capsule: ${result.capsuleModule}`);
@@ -995,6 +1085,8 @@ function writeResult(
       `connection revoked: ${result.connectionRevoked ? "yes" : "no"}`,
     );
   }
+  if (result.error) console.log(`error: ${result.error}`);
+  if (result.nextAction) console.log(`next: ${result.nextAction}`);
 }
 
 async function runSelfTest(): Promise<void> {
@@ -1027,6 +1119,25 @@ async function runSelfTest(): Promise<void> {
   }
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
+  }
+  const failed = failedResult(options, {
+    spaceId: "space_selftest",
+    connectionId: "conn_selftest",
+    connectionRevoked: true,
+    error: new Error(
+      "GET /api/v1/spaces failed with Bearer secret-token token=secret cookie=session",
+    ),
+  });
+  const serializedFailed = JSON.stringify(failed);
+  if (failed.status !== "failed" || failed.destroyVerified !== false) {
+    throw new Error("self-test failed result shape is wrong");
+  }
+  if (
+    serializedFailed.includes("secret-token") ||
+    serializedFailed.includes("token=secret") ||
+    serializedFailed.includes("cookie=session")
+  ) {
+    throw new Error("self-test leaked secret-looking failure details");
   }
   console.log("platform control-plane smoke self-test passed");
 }
