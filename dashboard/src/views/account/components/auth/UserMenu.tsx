@@ -4,7 +4,7 @@
  */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { CreditCard, LogOut, UserCircle2 } from "lucide-solid";
+import { CreditCard, HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
   readSession,
@@ -44,14 +44,14 @@ export default function UserMenu() {
   const initial = () => {
     const s = session();
     if (!s) return "?";
-    return (s.displayName ?? s.email ?? s.subject ?? "?")
+    return (s.displayName ?? s.email ?? t("nav.account"))
       .charAt(0)
       .toUpperCase();
   };
   const label = () => {
     const s = session();
     if (!s) return "—";
-    return s.displayName ?? s.email ?? s.subject;
+    return s.displayName ?? s.email ?? t("nav.account");
   };
 
   const signOut = () => {
@@ -74,8 +74,8 @@ export default function UserMenu() {
         <div class="user-menu-pop" role="menu">
           <div class="user-menu-id">
             <div class="user-menu-name">{label()}</div>
-            <Show when={session()?.subject}>
-              {(sub) => <div class="user-menu-sub">{sub()}</div>}
+            <Show when={session()?.email && session()?.displayName}>
+              {(email) => <div class="user-menu-sub">{email()}</div>}
             </Show>
           </div>
           <a
@@ -94,6 +94,15 @@ export default function UserMenu() {
               <CreditCard size={16} /> {t("nav.billing")}
             </a>
           </Show>
+          <a
+            class="user-menu-item"
+            href="https://takosumi.com/docs"
+            target="_blank"
+            rel="external noopener"
+            onClick={() => setOpen(false)}
+          >
+            <HelpCircle size={16} /> {t("nav.docs")}
+          </a>
           <div
             class="user-menu-lang"
             role="group"

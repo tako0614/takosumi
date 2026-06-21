@@ -99,6 +99,16 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   >(null);
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
+  const installReturn = currentInstallReturnContext();
+  const [createFormOpen, setCreateFormOpen] = createSignal(
+    Boolean(installReturn),
+  );
+  const hasProviderConnections = () => (providerConnections() ?? []).length > 0;
+  const shouldShowCreateForm = () =>
+    createFormOpen() ||
+    (!providerConnections.loading &&
+      !providerConnections.error &&
+      !hasProviderConnections());
 
   const refreshConnections = async () => {
     await refetchProviderConnections();
@@ -110,8 +120,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     setLastCreatedVerifiedHint(false);
     clearForm();
     await refreshConnections();
+    if (!installReturn) setCreateFormOpen(false);
   };
-  const installReturn = currentInstallReturnContext();
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
     : undefined;
@@ -562,7 +572,22 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       <Show when={(providerConnections() ?? []).length > 0}>
         <Card>
-          <CardHeader title={t("conn.providerConnections.title")} />
+          <CardHeader
+            title={t("conn.providerConnections.title")}
+            actions={
+              <Show when={!createFormOpen()}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  type="button"
+                  icon={<Plus size={14} />}
+                  onClick={() => setCreateFormOpen(true)}
+                >
+                  {t("conn.add.open")}
+                </Button>
+              </Show>
+            }
+          />
           <ActionError error={remove.error} />
           <Show when={testError()}>
             {(m) => <Toast tone="error">{m()}</Toast>}
@@ -579,363 +604,386 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       </Show>
 
       {/* ----- register form ----- */}
-      <Card>
-        <CardHeader title={t("conn.add.title")} />
-        <div class="wc-form">
-          <FormField label={t("conn.add.provider")}>
-            <Select
-              id="connection-provider"
-              name="provider"
-              value={provider()}
-              onChange={(e) => {
-                setProvider(e.currentTarget.value);
-                // Switching provider drops any half-entered secret values.
-                setValues({});
-                setHelperToken("");
-                setGenericEnvProvider("");
-                setEnvPairs([{ name: "", value: "" }]);
-              }}
-            >
-              <For each={PROVIDERS}>
-                {(p) => <option value={p.provider}>{p.label}</option>}
-              </For>
-            </Select>
-          </FormField>
-
-          <FormField label={t("conn.add.displayName")}>
-            <Input
-              id="connection-display-name"
-              name="displayName"
-              type="text"
-              value={displayName()}
-              onInput={(e) => setDisplayName(e.currentTarget.value)}
-              placeholder={t("conn.add.displayNamePlaceholder")}
-              autocomplete="off"
-            />
-          </FormField>
-
-          <Show when={!isGenericEnvProvider()}>
-            <details class="connection-advanced">
-              <summary>{t("conn.custom.summary")}</summary>
-              <p class="muted">{t("conn.custom.body")}</p>
-              <Button
-                variant="secondary"
-                type="button"
-                onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
+      <Show when={shouldShowCreateForm()}>
+        <Card>
+          <CardHeader
+            title={t("conn.add.title")}
+            actions={
+              <Show when={hasProviderConnections()}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => setCreateFormOpen(false)}
+                >
+                  {t("conn.add.close")}
+                </Button>
+              </Show>
+            }
+          />
+          <div class="wc-form">
+            <FormField label={t("conn.add.provider")}>
+              <Select
+                id="connection-provider"
+                name="provider"
+                value={provider()}
+                onChange={(e) => {
+                  setProvider(e.currentTarget.value);
+                  // Switching provider drops any half-entered secret values.
+                  setValues({});
+                  setHelperToken("");
+                  setGenericEnvProvider("");
+                  setEnvPairs([{ name: "", value: "" }]);
+                }}
               >
-                {t("conn.custom.use")}
-              </Button>
-            </details>
-          </Show>
-          <Show when={isGenericEnvProvider()}>
-            <div class="wc-form-actions">
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
-              >
-                {t("conn.custom.back")}
-              </Button>
-            </div>
-          </Show>
+                <For each={PROVIDERS}>
+                  {(p) => <option value={p.provider}>{p.label}</option>}
+                </For>
+              </Select>
+            </FormField>
 
-          <Show
-            when={isGenericEnvProvider()}
-            fallback={
-              <Show
-                when={tokenHelper()}
-                fallback={
-                  /* No guided helper — raw fields are the path. */
-                  <form
-                    class="wc-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void create.run();
-                    }}
-                  >
-                    <Index each={fields()}>
-                      {(field) => (
-                        <FormField
-                          label={field().label}
-                          required={field().required}
-                        >
-                          <Input
-                            id={`connection-field-${field().envName}`}
-                            name={`field:${field().envName}`}
-                            type={field().secret ? "password" : "text"}
-                            value={values()[field().envName] ?? ""}
-                            onInput={(e) =>
-                              setFieldValue(
-                                field().envName,
-                                e.currentTarget.value,
-                              )
-                            }
-                            placeholder={field().placeholder}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                      )}
-                    </Index>
-                    <div class="wc-form-actions">
-                      <Button
-                        variant="primary"
-                        type="submit"
-                        busy={create.busy()}
-                      >
-                        {create.busy()
-                          ? t("conn.registering")
-                          : t("conn.register")}
-                      </Button>
-                    </div>
-                    <ActionError error={create.error} />
-                  </form>
-                }
-              >
-                {(helper) => (
-                  <>
-                    {/* Guided-token flow: provider's own token screen → paste. */}
-                    <div class="wc-guided">
-                      <div class="wc-form-actions">
-                        <Button
-                          variant="primary"
-                          href={helper().createTokenUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {t("conn.guided.openProvider", {
-                            provider: descriptor()?.label ?? "",
-                          })}
-                        </Button>
-                        <Show when={oauthAvailable()}>
-                          <Button
-                            variant="secondary"
-                            type="button"
-                            busy={oauthBusy()}
-                            onClick={() => void startOAuth()}
-                          >
-                            {t("conn.guided.oauth", {
-                              provider: descriptor()?.label ?? "",
-                            })}
-                          </Button>
-                        </Show>
-                      </div>
-                      <details class="connection-advanced connection-help">
-                        <summary>{t("conn.guided.stepsSummary")}</summary>
-                        <ol class="wc-steps">
-                          <For each={helper().steps}>{(s) => <li>{s}</li>}</For>
-                        </ol>
-                      </details>
+            <FormField label={t("conn.add.displayName")}>
+              <Input
+                id="connection-display-name"
+                name="displayName"
+                type="text"
+                value={displayName()}
+                onInput={(e) => setDisplayName(e.currentTarget.value)}
+                placeholder={t("conn.add.displayNamePlaceholder")}
+                autocomplete="off"
+              />
+            </FormField>
 
-                      <form
-                        class="wc-form"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          void createFromHelper.run();
-                        }}
-                      >
-                        <FormField label={t("conn.guided.pasteLabel")} required>
-                          <Input
-                            id="connection-helper-token"
-                            name="helperToken"
-                            type="password"
-                            value={helperToken()}
-                            onInput={(e) =>
-                              setHelperToken(e.currentTarget.value)
-                            }
-                            placeholder={t("conn.guided.pastePlaceholder")}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                        <Show when={descriptor()?.provider === "cloudflare"}>
+            <Show when={!isGenericEnvProvider()}>
+              <details class="connection-advanced">
+                <summary>{t("conn.custom.summary")}</summary>
+                <p class="muted">{t("conn.custom.body")}</p>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
+                >
+                  {t("conn.custom.use")}
+                </Button>
+              </details>
+            </Show>
+            <Show when={isGenericEnvProvider()}>
+              <div class="wc-form-actions">
+                <Button
+                  variant="ghost"
+                  type="button"
+                  onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
+                >
+                  {t("conn.custom.back")}
+                </Button>
+              </div>
+            </Show>
+
+            <Show
+              when={isGenericEnvProvider()}
+              fallback={
+                <Show
+                  when={tokenHelper()}
+                  fallback={
+                    /* No guided helper — raw fields are the path. */
+                    <form
+                      class="wc-form"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void create.run();
+                      }}
+                    >
+                      <Index each={fields()}>
+                        {(field) => (
                           <FormField
-                            label={t(
-                              "conn.provider.cloudflare.accountId.label",
-                            )}
-                            required
+                            label={field().label}
+                            required={field().required}
                           >
                             <Input
-                              id="connection-helper-cloudflare-account-id"
-                              name="helperCloudflareAccountId"
-                              type="text"
-                              value={helperCloudflareAccountId()}
+                              id={`connection-field-${field().envName}`}
+                              name={`field:${field().envName}`}
+                              type={field().secret ? "password" : "text"}
+                              value={values()[field().envName] ?? ""}
                               onInput={(e) =>
-                                setHelperCloudflareAccountId(
+                                setFieldValue(
+                                  field().envName,
                                   e.currentTarget.value,
                                 )
                               }
-                              placeholder={t(
-                                "conn.provider.cloudflare.accountId.placeholder",
-                              )}
+                              placeholder={field().placeholder}
                               autocomplete="off"
                               spellcheck={false}
                             />
                           </FormField>
-                        </Show>
+                        )}
+                      </Index>
+                      <div class="wc-form-actions">
+                        <Button
+                          variant="primary"
+                          type="submit"
+                          busy={create.busy()}
+                        >
+                          {create.busy()
+                            ? t("conn.registering")
+                            : t("conn.register")}
+                        </Button>
+                      </div>
+                      <ActionError error={create.error} />
+                    </form>
+                  }
+                >
+                  {(helper) => (
+                    <>
+                      {/* Guided-token flow: provider's own token screen → paste. */}
+                      <div class="wc-guided">
                         <div class="wc-form-actions">
                           <Button
                             variant="primary"
-                            type="submit"
-                            busy={createFromHelper.busy()}
-                            icon={<Link size={16} />}
+                            href={helper().createTokenUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
                           >
-                            {createFromHelper.busy()
-                              ? t("conn.guided.connecting")
-                              : t("conn.guided.connect")}
+                            {t("conn.guided.openProvider", {
+                              provider: descriptor()?.label ?? "",
+                            })}
                           </Button>
+                          <Show when={oauthAvailable()}>
+                            <Button
+                              variant="secondary"
+                              type="button"
+                              busy={oauthBusy()}
+                              onClick={() => void startOAuth()}
+                            >
+                              {t("conn.guided.oauth", {
+                                provider: descriptor()?.label ?? "",
+                              })}
+                            </Button>
+                          </Show>
                         </div>
-                        <ActionError error={createFromHelper.error} />
-                      </form>
-                    </div>
+                        <details class="connection-advanced connection-help">
+                          <summary>{t("conn.guided.stepsSummary")}</summary>
+                          <ol class="wc-steps">
+                            <For each={helper().steps}>
+                              {(s) => <li>{s}</li>}
+                            </For>
+                          </ol>
+                        </details>
 
-                    {/* Advanced fallback: raw multi-field form, demoted. */}
-                    <details class="connection-advanced">
-                      <summary>{t("conn.advanced.summary")}</summary>
-                      <form
-                        class="wc-form"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          void create.run();
-                        }}
-                      >
-                        <Index each={fields()}>
-                          {(field) => (
+                        <form
+                          class="wc-form"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void createFromHelper.run();
+                          }}
+                        >
+                          <FormField
+                            label={t("conn.guided.pasteLabel")}
+                            required
+                          >
+                            <Input
+                              id="connection-helper-token"
+                              name="helperToken"
+                              type="password"
+                              value={helperToken()}
+                              onInput={(e) =>
+                                setHelperToken(e.currentTarget.value)
+                              }
+                              placeholder={t("conn.guided.pastePlaceholder")}
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                          <Show when={descriptor()?.provider === "cloudflare"}>
                             <FormField
-                              label={field().label}
-                              required={field().required}
+                              label={t(
+                                "conn.provider.cloudflare.accountId.label",
+                              )}
+                              required
                             >
                               <Input
-                                id={`connection-advanced-field-${field().envName}`}
-                                name={`advancedField:${field().envName}`}
-                                type={field().secret ? "password" : "text"}
-                                value={values()[field().envName] ?? ""}
+                                id="connection-helper-cloudflare-account-id"
+                                name="helperCloudflareAccountId"
+                                type="text"
+                                value={helperCloudflareAccountId()}
                                 onInput={(e) =>
-                                  setFieldValue(
-                                    field().envName,
+                                  setHelperCloudflareAccountId(
                                     e.currentTarget.value,
                                   )
                                 }
-                                placeholder={field().placeholder}
+                                placeholder={t(
+                                  "conn.provider.cloudflare.accountId.placeholder",
+                                )}
                                 autocomplete="off"
                                 spellcheck={false}
                               />
                             </FormField>
-                          )}
-                        </Index>
-                        <div class="wc-form-actions">
-                          <Button
-                            variant="secondary"
-                            type="submit"
-                            busy={create.busy()}
-                          >
-                            {create.busy()
-                              ? t("conn.registering")
-                              : t("conn.advanced.register")}
-                          </Button>
-                        </div>
-                        <ActionError error={create.error} />
-                      </form>
-                    </details>
-                  </>
-                )}
-              </Show>
-            }
-          >
-            {/* Generic own-key Provider Connection editor. */}
-            <div class="wc-guided">
-              <form
-                class="wc-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void createGenericEnvProvider.run();
-                }}
-              >
-                <FormField label={t("conn.genericEnv.providerName")} required>
-                  <Input
-                    id="connection-generic-provider"
-                    name="genericProvider"
-                    type="text"
-                    value={genericEnvProvider()}
-                    onInput={(e) =>
-                      setGenericEnvProvider(e.currentTarget.value)
-                    }
-                    placeholder="aws / google / kubernetes / …"
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </FormField>
+                          </Show>
+                          <div class="wc-form-actions">
+                            <Button
+                              variant="primary"
+                              type="submit"
+                              busy={createFromHelper.busy()}
+                              icon={<Link size={16} />}
+                            >
+                              {createFromHelper.busy()
+                                ? t("conn.guided.connecting")
+                                : t("conn.guided.connect")}
+                            </Button>
+                          </div>
+                          <ActionError error={createFromHelper.error} />
+                        </form>
+                      </div>
 
-                <Index each={envPairs()}>
-                  {(pair, index) => (
-                    <div class="wc-env-pair">
-                      <FormField label={t("conn.genericEnv.envName")}>
-                        <Input
-                          id={`connection-generic-env-name-${index}`}
-                          name={`genericEnvName:${index}`}
-                          type="text"
-                          value={pair().name}
-                          onInput={(e) =>
-                            setEnvPair(index, { name: e.currentTarget.value })
-                          }
-                          placeholder="AWS_ACCESS_KEY_ID"
-                          autocomplete="off"
-                          spellcheck={false}
-                        />
-                      </FormField>
-                      <FormField label={t("conn.genericEnv.value")}>
-                        <Input
-                          id={`connection-generic-env-value-${index}`}
-                          name={`genericEnvValue:${index}`}
-                          type="password"
-                          value={pair().value}
-                          onInput={(e) =>
-                            setEnvPair(index, { value: e.currentTarget.value })
-                          }
-                          placeholder={t("conn.genericEnv.valuePlaceholder")}
-                          autocomplete="off"
-                          spellcheck={false}
-                        />
-                      </FormField>
-                      <Show when={envPairs().length > 1}>
-                        <Button
-                          variant="ghost"
-                          type="button"
-                          onClick={() => removeEnvPair(index)}
-                          icon={<Trash size={16} />}
+                      {/* Advanced fallback: raw multi-field form, demoted. */}
+                      <details class="connection-advanced">
+                        <summary>{t("conn.advanced.summary")}</summary>
+                        <form
+                          class="wc-form"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void create.run();
+                          }}
                         >
-                          {t("common.delete")}
-                        </Button>
-                      </Show>
-                    </div>
+                          <Index each={fields()}>
+                            {(field) => (
+                              <FormField
+                                label={field().label}
+                                required={field().required}
+                              >
+                                <Input
+                                  id={`connection-advanced-field-${field().envName}`}
+                                  name={`advancedField:${field().envName}`}
+                                  type={field().secret ? "password" : "text"}
+                                  value={values()[field().envName] ?? ""}
+                                  onInput={(e) =>
+                                    setFieldValue(
+                                      field().envName,
+                                      e.currentTarget.value,
+                                    )
+                                  }
+                                  placeholder={field().placeholder}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                            )}
+                          </Index>
+                          <div class="wc-form-actions">
+                            <Button
+                              variant="secondary"
+                              type="submit"
+                              busy={create.busy()}
+                            >
+                              {create.busy()
+                                ? t("conn.registering")
+                                : t("conn.advanced.register")}
+                            </Button>
+                          </div>
+                          <ActionError error={create.error} />
+                        </form>
+                      </details>
+                    </>
                   )}
-                </Index>
+                </Show>
+              }
+            >
+              {/* Generic own-key Provider Connection editor. */}
+              <div class="wc-guided">
+                <form
+                  class="wc-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void createGenericEnvProvider.run();
+                  }}
+                >
+                  <FormField label={t("conn.genericEnv.providerName")} required>
+                    <Input
+                      id="connection-generic-provider"
+                      name="genericProvider"
+                      type="text"
+                      value={genericEnvProvider()}
+                      onInput={(e) =>
+                        setGenericEnvProvider(e.currentTarget.value)
+                      }
+                      placeholder="aws / google / kubernetes / …"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </FormField>
 
-                <div class="wc-form-actions">
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    onClick={() => addEnvPair()}
-                    icon={<Plus size={16} />}
-                  >
-                    {t("conn.genericEnv.addRow")}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    busy={createGenericEnvProvider.busy()}
-                  >
-                    {createGenericEnvProvider.busy()
-                      ? t("conn.registering")
-                      : t("conn.register")}
-                  </Button>
-                </div>
-                <ActionError error={createGenericEnvProvider.error} />
-              </form>
-            </div>
-          </Show>
-        </div>
-      </Card>
+                  <Index each={envPairs()}>
+                    {(pair, index) => (
+                      <div class="wc-env-pair">
+                        <FormField label={t("conn.genericEnv.envName")}>
+                          <Input
+                            id={`connection-generic-env-name-${index}`}
+                            name={`genericEnvName:${index}`}
+                            type="text"
+                            value={pair().name}
+                            onInput={(e) =>
+                              setEnvPair(index, { name: e.currentTarget.value })
+                            }
+                            placeholder="AWS_ACCESS_KEY_ID"
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </FormField>
+                        <FormField label={t("conn.genericEnv.value")}>
+                          <Input
+                            id={`connection-generic-env-value-${index}`}
+                            name={`genericEnvValue:${index}`}
+                            type="password"
+                            value={pair().value}
+                            onInput={(e) =>
+                              setEnvPair(index, {
+                                value: e.currentTarget.value,
+                              })
+                            }
+                            placeholder={t("conn.genericEnv.valuePlaceholder")}
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                        </FormField>
+                        <Show when={envPairs().length > 1}>
+                          <Button
+                            variant="ghost"
+                            type="button"
+                            onClick={() => removeEnvPair(index)}
+                            icon={<Trash size={16} />}
+                          >
+                            {t("common.delete")}
+                          </Button>
+                        </Show>
+                      </div>
+                    )}
+                  </Index>
+
+                  <div class="wc-form-actions">
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => addEnvPair()}
+                      icon={<Plus size={16} />}
+                    >
+                      {t("conn.genericEnv.addRow")}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      type="submit"
+                      busy={createGenericEnvProvider.busy()}
+                    >
+                      {createGenericEnvProvider.busy()
+                        ? t("conn.registering")
+                        : t("conn.register")}
+                    </Button>
+                  </div>
+                  <ActionError error={createGenericEnvProvider.error} />
+                </form>
+              </div>
+            </Show>
+          </div>
+        </Card>
+      </Show>
 
       <Show when={providerConnections.loading}>
         <Skeleton variant="card" count={2} />
