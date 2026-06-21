@@ -241,177 +241,180 @@ export default function SharesTab(props: { readonly spaceId: string }) {
 
   return (
     <div class="wb-stack">
-      <Card>
-        <CardHeader
-          title={t("shares.create.title")}
-          subtitle={t("shares.subtitle")}
-        />
-        <CardSection>
-          <form
-            class="wb-install-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void create.run();
-            }}
-          >
-            <div class="wb-form-row">
-              <FormField label={t("shares.create.toSpace")}>
-                <Select
-                  value={toSpaceId()}
-                  onChange={(e) => setToSpaceId(e.currentTarget.value)}
-                >
-                  <option value="">
-                    {t("shares.create.selectPlaceholder")}
-                  </option>
-                  <For
-                    each={(spaces() ?? []).filter((s) => s.id !== spaceId())}
+      <details class="wb-disclosure">
+        <summary>{t("shares.create.title")}</summary>
+        <Card>
+          <CardHeader
+            title={t("shares.create.title")}
+            subtitle={t("shares.subtitle")}
+          />
+          <CardSection>
+            <form
+              class="wb-install-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void create.run();
+              }}
+            >
+              <div class="wb-form-row">
+                <FormField label={t("shares.create.toSpace")}>
+                  <Select
+                    value={toSpaceId()}
+                    onChange={(e) => setToSpaceId(e.currentTarget.value)}
                   >
-                    {(space) => (
-                      <option value={space.id}>
-                        @{space.handle} — {space.displayName}
-                      </option>
+                    <option value="">
+                      {t("shares.create.selectPlaceholder")}
+                    </option>
+                    <For
+                      each={(spaces() ?? []).filter((s) => s.id !== spaceId())}
+                    >
+                      {(space) => (
+                        <option value={space.id}>
+                          @{space.handle} — {space.displayName}
+                        </option>
+                      )}
+                    </For>
+                  </Select>
+                </FormField>
+                <FormField label={t("shares.create.producer")}>
+                  <Select
+                    value={producerInstallationId()}
+                    onChange={(e) =>
+                      setProducerInstallationId(e.currentTarget.value)
+                    }
+                  >
+                    <option value="">
+                      {t("shares.create.selectPlaceholder")}
+                    </option>
+                    <For each={installations() ?? []}>
+                      {(inst) => (
+                        <option value={inst.id}>
+                          {inst.name} ({inst.environment})
+                        </option>
+                      )}
+                    </For>
+                  </Select>
+                </FormField>
+              </div>
+
+              <FormField label={t("shares.create.outputs")}>
+                <div class="wb-output-editor">
+                  <For each={outputs()}>
+                    {(output) => (
+                      <div class="wb-output-row">
+                        <Input
+                          type="text"
+                          value={output.name}
+                          onInput={(e) =>
+                            updateOutput(output.id, {
+                              name: e.currentTarget.value,
+                            })
+                          }
+                          placeholder="base_domain"
+                          autocomplete="off"
+                          spellcheck={false}
+                          aria-label={t("shares.create.outputName")}
+                        />
+                        <Input
+                          type="text"
+                          value={output.alias}
+                          onInput={(e) =>
+                            updateOutput(output.id, {
+                              alias: e.currentTarget.value,
+                            })
+                          }
+                          placeholder="alias"
+                          autocomplete="off"
+                          spellcheck={false}
+                          aria-label={t("shares.create.outputAlias")}
+                        />
+                        <Checkbox
+                          label={t("shares.create.sensitiveValue")}
+                          checked={output.sensitive}
+                          onChange={(e) =>
+                            updateOutput(output.id, {
+                              sensitive: e.currentTarget.checked,
+                            })
+                          }
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          type="button"
+                          onClick={() => removeOutput(output.id)}
+                        >
+                          {t("shares.create.removeOutput")}
+                        </Button>
+                      </div>
                     )}
                   </For>
-                </Select>
-              </FormField>
-              <FormField label={t("shares.create.producer")}>
-                <Select
-                  value={producerInstallationId()}
-                  onChange={(e) =>
-                    setProducerInstallationId(e.currentTarget.value)
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() =>
+                    setOutputs((rows) => [...rows, emptyOutputDraft()])
                   }
                 >
-                  <option value="">
-                    {t("shares.create.selectPlaceholder")}
-                  </option>
-                  <For each={installations() ?? []}>
-                    {(inst) => (
-                      <option value={inst.id}>
-                        {inst.name} ({inst.environment})
-                      </option>
-                    )}
-                  </For>
-                </Select>
+                  {t("shares.create.addOutput")}
+                </Button>
               </FormField>
-            </div>
 
-            <FormField label={t("shares.create.outputs")}>
-              <div class="wb-output-editor">
-                <For each={outputs()}>
-                  {(output) => (
-                    <div class="wb-output-row">
-                      <Input
-                        type="text"
-                        value={output.name}
-                        onInput={(e) =>
-                          updateOutput(output.id, {
-                            name: e.currentTarget.value,
-                          })
-                        }
-                        placeholder="base_domain"
-                        autocomplete="off"
-                        spellcheck={false}
-                        aria-label={t("shares.create.outputName")}
-                      />
-                      <Input
-                        type="text"
-                        value={output.alias}
-                        onInput={(e) =>
-                          updateOutput(output.id, {
-                            alias: e.currentTarget.value,
-                          })
-                        }
-                        placeholder="alias"
-                        autocomplete="off"
-                        spellcheck={false}
-                        aria-label={t("shares.create.outputAlias")}
-                      />
-                      <Checkbox
-                        label={t("shares.create.sensitiveValue")}
-                        checked={output.sensitive}
-                        onChange={(e) =>
-                          updateOutput(output.id, {
-                            sensitive: e.currentTarget.checked,
-                          })
-                        }
-                      />
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        type="button"
-                        onClick={() => removeOutput(output.id)}
-                      >
-                        {t("shares.create.removeOutput")}
-                      </Button>
-                    </div>
-                  )}
-                </For>
+              <Show when={sensitiveSelected()}>
+                <FormField label={t("shares.create.sensitiveReason")}>
+                  <Textarea
+                    value={sensitiveReason()}
+                    onInput={(e) => setSensitiveReason(e.currentTarget.value)}
+                    rows={3}
+                    placeholder={t("shares.create.sensitivePlaceholder")}
+                    spellcheck={false}
+                  />
+                </FormField>
+              </Show>
+
+              <div class="wb-form-actions">
+                <Button
+                  variant="primary"
+                  type="submit"
+                  busy={create.busy()}
+                  disabled={create.busy()}
+                >
+                  {t("shares.create.cta")}
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                type="button"
-                onClick={() =>
-                  setOutputs((rows) => [...rows, emptyOutputDraft()])
-                }
-              >
-                {t("shares.create.addOutput")}
-              </Button>
-            </FormField>
-
-            <Show when={sensitiveSelected()}>
-              <FormField label={t("shares.create.sensitiveReason")}>
-                <Textarea
-                  value={sensitiveReason()}
-                  onInput={(e) => setSensitiveReason(e.currentTarget.value)}
-                  rows={3}
-                  placeholder={t("shares.create.sensitivePlaceholder")}
-                  spellcheck={false}
-                />
-              </FormField>
-            </Show>
-
-            <div class="wb-form-actions">
-              <Button
-                variant="primary"
-                type="submit"
-                busy={create.busy()}
-                disabled={create.busy()}
-              >
-                {t("shares.create.cta")}
-              </Button>
-            </div>
-            <Show when={formError()}>
-              {(m) => (
-                <p class="wb-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-            <Show when={create.error()}>
-              {(m) => (
-                <p class="wb-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-            <Show when={approve.error()}>
-              {(m) => (
-                <p class="wb-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-            <Show when={revoke.error()}>
-              {(m) => (
-                <p class="wb-error" role="alert">
-                  {m()}
-                </p>
-              )}
-            </Show>
-          </form>
-        </CardSection>
-      </Card>
+              <Show when={formError()}>
+                {(m) => (
+                  <p class="wb-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+              <Show when={create.error()}>
+                {(m) => (
+                  <p class="wb-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+              <Show when={approve.error()}>
+                {(m) => (
+                  <p class="wb-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+              <Show when={revoke.error()}>
+                {(m) => (
+                  <p class="wb-error" role="alert">
+                    {m()}
+                  </p>
+                )}
+              </Show>
+            </form>
+          </CardSection>
+        </Card>
+      </details>
 
       <section class="wb-stack-tight">
         <h2 class="tg-card-title">{t("shares.list.title")}</h2>
