@@ -30,6 +30,7 @@ import type {
   OutputShare as ContractOutputShare,
   ProviderCatalogEntry as ContractProviderCatalogEntry,
   ProviderConnection as ContractProviderConnection,
+  ProviderResolution as ContractProviderResolution,
   PublicDeployment as ContractPublicDeployment,
   Run as ContractRun,
   RunCostInfo as ContractRunCostInfo,
@@ -352,6 +353,8 @@ export interface InstallationProviderConnectionSet {
   readonly updatedAt: string;
 }
 
+export type ProviderResolution = ContractProviderResolution;
+
 export interface InstallConfig {
   readonly id: string;
   readonly spaceId?: string;
@@ -440,17 +443,22 @@ export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
   readonly spaceId: string;
+  readonly sourceId?: string;
   readonly installationId?: string;
   readonly environment?: string;
   readonly type: RunType;
   readonly status: RunStatus;
   readonly sourceSnapshotId?: string;
   readonly dependencySnapshotId?: string;
+  readonly compatibilityReportId?: string;
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
   readonly summary?: RunChangeSummary;
   readonly policyStatus?: RunPolicyStatus;
+  readonly providerResolutions?: readonly ProviderResolution[];
+  readonly runEnvironmentEvidenceDigest?: string;
+  readonly redactionProfileId?: string;
   readonly requiresApproval?: boolean;
   readonly errorCode?: string;
   readonly createdBy: string;

@@ -40,7 +40,11 @@ import {
   getRun,
   getRunCostInfo,
   getRunLogs,
+  listProviderConnections,
   planInstallation,
+  type ProviderConnection,
+  type ProviderCredentialOwnership,
+  type ProviderResolution,
   type Run,
   type RunAuditEvent,
   type RunCostInfo,
@@ -73,6 +77,7 @@ import {
   PageHeader,
   Skeleton,
   StatusBadge,
+  type Tone,
 } from "../../components/ui/index.ts";
 
 export default function RunView() {
@@ -205,6 +210,134 @@ function NameList(props: { readonly names: readonly string[] }) {
   );
 }
 
+interface ProviderResolutionRow {
+  readonly provider: string;
+  readonly connectionId?: string;
+  readonly connectionName?: string;
+  readonly ownership?: ProviderCredentialOwnership;
+  readonly status: ProviderResolution["status"];
+  readonly blockedReason?: string;
+}
+
+function providerRequirementLabel(resolution: ProviderResolution): string {
+  const requirement = resolution.requirement;
+  const provider =
+    requirement.providerSource || requirement.providerName || "provider";
+  return requirement.alias ? `${provider}.${requirement.alias}` : provider;
+}
+
+function providerResolutionStatusLabel(
+  status: ProviderResolution["status"],
+): string {
+  switch (status) {
+    case "resolved_provider_connection":
+      return t("run.connections.statusResolved");
+    case "blocked_missing_connection":
+      return t("run.connections.statusMissing");
+    case "blocked_policy":
+      return t("run.connections.statusBlocked");
+  }
+}
+
+function providerResolutionTone(status: ProviderResolution["status"]): Tone {
+  switch (status) {
+    case "resolved_provider_connection":
+      return "ok";
+    case "blocked_missing_connection":
+      return "warn";
+    case "blocked_policy":
+      return "danger";
+  }
+}
+
+function providerConnectionName(
+  connectionId: string | undefined,
+  connectionsById: ReadonlyMap<string, ProviderConnection>,
+): string | undefined {
+  if (!connectionId) return undefined;
+  const connection = connectionsById.get(connectionId);
+  return connection?.displayName || connection?.providerSource || connectionId;
+}
+
+function providerResolutionRows(
+  run: Run | undefined,
+  connectionsById: ReadonlyMap<string, ProviderConnection>,
+): readonly ProviderResolutionRow[] {
+  return (run?.providerResolutions ?? []).map((resolution) => {
+    const evidence = resolution.evidence;
+    const connectionId =
+      resolution.connectionId ??
+      (evidence.kind === "provider_connection"
+        ? evidence.connectionId
+        : undefined);
+    const ownership =
+      resolution.ownership ??
+      (evidence.kind === "provider_connection"
+        ? evidence.ownership
+        : undefined);
+    return {
+      provider: providerRequirementLabel(resolution),
+      connectionId,
+      connectionName: providerConnectionName(connectionId, connectionsById),
+      ownership,
+      status: resolution.status,
+      blockedReason:
+        resolution.blockedReason ??
+        (evidence.kind === "blocked" ? evidence.reason : undefined),
+    };
+  });
+}
+
+function ProviderResolutionTable(props: {
+  readonly rows: readonly ProviderResolutionRow[];
+}) {
+  return (
+    <div class="wa-provider-resolution-list">
+      <For each={props.rows}>
+        {(row) => (
+          <div class="wa-provider-resolution-row">
+            <div>
+              <span class="wa-provider-resolution-label">
+                {t("run.connections.provider")}
+              </span>
+              <code>{row.provider}</code>
+            </div>
+            <div>
+              <span class="wa-provider-resolution-label">
+                {t("run.connections.connection")}
+              </span>
+              <code>{row.connectionName ?? row.connectionId ?? "—"}</code>
+            </div>
+            <div>
+              <span class="wa-provider-resolution-label">
+                {t("run.connections.ownership")}
+              </span>
+              <span>
+                {row.ownership
+                  ? row.ownership === "takos_provided"
+                    ? t("conn.ownership.takosProvided")
+                    : t("conn.ownership.ownKey")
+                  : "—"}
+              </span>
+            </div>
+            <div>
+              <span class="wa-provider-resolution-label">
+                {t("run.connections.status")}
+              </span>
+              <Badge tone={providerResolutionTone(row.status)}>
+                {providerResolutionStatusLabel(row.status)}
+              </Badge>
+              <Show when={row.blockedReason}>
+                {(reason) => <p class="muted">{reason()}</p>}
+              </Show>
+            </div>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
@@ -220,6 +353,10 @@ function Inner() {
       return undefined;
     }
   });
+  const [providerConnectionsForRun] = createResource(
+    () => run.latest?.spaceId ?? null,
+    listProviderConnections,
+  );
   // The owning app, for the plain-language summary sentence + back link.
   const installationId = () => run.latest?.installationId ?? null;
   const [installation] = createResource(installationId, getInstallation);
@@ -258,6 +395,18 @@ function Inner() {
   );
   const connections = createMemo(() =>
     connectionNamesFromLogs(logs()?.auditEvents ?? []),
+  );
+  const providerConnectionsById = createMemo(
+    () =>
+      new Map(
+        (providerConnectionsForRun() ?? []).map((connection) => [
+          connection.id,
+          connection,
+        ]),
+      ),
+  );
+  const providerRows = createMemo(() =>
+    providerResolutionRows(run.latest, providerConnectionsById()),
   );
 
   const approve = createAction(async () => {
@@ -758,6 +907,14 @@ function Inner() {
                 </Show>
               </Card>
 
+              <Show when={providerRows().length > 0}>
+                <Card>
+                  <CardHeader title={t("run.connections.reviewTitle")} />
+                  <p class="wa-notice">{t("run.connections.reviewBody")}</p>
+                  <ProviderResolutionTable rows={providerRows()} />
+                </Card>
+              </Show>
+
               {/* ===== diagnostics — open automatically when failed ===== */}
               <Card>
                 <CardHeader title={t("run.diagnostics.title")} />
@@ -829,12 +986,19 @@ function Inner() {
                   <Card>
                     <CardHeader title={t("run.connections.title")} />
                     <Show
-                      when={connections().length > 0}
+                      when={
+                        connections().length > 0 || providerRows().length > 0
+                      }
                       fallback={
                         <p class="muted">{t("run.connections.empty")}</p>
                       }
                     >
-                      <NameList names={connections()} />
+                      <Show
+                        when={providerRows().length > 0}
+                        fallback={<NameList names={connections()} />}
+                      >
+                        <ProviderResolutionTable rows={providerRows()} />
+                      </Show>
                     </Show>
                   </Card>
                   <Card>
