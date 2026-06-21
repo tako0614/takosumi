@@ -130,6 +130,26 @@ customer update には impact と次回 update 予定時刻を含めます。raw
 secret 名、provider account id、private channel link、未確定の root cause を
 含めてはいけません。
 
+## GA SEV Drill Evidence
+
+Takosumi Cloud GA readiness では、customer impact を起こさない synthetic alert
+を使い、`observability-incident` operation-drill batch で alert routing、ack、
+status update、postmortem / mitigation reference を集めます。
+
+```bash
+bun run plan:takosumi-operation-drills -- \
+  --batch observability-incident \
+  --print-batch-template \
+  --out-file takosumi-private/evidence/observability-incident-template.json
+```
+
+この batch の commands は observability artifact preflight、fail-closed private
+note template、manifest validation を提供します。実 alert / incident system の
+`alertId`、`incidentId`、`statusPageUpdateId`、`postmortemRef` は
+operator-private evidence にだけ保存し、public summary には drill であること、
+customer impact がないこと、ack / mitigation / follow-up が完了したことだけを
+記録します。
+
 ## Timeline Format
 
 material な event はすべて以下の形式で記録します:

@@ -83,6 +83,23 @@ procedures in the launch-readiness evidence.
 The dashboard may show empty plans or disabled billing in closed access. That is
 valid only while Takosumi Cloud remains pre-GA or closed.
 
+GA billing evidence is collected through the `billing-operation` operation-drill
+batch:
+
+```bash
+bun run plan:takosumi-operation-drills -- \
+  --batch billing-operation \
+  --print-batch-template \
+  --out-file takosumi-private/evidence/billing-operation-template.json
+```
+
+The batch includes public-safe commands for billing plan preflight, billing /
+usage / reservation state capture, private template generation, and manifest
+validation. Accepted evidence still requires real webhook event ids,
+entitlement state changes, dunning/suspension proof, and refund or credit-note
+proof in the operator-private readiness manifest. Public summaries must not
+contain payment details, customer identity, card data, or raw webhook payloads.
+
 ## Export Guide
 
 Customers must have a clear hosted-to-self-host exit path.
@@ -101,19 +118,35 @@ The export path must document:
 The operator must not claim export readiness until a clean import, post-import
 login, and sample data verification have been rehearsed.
 
+GA export/import/privacy evidence is collected through the
+`export-import-sovereignty` operation-drill batch:
+
+```bash
+bun run plan:takosumi-operation-drills -- \
+  --batch export-import-sovereignty \
+  --print-batch-template \
+  --out-file takosumi-private/evidence/export-import-sovereignty-template.json
+```
+
+The batch includes account-plane export request/readback commands and private
+template generation. It does not make an export ready by itself; accepted
+evidence must include an encrypted archive digest, recipient fingerprint,
+clean self-host import, post-import login/state verification, retention state,
+and privacy request rehearsal using scratch data only.
+
 ## Escalation Matrix
 
 Takosumi Cloud support ownership is:
 
-| Area | Primary owner | Escalation |
-| --- | --- | --- |
-| Sign-in and accounts | Takosumi Cloud operator | OIDC/account-plane maintainer |
-| Install and Capsule review | Takosumi Cloud operator | Control-plane maintainer |
-| Provider Connection failure | Takosumi Cloud operator | Provider runtime owner |
-| Runner failure | Takosumi Cloud operator | Runner/container owner |
-| Billing and entitlement | Takosumi Cloud operator | Billing owner |
-| Data export or deletion | Takosumi Cloud operator | Security/privacy owner |
-| Incident response | On-call operator | Incident commander |
+| Area                        | Primary owner           | Escalation                    |
+| --------------------------- | ----------------------- | ----------------------------- |
+| Sign-in and accounts        | Takosumi Cloud operator | OIDC/account-plane maintainer |
+| Install and Capsule review  | Takosumi Cloud operator | Control-plane maintainer      |
+| Provider Connection failure | Takosumi Cloud operator | Provider runtime owner        |
+| Runner failure              | Takosumi Cloud operator | Runner/container owner        |
+| Billing and entitlement     | Takosumi Cloud operator | Billing owner                 |
+| Data export or deletion     | Takosumi Cloud operator | Security/privacy owner        |
+| Incident response           | On-call operator        | Incident commander            |
 
 Customer-impacting incidents must create an incident record, customer support
 note, and follow-up action list before the readiness evidence can pass.
