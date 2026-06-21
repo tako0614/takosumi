@@ -76,6 +76,22 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain('"conn.return.cta"');
   });
 
+  test("connections tab restores OAuth-created connection readiness from callback query", () => {
+    expect(connectionsTabSource).toContain('params.get("connection_id")');
+    expect(connectionsTabSource).toContain(
+      'params.get("connection_status") === "verified"',
+    );
+    expect(connectionsTabSource).toContain("setLastCreatedConnectionId");
+    expect(connectionsTabSource).toContain("setLastCreatedVerifiedHint");
+    expect(connectionsTabSource).toContain('params.delete("connection_id")');
+    expect(connectionsTabSource).toContain(
+      'params.delete("connection_status")',
+    );
+    expect(connectionsTabSource).toContain(
+      'lastCreatedProviderConnection()?.status === "ready" ||',
+    );
+  });
+
   test("connections tab refreshes ProviderConnection projections after mutations", () => {
     expect(connectionsTabSource).toContain(
       "refetch: refetchProviderConnections",
@@ -104,12 +120,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("rowRequiresOperatorManagedOnly");
     expect(newAppViewSource).toContain("missingOperatorManagedProviderRows");
     expect(newAppViewSource).toContain("missingOwnKeyProviderRows");
-    expect(newAppViewSource).toContain(
-      '"new.providers.operatorMissingTitle"',
-    );
-    expect(newAppViewSource).toContain(
-      '"new.providers.errorOperatorManaged"',
-    );
+    expect(newAppViewSource).toContain('"new.providers.operatorMissingTitle"');
+    expect(newAppViewSource).toContain('"new.providers.errorOperatorManaged"');
   });
 
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {
@@ -205,9 +217,7 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain('name="provider"');
     expect(connectionsTabSource).toContain('name="displayName"');
     expect(connectionsTabSource).toContain('name="helperToken"');
-    expect(connectionsTabSource).toContain(
-      'name="helperCloudflareAccountId"',
-    );
+    expect(connectionsTabSource).toContain('name="helperCloudflareAccountId"');
     expect(connectionsTabSource).toContain('name="genericProvider"');
     expect(connectionsTabSource).toContain("name={`field:${field().envName}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvName:${index}`}");
@@ -234,9 +244,7 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("ProviderConnection ownership table reflects the backend projection", () => {
-    expect(connectionsTabSource).toContain(
-      "providerConnectionOwnershipLabel",
-    );
+    expect(connectionsTabSource).toContain("providerConnectionOwnershipLabel");
     expect(connectionsTabSource).toContain('d.ownership === "takos_provided"');
     expect(connectionsTabSource).toContain("d.ownership");
     expect(connectionsTabSource).not.toContain(
