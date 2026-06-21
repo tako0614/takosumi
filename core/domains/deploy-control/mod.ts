@@ -421,6 +421,42 @@ export interface OpenTofuApplyResult {
   readonly rawOutputsKey?: string;
 }
 
+export type ReleaseActivationStatus =
+  | "skipped"
+  | "pending"
+  | "succeeded"
+  | "failed";
+
+export interface ReleaseActivationInput {
+  readonly planRun: PlanRun;
+  readonly applyRun: ApplyRun;
+  readonly installation: Installation;
+  readonly deployment: Deployment;
+  readonly outputSnapshot: OutputSnapshot;
+  /**
+   * Non-sensitive apply outputs available to an operator/Cloud release
+   * activator. This is broader than Deployment.outputsPublic because generic
+   * Capsules can keep public projection empty while still producing resource ids
+   * that a Cloud-only artifact publisher needs. Sensitive OpenTofu outputs and
+   * secret-shaped names/values are filtered before this seam.
+   */
+  readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+}
+
+export interface ReleaseActivationResult {
+  readonly status: ReleaseActivationStatus;
+  /** Operator-defined activation kind, for example `takos.cloudflare.worker`. */
+  readonly kind?: string;
+  readonly message?: string;
+  readonly launchUrl?: string;
+  readonly healthUrl?: string;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+export interface ReleaseActivator {
+  activate(input: ReleaseActivationInput): Promise<ReleaseActivationResult>;
+}
+
 export interface OpenTofuDestroyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly providerInstallation?: readonly ProviderInstallationEvidence[];
@@ -756,6 +792,14 @@ export interface OpenTofuDeploymentControllerDependencies {
    */
   readonly dependencyValueSealer?: DependencyValueSealer;
   /**
+   * Operator/Cloud-only post-apply seam. OSS core records OpenTofu apply as the
+   * Deployment of infrastructure/state. A host may additionally publish an
+   * application artifact (for example the Takos Worker script/assets) and report
+   * that release activation here. The hook receives no credential material and
+   * no sensitive outputs.
+   */
+  readonly releaseActivator?: ReleaseActivator;
+  /**
    * Operator/self-host billing default (§28). Space.billingSettings overrides
    * this. Omitted means self-host style `disabled`.
    */
@@ -920,6 +964,7 @@ export class OpenTofuDeploymentController {
   readonly #serviceGraphService?: ServiceGraphOperations;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
+  readonly #releaseActivator?: ReleaseActivator;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #allowOperatorBackedProviderEnvs: boolean;
   readonly #seededProfiles: Promise<void>;
@@ -960,6 +1005,7 @@ export class OpenTofuDeploymentController {
     this.#serviceGraphService = dependencies.serviceGraphService;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
+    this.#releaseActivator = dependencies.releaseActivator;
     this.#defaultBillingSettings =
       dependencies.defaultBillingSettings ?? DISABLED_BILLING_SETTINGS;
     this.#allowOperatorBackedProviderEnvs =
@@ -4667,6 +4713,14 @@ export class OpenTofuDeploymentController {
           deployment,
           outputSnapshot: projected.outputSnapshot,
         });
+        await this.#activateReleaseAfterApply({
+          planRun,
+          applyRun: completed,
+          installation: patched,
+          deployment,
+          outputSnapshot: projected.outputSnapshot,
+          result,
+        });
       }
       // §24 stale propagation: when this apply's projected outputs changed
       // versus the Installation's PREVIOUS OutputSnapshot, every transitive
@@ -5123,6 +5177,86 @@ export class OpenTofuDeploymentController {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  async #activateReleaseAfterApply(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+    readonly outputSnapshot: OutputSnapshot;
+    readonly result: OpenTofuApplyResult;
+  }): Promise<void> {
+    if (!this.#releaseActivator) return;
+    const nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
+    let result: ReleaseActivationResult;
+    try {
+      result = await this.#releaseActivator.activate({
+        planRun: input.planRun,
+        applyRun: input.applyRun,
+        installation: input.installation,
+        deployment: input.deployment,
+        outputSnapshot: input.outputSnapshot,
+        nonSensitiveOutputs,
+      });
+    } catch (error) {
+      await this.#recordReleaseActivationActivity({
+        ...input,
+        status: "failed",
+        message: errorMessage(error),
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+      return;
+    }
+    if (result.status === "skipped") return;
+    await this.#recordReleaseActivationActivity({
+      ...input,
+      status: result.status,
+      kind: result.kind,
+      message: result.message,
+      hasLaunchUrl: Boolean(result.launchUrl),
+      hasHealthUrl: Boolean(result.healthUrl),
+      metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    });
+  }
+
+  async #recordReleaseActivationActivity(input: {
+    readonly applyRun: ApplyRun;
+    readonly installation: Installation;
+    readonly deployment: Deployment;
+    readonly status: Exclude<ReleaseActivationStatus, "skipped">;
+    readonly kind?: string;
+    readonly message?: string;
+    readonly hasLaunchUrl?: boolean;
+    readonly hasHealthUrl?: boolean;
+    readonly metadataKeys?: readonly string[];
+    readonly outputCount: number;
+  }): Promise<void> {
+    await this.#recordActivity({
+      spaceId: input.applyRun.spaceId,
+      action: `release_activation.${input.status}`,
+      targetType: "deployment",
+      targetId: input.deployment.id,
+      runId: input.applyRun.id,
+      metadata: {
+        installationId: input.installation.id,
+        deploymentId: input.deployment.id,
+        applyRunId: input.applyRun.id,
+        outputCount: input.outputCount,
+        ...(input.kind ? { activationKind: input.kind } : {}),
+        ...(input.message ? { message: input.message } : {}),
+        ...(input.hasLaunchUrl === undefined
+          ? {}
+          : { hasLaunchUrl: input.hasLaunchUrl }),
+        ...(input.hasHealthUrl === undefined
+          ? {}
+          : { hasHealthUrl: input.hasHealthUrl }),
+        ...(input.metadataKeys && input.metadataKeys.length > 0
+          ? { metadataKeys: [...input.metadataKeys] }
+          : {}),
+      },
+    });
   }
 
   /**
@@ -6005,6 +6139,70 @@ function providerInstallationAuditEvents(
       })),
     }),
   ];
+}
+
+const RELEASE_ACTIVATION_SECRET_NAME_RE =
+  /(?:^|[_-])(token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])/i;
+const RELEASE_ACTIVATION_SECRET_VALUE_RE =
+  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)/i;
+
+function releaseActivationOutputs(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): Readonly<Record<string, JsonValue>> {
+  if (!outputs) return {};
+  const safeOutputs: Record<string, JsonValue> = {};
+  if (Array.isArray(outputs)) {
+    for (const output of outputs) {
+      if (isReleaseActivationOutputSafe(output.name, output.value)) {
+        safeOutputs[output.name] = output.value;
+      }
+    }
+    return safeOutputs;
+  }
+  for (const [name, output] of Object.entries(outputs)) {
+    if (output.sensitive === true) continue;
+    if (isReleaseActivationOutputSafe(name, output.value)) {
+      safeOutputs[name] = output.value;
+    }
+  }
+  return safeOutputs;
+}
+
+function isReleaseActivationOutputSafe(
+  name: string,
+  value: JsonValue,
+): boolean {
+  if (RELEASE_ACTIVATION_SECRET_NAME_RE.test(name)) return false;
+  return !releaseActivationValueLooksSecret(value);
+}
+
+function releaseActivationValueLooksSecret(value: JsonValue): boolean {
+  const stack: JsonValue[] = [value];
+  let inspected = 0;
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    inspected += 1;
+    if (inspected > 1_000) return true;
+    if (typeof current === "string") {
+      if (RELEASE_ACTIVATION_SECRET_VALUE_RE.test(current)) return true;
+      continue;
+    }
+    if (current === null || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    for (const [key, nested] of Object.entries(current)) {
+      if (
+        RELEASE_ACTIVATION_SECRET_NAME_RE.test(key) ||
+        RELEASE_ACTIVATION_SECRET_VALUE_RE.test(key)
+      ) {
+        return true;
+      }
+      stack.push(nested);
+    }
+  }
+  return false;
 }
 
 function changedOutputNamesBetween(
