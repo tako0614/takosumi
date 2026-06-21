@@ -80,26 +80,26 @@
   padding: 0 0 var(--tg-s-3);
   border-bottom: 1px solid var(--tg-line);
 }
-.av-summary-metrics {
+.av-summary-copy {
+  min-width: 0;
+}
+.av-summary-copy h2 {
+  margin: 0;
+  font-family: var(--tg-font-display);
+  font-size: var(--tg-fs-lg);
+  letter-spacing: 0;
+}
+.av-summary-copy p {
+  margin: 3px 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.av-summary-actions {
   display: flex;
   align-items: center;
-  gap: var(--tg-s-4);
-  min-width: 0;
-}
-.av-summary-metric {
-  display: flex;
-  align-items: baseline;
   gap: var(--tg-s-2);
-  min-width: 0;
-}
-.av-summary-label {
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-xs);
-}
-.av-summary-metric strong {
-  color: var(--tg-fg);
-  font-size: var(--tg-fs-lg);
-  line-height: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* ===== Workspace starter (home) ===== */
@@ -146,44 +146,34 @@
   gap: var(--tg-s-2);
   margin-top: var(--tg-s-4);
 }
-.av-start-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.av-start-options {
   display: grid;
   gap: var(--tg-s-2);
 }
-.av-start-steps li {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: var(--tg-s-3);
-  align-items: start;
+.av-start-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   padding: var(--tg-s-3);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
   background: var(--tg-bg);
-}
-.av-start-step-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--tg-r-md);
-  background: var(--tg-accent-soft);
-  color: var(--tg-accent-text);
-}
-.av-start-steps strong,
-.av-start-steps small {
-  display: block;
-  min-width: 0;
-}
-.av-start-steps strong {
   color: var(--tg-fg);
+  text-decoration: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.av-start-option:hover {
+  border-color: var(--tg-line-strong);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+}
+.av-start-option-title {
+  font-weight: 700;
   font-size: var(--tg-fs-sm);
 }
-.av-start-steps small {
-  margin-top: 2px;
+.av-start-option span:last-child {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-xs);
   line-height: 1.45;
@@ -216,9 +206,8 @@
   background: color-mix(in srgb, var(--tg-accent) 4%, transparent);
 }
 .av-service-main {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: var(--tg-s-2);
   min-width: 0;
   padding: 0;
@@ -229,6 +218,17 @@
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
   font-size: inherit;
+}
+.av-service-icon {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
 }
 .av-service-head {
   display: flex;
@@ -255,6 +255,9 @@
 }
 .av-service-actions {
   display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  flex-wrap: wrap;
   justify-content: flex-end;
   min-width: max-content;
 }
@@ -343,22 +346,19 @@
 }
 
 /* ===== catalog (/new) ===== */
-.av-new-flow {
+.av-new-guide {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.9fr);
-  gap: var(--tg-s-5);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.75fr);
+  gap: var(--tg-s-4);
+  align-items: start;
   margin-bottom: var(--tg-s-4);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-sm);
+  padding: var(--tg-s-4) 0;
+  border-bottom: 1px solid var(--tg-line);
 }
-.av-new-flow-copy {
+.av-new-guide-copy {
   min-width: 0;
 }
-.av-new-flow-kicker {
+.av-new-guide-kicker {
   display: inline-flex;
   margin-bottom: var(--tg-s-2);
   color: var(--tg-fg-subtle);
@@ -367,14 +367,15 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.av-new-flow h2 {
+.av-new-guide h2 {
   margin: 0;
   font-family: var(--tg-font-display);
   font-size: var(--tg-fs-xl);
   line-height: 1.2;
   letter-spacing: 0;
 }
-.av-new-flow p {
+.av-new-guide p {
+  max-width: 68ch;
   margin: var(--tg-s-2) 0 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
@@ -382,7 +383,6 @@
 .av-new-source {
   display: grid;
   gap: 4px;
-  margin-top: var(--tg-s-4);
   padding: var(--tg-s-3);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
@@ -414,64 +414,6 @@
 .av-new-source-meta {
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
-}
-.av-new-flow-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--tg-s-2);
-}
-.av-new-flow-step {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: var(--tg-s-3);
-  align-items: start;
-  padding: var(--tg-s-3);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg);
-  color: var(--tg-fg-muted);
-}
-.av-new-flow-step.is-current {
-  border-color: color-mix(in srgb, var(--tg-accent) 42%, var(--tg-line));
-  background: color-mix(in srgb, var(--tg-accent) 8%, var(--tg-bg));
-  color: var(--tg-fg);
-}
-.av-new-flow-step.is-done {
-  color: var(--tg-fg);
-}
-.av-new-flow-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg-muted);
-}
-.av-new-flow-step.is-current .av-new-flow-icon {
-  background: var(--tg-accent-soft);
-  color: var(--tg-accent-text);
-}
-.av-new-flow-step.is-done .av-new-flow-icon {
-  background: color-mix(in srgb, var(--tg-success) 14%, transparent);
-  color: var(--tg-success);
-}
-.av-new-flow-step strong,
-.av-new-flow-step small {
-  display: block;
-  min-width: 0;
-}
-.av-new-flow-step strong {
-  font-size: var(--tg-fs-sm);
-}
-.av-new-flow-step small {
-  margin-top: 2px;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-xs);
-  line-height: 1.4;
 }
 
 .av-catalog {
@@ -538,7 +480,7 @@ button.tg-tab {
     flex-direction: column;
   }
 
-  .av-summary-metrics {
+  .av-summary-actions {
     width: 100%;
     justify-content: space-between;
   }
@@ -551,27 +493,6 @@ button.tg-tab {
 
   .av-start-actions .tg-btn {
     flex: 1 1 100%;
-  }
-
-  .av-start-steps {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .av-start-steps li {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    gap: var(--tg-s-2);
-    padding: var(--tg-s-2);
-    text-align: center;
-  }
-
-  .av-start-step-icon {
-    width: 28px;
-    height: 28px;
-  }
-
-  .av-start-steps small {
-    display: none;
   }
 
   .av-service-row {
@@ -587,30 +508,28 @@ button.tg-tab {
     width: 100%;
   }
 
-  .av-new-flow {
+  .av-new-guide {
     grid-template-columns: 1fr;
     gap: var(--tg-s-2);
-    padding: var(--tg-s-3);
-    border-radius: var(--tg-r-md);
+    padding: var(--tg-s-3) 0;
     margin-bottom: var(--tg-s-3);
   }
 
-  .av-new-flow-kicker {
+  .av-new-guide-kicker {
     margin-bottom: 4px;
     font-size: 11px;
   }
 
-  .av-new-flow h2 {
+  .av-new-guide h2 {
     font-size: var(--tg-fs-lg);
   }
 
-  .av-new-flow p {
+  .av-new-guide p {
     font-size: var(--tg-fs-xs);
     line-height: 1.55;
   }
 
   .av-new-source {
-    margin-top: var(--tg-s-3);
     padding: var(--tg-s-2);
   }
 
@@ -619,34 +538,6 @@ button.tg-tab {
     width: 100%;
     font-size: var(--tg-fs-xs);
     line-height: 1.45;
-  }
-
-  .av-new-flow-steps {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .av-new-flow-step {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    gap: 6px;
-    padding: 8px 6px;
-    text-align: center;
-    border-radius: var(--tg-r-sm);
-  }
-
-  .av-new-flow-icon {
-    width: 26px;
-    height: 26px;
-  }
-
-  .av-new-flow-step strong {
-    font-size: var(--tg-fs-xs);
-    line-height: 1.25;
-  }
-
-  .av-new-flow-step small {
-    display: none;
   }
 
   .av-catalog-item {
