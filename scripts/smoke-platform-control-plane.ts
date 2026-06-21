@@ -54,6 +54,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly json: boolean;
   readonly keepConnection: boolean;
   readonly ensureSpace: boolean;
+  readonly backupRestoreRehearsal: boolean;
   readonly spaceDisplayName?: string;
 }
 
@@ -75,6 +76,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly applyRunId?: string;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
+  readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly deploymentVerified: boolean;
@@ -102,6 +104,7 @@ interface CliArgs {
   readonly json?: boolean;
   readonly keepConnection?: boolean;
   readonly ensureSpace?: boolean;
+  readonly backupRestoreRehearsal?: boolean;
   readonly url?: string;
   readonly sessionTokenFile?: string;
   readonly cloudflareApiTokenFile?: string;
@@ -151,6 +154,13 @@ interface RunRecord {
   readonly status: string;
   readonly type: string;
   readonly policyStatus?: string;
+  readonly backupId?: string;
+  readonly restoreStateGeneration?: number;
+  readonly restoredStateSnapshotId?: string;
+  readonly restoredFromStateSnapshotId?: string;
+  readonly createdAt?: string;
+  readonly startedAt?: string;
+  readonly finishedAt?: string;
 }
 
 interface DeployResponse {
@@ -166,6 +176,38 @@ interface InstallationRecord {
   readonly name?: string;
   readonly status?: string;
   readonly currentStateGeneration?: number;
+}
+
+interface BackupRecord {
+  readonly id: string;
+  readonly digest: string;
+  readonly createdByRunId?: string;
+  readonly createdAt: string;
+}
+
+interface DeploymentRecord {
+  readonly id: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly status: string;
+  readonly createdAt: string;
+}
+
+interface BackupRestoreRehearsalResult {
+  readonly backupId: string;
+  readonly backupRunId?: string;
+  readonly backupDigest: string;
+  readonly backupCreatedAt: string;
+  readonly stateGeneration: number;
+  readonly deploymentId: string;
+  readonly restoreRunId: string;
+  readonly restoredFromStateSnapshotId?: string;
+  readonly restoredStateSnapshotId?: string;
+  readonly restoreCreatedAt?: string;
+  readonly restoreStartedAt?: string;
+  readonly restoreFinishedAt?: string;
+  readonly restoreTargetSmoke: "passed";
 }
 
 if (import.meta.main) {
@@ -268,6 +310,7 @@ export async function resolveOptions(
     json: args.json === true,
     keepConnection: args.keepConnection === true,
     ensureSpace: args.ensureSpace === true,
+    backupRestoreRehearsal: args.backupRestoreRehearsal === true,
     ...(args.spaceDisplayName
       ? { spaceDisplayName: args.spaceDisplayName }
       : {}),
@@ -285,9 +328,23 @@ export function dryRunResult(
     scratchSpaceId: options.space,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
-    steps: requiredSteps(),
+    steps: requiredSteps(options),
     appName: options.appName,
     environment: options.environment,
+    ...(options.backupRestoreRehearsal
+      ? {
+          backupRestoreRehearsal: {
+            backupId: "bkp_dry_run",
+            backupRunId: "backup_dry_run",
+            backupDigest: `sha256:${"0".repeat(64)}`,
+            backupCreatedAt: new Date(0).toISOString(),
+            stateGeneration: 1,
+            deploymentId: "dep_dry_run",
+            restoreRunId: "restore_dry_run",
+            restoreTargetSmoke: "passed",
+          },
+        }
+      : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
     deploymentVerified: true,
@@ -308,6 +365,7 @@ export async function runPlatformControlPlaneSmoke(
   let applyRunId: string | undefined;
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
+  let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -352,6 +410,12 @@ export async function runPlatformControlPlaneSmoke(
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     await assertCloudflareWorkerExists(options);
+    if (options.backupRestoreRehearsal) {
+      backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
+        spaceId,
+        installationId,
+      });
+    }
 
     const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
       baseUrl: options.url,
@@ -397,7 +461,7 @@ export async function runPlatformControlPlaneSmoke(
       scratchSpaceId: spaceId,
       capsuleModule: "cloudflare-hello-worker",
       credentialPath: "space_scoped_provider_connection",
-      steps: requiredSteps(),
+      steps: requiredSteps(options),
       appName: options.appName,
       environment: options.environment,
       connectionId,
@@ -407,6 +471,7 @@ export async function runPlatformControlPlaneSmoke(
       applyRunId,
       destroyPlanRunId,
       destroyApplyRunId,
+      backupRestoreRehearsal,
       capsuleGateStatus: "passed",
       policyStatus:
         completedApply.policyStatus === "deny" ||
@@ -456,6 +521,7 @@ export async function runPlatformControlPlaneSmoke(
     applyRunId,
     destroyPlanRunId,
     destroyApplyRunId,
+    backupRestoreRehearsal,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -478,6 +544,7 @@ function failedResult(
     readonly applyRunId?: string;
     readonly destroyPlanRunId?: string;
     readonly destroyApplyRunId?: string;
+    readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -499,7 +566,7 @@ function failedResult(
     scratchSpaceId: input.spaceId,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
-    steps: requiredSteps(),
+    steps: requiredSteps(options),
     appName: options.appName,
     environment: options.environment,
     connectionId: input.connectionId,
@@ -509,6 +576,7 @@ function failedResult(
     applyRunId: input.applyRunId,
     destroyPlanRunId: input.destroyPlanRunId,
     destroyApplyRunId: input.destroyApplyRunId,
+    backupRestoreRehearsal: input.backupRestoreRehearsal,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     deploymentVerified: false,
@@ -885,6 +953,111 @@ function assertRunSucceeded(run: RunRecord, phase: string): void {
   }
 }
 
+async function runBackupRestoreRehearsal(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly installationId: string;
+  },
+): Promise<BackupRestoreRehearsalResult> {
+  const deployment = await latestDeploymentForInstallation(
+    options,
+    input.installationId,
+  );
+  const backup = (
+    await requestJson<{ readonly backup: BackupRecord }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "POST",
+      path: `${API_PREFIX}/installations/${encodeURIComponent(
+        input.installationId,
+      )}/backups`,
+    })
+  ).backup;
+  const restore = (
+    await requestJson<{ readonly run: RunRecord }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "POST",
+      path: `${API_PREFIX}/spaces/${encodeURIComponent(
+        input.spaceId,
+      )}/backups/${encodeURIComponent(backup.id)}/restores`,
+      body: {
+        installationId: input.installationId,
+        environment: deployment.environment,
+        stateGeneration: deployment.stateGeneration,
+        expectedBackupDigest: backup.digest,
+      },
+    })
+  ).run;
+  if (restore.status !== "waiting_approval") {
+    throw new Error(
+      `restore run ${restore.id} ended as ${restore.status}; expected waiting_approval`,
+    );
+  }
+  await requestJson({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/runs/${encodeURIComponent(restore.id)}/approve`,
+    body: {
+      reason: "Layer-2 platform-control-plane backup/restore rehearsal",
+    },
+  });
+  const completedRestore = await pollRun(options, restore.id);
+  assertRunSucceeded(completedRestore, "restore");
+  return {
+    backupId: backup.id,
+    backupRunId: backup.createdByRunId,
+    backupDigest: backup.digest,
+    backupCreatedAt: backup.createdAt,
+    stateGeneration: deployment.stateGeneration,
+    deploymentId: deployment.id,
+    restoreRunId: completedRestore.id,
+    restoredFromStateSnapshotId: completedRestore.restoredFromStateSnapshotId,
+    restoredStateSnapshotId: completedRestore.restoredStateSnapshotId,
+    restoreCreatedAt: completedRestore.createdAt ?? restore.createdAt,
+    restoreStartedAt: completedRestore.startedAt,
+    restoreFinishedAt: completedRestore.finishedAt,
+    restoreTargetSmoke: "passed",
+  };
+}
+
+async function latestDeploymentForInstallation(
+  options: PlatformControlPlaneSmokeOptions,
+  installationId: string,
+): Promise<DeploymentRecord> {
+  const response = await requestJson<{
+    readonly deployments?: readonly DeploymentRecord[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      installationId,
+    )}/deployments`,
+  });
+  const deployments = [...(response.deployments ?? [])].sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+  );
+  const deployment =
+    deployments.find((candidate) => candidate.status === "active") ??
+    deployments[0];
+  if (!deployment) {
+    throw new Error(
+      `installation ${installationId} did not return a deployment for backup/restore rehearsal`,
+    );
+  }
+  if (
+    !Number.isInteger(deployment.stateGeneration) ||
+    deployment.stateGeneration < 0
+  ) {
+    throw new Error(
+      `deployment ${deployment.id} has invalid stateGeneration for backup/restore rehearsal`,
+    );
+  }
+  return deployment;
+}
+
 async function assertCloudflareWorkerExists(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -1191,16 +1364,22 @@ function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function requiredSteps(): readonly string[] {
-  return [
+function requiredSteps(
+  options?: Pick<PlatformControlPlaneSmokeOptions, "backupRestoreRehearsal">,
+): readonly string[] {
+  const steps = [
     "spaceScopedProviderConnection",
     "connectionVerified",
     "scratchInstall",
     "plan",
     "apply",
     "deploymentVerified",
-    "destroy",
   ];
+  if (options?.backupRestoreRehearsal) {
+    steps.push("backupRestoreRehearsal");
+  }
+  steps.push("destroy");
+  return steps;
 }
 
 function writeResult(
@@ -1270,6 +1449,27 @@ async function runSelfTest(): Promise<void> {
   }
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
+  }
+  const rehearsalOptions = await resolveOptions(
+    {
+      dryRun: true,
+      backupRestoreRehearsal: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+    },
+    {},
+  );
+  const rehearsalResult = dryRunResult(rehearsalOptions);
+  if (
+    !rehearsalResult.steps.includes("backupRestoreRehearsal") ||
+    !rehearsalResult.backupRestoreRehearsal
+  ) {
+    throw new Error("self-test result is missing backup/restore rehearsal");
   }
   const failed = failedResult(options, {
     spaceId: "space_selftest",
@@ -1387,6 +1587,7 @@ Options:
   --timeout-seconds <n>                  default 600
   --deploy-timeout-seconds <n>           default 120
   --poll-interval-ms <n>                 default 2000
+  --backup-restore-rehearsal             create an Installation backup, approve a restore Run, and verify it succeeds before cleanup
   --keep-connection                      keep the temporary Space ProviderConnection
   --dry-run                              validate shape and print redacted plan
   --json                                 print JSON only

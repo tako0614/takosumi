@@ -69,6 +69,41 @@ test("platform control-plane smoke infers production environment from URL", asyn
   expect(options.environment).toBe("production-smoke");
 });
 
+test("platform control-plane smoke can include backup restore rehearsal in dry-run", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      backupRestoreRehearsal: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_test",
+      appName: "takosumi-smoke-test",
+      cloudflareAccountId: "account",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.steps).toEqual([
+    "spaceScopedProviderConnection",
+    "connectionVerified",
+    "scratchInstall",
+    "plan",
+    "apply",
+    "deploymentVerified",
+    "backupRestoreRehearsal",
+    "destroy",
+  ]);
+  expect(result.backupRestoreRehearsal).toMatchObject({
+    backupId: "bkp_dry_run",
+    restoreRunId: "restore_dry_run",
+    restoreTargetSmoke: "passed",
+  });
+});
+
 test("platform control-plane smoke resolves secret sources from environment", async () => {
   const options = await resolveOptions(
     {
