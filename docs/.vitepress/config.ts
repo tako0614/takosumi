@@ -29,6 +29,10 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "概要", link: "/" },
         { text: "Final Plan", link: "/final-plan" },
+        {
+          text: "Cloud UX redesign",
+          link: "/cloud-dashboard-ux-redesign",
+        },
         { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
@@ -79,6 +83,10 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Overview", link: "/en/" },
         { text: "Final Plan", link: "/final-plan" },
+        {
+          text: "Cloud UX redesign",
+          link: "/cloud-dashboard-ux-redesign",
+        },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
       ],
     },
