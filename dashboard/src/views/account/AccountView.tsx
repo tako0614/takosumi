@@ -8,7 +8,7 @@ import "../../styles/wave-c.css";
 import "../../styles/wave-b.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { LogOut, Monitor, User } from "lucide-solid";
+import { LogOut, User } from "lucide-solid";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
@@ -77,57 +77,6 @@ function Inner(props: { readonly session: SessionRecord }) {
                 value: props.session.email ?? "—",
               },
             ]}
-          />
-        </Card>
-
-        <Card>
-          <CardHeader
-            title={t("account.language.title")}
-            subtitle={t("account.language.body")}
-          />
-          <div class="wc-form-actions">
-            <Button
-              variant={locale() === "ja" ? "primary" : "secondary"}
-              type="button"
-              onClick={() => setLocale("ja")}
-            >
-              日本語
-            </Button>
-            <Button
-              variant={locale() === "en" ? "primary" : "secondary"}
-              type="button"
-              onClick={() => setLocale("en")}
-            >
-              English
-            </Button>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title={t("account.theme.title")}
-            subtitle={t("account.theme.body")}
-          />
-          <div class="wc-form-actions">
-            {(["system", "light", "dark"] as const).map((theme) => (
-              <Button
-                variant={themePreference() === theme ? "primary" : "secondary"}
-                type="button"
-                onClick={() => setThemePreference(theme)}
-              >
-                {t(THEME_LABEL_KEY[theme])}
-              </Button>
-            ))}
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title={
-              <span style="display:inline-flex;align-items:center;gap:8px">
-                <Monitor size={18} /> {t("account.session.title")}
-              </span>
-            }
           />
           <CardSection>
             <Show
@@ -205,6 +154,52 @@ function Inner(props: { readonly session: SessionRecord }) {
                 ]}
               />
             </details>
+          </CardSection>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title={t("account.preferences.title")}
+            subtitle={t("account.preferences.body")}
+          />
+          <CardSection>
+            <div class="wc-stack-sm">
+              <div>
+                <p class="tg-card-title">{t("account.language.title")}</p>
+                <div class="wc-form-actions">
+                  <Button
+                    variant={locale() === "ja" ? "primary" : "secondary"}
+                    type="button"
+                    onClick={() => setLocale("ja")}
+                  >
+                    日本語
+                  </Button>
+                  <Button
+                    variant={locale() === "en" ? "primary" : "secondary"}
+                    type="button"
+                    onClick={() => setLocale("en")}
+                  >
+                    English
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <p class="tg-card-title">{t("account.theme.title")}</p>
+                <div class="wc-form-actions">
+                  {(["system", "light", "dark"] as const).map((theme) => (
+                    <Button
+                      variant={
+                        themePreference() === theme ? "primary" : "secondary"
+                      }
+                      type="button"
+                      onClick={() => setThemePreference(theme)}
+                    >
+                      {t(THEME_LABEL_KEY[theme])}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </CardSection>
         </Card>
       </div>

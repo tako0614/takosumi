@@ -174,11 +174,11 @@ describe("/new flow guidance", () => {
   });
 
   test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
-    expect(newAppViewSource).toContain("const shouldOpenExtraInputs = ()");
+    expect(newAppViewSource).toContain("const shouldOpenServiceAdvanced = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
     expect(newAppViewSource).toContain("selectedCatalogVariableNames");
-    expect(newAppViewSource).toContain("open={shouldOpenExtraInputs()}");
+    expect(newAppViewSource).toContain("open={shouldOpenServiceAdvanced()}");
     expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
     expect(newAppViewSource).toContain("name={`varName:${index()}`}");
     expect(newAppViewSource).toContain("name={`varValue:${index()}`}");

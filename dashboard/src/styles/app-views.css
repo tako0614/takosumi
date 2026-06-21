@@ -417,10 +417,7 @@
 .av-service-setup {
   display: grid;
   gap: var(--tg-s-3);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
+  padding: 0;
 }
 .av-service-setup-head {
   min-width: 0;
@@ -495,7 +492,7 @@ button.tg-tab {
   }
 
   .av-service-setup {
-    padding: var(--tg-s-3);
+    padding: 0;
   }
 
   .av-service-setup-grid {

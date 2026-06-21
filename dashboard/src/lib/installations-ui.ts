@@ -50,7 +50,7 @@ export function launchUrlFromOutputs(
   return undefined;
 }
 
-/** Friendly label for a well-known public output key; raw key otherwise. */
+/** Friendly label for a well-known public output key; humanized key otherwise. */
 const OUTPUT_LABEL_KEYS: Record<string, MessageKey> = {
   launch_url: "app.output.launchUrl",
   url: "app.output.url",
@@ -61,7 +61,21 @@ const OUTPUT_LABEL_KEYS: Record<string, MessageKey> = {
 };
 export function outputLabel(name: string): string {
   const key = OUTPUT_LABEL_KEYS[name];
-  return key ? t(key) : name;
+  return key ? t(key) : humanizeOutputKey(name);
+}
+
+function humanizeOutputKey(name: string): string {
+  const normalized = name
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!normalized) return name;
+  return (normalized.charAt(0).toUpperCase() + normalized.slice(1))
+    .replace(/\bUrl\b/gu, "URL")
+    .replace(/\bId\b/gu, "ID")
+    .replace(/\bApi\b/gu, "API");
 }
 
 /** Human-readable stale reason recorded on an `installation.stale` event. */

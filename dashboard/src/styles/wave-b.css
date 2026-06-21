@@ -426,13 +426,10 @@
     );
     z-index: 35;
     margin-top: var(--tg-s-2);
-    padding: var(--tg-s-2);
-    border: 1px solid var(--tg-line);
-    border-radius: var(--tg-r-md);
-    background: color-mix(in srgb, var(--tg-bg-elev) 96%, transparent);
-    box-shadow: var(--tg-shadow-md);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
   .wb-form-actions .tg-btn {
     flex: 1 1 100%;

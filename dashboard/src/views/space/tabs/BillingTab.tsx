@@ -261,12 +261,23 @@ export default function BillingTab(props: { readonly spaceId: string }) {
                   label: availableLabel(),
                   value: formatBillingNumber(balance()?.availableCredits ?? 0),
                 },
-                {
-                  label: reservedLabel(),
-                  value: formatBillingNumber(balance()?.reservedCredits ?? 0),
-                },
               ]}
             />
+            <Show when={(balance()?.reservedCredits ?? 0) > 0}>
+              <details class="wb-disclosure av-billing-ledger">
+                <summary>{t("billing.pendingUse.title")}</summary>
+                <KVList
+                  items={[
+                    {
+                      label: reservedLabel(),
+                      value: formatBillingNumber(
+                        balance()?.reservedCredits ?? 0,
+                      ),
+                    },
+                  ]}
+                />
+              </details>
+            </Show>
             <Show when={canOpenPortal()}>
               <div class="wc-form-actions">
                 <Button
