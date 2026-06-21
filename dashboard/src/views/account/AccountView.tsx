@@ -8,7 +8,14 @@ import "../../styles/wave-c.css";
 import "../../styles/wave-b.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { CreditCard, LogOut, Monitor, Plug, ScrollText, User } from "lucide-solid";
+import {
+  CreditCard,
+  LogOut,
+  Monitor,
+  Plug,
+  ScrollText,
+  User,
+} from "lucide-solid";
 import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
@@ -76,16 +83,12 @@ function Inner(props: { readonly session: SessionRecord }) {
                 label: t("account.profile.email"),
                 value: props.session.email ?? "—",
               },
-              {
-                label: t("account.profile.provider"),
-                value: props.session.provider ?? "—",
-              },
             ]}
           />
         </Card>
 
-        <Card>
-          <CardHeader title={t("account.manage.title")} />
+        <details class="wb-disclosure wc-advanced-settings">
+          <summary>{t("account.manage.title")}</summary>
           <div class="wc-quick-links">
             <Button
               variant="secondary"
@@ -109,7 +112,7 @@ function Inner(props: { readonly session: SessionRecord }) {
               {t("nav.activity")}
             </Button>
           </div>
-        </Card>
+        </details>
 
         <Card>
           <CardHeader
@@ -198,11 +201,15 @@ function Inner(props: { readonly session: SessionRecord }) {
                 </Button>
               </div>
             </Show>
-            <p class="muted">{t("account.session.otherNote")}</p>
             <details class="wb-disclosure wc-advanced-settings">
               <summary>{t("account.session.details")}</summary>
+              <p class="muted">{t("account.session.otherNote")}</p>
               <KVList
                 items={[
+                  {
+                    label: t("account.profile.provider"),
+                    value: props.session.provider ?? "—",
+                  },
                   {
                     label: t("account.profile.subject"),
                     value: <code class="wc-code">{props.session.subject}</code>,

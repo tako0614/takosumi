@@ -6,10 +6,11 @@ terraform {
   }
 }
 
-# Starter capsule: a runnable Cloudflare Worker with NO build step. Unlike
-# cloudflare-worker-service (which uploads a built artifact) this bakes the
-# Worker source inline. Provider credentials are minted by Takosumi at dispatch
-# (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); no inline secrets.
+# Starter capsule: a runnable Cloudflare Worker with NO build step and a
+# workers.dev URL. Unlike cloudflare-worker-service (which uploads a built
+# artifact) this bakes the Worker source inline. Provider credentials are minted
+# by Takosumi at dispatch (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); no
+# inline secrets.
 
 variable "accountId" {
   type        = string
@@ -22,10 +23,9 @@ variable "appName" {
   default     = "takosumi-hello"
 }
 
-variable "publicUrl" {
+variable "workersSubdomain" {
   type        = string
-  description = "Optional public URL projected by a dispatcher/custom route after apply. Empty means this module only reports the Worker script name."
-  default     = ""
+  description = "The Cloudflare Workers subdomain for the account, without .workers.dev."
 }
 
 variable "compatibilityDate" {
@@ -52,12 +52,18 @@ resource "cloudflare_workers_script" "this" {
   compatibility_date = var.compatibilityDate
 }
 
+resource "cloudflare_workers_script_subdomain" "this" {
+  account_id  = var.accountId
+  script_name = cloudflare_workers_script.this.script_name
+  enabled     = true
+}
+
 output "worker_name" {
   description = "Deployed Worker script name."
   value       = cloudflare_workers_script.this.script_name
 }
 
 output "url" {
-  description = "Public URL projected outside this module, or empty when no dispatcher/custom route projection is configured."
-  value       = var.publicUrl
+  description = "Public workers.dev URL for the deployed Worker."
+  value       = cloudflare_workers_script_subdomain.this.enabled ? "https://${cloudflare_workers_script.this.script_name}.${var.workersSubdomain}.workers.dev" : ""
 }

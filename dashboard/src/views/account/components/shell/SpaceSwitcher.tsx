@@ -100,7 +100,7 @@ export default function SpaceSwitcher() {
 
       <button
         type="button"
-        class="topbar-icon-btn"
+        class="topbar-icon-btn topbar-create-space"
         aria-label={t("space.new")}
         aria-expanded={creating()}
         onClick={() => setCreating((v) => !v)}

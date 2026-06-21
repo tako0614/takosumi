@@ -117,6 +117,18 @@ test("declared allowedProviders appear in the bundled HCL required_providers", (
   }
 });
 
+test("declared allowed resource types appear in the bundled HCL", () => {
+  for (const template of TEMPLATES) {
+    const mainTf = mainTfFor(template.id);
+    for (const resourceType of template.policy?.allowedResourceTypes ?? []) {
+      expect(
+        mainTf,
+        `${template.id}: resource "${resourceType}" must be present in bundled main.tf`,
+      ).toContain(`resource "${resourceType}"`);
+    }
+  }
+});
+
 test("core declares no providers and no provider source in its HCL", () => {
   expect(coreTemplate.policy?.allowedProviders).toEqual([]);
   const mainTf = mainTfFor("core");

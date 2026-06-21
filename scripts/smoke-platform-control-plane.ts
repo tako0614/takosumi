@@ -43,6 +43,8 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareApiTokenSource: "env" | "file";
   readonly cloudflareAccountId: string;
   readonly cloudflareAccountIdSource: "env" | "file" | "arg";
+  readonly cloudflareWorkersSubdomain: string;
+  readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
   readonly space: string;
   readonly appName: string;
   readonly environment: string;
@@ -93,6 +95,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareApiTokenSource: "env" | "file";
     readonly cloudflareAccountIdSource: "env" | "file" | "arg";
     readonly cloudflareAccountIdDigest: string;
+    readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
     readonly capsuleDir: string;
   };
 }
@@ -110,6 +113,8 @@ interface CliArgs {
   readonly cloudflareApiTokenFile?: string;
   readonly cloudflareAccountId?: string;
   readonly cloudflareAccountIdFile?: string;
+  readonly cloudflareWorkersSubdomain?: string;
+  readonly cloudflareWorkersSubdomainFile?: string;
   readonly space?: string;
   readonly spaceDisplayName?: string;
   readonly appName?: string;
@@ -260,6 +265,20 @@ export async function resolveOptions(
     envName: "CLOUDFLARE_ACCOUNT_ID",
     label: "Cloudflare account id",
     dryRun: args.dryRun === true,
+    hint:
+      "pass --cloudflare-account-id-file, --cloudflare-account-id, or set CLOUDFLARE_ACCOUNT_ID",
+  });
+  const cloudflareWorkersSubdomain = await readNonSecretInput({
+    file:
+      args.cloudflareWorkersSubdomainFile ??
+      env.CLOUDFLARE_WORKERS_SUBDOMAIN_FILE,
+    value: args.cloudflareWorkersSubdomain,
+    envValue: env.CLOUDFLARE_WORKERS_SUBDOMAIN,
+    envName: "CLOUDFLARE_WORKERS_SUBDOMAIN",
+    label: "Cloudflare Workers subdomain",
+    dryRun: args.dryRun === true,
+    hint:
+      "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
   });
   const accountSessionToken = await readSecret({
     file: args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE,
@@ -287,6 +306,8 @@ export async function resolveOptions(
     cloudflareApiTokenSource: cloudflareApiToken.source,
     cloudflareAccountId: cloudflareAccountId.value,
     cloudflareAccountIdSource: cloudflareAccountId.source,
+    cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
+    cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     space,
     appName: args.appName ?? defaultAppName(),
     environment: args.environment ?? defaultSmokeEnvironment(url),
@@ -815,6 +836,7 @@ async function deploySnapshot(
       vars: {
         accountId: options.cloudflareAccountId,
         appName: options.appName,
+        workersSubdomain: options.cloudflareWorkersSubdomain,
       },
       providerConnections: [
         {
@@ -1298,6 +1320,7 @@ async function readNonSecretInput(input: {
   readonly envName: string;
   readonly label: string;
   readonly dryRun: boolean;
+  readonly hint: string;
 }): Promise<{
   readonly value: string;
   readonly source: "env" | "file" | "arg";
@@ -1321,7 +1344,7 @@ async function readNonSecretInput(input: {
     };
   }
   throw new Error(
-    `${input.label} is required: pass --cloudflare-account-id-file, --cloudflare-account-id, or set ${input.envName}`,
+    `${input.label} is required: ${input.hint}`,
   );
 }
 
@@ -1355,6 +1378,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareApiTokenSource: "env" | "file";
   readonly cloudflareAccountIdSource: "env" | "file" | "arg";
   readonly cloudflareAccountIdDigest: string;
+  readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
   readonly capsuleDir: string;
 } {
   return {
@@ -1362,6 +1386,8 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     cloudflareApiTokenSource: options.cloudflareApiTokenSource,
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
     cloudflareAccountIdDigest: sha256(options.cloudflareAccountId),
+    cloudflareWorkersSubdomainSource:
+      options.cloudflareWorkersSubdomainSource,
     capsuleDir: options.capsuleDir,
   };
 }
@@ -1429,6 +1455,7 @@ async function runSelfTest(): Promise<void> {
       url: "https://app-staging.takosumi.com",
       space: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
       ensureSpace: true,
       sessionTokenFile: "/private/account-session-token",
@@ -1450,6 +1477,9 @@ async function runSelfTest(): Promise<void> {
   if (serialized.includes("cloudflare-account-id")) {
     throw new Error("self-test leaked Cloudflare account id file name");
   }
+  if (serialized.includes("cloudflare-workers-subdomain")) {
+    throw new Error("self-test leaked Cloudflare Workers subdomain file name");
+  }
   if (serialized.includes("acc_selftest")) {
     throw new Error("self-test leaked Cloudflare account id");
   }
@@ -1463,6 +1493,7 @@ async function runSelfTest(): Promise<void> {
       url: "https://app-staging.takosumi.com",
       space: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
       ensureSpace: true,
       sessionTokenFile: "/private/account-session-token",
@@ -1522,6 +1553,7 @@ async function runSelfTest(): Promise<void> {
       url: "https://app-staging.takosumi.com",
       space: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
       ensureSpace: true,
       sessionTokenFile: "/private/account-session-token",
@@ -1577,27 +1609,29 @@ function printHelp(): void {
   bun run smoke:platform-control-plane -- --url <origin> --space <space_...|@handle> --cloudflare-api-token-file <path> --cloudflare-account-id-file <path>
 
 Required inputs:
-  --url <origin>                         or TAKOSUMI_PLATFORM_URL
-  --space <space_...|@handle>            or TAKOSUMI_SMOKE_SPACE
-  --session-token-file <path>            or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
-  --cloudflare-api-token-file <path>     or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN
-  --cloudflare-account-id-file <path>    or CLOUDFLARE_ACCOUNT_ID_FILE
-  --cloudflare-account-id <id>           or CLOUDFLARE_ACCOUNT_ID
+  --url <origin>                                  or TAKOSUMI_PLATFORM_URL
+  --space <space_...|@handle>                     or TAKOSUMI_SMOKE_SPACE
+  --session-token-file <path>                     or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
+  --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN
+  --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE
+  --cloudflare-account-id <id>                    or CLOUDFLARE_ACCOUNT_ID
+  --cloudflare-workers-subdomain-file <path>      or CLOUDFLARE_WORKERS_SUBDOMAIN_FILE
+  --cloudflare-workers-subdomain <name>           or CLOUDFLARE_WORKERS_SUBDOMAIN
 
 Options:
-  --app-name <name>                      default takosumi-smoke-<random>
-  --environment <name>                   default inferred from --url
-  --ensure-space                         create @handle scratch Space when missing; validates space_... ids
-  --space-display-name <name>            display name used with --ensure-space
-  --capsule-dir <path>                   default cloudflare-hello-worker module
-  --timeout-seconds <n>                  default 600
-  --deploy-timeout-seconds <n>           default 120
-  --poll-interval-ms <n>                 default 2000
-  --backup-restore-rehearsal             create an Installation backup, approve a restore Run, and verify it succeeds before cleanup
-  --keep-connection                      keep the temporary Space ProviderConnection
-  --dry-run                              validate shape and print redacted plan
-  --json                                 print JSON only
-  --self-test                            run offline redaction/shape self-test
+  --app-name <name>                               default takosumi-smoke-<random>
+  --environment <name>                            default inferred from --url
+  --ensure-space                                  create @handle scratch Space when missing; validates space_... ids
+  --space-display-name <name>                     display name used with --ensure-space
+  --capsule-dir <path>                            default cloudflare-hello-worker module
+  --timeout-seconds <n>                           default 600
+  --deploy-timeout-seconds <n>                    default 120
+  --poll-interval-ms <n>                          default 2000
+  --backup-restore-rehearsal                      create an Installation backup, approve a restore Run, and verify it succeeds before cleanup
+  --keep-connection                               keep the temporary Space ProviderConnection
+  --dry-run                                       validate shape and print redacted plan
+  --json                                          print JSON only
+  --self-test                                     run offline redaction/shape self-test
 `);
 }
 
