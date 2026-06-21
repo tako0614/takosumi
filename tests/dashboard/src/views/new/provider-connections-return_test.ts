@@ -118,12 +118,20 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
   });
 
-  test("Cloudflare connection form forwards account id as a scope hint", () => {
+  test("Cloudflare connection form requires and forwards account id as a scope hint", () => {
     expect(connectionsTabSource).toContain("scopeHintsFromConnectionValues");
+    expect(connectionsTabSource).toContain("helperCloudflareAccountId");
     expect(connectionsTabSource).toContain("CLOUDFLARE_ACCOUNT_ID");
+    expect(connectionsTabSource).toContain(
+      "submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId",
+    );
     expect(connectionsTabSource).toContain(
       "scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues)",
     );
+    expect(connectionsHelperSource).toContain(
+      'envName: "CLOUDFLARE_ACCOUNT_ID"',
+    );
+    expect(connectionsHelperSource).toContain("required: true");
   });
 
   test("compatibility adapter preserves backend resource summaries", () => {
@@ -185,6 +193,9 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain('name="provider"');
     expect(connectionsTabSource).toContain('name="displayName"');
     expect(connectionsTabSource).toContain('name="helperToken"');
+    expect(connectionsTabSource).toContain(
+      'name="helperCloudflareAccountId"',
+    );
     expect(connectionsTabSource).toContain('name="genericProvider"');
     expect(connectionsTabSource).toContain("name={`field:${field().envName}`}");
     expect(connectionsTabSource).toContain("name={`genericEnvName:${index}`}");

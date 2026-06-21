@@ -114,6 +114,7 @@ import type {
   CreditReservation,
   UsageEvent,
 } from "takosumi-contract/billing";
+import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
 import type {
   Run,
   RunCostInfo,
@@ -967,6 +968,11 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   // GET/POST /api/v1/spaces
   if (segments.length === 1 && segments[0] === "spaces") {
     if (method === "GET") {
+      await maybeEnsurePersonalSpaceForSession({
+        request: request.clone(),
+        store,
+        operations,
+      });
       return await listSpaces(operations, store, input.session.subject);
     }
     if (method === "POST") {
