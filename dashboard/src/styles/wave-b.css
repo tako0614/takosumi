@@ -347,9 +347,9 @@
   align-items: center;
 }
 @media (max-width: 720px) {
-  .wb-install-form {
+  .wb-install-form.wb-install-source-form {
     padding-bottom: calc(
-      var(--tg-mobile-tab-h) + var(--tg-s-8) + env(safe-area-inset-bottom, 0px)
+      var(--tg-mobile-tab-h) + 76px + env(safe-area-inset-bottom, 0px)
     );
   }
   .wb-output-row {
@@ -361,18 +361,21 @@
   .wb-provider-row {
     grid-template-columns: 1fr;
   }
-  .wb-install-form > .wb-form-actions {
-    position: sticky;
+  .wb-install-form.wb-install-source-form > .wb-form-actions {
+    position: fixed;
+    left: var(--tg-s-3);
+    right: var(--tg-s-3);
     bottom: calc(
       var(--tg-mobile-tab-h) + var(--tg-s-2) + env(safe-area-inset-bottom, 0px)
     );
-    z-index: 25;
-    padding: var(--tg-s-2) 0;
-    background: linear-gradient(
-      to bottom,
-      color-mix(in srgb, var(--tg-bg) 0%, transparent),
-      var(--tg-bg) 28%
-    );
+    z-index: 45;
+    padding: var(--tg-s-2);
+    border: 1px solid var(--tg-line);
+    border-radius: var(--tg-r-md);
+    background: color-mix(in srgb, var(--tg-bg-elev) 96%, transparent);
+    box-shadow: var(--tg-shadow-md);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
   }
   .wb-form-actions .tg-btn {
     flex: 1 1 100%;
