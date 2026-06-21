@@ -1,0 +1,48 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const runViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/runs/RunView.tsx"),
+  "utf8",
+);
+const controlApiSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
+  "utf8",
+);
+
+describe("Run review ProviderConnection evidence", () => {
+  test("keeps public provider resolution fields on the dashboard Run shape", () => {
+    expect(controlApiSource).toContain(
+      "ProviderResolution as ContractProviderResolution",
+    );
+    expect(controlApiSource).toContain(
+      "readonly providerResolutions?: readonly ProviderResolution[]",
+    );
+    expect(controlApiSource).toContain(
+      "readonly runEnvironmentEvidenceDigest?: string",
+    );
+    expect(controlApiSource).toContain("readonly redactionProfileId?: string");
+  });
+
+  test("shows ProviderConnection evidence before the deploy action is hidden in details", () => {
+    expect(runViewSource).toContain("ProviderResolutionTable");
+    expect(runViewSource).toContain("providerResolutionRows(run.latest");
+    expect(runViewSource).toContain('t("run.connections.reviewTitle")');
+    expect(runViewSource).toContain("listProviderConnections");
+    expect(runViewSource).toContain("providerConnectionsForRun");
+  });
+
+  test("keeps the copy explicit that credentials are not displayed", () => {
+    expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
+      "credential values are not shown",
+    );
+    expect(ja["run.connections.reviewBody"]).toContain(
+      "認証情報の値は表示しません",
+    );
+  });
+});
