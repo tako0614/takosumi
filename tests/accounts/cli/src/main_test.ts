@@ -8046,6 +8046,48 @@ test("platform-secrets status requires configured upstream OAuth client secret",
   }
 });
 
+test("platform-secrets status requires Stripe secrets when billing is configured", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      "TAKOSUMI_BILLING_PLANS = '''",
+      '[{"id":"starter","name":"Starter","stripePriceId":"price_starter","includedCredits":1000}]',
+      "'''",
+      'TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST = "https://app.takosumi.com"',
+    ].join("\n"),
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["status", "--config", config, "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async () => ({ code: 0, stdout: "[]", stderr: "" }),
+    );
+
+    expect(code).toEqual(1);
+    expect(stderr).toEqual([]);
+    const output = stdout.join("\n");
+    expect(output).toContain(
+      "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
+    );
+    expect(output).toContain(
+      "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
+    );
+    expect(output).toContain("Manual present: none");
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
 test("platform-secrets status reads multiline AI Gateway profiles from wrangler vars", async () => {
   const dir = await makeTempDir();
   const config = await makeTempFile({ suffix: ".toml" });
@@ -8372,6 +8414,55 @@ test("platform-secrets apply fails when configured upstream OAuth client secret 
     expect(stdout).toEqual([]);
     expect(stderr.join("\n")).toContain(
       "missing required manual platform secret(s): TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET",
+    );
+    expect(commands).toEqual([]);
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
+test("platform-secrets apply fails when configured billing Stripe secrets are missing", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      "TAKOSUMI_BILLING_PLANS = '''",
+      '[{"id":"starter","name":"Starter","stripePriceId":"price_starter","includedCredits":1000}]',
+      "'''",
+      'TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST = "https://app.takosumi.com"',
+    ].join("\n"),
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
+    "protected-key",
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["apply", "--config", config, "--secrets-dir", dir, "--dry-run"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async (args) => {
+        commands.push([...args]);
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    );
+
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain(
+      "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
+    );
+    expect(stderr.join("\n")).toContain(
+      "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
     );
     expect(commands).toEqual([]);
   } finally {
