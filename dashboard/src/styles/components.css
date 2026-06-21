@@ -67,12 +67,19 @@
 .tg-btn-primary {
   background: var(--tg-accent);
   color: var(--tg-accent-fg);
+  -webkit-text-fill-color: var(--tg-accent-fg);
   border-color: var(--tg-accent);
   box-shadow: none;
+}
+.tg-btn-primary:visited,
+.tg-btn-primary:focus-visible {
+  color: var(--tg-accent-fg);
+  -webkit-text-fill-color: var(--tg-accent-fg);
 }
 .tg-btn-primary:hover:not(:disabled) {
   background: var(--tg-accent-hover);
   color: var(--tg-accent-fg);
+  -webkit-text-fill-color: var(--tg-accent-fg);
 }
 .tg-btn-secondary {
   background: transparent;
