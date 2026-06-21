@@ -68,6 +68,39 @@ export class ControlApiError extends Error {
           /source_sync_required/u.test(this.message)))
     );
   }
+
+  /** Typed detail payload from deploy-control error envelopes, when present. */
+  get details(): unknown {
+    return controlErrorDetails(this.body);
+  }
+
+  /** Machine-readable detail reason from deploy-control error envelopes. */
+  get reason(): string | undefined {
+    const details = this.details;
+    if (!isRecord(details)) return undefined;
+    const reason = details.reason;
+    return typeof reason === "string" ? reason : undefined;
+  }
+
+  /** True when creating a service hit the Workspace/name/environment guard. */
+  get isDuplicateService(): boolean {
+    return (
+      this.reason === "duplicate_installation" ||
+      (this.status === 409 &&
+        /installation\s+.+\s+already exists/iu.test(this.message))
+    );
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function controlErrorDetails(body: unknown): unknown {
+  if (!isRecord(body)) return undefined;
+  const payload = body.error;
+  if (!isRecord(payload) || !("details" in payload)) return undefined;
+  return payload.details;
 }
 
 interface RequestOpts {

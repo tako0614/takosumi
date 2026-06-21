@@ -260,8 +260,10 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("duplicate installation errors use typed details before message fallback", () => {
-    expect(newAppViewSource).toContain("function controlErrorDetails");
-    expect(newAppViewSource).toContain('"duplicate_installation"');
+    expect(controlApiSource).toContain("get isDuplicateService()");
+    expect(controlApiSource).toContain("function controlErrorDetails");
+    expect(controlApiSource).toContain('"duplicate_installation"');
+    expect(newAppViewSource).toContain("error?.isDuplicateService");
     expect(installationsServiceSource).toContain(
       'reason: "duplicate_installation"',
     );
