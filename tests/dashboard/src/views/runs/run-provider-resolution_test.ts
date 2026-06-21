@@ -32,14 +32,21 @@ describe("Run review ProviderConnection evidence", () => {
   test("keeps ProviderConnection evidence available but folded behind review details", () => {
     expect(runViewSource).toContain("ProviderResolutionTable");
     expect(runViewSource).toContain("providerResolutionRows(run.latest");
+    expect(runViewSource).toContain("providerRowsNeedingAttention");
+    expect(runViewSource).toContain("providerResolutionNeedsAttention");
     expect(runViewSource).toContain('t("run.connections.reviewTitle")');
     expect(runViewSource).toContain(
-      '<summary>{t("run.connections.reviewTitle")}</summary>',
+      "<Show when={providerRowsNeedingAttention().length > 0}>",
+    );
+    expect(runViewSource).toContain(
+      "rows={providerRowsNeedingAttention()}",
     );
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
     expect(en["run.details.title"]).toBe("Support details");
     expect(ja["run.details.title"]).toBe("サポート詳細");
+    expect(en["run.connections.reviewTitle"]).toBe("Connection review needed");
+    expect(ja["run.connections.reviewTitle"]).toBe("接続の確認が必要です");
     expect(en["run.connections.ownership"]).toBe("Credential source");
     expect(ja["run.connections.ownership"]).toBe("認証情報の管理元");
   });
@@ -56,6 +63,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain(
       "<PlanResourceReview resources={planResources()} />",
     );
+    expect(en["run.resources.title"]).toBe("Technical change details");
+    expect(ja["run.resources.title"]).toBe("技術的な変更詳細");
+    expect(en["run.resources.kicker"]).toBe("Support details");
+    expect(ja["run.resources.kicker"]).toBe("サポート詳細");
     expect(runViewSource).not.toContain("change.before");
     expect(runViewSource).not.toContain("change.after");
   });
@@ -72,6 +83,9 @@ describe("Run review ProviderConnection evidence", () => {
   test("keeps the copy explicit that credentials are not displayed", () => {
     expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
       "credential values are not shown",
+    );
+    expect(en["run.connections.reviewBody"]).not.toContain(
+      "will use these external service connections",
     );
     expect(ja["run.connections.reviewBody"]).toContain(
       "認証情報の値は表示しません",

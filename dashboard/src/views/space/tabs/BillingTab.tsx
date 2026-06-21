@@ -4,7 +4,7 @@
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
  *   - balance + billing-mode explanation
  *   - Stripe customer portal (payment methods / invoices)
- *   - usage events + credit reservations (read-only history)
+ *   - usage events as folded support history
  *
  * The old debug controls (billing-mode select, free top-up input,
  * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
@@ -22,10 +22,8 @@ import {
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
-  type CreditReservation,
   getSpaceBilling,
   listBillingPlans,
-  listSpaceCreditReservations,
   listSpaceUsage,
   type PublicBillingPlan,
   type UsageEvent,
@@ -58,10 +56,6 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   const [billing] = createResource(() => props.spaceId, getSpaceBilling);
   const [plans] = createResource(listBillingPlans);
   const [usage] = createResource(() => props.spaceId, listSpaceUsage);
-  const [reservations] = createResource(
-    () => props.spaceId,
-    listSpaceCreditReservations,
-  );
 
   const mode = createMemo(() => billing()?.settings?.mode);
   const balance = createMemo(() => billing()?.balance);
@@ -161,21 +155,6 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       setPortalBusy(false);
     }
   };
-
-  const reservationColumns: readonly Column<CreditReservation>[] = [
-    {
-      header: t("members.col.status"),
-      cell: (r) => <code class="wc-code">{r.status}</code>,
-    },
-    {
-      header: t("billing.usage.credits"),
-      cell: (r) => formatBillingNumber(r.estimatedCredits),
-    },
-    {
-      header: t("billing.reservations.expires"),
-      cell: (r) => formatDateTime(r.expiresAt),
-    },
-  ];
 
   const usageColumns: readonly Column<UsageEvent>[] = [
     {
@@ -335,40 +314,6 @@ export default function BillingTab(props: { readonly spaceId: string }) {
         <details class="wb-disclosure av-billing-ledger">
           <summary>{t("billing.ledger.title")}</summary>
           <div class="wc-stack-sm">
-            <section>
-              <h3 class="tg-card-title">{t("billing.reservations.title")}</h3>
-              <Switch>
-                <Match when={reservations.loading}>
-                  <p class="muted">{t("billing.reservations.loading")}</p>
-                </Match>
-                <Match when={reservations.error}>
-                  {(error) => (
-                    <Toast tone="error">
-                      {t("billing.reservations.error", {
-                        message: errorMessage(error()),
-                      })}
-                    </Toast>
-                  )}
-                </Match>
-                <Match when={reservations()}>
-                  {(rows) => (
-                    <Show
-                      when={rows().length > 0}
-                      fallback={
-                        <p class="muted">{t("billing.reservations.empty")}</p>
-                      }
-                    >
-                      <DataTable
-                        columns={reservationColumns}
-                        rows={rows()}
-                        rowKey={(r) => r.runId}
-                      />
-                    </Show>
-                  )}
-                </Match>
-              </Switch>
-            </section>
-
             <section>
               <h3 class="tg-card-title">{t("billing.usage.title")}</h3>
               <Switch>
