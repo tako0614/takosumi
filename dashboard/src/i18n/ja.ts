@@ -232,7 +232,11 @@ export const ja = {
     "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.generation": "バージョン {n}",
+  "app.deploys.restoreMenu": "その他",
   "app.deploys.restore": "この状態に戻す",
+  "app.deploys.advancedActions": "その他の更新操作",
+  "app.deploys.advancedActionsBody":
+    "変更前の復元ポイントやエクスポートが必要な場合だけ、バックアップを作成します。",
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました: {id}",
   "app.recentRuns.title": "最近の実行",
