@@ -31,6 +31,7 @@ import {
   installationEnvelope,
   isMeteredBindingKind,
 } from "../../../../accounts/service/src/installation-helpers.ts";
+import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-routes.ts";
 import { appendLedgerEvent } from "../../../../accounts/service/src/installation-ledger-events.ts";
 import { serviceGrantMaterialRecordsFromValue } from "../../../../accounts/service/src/installation-lifecycle-shared.ts";
 import type {
@@ -6685,6 +6686,181 @@ test("accounts handler allows authenticated owner export while platform readines
   const body = await exportResponse.json();
   expect(body.status).toEqual("preparing");
   expect(body.event.type).toEqual("installation.export-requested");
+});
+
+test("accounts handler mirrors control deploy projection and exports after apply success", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_owner");
+  const operations = {
+    spaces: {
+      getSpace: async (id: string) => ({
+        id,
+        handle: "owner",
+        displayName: "Owner",
+        type: "personal" as const,
+        ownerUserId: "tsub_owner",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    deployUpload: async () => ({
+      installation: {
+        id: "inst_control_export",
+        spaceId: "space_control_export",
+        name: "hello",
+        slug: "hello",
+        installConfigId: "cfg_control_export",
+        environment: "production",
+        currentStateGeneration: 0,
+        status: "pending" as const,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+      installConfigId: "cfg_control_export",
+      run: {
+        id: "plan_control_export",
+        spaceId: "space_control_export",
+        installationId: "inst_control_export",
+        type: "plan" as const,
+        status: "succeeded" as const,
+        sourceSnapshotId: "snap_control_export",
+        planDigest: `sha256:${"d".repeat(64)}`,
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+      status: "planned" as const,
+      created: true,
+    }),
+    getPlanRun: async () => ({
+      planRun: {
+        id: "plan_control_export",
+        spaceId: "space_control_export",
+        installationId: "inst_control_export",
+        sourceSnapshotId: "snap_control_export",
+        source: {
+          kind: "git" as const,
+          url: "upload://space_control_export",
+          commit:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+        sourceDigest: `sha256:${"a".repeat(64)}`,
+        operation: "create" as const,
+        runnerProfileId: "rp_default",
+        variablesDigest: `sha256:${"b".repeat(64)}`,
+        requiredProviders: [],
+        status: "succeeded" as const,
+        policy: { status: "passed" as const, reasons: [], checkedAt: 0 },
+        policyDecisionDigest: `sha256:${"c".repeat(64)}`,
+        planDigest: `sha256:${"d".repeat(64)}`,
+        planArtifact: {
+          kind: "object-storage" as const,
+          ref: "plans/plan_control_export.tfplan",
+          digest: `sha256:${"d".repeat(64)}`,
+        },
+        auditEvents: [],
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    }),
+    getSourceSnapshot: async () => ({
+      id: "snap_control_export",
+      origin: "upload" as const,
+      spaceId: "space_control_export",
+      url: "upload://space_control_export",
+      ref: "upload",
+      resolvedCommit:
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      path: ".",
+      archiveObjectKey:
+        "spaces/space_control_export/uploads/snap_control_export/source.tar.zst",
+      archiveDigest: `sha256:${"b".repeat(64)}`,
+      archiveSizeBytes: 128,
+      fetchedByRunId: "upload",
+      fetchedAt: "2026-01-01T00:00:00Z",
+    }),
+    getRun: async () => ({
+      id: "apply_control_export",
+      spaceId: "space_control_export",
+      installationId: "inst_control_export",
+      type: "apply" as const,
+      status: "succeeded" as const,
+      planDigest: `sha256:${"d".repeat(64)}`,
+      createdBy: "test",
+      createdAt: "2026-01-01T00:00:00Z",
+    }),
+  } as unknown as ControlPlaneOperations;
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+    controlPlaneOperations: operations,
+  });
+
+  const deployResponse = await handler(
+    new Request("https://accounts.example.test/api/v1/deploy", {
+      method: "POST",
+      headers: accountSessionHeaders(sessionId),
+      body: JSON.stringify({
+        spaceId: "space_control_export",
+        name: "hello",
+        snapshotId: "snap_control_export",
+      }),
+    }),
+  );
+  expect(deployResponse.status).toEqual(200);
+  expect(store.findAppInstallation("inst_control_export")?.status).toEqual(
+    "installing",
+  );
+
+  const prematureExportResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_control_export/export",
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": "idem-control-export-early" },
+        body: JSON.stringify({
+          includeData: false,
+          format: "bundle",
+          encryption: { method: "none" },
+          scope: { secrets: "templates-only" },
+        }),
+      },
+    ),
+  );
+  expect(prematureExportResponse.status).toEqual(409);
+  expect((await prematureExportResponse.json()).error.code).toEqual(
+    "state_conflict",
+  );
+
+  const pollResponse = await handler(
+    new Request(
+      "https://accounts.example.test/api/v1/runs/apply_control_export",
+      {
+        headers: accountSessionHeaders(sessionId),
+      },
+    ),
+  );
+  expect(pollResponse.status).toEqual(200);
+  expect(store.findAppInstallation("inst_control_export")?.status).toEqual(
+    "ready",
+  );
+
+  const exportResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_control_export/export",
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": "idem-control-export-ready" },
+        body: JSON.stringify({
+          includeData: false,
+          format: "bundle",
+          encryption: { method: "none" },
+          scope: { secrets: "templates-only" },
+        }),
+      },
+    ),
+  );
+  expect(exportResponse.status).toEqual(202);
+  expect((await exportResponse.json()).status).toEqual("preparing");
 });
 
 test("accounts handler does not launch-gate core OAuth and PAT issuance when platform readiness access is closed", async () => {

@@ -518,6 +518,7 @@ export interface TakosumiOperations {
     readonly bytes: Uint8Array;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
+  getSourceSnapshot(id: string): Promise<SourceSnapshot>;
   deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
@@ -1046,6 +1047,7 @@ export async function createTakosumiService(
         ...(input.path ? { path: input.path } : {}),
       });
     },
+    getSourceSnapshot: (id) => opentofuController.getSourceSnapshot(id),
     deployUpload: (request) =>
       deployUpload(
         { controller: opentofuController, installations: installationsService },
