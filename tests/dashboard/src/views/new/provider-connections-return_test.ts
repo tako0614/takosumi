@@ -11,6 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const newAppViewSource = readFileSync(
@@ -122,6 +124,21 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("missingOwnKeyProviderRows");
     expect(newAppViewSource).toContain('"new.providers.operatorMissingTitle"');
     expect(newAppViewSource).toContain('"new.providers.errorOperatorManaged"');
+    expect(newAppViewSource).toContain('"new.providers.operatorMissingNext"');
+    expect(en["new.providers.operatorMissingBody"]).not.toContain("operator");
+    expect(en["new.providers.operatorMissingNext"]).toContain("managed access");
+    expect(ja["new.providers.operatorMissingBody"]).not.toContain("運営側");
+  });
+
+  test("/new explains rejected external install links instead of silently opening the catalog", () => {
+    expect(newAppViewSource).toContain("hasInstallPrefillParams");
+    expect(newAppViewSource).toContain("installPrefillRejected");
+    expect(newAppViewSource).toContain('"new.deeplink.invalidTitle"');
+    expect(newAppViewSource).toContain('"new.deeplink.invalidBody"');
+    expect(en["new.deeplink.invalidBody"].toLowerCase()).toContain(
+      "paste the git url manually",
+    );
+    expect(ja["new.deeplink.invalidBody"]).toContain("手動で貼り付け");
   });
 
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {

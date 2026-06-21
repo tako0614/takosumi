@@ -44,6 +44,7 @@ import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   capsuleNameFromUrl,
+  hasInstallPrefillParams,
   isSafeInstallVariableName,
   isSafeInstallVariableValue,
   parseInstallPrefill,
@@ -330,6 +331,10 @@ function Inner() {
     typeof location === "undefined"
       ? undefined
       : parseInstallPrefill(location.search);
+  const installPrefillRejected =
+    typeof location !== "undefined" &&
+    !prefill &&
+    hasInstallPrefillParams(location.search);
 
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
     prefill ? "git" : "catalog",
@@ -1385,6 +1390,13 @@ function Inner() {
           </ol>
         </section>
 
+        <Show when={installPrefillRejected}>
+          <div class="wb-action-callout" role="alert">
+            <strong>{t("new.deeplink.invalidTitle")}</strong>
+            <p>{t("new.deeplink.invalidBody")}</p>
+          </div>
+        </Show>
+
         {/* tab strip: examples | git url */}
         <nav class="tg-tabs" aria-label="Add method">
           <button
@@ -1773,6 +1785,7 @@ function Inner() {
                               {t("new.providers.operatorMissingTitle")}
                             </strong>
                             <p>{t("new.providers.operatorMissingBody")}</p>
+                            <p>{t("new.providers.operatorMissingNext")}</p>
                             <ul>
                               <For each={missingOperatorManagedProviderRows()}>
                                 {(row) => (

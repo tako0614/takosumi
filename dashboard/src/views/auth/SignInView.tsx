@@ -307,6 +307,13 @@ export function SignInCallbackView() {
     provider?: string;
   }>();
   const [error, setError] = createSignal<string | null>(null);
+  const signInErrorMessage = (err: Error): string => {
+    const message = err.message?.trim();
+    if (!message || message === "oauth flow was not started in this tab") {
+      return t("auth.retryableCallbackFailure");
+    }
+    return t("auth.retryableCallbackFailureWithDetail", { message });
+  };
 
   onMount(() => {
     const code = params.code;
@@ -319,7 +326,7 @@ export function SignInCallbackView() {
       rpc.auth.recallOAuthProvider() ??
       undefined;
     if (typeof code !== "string" || typeof state !== "string" || !provider) {
-      setError(t("auth.incompleteCallback"));
+      setError(t("auth.retryableCallbackFailure"));
       return;
     }
     rpc.auth
@@ -331,7 +338,7 @@ export function SignInCallbackView() {
         await refreshSession();
         nav(returnTo, { replace: true });
       })
-      .catch((err: Error) => setError(err.message));
+      .catch((err: Error) => setError(signInErrorMessage(err)));
   });
 
   return (
