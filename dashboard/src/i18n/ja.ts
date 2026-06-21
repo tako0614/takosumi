@@ -346,35 +346,35 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
-  "new.subtitle": "サンプルから始めるか、取得元 URL を指定して追加します。",
+  "new.subtitle": "サンプルを選ぶか、リンクを貼り付けて追加します。",
   "new.flow.aria": "サービス追加の進行状況",
-  "new.flow.kicker": "追加フロー",
-  "new.flow.title": "デプロイ前に取得元を確認します",
-  "new.flow.source": "現在の取得元",
-  "new.flow.sourceEmpty": "取得元はまだ選択されていません。",
+  "new.flow.kicker": "追加の流れ",
+  "new.flow.title": "追加前に内容を確認します",
+  "new.flow.source": "追加するもの",
+  "new.flow.sourceEmpty": "まだ選ばれていません。",
   "new.flow.sourceMeta": "バージョン {ref} / フォルダ {path}",
-  "new.flow.nextSource": "サンプルを選ぶか、取得元 URL を入力してください。",
+  "new.flow.nextSource": "サンプルを選ぶか、取得元 URL を貼り付けてください。",
   "new.flow.nextCheck":
-    "取得元を確認します。必要な接続がある場合だけ Takosumi が案内します。",
+    "内容を確認します。必要な接続がある場合だけ、この後に案内します。",
   "new.flow.nextConnect":
     "不足しているクラウド接続を設定すると、この画面に戻って続けられます。",
   "new.flow.nextReview":
     "次は追加内容の確認です。確認画面で承認するまでデプロイされません。",
-  "new.flow.stepSource": "取得元",
-  "new.flow.stepSourceSub": "取得元、バージョン、フォルダ",
+  "new.flow.stepSource": "入力",
+  "new.flow.stepSourceSub": "URL とバージョン",
   "new.flow.stepCheck": "確認",
-  "new.flow.stepCheckSub": "追加前に検査",
+  "new.flow.stepCheckSub": "追加できるか確認",
   "new.flow.stepConnect": "接続",
-  "new.flow.stepConnectSub": "選択した外部サービスだけ使う",
+  "new.flow.stepConnectSub": "必要なものだけ",
   "new.flow.stepReview": "レビュー",
-  "new.flow.stepReviewSub": "内容を確認してからデプロイ",
+  "new.flow.stepReviewSub": "承認して追加",
   "new.tab.catalog": "サンプル",
   "new.tab.git": "取得元 URL",
   "new.catalog.intro":
-    "追加できるサンプルです。選ぶだけでは追加せず、取得元を入力済みにします。",
+    "選ぶと入力欄に反映されます。まだ追加はされません。",
   "new.catalog.select": "このサンプルを使う",
   "new.deeplink.summary":
-    "リンクから「{capsule}」の取得元が入力されています。内容を確認してから追加してください。",
+    "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
   "new.git.url": "取得元 URL",
   "new.git.advanced": "バージョンとフォルダを指定",
   "new.git.ref": "バージョン",
@@ -425,13 +425,13 @@ export const ja = {
     "project_name はリソース接頭辞の欄で指定してください。",
   "new.vars.errorDuplicate": "「{name}」が重複しています。",
   "new.managed.notice":
-    "Takosumi で追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
+    "まず内容を確認します。必要な接続がある場合だけ、この後に案内します。",
   "new.managed.needCredential":
     "追加するには、まだこの Workspace にない外部サービス接続が必要です。",
   "new.managed.connectFirst": "接続を設定する",
   "new.managed.byoTitle": "自分のクラウド接続を使う",
   "new.managed.byoBody":
-    "この Capsule に必要な AWS / GCP / Kubernetes / Cloudflare などの外部サービス接続を追加または選択してください。",
+    "このサービスが AWS / GCP / Kubernetes / Cloudflare などを使う場合は、必要な接続を追加または選択してください。",
   "new.managed.byoLink": "接続を設定する",
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
   "new.deeplink.invalidBody":

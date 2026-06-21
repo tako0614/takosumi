@@ -439,6 +439,57 @@
   color: var(--tg-accent);
   border-bottom-color: var(--tg-accent);
 }
+
+@media (max-width: 640px) {
+  .tg-page-header {
+    gap: var(--tg-s-2);
+    margin-bottom: var(--tg-s-3);
+  }
+
+  .tg-page-title {
+    font-size: var(--tg-fs-xl);
+    line-height: 1.2;
+  }
+
+  .tg-page-subtitle {
+    font-size: var(--tg-fs-sm);
+    line-height: 1.55;
+  }
+
+  .tg-page-actions {
+    width: 100%;
+  }
+
+  .tg-page-actions .tg-btn {
+    min-height: 32px;
+    padding: 0.42em 0.75em;
+  }
+
+  .tg-tabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--tg-line);
+    border-radius: var(--tg-r-md);
+    background: var(--tg-bg-subtle);
+  }
+
+  .tg-tab {
+    min-width: 0;
+    padding: var(--tg-s-2) var(--tg-s-3);
+    border: 0;
+    border-radius: var(--tg-r-sm);
+    margin-bottom: 0;
+    color: var(--tg-fg-muted);
+  }
+
+  .tg-tab.active {
+    color: var(--tg-fg);
+    background: var(--tg-bg-elev);
+    box-shadow: var(--tg-shadow-sm);
+  }
+}
 /* ----- DataTable ----- */
 .tg-table-wrap {
   border: 1px solid var(--tg-line);
