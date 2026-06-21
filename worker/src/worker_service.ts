@@ -38,6 +38,7 @@ import { sensitiveOutputResolverFromEnv } from "./sensitive_output_resolver.ts";
 import { dependencyValueSealerFromEnv } from "./dependency_value_sealer.ts";
 import { CloudflareContainerOpenTofuRunner } from "./container_runner.ts";
 import { releaseActivatorFromEnv } from "./release_activator.ts";
+import { CloudflareD1MetricObservabilitySink } from "./d1_observability.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -294,7 +295,10 @@ function createWorkerAdapters(input: {
     source: new ImmutableSourceAdapter({ clock, idGenerator }),
     storage: input.storage,
     kms: new NoopTestKms({ clock, idGenerator }),
-    observability: new InMemoryObservabilitySink(),
+    observability: new CloudflareD1MetricObservabilitySink({
+      db: input.env.TAKOSUMI_CONTROL_DB,
+      fallback: new InMemoryObservabilitySink(),
+    }),
     queue: new MemoryQueueAdapter({ clock, idGenerator }),
     objectStorage: new CloudflareR2ObjectStorage(input.env.R2_ARTIFACTS),
     runtimeAgent,
