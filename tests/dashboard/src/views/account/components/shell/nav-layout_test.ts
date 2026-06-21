@@ -41,6 +41,8 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.accountSection"]).toBe("アカウント");
     expect(en["nav.advanced"]).toBe("Advanced");
     expect(ja["nav.advanced"]).toBe("詳細");
+    expect(en["spaceSettings.title"]).toBe("Advanced workspace settings");
+    expect(ja["spaceSettings.title"]).toBe("詳細な Workspace 設定");
   });
 
   test("keeps mobile tabs focused on everyday destinations", () => {

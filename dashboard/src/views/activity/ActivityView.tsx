@@ -117,10 +117,6 @@ function ActivityRow(props: { event: ActivityEvent }) {
         <span class="wa-activity-action">{activityTitle(props.event)}</span>
       </div>
       <div class="wa-activity-rowmeta">
-        <Show when={props.event.actorId}>
-          <span>{props.event.actorId}</span>
-          <span>·</span>
-        </Show>
         <time datetime={props.event.createdAt}>
           {formatDateTime(props.event.createdAt)}
         </time>
@@ -128,6 +124,13 @@ function ActivityRow(props: { event: ActivityEvent }) {
       <details class="wb-disclosure">
         <summary>{t("activity.details")}</summary>
         <div class="wa-meta">
+          <Show when={props.event.actorId}>
+            {(actorId) => (
+              <span class="wa-meta-chip">
+                <span class="muted">actor</span>=<code>{actorId()}</code>
+              </span>
+            )}
+          </Show>
           <span class="wa-meta-chip">
             <span class="muted">action</span>=<code>{props.event.action}</code>
           </span>

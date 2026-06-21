@@ -38,6 +38,10 @@ describe("Run review ProviderConnection evidence", () => {
     );
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
+    expect(en["run.details.title"]).toBe("Support details");
+    expect(ja["run.details.title"]).toBe("サポート詳細");
+    expect(en["run.connections.ownership"]).toBe("Credential source");
+    expect(ja["run.connections.ownership"]).toBe("認証情報の管理元");
   });
 
   test("shows public plan resources as the reviewable resource list", () => {

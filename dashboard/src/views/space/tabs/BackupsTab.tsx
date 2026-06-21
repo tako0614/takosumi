@@ -38,55 +38,87 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
     {
       header: t("backups.col.createdAt"),
       cell: (backup) => (
-        <>
+        <div>
           <time datetime={backup.createdAt}>
             {formatDateTime(backup.createdAt)}
           </time>
-          <div class="wb-subline">
-            <code>{backup.id}</code>
-          </div>
-        </>
+        </div>
       ),
     },
     {
-      header: t("backups.col.artifact"),
+      header: t("backups.col.contents"),
       cell: (backup) => (
-        <>
-          <code class="wb-mono">{backup.objectKey}</code>
+        <div>
+          <strong>{t("backups.col.artifact")}</strong>
           <div class="wb-subline">
-            {formatBytes(backup.sizeBytes)} · {shortDigest(backup.digest)}
+            {formatBytes(backup.sizeBytes)}
+            {backup.serviceData
+              ? ` · ${t("backups.serviceDataSummary", {
+                  exported: backup.serviceData.exportedCount,
+                  unsupported: backup.serviceData.unsupportedCount,
+                  missing: backup.serviceData.missingCount,
+                })}`
+              : ""}
           </div>
-        </>
+        </div>
       ),
     },
     {
-      header: t("backups.col.serviceData"),
+      header: t("backups.col.source"),
       cell: (backup) => (
-        <Show
-          when={backup.serviceData}
-          fallback={<span class="muted">{t("common.none")}</span>}
-        >
-          {(data) => (
-            <span>
-              <code class="wb-mono">{data().objectKey}</code>
-              <div class="wb-subline">
-                exported {data().exportedCount} · unsupported{" "}
-                {data().unsupportedCount} · missing {data().missingCount}
+        <span>
+          {backup.createdByRunId ? t("backups.col.run") : t("backups.manual")}
+        </span>
+      ),
+    },
+    {
+      header: t("common.details"),
+      cell: (backup) => (
+        <details class="wb-disclosure">
+          <summary>{t("common.details")}</summary>
+          <div class="wb-stack-sm">
+            <div>
+              <span class="muted">{t("backups.detail.id")}</span>
+              <div>
+                <code class="wb-mono">{backup.id}</code>
               </div>
-            </span>
-          )}
-        </Show>
-      ),
-    },
-    {
-      header: t("backups.col.run"),
-      cell: (backup) => (
-        <Show
-          when={backup.createdByRunId}
-          fallback={<span class="muted">{t("backups.manual")}</span>}
-        >
-          {(runId) => <code class="wb-mono">{runId()}</code>}
-        </Show>
+            </div>
+            <div>
+              <span class="muted">{t("backups.col.artifact")}</span>
+              <div>
+                <code class="wb-mono">{backup.objectKey}</code>
+              </div>
+              <div class="wb-subline">{shortDigest(backup.digest)}</div>
+            </div>
+            <Show when={backup.serviceData}>
+              {(data) => (
+                <div>
+                  <span class="muted">{t("backups.col.serviceData")}</span>
+                  <div>
+                    <code class="wb-mono">{data().objectKey}</code>
+                  </div>
+                  <div class="wb-subline">
+                    {t("backups.serviceDataSummary", {
+                      exported: data().exportedCount,
+                      unsupported: data().unsupportedCount,
+                      missing: data().missingCount,
+                    })}
+                  </div>
+                </div>
+              )}
+            </Show>
+            <Show when={backup.createdByRunId}>
+              {(runId) => (
+                <div>
+                  <span class="muted">{t("backups.col.run")}</span>
+                  <div>
+                    <code class="wb-mono">{runId()}</code>
+                  </div>
+                </div>
+              )}
+            </Show>
+          </div>
+        </details>
       ),
     },
   ];
