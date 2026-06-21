@@ -87,11 +87,40 @@ First run the billing readiness preflight against operator-private config and
 the live authenticated billing plan projection:
 
 ```bash
+bun run write:takosumi-billing-config -- \
+  --private-root takosumi-private \
+  --environment production \
+  --plans-file evidence/billing-plans-production.json
+
+bun run write:takosumi-stripe-secret -- \
+  --private-root takosumi-private \
+  --environment production \
+  --secret secret-key \
+  --stdin
+
+bun run write:takosumi-stripe-secret -- \
+  --private-root takosumi-private \
+  --environment production \
+  --secret webhook-secret \
+  --stdin
+
+cd takosumi
+bun run cli -- secrets apply \
+  --config ../takosumi-private/platform/wrangler.toml \
+  --secrets-dir ../takosumi-private/.secrets/production
+cd ..
+
 bun run check:takosumi-billing-readiness -- \
   --private-root takosumi-private \
   --environment production \
   --out-file evidence/billing-readiness-production.json
 ```
+
+`write:takosumi-billing-config` only writes non-secret plan catalog and redirect
+allowlist vars into the realized Wrangler config. Stripe API keys and webhook
+signing secrets must go through `write:takosumi-stripe-secret` and the operator
+secret apply command; do not place secret values in `wrangler.toml` or evidence
+files.
 
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
