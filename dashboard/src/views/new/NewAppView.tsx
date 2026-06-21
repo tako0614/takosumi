@@ -61,7 +61,9 @@ import {
   createSourceHttpsTokenConnection,
   createSource,
   extractRunId,
+  listInstallations,
   type InstallationProviderConnectionBindings,
+  type Installation,
   type CapsuleCompatibilityDiagnostic,
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
@@ -292,6 +294,15 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
   return "";
 }
 
+function isDuplicateInstallationError(
+  error: ControlApiError | undefined,
+): boolean {
+  return (
+    error?.status === 409 &&
+    /installation\s+.+\s+already exists/iu.test(error.message)
+  );
+}
+
 function runStatusLabel(status: RunStatus): string {
   switch (status) {
     case "queued":
@@ -412,6 +423,8 @@ function Inner() {
   const [createdInstallationId, setCreatedInstallationId] = createSignal<
     string | null
   >(null);
+  const [existingInstallation, setExistingInstallation] =
+    createSignal<Installation | null>(null);
   const [stepSource, setStepSource] = createSignal<StepState>("idle");
   const [stepSync, setStepSync] = createSignal<StepState>("idle");
   const [stepInstall, setStepInstall] = createSignal<StepState>("idle");
@@ -854,6 +867,7 @@ function Inner() {
     setProviderRows([]);
     setCreatedSourceId(null);
     setCreatedInstallationId(null);
+    setExistingInstallation(null);
     setError(null);
   };
 
@@ -922,6 +936,20 @@ function Inner() {
   const retryAfterSyncWait = () => {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
+  };
+  const findExistingInstallation = async (
+    space: string,
+    installationName: string,
+    environment: string,
+  ): Promise<Installation | null> => {
+    const installations = await listInstallations(space);
+    return (
+      installations.find(
+        (installation) =>
+          installation.name === installationName &&
+          installation.environment === environment,
+      ) ?? null
+    );
   };
 
   const runCompatibilityCheck = async () => {
@@ -1014,6 +1042,7 @@ function Inner() {
     }
     setBusy(true);
     setError(null);
+    setExistingInstallation(null);
     setSyncRequired(false);
     setSourceSyncRunStatus(null);
     startSourceSyncSlowTimer();
@@ -1069,6 +1098,17 @@ function Inner() {
       let installationId = createdInstallationId();
       if (!installationId) {
         setStepInstall("running");
+        const existing = await findExistingInstallation(
+          space,
+          name().trim(),
+          "production",
+        ).catch(() => null);
+        if (existing) {
+          setStepInstall("done");
+          setStepPlan("idle");
+          setExistingInstallation(existing);
+          return;
+        }
         const vars = installVariables();
         const installation = await createInstallation({
           spaceId: space,
@@ -1111,6 +1151,20 @@ function Inner() {
         );
       } else if (isAbortError(err)) {
         return;
+      } else if (isDuplicateInstallationError(apiError)) {
+        setStepInstall("done");
+        setStepPlan("idle");
+        const existing = await findExistingInstallation(
+          space,
+          name().trim(),
+          "production",
+        ).catch(() => null);
+        if (existing) {
+          setExistingInstallation(existing);
+          setError(null);
+        } else {
+          setError(t("new.error.alreadyExists", { name: name().trim() }));
+        }
       } else {
         setError(apiError?.message ?? String(err));
       }
@@ -1875,6 +1929,26 @@ function Inner() {
                     <p class="wb-error" role="alert">
                       {m()}
                     </p>
+                  )}
+                </Show>
+                <Show when={existingInstallation()}>
+                  {(installation) => (
+                    <div class="wb-action-callout" role="status">
+                      <strong>{t("new.existing.title")}</strong>
+                      <p>
+                        {t("new.existing.body", {
+                          name: installation().name,
+                          environment: installation().environment,
+                        })}
+                      </p>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        href={`/capsules/${encodeURIComponent(installation().id)}`}
+                      >
+                        {t("new.existing.open")}
+                      </Button>
+                    </div>
                   )}
                 </Show>
               </form>
