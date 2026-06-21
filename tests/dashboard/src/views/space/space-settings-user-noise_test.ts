@@ -68,6 +68,7 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).toContain("setCreateFormOpen(false)");
     expect(connectionsTabSource).toContain('t("conn.add.open")');
     expect(connectionsTabSource).toContain('t("conn.add.close")');
+    expect(connectionsTabSource).toContain("!shouldShowCreateForm()");
     expect(en["conn.add.open"]).toBe("Add connection");
     expect(ja["conn.add.open"]).toBe("接続を追加");
   });

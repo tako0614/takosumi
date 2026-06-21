@@ -1,9 +1,8 @@
 /**
- * Service detail (`/capsules/:id` + tab routes) — one service, four tabs:
- *   概要     status / public links / dependencies
- *   更新     saved versions + recent activity (review first, restore/backup folded)
- *   設定     source coordinates + connected cloud accounts (advanced/folded)
- *   危険な操作 destroy (review-first)
+ * Service detail (`/capsules/:id` + tab routes) — one service. The primary tabs
+ * stay focused on using/opening the service and reviewing updates; source,
+ * provider mapping, and delete options remain reachable from advanced manage
+ * routes instead of occupying the everyday tab strip.
  *
  * The friendly layer leads: open the service, check its status, then opt into
  * updates/settings when needed. All mutations still route through the same
@@ -25,7 +24,13 @@ import {
   Switch,
 } from "solid-js";
 import { A, useNavigate, useParams } from "@solidjs/router";
-import { Archive, ArrowLeft, ExternalLink, RotateCcw } from "lucide-solid";
+import {
+  Archive,
+  ArrowLeft,
+  ExternalLink,
+  RotateCcw,
+  Settings2,
+} from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -214,7 +219,6 @@ function Inner() {
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
-      { href: `${base}/settings`, label: t("app.tab.settings") },
     ];
   };
 
@@ -313,6 +317,7 @@ function Inner() {
                       reviewBusy={plan.busy()}
                       onReview={() => void plan.run()}
                       reviewError={plan.error()}
+                      settingsHref={`/capsules/${encodeURIComponent(installationId())}/settings`}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -565,6 +570,7 @@ function DeploysTab(props: {
   readonly reviewBusy: boolean;
   readonly onReview: () => void;
   readonly reviewError: string | null;
+  readonly settingsHref: string;
 }) {
   return (
     <>
@@ -673,6 +679,14 @@ function DeploysTab(props: {
           <summary>{t("app.deploys.advancedActions")}</summary>
           <p class="muted">{t("app.deploys.advancedActionsBody")}</p>
           <div class="wa-form-actions">
+            <Button
+              variant="secondary"
+              size="sm"
+              href={props.settingsHref}
+              icon={<Settings2 size={14} />}
+            >
+              {t("app.settings.openCta")}
+            </Button>
             <Button
               variant="secondary"
               size="sm"

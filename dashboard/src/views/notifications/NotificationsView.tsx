@@ -290,9 +290,12 @@ export default function NotificationsView() {
                           {(entry) => <NotificationRow entry={entry} />}
                         </For>
                       </ul>
-                      <p class="muted">
-                        <A href="/activity">{t("notif.viewRaw")}</A>
-                      </p>
+                      <details class="wb-disclosure wc-notif-support">
+                        <summary>{t("notif.supportSummary")}</summary>
+                        <p class="muted">
+                          <A href="/activity">{t("notif.viewRaw")}</A>
+                        </p>
+                      </details>
                     </div>
                   </Show>
                 )}

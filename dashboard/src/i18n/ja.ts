@@ -233,7 +233,7 @@ export const ja = {
   "app.bindings.none": "接続済みのクラウドアカウントはありません。",
   "app.bindings.editAdvanced": "詳細な接続設定",
   "app.bindings.add": "接続先を追加",
-  "app.bindings.aliasPlaceholder": "alias（任意）",
+  "app.bindings.aliasPlaceholder": "対象名（任意）",
   "app.bindings.selectConnection": "接続を選択",
   "app.bindings.remove": "削除",
   "app.bindings.errorProvider": "接続 {index} の接続先を入力してください。",
@@ -243,6 +243,7 @@ export const ja = {
   "app.settings.removeBody":
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
   "app.settings.removeCta": "削除オプションを開く",
+  "app.settings.openCta": "サービスの管理を開く",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
@@ -344,11 +345,11 @@ export const ja = {
   "new.store.aria": "おすすめサービス",
   "new.store.title": "おすすめサービス",
   "new.catalog.select": "これを追加",
-  "new.advancedImport.open": "手動で追加",
+  "new.advancedImport.open": "リンクから追加",
   "new.advancedImport.close": "おすすめに戻る",
-  "new.advancedImport.title": "手動で追加",
+  "new.advancedImport.title": "リンクから追加",
   "new.advancedImport.subtitle":
-    "アプリページのインストールリンク、または詳しい人向けの Git URL を貼り付けます。",
+    "アプリページのインストールリンクを貼り付けます。詳しい人向けに Git URL も使えます。",
   "new.selection.subtitle":
     "まず内容を確認します。デプロイは承認後に実行されます。",
   "new.catalogInput.title": "サービス設定",
@@ -445,7 +446,7 @@ export const ja = {
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
   "new.providers.title": "接続するクラウドアカウント",
-  "new.providers.alias": "alias: {alias}",
+  "new.providers.alias": "対象: {alias}",
   "new.providers.selectConnection": "接続を選択",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
@@ -688,7 +689,8 @@ export const ja = {
     "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.viewRaw": "サポート履歴を見る →",
+  "notif.supportSummary": "サポート詳細",
+  "notif.viewRaw": "履歴を開く →",
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
