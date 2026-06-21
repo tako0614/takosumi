@@ -49,6 +49,7 @@ import {
   type ReconcileInvoiceUsageInput,
   type RecordGatewayResourceUsageInput,
   type OpenTofuRunner,
+  type ReleaseActivator,
   type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
 import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
@@ -377,6 +378,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * at apply. Omitted ⇒ a sensitive published_output edge fails closed.
    */
   readonly dependencyValueSealer?: DependencyValueSealer;
+  /**
+   * Optional host/operator release activation seam. Takosumi core commits the
+   * OpenTofu ledger first; hosts that also publish application artifacts can
+   * report that post-apply activation through this hook.
+   */
+  readonly releaseActivator?: ReleaseActivator;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -859,6 +866,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.dependencyValueSealer
       ? { dependencyValueSealer: options.dependencyValueSealer }
+      : {}),
+    ...(options.releaseActivator
+      ? { releaseActivator: options.releaseActivator }
       : {}),
     serviceGraphService,
   });

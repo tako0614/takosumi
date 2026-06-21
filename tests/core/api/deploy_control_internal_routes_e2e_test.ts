@@ -14,7 +14,11 @@ import type {
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
 import type { Space } from "takosumi-contract/spaces";
-import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
+import type {
+  OpenTofuRunner,
+  ReleaseActivationInput,
+  ReleaseActivator,
+} from "../../../core/domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { fakeProviderVault } from "../../helpers/deploy-control/model_fixture.ts";
@@ -220,7 +224,10 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
  */
 async function seedInstallationViaRoutes(
   runner: OpenTofuRunner,
-  options: { readonly environment?: string } = {},
+  options: {
+    readonly environment?: string;
+    readonly releaseActivator?: ReleaseActivator;
+  } = {},
 ): Promise<{
   app: { request: (path: string, init?: RequestInit) => Promise<Response> };
   installationId: string;
@@ -238,6 +245,9 @@ async function seedInstallationViaRoutes(
     opentofuDeploymentStore: store,
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    ...(options.releaseActivator
+      ? { releaseActivator: options.releaseActivator }
+      : {}),
     startWorkerDaemon: false,
   });
 
@@ -450,6 +460,63 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
       sensitive: false,
     },
   ]);
+});
+
+test("bootstrap wires host release activator into apply lifecycle", async () => {
+  const activations: ReleaseActivationInput[] = [];
+  const { app, installationId, store, spaceId } =
+    await seedInstallationViaRoutes(fakeRunner(), {
+      releaseActivator: {
+        activate: (input) => {
+          activations.push(input);
+          return Promise.resolve({
+            status: "succeeded",
+            kind: "takos.cloudflare.worker",
+            healthUrl: "https://app.example.test/health",
+          });
+        },
+      },
+    });
+
+  const planRes = await app.request(
+    `/internal/v1/installations/${installationId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  const planRun = ((await planRes.json()) as { run: Run }).run;
+  const plan = await readInternalPlanRun(app, planRun.id);
+  await app.request(`/internal/v1/runs/${planRun.id}/approve`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+  });
+
+  const applyRes = await app.request("/internal/v1/apply-runs", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      planRunId: plan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(plan.planRun),
+    }),
+  });
+  const apply = (await applyRes.json()) as ApplyRunResponse;
+
+  expect(apply.applyRun.status).toEqual("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.nonSensitiveOutputs).toEqual({
+    launch_url: "https://app.example.test",
+  });
+  const activity = (await store.listActivityEvents(spaceId)).find(
+    (event) => event.action === "release_activation.succeeded",
+  );
+  expect(activity).toBeDefined();
+  expect(activity?.metadata).toMatchObject({
+    installationId,
+    applyRunId: apply.applyRun.id,
+    activationKind: "takos.cloudflare.worker",
+    hasHealthUrl: true,
+  });
+  expect(JSON.stringify(activity)).not.toContain(
+    "https://app.example.test/health",
+  );
 });
 
 test("run logs/events expose diagnostics + audit trail (§30)", async () => {
