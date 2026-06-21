@@ -351,6 +351,22 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.path": "Folder",
   "new.name": "Display name",
   "new.vars.projectName": "Resource prefix",
+  "new.vars.inputsTitle": "OpenTofu inputs",
+  "new.vars.inputsBody":
+    "Optional non-secret variables for this Capsule. Put tokens, passwords, and API keys in Provider Connections instead.",
+  "new.vars.inputName": "Variable",
+  "new.vars.inputValue": "Value",
+  "new.vars.addInput": "Add input",
+  "new.vars.removeInput": "Remove",
+  "new.vars.errorNameRequired":
+    "Enter a variable name or remove the empty row.",
+  "new.vars.errorUnsafeName":
+    "“{name}” cannot be passed as a link/input variable. Use Provider Connections for secrets.",
+  "new.vars.errorUnsafeValue":
+    "The value for “{name}” is too long or contains an unsupported character.",
+  "new.vars.errorProjectNameReserved":
+    "Use the Resource prefix field for project_name.",
+  "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.managed.notice":
     "Takosumi checks whether this can be added. Start with source inspection; if another connection is needed, Takosumi will ask for it.",
   "new.managed.needCredential":

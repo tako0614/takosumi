@@ -59,12 +59,23 @@ function parseVariableParams(
   for (const [key, value] of params) {
     if (!key.startsWith("var.")) continue;
     const name = key.slice("var.".length);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) continue;
-    if (name !== "project_name") continue;
-    if (/[\r\n\0]/u.test(value)) continue;
+    if (!isSafeInstallVariableName(name)) continue;
+    if (!isSafeInstallVariableValue(value)) continue;
     vars[name] = value;
   }
   return vars;
+}
+
+export function isSafeInstallVariableName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(trimmed)) return false;
+  return !/(secret|token|password|credential|private_?key|api_?key)/iu.test(
+    trimmed,
+  );
+}
+
+export function isSafeInstallVariableValue(value: string): boolean {
+  return value.length <= 512 && !/[\r\n\0]/u.test(value);
 }
 
 /** `source=git::<url>//<path>?ref=<ref>` (Terraform/OpenTofu module address). */

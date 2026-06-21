@@ -357,6 +357,22 @@ export const ja = {
   "new.git.path": "フォルダ",
   "new.name": "表示名",
   "new.vars.projectName": "リソース接頭辞",
+  "new.vars.inputsTitle": "OpenTofu 入力",
+  "new.vars.inputsBody":
+    "この Capsule に渡す任意の非 secret 変数です。トークン、パスワード、API キーは Provider Connection に入れてください。",
+  "new.vars.inputName": "変数名",
+  "new.vars.inputValue": "値",
+  "new.vars.addInput": "入力を追加",
+  "new.vars.removeInput": "削除",
+  "new.vars.errorNameRequired":
+    "変数名を入力するか、空の行を削除してください。",
+  "new.vars.errorUnsafeName":
+    "「{name}」はリンク/入力変数として渡せません。secret は Provider Connection を使ってください。",
+  "new.vars.errorUnsafeValue":
+    "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
+  "new.vars.errorProjectNameReserved":
+    "project_name はリソース接頭辞の欄で指定してください。",
+  "new.vars.errorDuplicate": "「{name}」が重複しています。",
   "new.managed.notice":
     "Takosumi で追加できるか確認します。まず取得元を確認し、追加の接続が必要な場合だけ案内します。",
   "new.managed.needCredential":

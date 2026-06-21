@@ -33,7 +33,9 @@ import {
   GitBranch,
   ListChecks,
   Plug,
+  Plus,
   SearchCheck,
+  Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -41,6 +43,8 @@ import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   capsuleNameFromUrl,
+  isSafeInstallVariableName,
+  isSafeInstallVariableValue,
   parseInstallPrefill,
 } from "../../lib/install-link.ts";
 import {
@@ -95,6 +99,11 @@ interface ProviderConnectionRow {
   readonly connectionId: string;
   readonly ownershipOptions: readonly ProviderCredentialOwnership[];
   readonly resourceTypes: readonly string[];
+}
+
+interface InputVariableRow {
+  readonly name: string;
+  readonly value: string;
 }
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
@@ -258,6 +267,15 @@ function isTakosOpenTofuCapsule(git: string, modulePath: string): boolean {
   }
 }
 
+function inputVariableRowsFromPrefill(
+  vars: Readonly<Record<string, string>> | undefined,
+): readonly InputVariableRow[] {
+  return Object.entries(vars ?? {})
+    .filter(([name]) => name !== "project_name")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => ({ name, value }));
+}
+
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
   const body = error?.body;
   if (body && typeof body === "object" && "sourceId" in body) {
@@ -327,6 +345,9 @@ function Inner() {
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
     prefill?.vars?.project_name !== undefined,
   );
+  const [inputVariables, setInputVariables] = createSignal<
+    readonly InputVariableRow[]
+  >(inputVariableRowsFromPrefill(prefill?.vars));
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
@@ -416,6 +437,8 @@ function Inner() {
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
+    const variableError = inputVariableError();
+    if (variableError) return variableError;
     return null;
   };
   const effectiveRef = () => {
@@ -436,10 +459,68 @@ function Inner() {
   };
   const projectNameVariable = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
+  const updateInputVariable = (
+    index: number,
+    patch: Partial<InputVariableRow>,
+  ) => {
+    setInputVariables((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+    resetCompatibility();
+  };
+  const addInputVariable = () =>
+    setInputVariables((rows) => [...rows, { name: "", value: "" }]);
+  const removeInputVariable = (index: number) => {
+    setInputVariables((rows) => rows.filter((_, i) => i !== index));
+    resetCompatibility();
+  };
+  const normalizedInputVariables = () => {
+    const variables: Record<string, string> = {};
+    for (const row of inputVariables()) {
+      const variableName = row.name.trim();
+      const value = row.value.trim();
+      if (!variableName && !value) continue;
+      variables[variableName] = value;
+    }
+    return variables;
+  };
+  const inputVariableError = (): string | null => {
+    const seen = new Set<string>();
+    for (const row of inputVariables()) {
+      const variableName = row.name.trim();
+      const value = row.value.trim();
+      if (!variableName && !value) continue;
+      if (!variableName) return t("new.vars.errorNameRequired");
+      if (!isSafeInstallVariableName(variableName)) {
+        return t("new.vars.errorUnsafeName", { name: variableName });
+      }
+      if (!isSafeInstallVariableValue(value)) {
+        return t("new.vars.errorUnsafeValue", { name: variableName });
+      }
+      if (supportsProjectNameInput() && variableName === "project_name") {
+        return t("new.vars.errorProjectNameReserved");
+      }
+      if (seen.has(variableName)) {
+        return t("new.vars.errorDuplicate", { name: variableName });
+      }
+      seen.add(variableName);
+    }
+    return null;
+  };
+  const installReturnVariables = (): Readonly<Record<string, string>> => {
+    const variables: Record<string, string> = {};
+    if (supportsProjectNameInput()) {
+      variables.project_name = projectNameVariable();
+    }
+    Object.assign(variables, normalizedInputVariables());
+    return variables;
+  };
   const installVariables = ():
     | Readonly<Record<string, JsonValue>>
     | undefined => {
-    const variables: Record<string, JsonValue> = {};
+    const variables: Record<string, JsonValue> = {
+      ...normalizedInputVariables(),
+    };
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
@@ -454,9 +535,7 @@ function Inner() {
       ref: effectiveRef(),
       path: path().trim() || ".",
       name: name().trim(),
-      ...(supportsProjectNameInput()
-        ? { vars: { project_name: projectNameVariable() } }
-        : {}),
+      vars: installReturnVariables(),
     });
   const providerConnectionsHref = () =>
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
@@ -724,7 +803,7 @@ function Inner() {
     return t("new.flow.nextReview");
   };
   const sourceSummaryTitle = () =>
-    gitUrl().trim() ? (name().trim() || capsuleNameFromUrl(gitUrl())) : "";
+    gitUrl().trim() ? name().trim() || capsuleNameFromUrl(gitUrl()) : "";
   const sourceSummaryMeta = () =>
     gitUrl().trim()
       ? t("new.flow.sourceMeta", {
@@ -1223,6 +1302,77 @@ function Inner() {
                   </FormField>
                 </Show>
 
+                <details
+                  class="wb-disclosure wb-input-vars"
+                  open={inputVariables().length > 0}
+                >
+                  <summary>{t("new.vars.inputsTitle")}</summary>
+                  <p class="wb-note">{t("new.vars.inputsBody")}</p>
+                  <div class="wb-variable-list">
+                    <For each={inputVariables()}>
+                      {(row, index) => (
+                        <div class="wb-variable-row">
+                          <FormField label={t("new.vars.inputName")}>
+                            <Input
+                              name={`varName:${index()}`}
+                              type="text"
+                              value={row.name}
+                              onInput={(e) =>
+                                updateInputVariable(index(), {
+                                  name: e.currentTarget.value,
+                                })
+                              }
+                              placeholder="region"
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                          <FormField label={t("new.vars.inputValue")}>
+                            <Input
+                              name={`varValue:${index()}`}
+                              type="text"
+                              value={row.value}
+                              onInput={(e) =>
+                                updateInputVariable(index(), {
+                                  value: e.currentTarget.value,
+                                })
+                              }
+                              placeholder="ap-northeast-1"
+                              autocomplete="off"
+                              spellcheck={false}
+                            />
+                          </FormField>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            icon={<Trash size={16} />}
+                            onClick={() => removeInputVariable(index())}
+                          >
+                            {t("new.vars.removeInput")}
+                          </Button>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                  <div class="wb-form-actions">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      icon={<Plus size={16} />}
+                      onClick={addInputVariable}
+                    >
+                      {t("new.vars.addInput")}
+                    </Button>
+                  </div>
+                  <Show when={inputVariableError()}>
+                    {(message) => (
+                      <p class="wb-error" role="alert">
+                        {message()}
+                      </p>
+                    )}
+                  </Show>
+                </details>
+
                 <Show when={!configs.loading && configList().length === 0}>
                   <p class="wb-error" role="alert">
                     {t("new.error.configMissing")}
@@ -1401,7 +1551,9 @@ function Inner() {
                       <Show when={missingProviderRows().length > 0}>
                         <div class="wb-action-callout" role="note">
                           <Show
-                            when={missingOperatorManagedProviderRows().length > 0}
+                            when={
+                              missingOperatorManagedProviderRows().length > 0
+                            }
                           >
                             <strong>
                               {t("new.providers.operatorMissingTitle")}
@@ -1409,7 +1561,9 @@ function Inner() {
                             <p>{t("new.providers.operatorMissingBody")}</p>
                             <ul>
                               <For each={missingOperatorManagedProviderRows()}>
-                                {(row) => <li>{providerLabel(row.provider)}</li>}
+                                {(row) => (
+                                  <li>{providerLabel(row.provider)}</li>
+                                )}
                               </For>
                             </ul>
                           </Show>
@@ -1418,7 +1572,9 @@ function Inner() {
                             <p>{t("new.providers.missingBody")}</p>
                             <ul>
                               <For each={missingOwnKeyProviderRows()}>
-                                {(row) => <li>{providerLabel(row.provider)}</li>}
+                                {(row) => (
+                                  <li>{providerLabel(row.provider)}</li>
+                                )}
                               </For>
                             </ul>
                             <Button

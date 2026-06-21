@@ -27,17 +27,34 @@ describe("/new flow guidance", () => {
   });
 
   test("keeps the cloud UX clear that deploy happens only after review", () => {
-    expect(en["new.flow.nextReview"].toLowerCase()).toContain("nothing is deployed");
+    expect(en["new.flow.nextReview"].toLowerCase()).toContain(
+      "nothing is deployed",
+    );
     expect(en["new.flow.title"].toLowerCase()).toContain("before");
-    expect(ja["new.flow.nextReview"]).toContain("承認するまでデプロイされません");
+    expect(ja["new.flow.nextReview"]).toContain(
+      "承認するまでデプロイされません",
+    );
     expect(ja["new.flow.title"]).toContain("デプロイ前");
   });
 
   test("keeps the /new flow compact on mobile", () => {
     expect(appViewsCssSource).toContain(".av-new-flow");
     expect(appViewsCssSource).toContain(".av-new-flow-steps");
-    expect(appViewsCssSource).toContain("grid-template-columns: repeat(4, minmax(0, 1fr));");
+    expect(appViewsCssSource).toContain(
+      "grid-template-columns: repeat(4, minmax(0, 1fr));",
+    );
     expect(appViewsCssSource).toContain(".av-new-flow-step small");
     expect(appViewsCssSource).toContain("display: none;");
+  });
+
+  test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
+    expect(newAppViewSource).toContain("normalizedInputVariables");
+    expect(newAppViewSource).toContain("installReturnVariables");
+    expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
+    expect(newAppViewSource).toContain("name={`varName:${index()}`}");
+    expect(newAppViewSource).toContain("name={`varValue:${index()}`}");
+    expect(newAppViewSource).toContain("inputVariableError");
+    expect(en["new.vars.inputsBody"].toLowerCase()).toContain("non-secret");
+    expect(ja["new.vars.inputsBody"]).toContain("非 secret");
   });
 });
