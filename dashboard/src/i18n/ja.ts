@@ -43,14 +43,13 @@ export const ja = {
   "nav.activity": "履歴",
   "nav.manage": "管理",
   "nav.accountSection": "アカウント",
-  "nav.advanced": "詳細",
   "nav.notifications": "通知",
-  "nav.spaceSettings": "Workspace 設定",
+  "nav.spaceSettings": "チーム設定",
   "nav.spaceSettingsShort": "設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "戻る",
-  "nav.deployContext": "デプロイ / 管理",
+  "nav.deployContext": "サービス運用",
   "shell.skipToContent": "本文へスキップ",
   "shell.userMenu": "ユーザーメニュー",
   "shell.signOut": "サインアウト",
@@ -62,16 +61,16 @@ export const ja = {
   "theme.dark": "ダーク",
 
   // --- space switcher -------------------------------------------------------
-  "space.label": "Workspace",
-  "space.loadFailed": "Workspace の取得に失敗しました — {message}",
-  "space.none": "Workspace がありません",
-  "space.new": "新しい Workspace",
+  "space.label": "チーム",
+  "space.loadFailed": "チームの取得に失敗しました — {message}",
+  "space.none": "チームがありません",
+  "space.new": "新しいチーム",
   "space.handleLabel": "ハンドル（@なし、半角英数とハイフン）",
   "space.handlePlaceholder": "my-space",
   "space.handleRequired": "ハンドルを入力してください。",
-  "space.select": "Workspace を選択してください",
+  "space.select": "チームを選択してください",
   "space.selectMessage":
-    "右上の Workspace スイッチャーから Workspace を選ぶと表示されます。",
+    "右上のチーム選択からチームを選ぶと表示されます。",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -210,16 +209,16 @@ export const ja = {
   "app.deps.title": "連携しているサービス",
   "app.deps.dependsOn": "このサービスが使うサービス",
   "app.deps.usedBy": "このサービスを使っているサービス",
-  "app.source.title": "ソース",
+  "app.source.title": "アプリの取得元",
   "app.source.name": "名前",
-  "app.source.url": "Git URL",
-  "app.source.refPath": "Ref / Path",
+  "app.source.url": "取得元 URL",
+  "app.source.refPath": "バージョン / フォルダ",
   "app.source.status": "取得状態",
   "app.source.loading": "ソース情報を読み込み中です。",
-  "app.info.title": "技術的な詳細",
+  "app.info.title": "サポート情報",
   "app.info.id": "ID",
   "app.info.generation": "復元ポイント",
-  "app.info.deployment": "Current deployment",
+  "app.info.deployment": "現在の状態",
   "app.info.installConfig": "追加設定",
   "app.deploys.title": "更新履歴",
   "app.deploys.subtitle":
@@ -232,8 +231,8 @@ export const ja = {
     "変更前の復元ポイントやエクスポートが必要な場合だけ、バックアップを作成します。",
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました: {id}",
-  "app.recentRuns.title": "最近の実行",
-  "app.recentRuns.empty": "最近の実行はありません。",
+  "app.recentRuns.title": "最近の確認",
+  "app.recentRuns.empty": "最近の確認はありません。",
   "app.recentRuns.open": "詳細",
   "app.recentActivity.title": "最近の更新",
   "app.recentActivity.empty": "最近の更新はありません。",
@@ -301,7 +300,7 @@ export const ja = {
   "run.changes.create": "作成",
   "run.changes.update": "変更",
   "run.changes.delete": "削除",
-  "run.resources.kicker": "Plan の内容",
+  "run.resources.kicker": "変更プレビュー",
   "run.resources.title": "変更されるリソース",
   "run.resources.count": "{n} 件",
   "run.resources.more": "ほか {n} 件のリソースがこの Plan に含まれています。",
@@ -312,9 +311,9 @@ export const ja = {
   "run.details.title": "サポート詳細",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
-  "run.details.policy": "ポリシー",
+  "run.details.policy": "安全確認",
   "run.details.installation": "サービス",
-  "run.details.sourceSnapshot": "取得元の固定情報",
+  "run.details.sourceSnapshot": "取得元のバージョン",
   "run.details.dependencySnapshot": "連携入力の固定情報",
   "run.details.baseGeneration": "元の状態",
   "run.details.planDigest": "変更内容の検証 ID",
@@ -322,8 +321,8 @@ export const ja = {
   "run.details.started": "開始",
   "run.details.finished": "終了",
   "run.details.error": "エラー",
-  "run.inputs.title": "依存からの入力",
-  "run.inputs.empty": "依存からの注入入力は検出されませんでした。",
+  "run.inputs.title": "連携サービスからの値",
+  "run.inputs.empty": "連携サービスから受け取った値はありません。",
   "run.connections.title": "接続",
   "run.connections.reviewTitle": "この確認で使う外部サービス",
   "run.connections.reviewBody":
@@ -338,8 +337,8 @@ export const ja = {
   "run.connections.empty": "接続解決情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
-  "run.audit.title": "監査ログ",
-  "run.audit.empty": "監査イベントはありません。",
+  "run.audit.title": "活動記録",
+  "run.audit.empty": "活動記録はありません。",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
@@ -363,11 +362,11 @@ export const ja = {
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
-  "new.git.url": "インストールリンクまたは Git URL",
-  "new.git.advanced": "詳細な取得元設定",
+  "new.git.url": "インストールリンク",
+  "new.git.advanced": "取得元の詳細設定",
   "new.git.ref": "バージョン",
   "new.git.path": "フォルダ",
-  "new.sourceAccess.title": "非公開リポジトリ",
+  "new.sourceAccess.title": "非公開の取得元",
   "new.sourceAccess.body":
     "公開リポジトリなら認証情報は不要です。非公開の取得元では、読み取り専用の HTTPS token を保存するか、保存済みの取得元アクセスを選んでください。",
   "new.sourceAccess.mode": "取得元アクセス",
@@ -377,13 +376,13 @@ export const ja = {
   "new.sourceAccess.connection": "保存済みの取得元アクセス",
   "new.sourceAccess.selectConnection": "保存済みの取得元アクセスを選択",
   "new.sourceAccess.noConnections":
-    "この Workspace には、検証済みの取得元アクセスがまだありません。",
+    "このチームには、検証済みの取得元アクセスがまだありません。",
   "new.sourceAccess.username": "ユーザー名",
   "new.sourceAccess.accessToken": "Access token",
   "new.sourceAccess.tokenPlaceholder": "読み取り専用リポジトリ token",
   "new.sourceAccess.saveToken": "token を保存",
   "new.sourceAccess.tokenBody":
-    "token は書き込み専用の取得元接続として保存され、この Workspace の取得元確認にだけ使われます。",
+    "token は書き込み専用の取得元接続として保存され、このチームの取得元確認にだけ使われます。",
   "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
   "new.sourceAccess.errorSaveToken":
     "取得元を確認する前に、非公開リポジトリの token を保存してください。",
@@ -456,22 +455,22 @@ export const ja = {
   "new.providers.errorConnection":
     "{provider} の利用可能な接続を選択してください。",
   "new.providers.errorOperatorManaged":
-    "{provider} はこの Workspace ではまだ利用できません。",
+    "{provider} はこのチームではまだ利用できません。",
   "new.providers.missingTitle": "接続の設定が必要です",
   "new.providers.missingBody": "接続を設定すると続けられます。",
   "new.providers.setupMissing": "必要な接続を設定",
   "new.providers.operatorMissingTitle": "このサービスはまだここでは使えません",
   "new.providers.operatorMissingBody":
-    "必要なサービス接続が、この Workspace ではまだ有効化されていません。",
+    "必要なサービス接続が、このチームではまだ有効化されていません。",
   "new.providers.operatorMissingNext":
-    "Workspace の管理者に有効化を依頼してください。",
-  "new.step.technical": "技術的な進行状況",
-  "new.step.register": "取得元を登録",
+    "チームの管理者に有効化を依頼してください。",
+  "new.step.technical": "確認の進行状況",
+  "new.step.register": "サービスを準備",
   "new.step.sync": "中身を取得",
   "new.step.create": "サービスを作成",
   "new.step.plan": "変更を確認",
-  "new.error.spaceRequired": "Workspace を選択してください。",
-  "new.error.urlRequired": "Git URL を入力してください。",
+  "new.error.spaceRequired": "チームを選択してください。",
+  "new.error.urlRequired": "インストールリンクを入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
   "new.error.nameInvalid":
     "サービス名は半角小文字・数字・ハイフンだけで入力してください。",
@@ -481,14 +480,14 @@ export const ja = {
   "new.error.sourceFetchFailed":
     "Git の中身を取得できませんでした。URL、バージョン、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
   "new.error.alreadyExists":
-    "「{name}」はこの Workspace に既に追加されています。一覧から既存サービスを開いてください。",
+    "「{name}」はこのチームに既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "詳細な Workspace 設定",
+  "spaceSettings.title": "チーム設定",
   "spaceSettings.subtitle":
-    "メンバー、復元、共有、ポリシーなどの管理用設定です。",
+    "メンバー、復元、共有などの管理用設定です。",
   "spaceSettings.tab.general": "一般",
   "spaceSettings.tab.members": "メンバー",
   "spaceSettings.tab.connections": "接続",
@@ -500,9 +499,9 @@ export const ja = {
   "spaceSettings.general.type": "種別",
   "spaceSettings.general.owner": "オーナー",
   "spaceSettings.general.updated": "更新日時",
-  "spaceSettings.general.advancedDetails": "Workspace の詳細設定",
-  "spaceSettings.general.policyAdvanced": "ポリシー JSON（上級者向け）",
-  "spaceSettings.general.saved": "Workspace 設定を保存しました。",
+  "spaceSettings.general.advancedDetails": "サポート向け詳細設定",
+  "spaceSettings.general.policyAdvanced": "ポリシー JSON（サポート向け）",
+  "spaceSettings.general.saved": "チーム設定を保存しました。",
   "spaceSettings.general.nameRequired": "表示名を入力してください。",
   "spaceSettings.general.policyObject":
     "ポリシー JSON は object にしてください。",
@@ -518,7 +517,7 @@ export const ja = {
   "members.status.invited": "招待中",
   "members.status.suspended": "削除済み",
   "members.subtitle":
-    "この Workspace のメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。",
+    "このチームのメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。",
   "members.invite.title": "メンバーを招待",
   "members.invite.subtitle":
     "Takosumi Cloud に一度ログイン済みの相手の Google メールを入力してください。",
@@ -538,7 +537,7 @@ export const ja = {
     "最後のオーナーは削除できません。先に別のオーナーを指名してください。",
   "members.remove": "削除",
   "members.removeConfirm": "このメンバーを削除しますか？（{account}）",
-  "members.empty": "この Workspace にはまだメンバーがいません。",
+  "members.empty": "このチームにはまだメンバーがいません。",
   "members.viewerNote":
     "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
 
@@ -547,12 +546,12 @@ export const ja = {
   "conn.providerConnections.title": "外部サービス接続",
   "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
-  "conn.providerConnections.ownership": "所有",
+  "conn.providerConnections.ownership": "管理元",
   "conn.providerConnections.status": "状態",
   "conn.ownership.ownKey": "自分の接続情報",
   "conn.ownership.takosProvided": "運営管理",
   "conn.scope.operator": "運営管理",
-  "conn.scope.space": "Workspace",
+  "conn.scope.space": "チーム",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
@@ -607,15 +606,20 @@ export const ja = {
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "接続する",
   "conn.guided.connecting": "接続中...",
+  "conn.custom.summary": "その他の接続",
+  "conn.custom.body":
+    "一覧にない外部サービスを使う場合だけ、必要な値を直接登録します。",
+  "conn.custom.use": "カスタム接続を使う",
+  "conn.custom.back": "通常の接続先に戻る",
   "conn.advanced.summary": "詳細設定（上級者向け）",
   "conn.advanced.register": "値を直接登録",
   "conn.register": "接続を登録",
   "conn.registering": "登録中...",
   "conn.genericEnv.providerName": "外部サービス名",
-  "conn.genericEnv.envName": "環境変数名",
+  "conn.genericEnv.envName": "値の名前",
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
-  "conn.genericEnv.addRow": "環境変数を追加",
+  "conn.genericEnv.addRow": "値を追加",
   "conn.genericEnv.providerRequired": "外部サービス名を入力してください。",
   "conn.genericEnv.cloudflareGuided":
     "Cloudflare は上のプロバイダから登録してください（専用フローがあります）。",
@@ -626,7 +630,7 @@ export const ja = {
   "conn.error.fieldRequired": "{field} は必須です。",
   "conn.list.title": "接続の詳細",
   "conn.list.empty":
-    "この Workspace にはまだ接続がありません。上のフォームから追加できます。",
+    "このチームにはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
   "conn.testing": "確認中...",
   "conn.test.notReady": "接続はまだ利用できません（状態: {status}）。",
@@ -636,7 +640,7 @@ export const ja = {
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle":
-    "Workspace の設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応しているサービスでのみ表示されます。",
+    "チームの設定・デプロイ状態のバックアップを管理します。サービスデータのエクスポートは、対応しているサービスでのみ表示されます。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
@@ -651,12 +655,12 @@ export const ja = {
     "サービスデータ {exported} 件 / 未対応 {unsupported} 件 / 不足 {missing} 件",
   "backups.empty.title": "まだバックアップがありません",
   "backups.empty.message":
-    "この Workspace の最初のバックアップを作成できます。",
+    "このチームの最初のバックアップを作成できます。",
 
   // --- shared values -------------------------------------------------------------
-  "shares.subtitle": "Workspace 間でサービスの公開値を明示的に共有します。",
+  "shares.subtitle": "チーム間でサービスの公開値を明示的に共有します。",
   "shares.create.title": "共有を作成",
-  "shares.create.toSpace": "共有先 Workspace",
+  "shares.create.toSpace": "共有先チーム",
   "shares.create.producer": "共有元サービス",
   "shares.create.selectPlaceholder": "選択してください",
   "shares.create.outputs": "共有する値",
@@ -724,11 +728,11 @@ export const ja = {
   // --- activity -------------------------------------------------------------------
   "activity.title": "履歴",
   "activity.subtitle":
-    "最近のサービスやアカウントの出来事です。技術的な監査詳細は各項目から確認できます。",
+    "最近のサービスやアカウントの出来事です。サポート詳細は各項目から確認できます。",
   "activity.details": "サポート詳細",
   "activity.empty.title": "まだ履歴がありません",
   "activity.empty.message":
-    "この Workspace で操作が行われると、ここに記録されます。",
+    "このチームで操作が行われると、ここに記録されます。",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "まとめての更新",
@@ -744,15 +748,16 @@ export const ja = {
   "graph.title": "サービス連携",
   "graph.subtitle":
     "どのサービスが他のサービスの値を使っているかを表示します。",
-  "graph.layer": "確認順 {n}",
+  "graph.layer": "設定順 {n}",
   "graph.cycle": "連携の見直しが必要",
   "graph.dependsOn": "{names} を利用",
   "graph.empty.title": "サービスがありません",
-  "graph.empty.message": "この Workspace にはまだサービスがありません。",
+  "graph.empty.message": "このチームにはまだサービスがありません。",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
   "account.subtitle": "サインイン情報・セッション・言語・表示の設定です。",
+  "account.manage.title": "よく使う設定",
   "account.profile.title": "サインイン情報",
   "account.profile.subject": "Subject",
   "account.profile.displayName": "表示名",
@@ -775,8 +780,8 @@ export const ja = {
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",
   "billing.subtitle":
-    "このスペースのプラン、クレジット、使用量、支払い設定を確認します。",
-  "billing.mode.disabled": "この Workspace では課金は無効です。",
+    "このチームのプラン、クレジット、使用量、支払い設定を確認します。",
+  "billing.mode.disabled": "このチームでは課金は無効です。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce": "デプロイにはクレジット残高が必要です。",
   "billing.loading": "課金状態を読み込み中です...",

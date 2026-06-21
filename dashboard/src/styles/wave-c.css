@@ -26,6 +26,11 @@
   flex-direction: column;
   gap: var(--tg-s-4);
 }
+.wc-quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+}
 
 /* Form rows inside Cards */
 .wc-form {
@@ -46,6 +51,10 @@
   flex-wrap: wrap;
 }
 @media (max-width: 640px) {
+  .wc-quick-links .tg-btn {
+    flex: 1 1 100%;
+  }
+
   .wc-inline-feedback {
     align-items: stretch;
   }

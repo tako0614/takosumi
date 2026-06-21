@@ -26,23 +26,23 @@ const shellCssSource = readFileSync(
 );
 
 describe("dashboard shell navigation layout", () => {
-  test("keeps desktop navigation service-first with advanced routes folded", () => {
+  test("keeps desktop navigation service-first with support routes out of primary chrome", () => {
     expect(sidebarSource).toContain("const PRIMARY");
     expect(sidebarSource).toContain("const ACCOUNT");
-    expect(sidebarSource).toContain("const ADVANCED");
+    expect(sidebarSource).not.toContain("const ADVANCED");
     expect(sidebarSource).toContain('labelKey: "nav.home"');
     expect(sidebarSource).toContain('labelKey: "nav.add"');
     expect(sidebarSource).not.toContain('labelKey: "nav.notifications"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.connections"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.activity"');
     expect(sidebarSource).not.toContain('href: "/notifications"');
     expect(sidebarSource).toContain('aria-label={t("nav.accountSection")}');
-    expect(sidebarSource).toContain('class="sidebar-advanced"');
+    expect(sidebarSource).not.toContain('class="sidebar-advanced"');
     expect(sidebarSource).toContain('class="sidebar-section-label"');
     expect(en["nav.accountSection"]).toBe("Account");
     expect(ja["nav.accountSection"]).toBe("アカウント");
-    expect(en["nav.advanced"]).toBe("Advanced");
-    expect(ja["nav.advanced"]).toBe("詳細");
-    expect(en["spaceSettings.title"]).toBe("Advanced workspace settings");
-    expect(ja["spaceSettings.title"]).toBe("詳細な Workspace 設定");
+    expect(en["spaceSettings.title"]).toBe("Team settings");
+    expect(ja["spaceSettings.title"]).toBe("チーム設定");
   });
 
   test("keeps mobile tabs focused on everyday destinations", () => {
