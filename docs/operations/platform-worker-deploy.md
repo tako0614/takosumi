@@ -200,13 +200,14 @@ required manual secret として不足検出する。Stripe は Cloudflare platf
 `TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET`、node-postgres profile では
 `TAKOSUMI_ACCOUNTS_STRIPE_API_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET` を読む。
 
-未設定（運用 TODO）: `TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_*`（Google OAuth app を登録して push
-するまで sign-in に使える provider が出ない）。built-in Google sign-in は
-`CLIENT_ID` / `CLIENT_SECRET` / `REDIRECT_URI` の3つが揃った時だけ有効にする。
-Google OAuth app は application type `Web application` で作成し、authorized JavaScript origin
-には platform origin、authorized redirect URI には `https://<platform-origin>/sign-in/callback`
-だけを登録する。`/v1/auth/upstream/callback` は SPA が同一 origin で呼ぶ backend completion endpoint
-で、外部 OAuth provider の redirect target にはしない。
+Google sign-in is configured through `TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_*`.
+Production readiness probes must show the provider as enabled before GA.
+built-in Google sign-in is enabled only when `CLIENT_ID` / `CLIENT_SECRET` /
+`REDIRECT_URI` are all present. Google OAuth app は application type
+`Web application` で作成し、authorized JavaScript origin には platform
+origin、authorized redirect URI には `https://<platform-origin>/sign-in/callback`
+だけを登録する。`/v1/auth/upstream/callback` は SPA が同一 origin で呼ぶ
+backend completion endpoint で、外部 OAuth provider の redirect target にはしない。
 Stripe、passkey。
 Cloud-only AI Gateway extension は `TAKOSUMI_AI_GATEWAY_PROFILES` と、その profile の
 `apiKeyEnv` が指す upstream provider secret を realized config / operator vault に入れるまで
