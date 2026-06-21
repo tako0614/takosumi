@@ -29,8 +29,16 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
-import { A, useNavigate } from "@solidjs/router";
-import { Download, KeyRound, Plus, Trash } from "lucide-solid";
+import { useNavigate } from "@solidjs/router";
+import {
+  Cloud,
+  Download,
+  Globe2,
+  HardDrive,
+  KeyRound,
+  Plus,
+  Trash,
+} from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -46,7 +54,11 @@ import {
   installReturnPathFromPrefill,
   providerConnectionsHrefForInstallReturn,
 } from "../../lib/install-return-context.ts";
-import { CATALOG, type CatalogEntry } from "../../catalog.ts";
+import {
+  CATALOG,
+  type CatalogEntry,
+  type CatalogInputField,
+} from "../../catalog.ts";
 import {
   checkCapsuleCompatibility,
   ControlApiError,
@@ -91,7 +103,6 @@ import {
 } from "../../components/ui/index.ts";
 
 type StepState = "idle" | "running" | "done" | "error";
-type AddStep = "choose" | "check" | "connect" | "review";
 type FlowRun = {
   readonly id: number;
   readonly controller: AbortController;
@@ -111,41 +122,15 @@ interface InputVariableRow {
   readonly value: string;
 }
 
-const ADD_STEPS: readonly AddStep[] = ["choose", "check", "connect", "review"];
-
-function addStepLabel(step: AddStep): string {
-  switch (step) {
-    case "choose":
-      return t("new.steps.choose");
-    case "check":
-      return t("new.steps.check");
-    case "connect":
-      return t("new.steps.connect");
-    case "review":
-      return t("new.steps.review");
+function CatalogIcon(props: { readonly entry: CatalogEntry }) {
+  switch (props.entry.kind) {
+    case "worker":
+      return <Cloud size={20} />;
+    case "site":
+      return <Globe2 size={20} />;
+    case "storage":
+      return <HardDrive size={20} />;
   }
-}
-
-function AddProgress(props: { readonly current: AddStep }) {
-  const currentIndex = () => ADD_STEPS.indexOf(props.current);
-  return (
-    <ol class="av-add-steps" aria-label={t("new.steps.aria")}>
-      <For each={ADD_STEPS}>
-        {(step, index) => (
-          <li
-            class="av-add-step"
-            classList={{
-              "is-current": index() === currentIndex(),
-              "is-done": index() < currentIndex(),
-            }}
-          >
-            <span class="av-add-step-dot" aria-hidden="true" />
-            <span>{addStepLabel(step)}</span>
-          </li>
-        )}
-      </For>
-    </ol>
-  );
 }
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
@@ -300,6 +285,31 @@ function spaceSuffix(value: string | null): string {
     .toLowerCase();
 }
 
+function catalogInputKey(entryId: string, fieldName: string): string {
+  return `${entryId}:${fieldName}`;
+}
+
+function catalogDefaultInputValue(
+  entry: CatalogEntry,
+  field: CatalogInputField,
+  spaceId: string | null,
+): string {
+  const base = slugInputValue(entry.suggestedName);
+  const suffix = spaceSuffix(spaceId);
+  switch (field.defaultValue) {
+    case "service-name":
+      return base;
+    case "service-name-with-space":
+      return suffix ? `${base}-${suffix}` : base;
+    case "main":
+      return "main";
+    case "us-east-1":
+      return "us-east-1";
+    default:
+      return "";
+  }
+}
+
 function isTakosOpenTofuCapsule(git: string, modulePath: string): boolean {
   const normalizedPath = modulePath.trim().replace(/^\/+|\/+$/gu, "") || ".";
   if (normalizedPath !== "deploy/opentofu") return false;
@@ -384,6 +394,12 @@ function Inner() {
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
     prefill || opensLinkMode ? "git" : "catalog",
   );
+  const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
+    null,
+  );
+  const [catalogInputValues, setCatalogInputValues] = createSignal<
+    Readonly<Record<string, string>>
+  >({});
   const initialRef = prefill?.ref || "main";
   const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
   const [ref, setRef] = createSignal(displayRef(initialRef));
@@ -448,6 +464,67 @@ function Inner() {
   const selectedInstallConfigId = () => {
     ensureConfigSelected();
     return installConfigId();
+  };
+  const selectedCatalogEntry = () => {
+    const id = selectedCatalogId();
+    return id ? (CATALOG.find((entry) => entry.id === id) ?? null) : null;
+  };
+  const catalogInputValue = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) => {
+    const key = catalogInputKey(entry.id, field.name);
+    return (
+      catalogInputValues()[key] ??
+      catalogDefaultInputValue(entry, field, spaceId())
+    );
+  };
+  const updateCatalogInputValue = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+    value: string,
+  ) => {
+    setCatalogInputValues((current) => ({
+      ...current,
+      [catalogInputKey(entry.id, field.name)]: value,
+    }));
+    resetCompatibility();
+  };
+  const selectedCatalogVariables = () => {
+    const entry = selectedCatalogEntry();
+    if (!entry) return {};
+    const variables: Record<string, string> = {};
+    for (const field of entry.inputs) {
+      const value = catalogInputValue(entry, field).trim();
+      if (value) variables[field.name] = value;
+    }
+    return variables;
+  };
+  const selectedCatalogVariableNames = () =>
+    new Set(Object.keys(selectedCatalogVariables()));
+  const catalogInputError = (): string | null => {
+    const entry = selectedCatalogEntry();
+    if (!entry) return null;
+    for (const field of entry.inputs) {
+      const value = catalogInputValue(entry, field).trim();
+      if (field.required && !value) {
+        return t("new.catalogInput.errorRequired", {
+          label: field.label[locale()],
+        });
+      }
+      if (value && !isSafeInstallVariableValue(value)) {
+        return t("new.catalogInput.errorUnsafeValue", {
+          label: field.label[locale()],
+        });
+      }
+    }
+    return null;
+  };
+  const clearSelectedCatalog = () => {
+    if (!selectedCatalogId()) return;
+    setSelectedCatalogId(null);
+    setCatalogInputValues({});
+    setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
   };
 
   // Step machine: keep the created Source id so a retry resumes mid-flow.
@@ -533,6 +610,8 @@ function Inner() {
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
+    const catalogError = catalogInputError();
+    if (catalogError) return catalogError;
     const variableError = inputVariableError();
     if (variableError) return variableError;
     return null;
@@ -582,6 +661,7 @@ function Inner() {
   };
   const inputVariableError = (): string | null => {
     const seen = new Set<string>();
+    const catalogNames = selectedCatalogVariableNames();
     for (const row of inputVariables()) {
       const variableName = row.name.trim();
       const value = row.value.trim();
@@ -596,6 +676,9 @@ function Inner() {
       if (supportsProjectNameInput() && variableName === "project_name") {
         return t("new.vars.errorProjectNameReserved");
       }
+      if (catalogNames.has(variableName)) {
+        return t("new.vars.errorCatalogReserved", { name: variableName });
+      }
       if (seen.has(variableName)) {
         return t("new.vars.errorDuplicate", { name: variableName });
       }
@@ -608,6 +691,7 @@ function Inner() {
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
+    Object.assign(variables, selectedCatalogVariables());
     Object.assign(variables, normalizedInputVariables());
     return variables;
   };
@@ -615,6 +699,7 @@ function Inner() {
     | Readonly<Record<string, JsonValue>>
     | undefined => {
     const variables: Record<string, JsonValue> = {
+      ...selectedCatalogVariables(),
       ...normalizedInputVariables(),
     };
     if (supportsProjectNameInput()) {
@@ -935,6 +1020,14 @@ function Inner() {
     setPinnedFullRef(isFullCommitSha(entry.ref) ? entry.ref : null);
     setPath(entry.path);
     setName(entry.suggestedName);
+    setSelectedCatalogId(entry.id);
+    setInstallConfigId(entry.installConfigId);
+    const defaults: Record<string, string> = {};
+    for (const field of entry.inputs) {
+      defaults[catalogInputKey(entry.id, field.name)] =
+        catalogDefaultInputValue(entry, field, spaceId());
+    }
+    setCatalogInputValues(defaults);
     setResourcePrefix("");
     setResourcePrefixTouched(false);
     resetCompatibility();
@@ -954,23 +1047,6 @@ function Inner() {
     compatibility() !== null &&
     compatibilityRunnable() &&
     providerConnectionError() === null;
-  const guideBody = () => {
-    if (checkingCompatibility() || busy()) return t("new.guide.checking");
-    if (compatibility()) {
-      if (!compatibilityRunnable()) return t("new.guide.needsFix");
-      if (needsCloudCredential()) return t("new.guide.connect");
-      return t("new.guide.ready");
-    }
-    if (gitUrl().trim()) return t("new.guide.check");
-    return t("new.guide.choose");
-  };
-  const currentAddStep = (): AddStep => {
-    if (!gitUrl().trim()) return "choose";
-    if (!compatibility() || checkingCompatibility() || busy()) return "check";
-    if (!compatibilityRunnable()) return "check";
-    if (needsCloudCredential()) return "connect";
-    return "review";
-  };
   const usingSelectedService = () =>
     activeTab() !== "git" && Boolean(gitUrl().trim());
   const sourceSummaryTitle = () =>
@@ -1276,6 +1352,7 @@ function Inner() {
           type="text"
           value={gitUrl()}
           onInput={(e) => {
+            clearSelectedCatalog();
             setGitUrl(e.currentTarget.value);
             resetCompatibility();
           }}
@@ -1404,6 +1481,7 @@ function Inner() {
               type="text"
               value={ref()}
               onInput={(e) => {
+                clearSelectedCatalog();
                 setPinnedFullRef(null);
                 setRef(e.currentTarget.value);
                 resetCompatibility();
@@ -1420,6 +1498,7 @@ function Inner() {
               type="text"
               value={path()}
               onInput={(e) => {
+                clearSelectedCatalog();
                 setPath(e.currentTarget.value);
                 resetCompatibility();
               }}
@@ -1454,24 +1533,6 @@ function Inner() {
           />
         }
       >
-        <section class="av-new-guide" aria-label={t("new.guide.aria")}>
-          <div class="av-new-guide-copy">
-            <span class="av-new-guide-kicker">{t("new.guide.kicker")}</span>
-            <h2>{t("new.guide.title")}</h2>
-            <p>{guideBody()}</p>
-          </div>
-          <Show when={gitUrl().trim()}>
-            <div class="av-new-source" role="note">
-              <span class="av-new-source-label">{t("new.flow.source")}</span>
-              <strong>{sourceSummaryTitle()}</strong>
-              <code>{gitUrl().trim()}</code>
-              <span class="av-new-source-meta">{sourceSummaryMeta()}</span>
-            </div>
-          </Show>
-        </section>
-
-        <AddProgress current={currentAddStep()} />
-
         <Show when={installPrefillRejected}>
           <div class="wb-action-callout" role="alert">
             <strong>{t("new.deeplink.invalidTitle")}</strong>
@@ -1500,17 +1561,20 @@ function Inner() {
                 {(entry) => (
                   <li class="av-catalog-card">
                     <div class="av-catalog-icon" aria-hidden="true">
-                      <Download size={20} />
+                      <CatalogIcon entry={entry} />
                     </div>
                     <div class="av-catalog-text">
-                      <span class="av-catalog-src">
-                        {t("new.catalog.readyStarter")}
-                      </span>
+                      <span class="av-catalog-src">{entry.badge[locale()]}</span>
                       <span class="av-catalog-name">
                         {entry.name[locale()]}
                       </span>
                       <span class="av-catalog-desc">
                         {entry.description[locale()]}
+                      </span>
+                      <span class="av-catalog-provider">
+                        {t("new.catalog.provider", {
+                          provider: providerDisplayName(entry.provider),
+                        })}
                       </span>
                     </div>
                     <Button
@@ -1533,12 +1597,14 @@ function Inner() {
             <CardHeader
               title={
                 usingSelectedService()
-                  ? t("new.selection.title")
+                  ? (selectedCatalogEntry()?.name[locale()] ??
+                    sourceSummaryTitle())
                   : t("new.advancedImport.title")
               }
               subtitle={
                 usingSelectedService()
-                  ? t("new.selection.subtitle")
+                  ? (selectedCatalogEntry()?.description[locale()] ??
+                    t("new.selection.subtitle"))
                   : t("new.advancedImport.subtitle")
               }
               actions={
@@ -1564,20 +1630,6 @@ function Inner() {
                   })}
                 </p>
               </Show>
-              <Show when={!compatibility()}>
-                <p class="wb-note" role="note">
-                  {t("new.managed.notice")}
-                </p>
-              </Show>
-              <details class="wb-disclosure">
-                <summary>{t("new.managed.byoTitle")}</summary>
-                <p class="wb-note">
-                  {t("new.managed.byoBody")}{" "}
-                  <A href={providerConnectionsHref()} class="link">
-                    {t("new.managed.byoLink")}
-                  </A>
-                </p>
-              </details>
 
               <form
                 class="wb-install-form wb-install-source-form"
@@ -1589,44 +1641,69 @@ function Inner() {
                 }}
               >
                 <Show when={usingSelectedService()} fallback={gitFields()}>
-                  <div class="av-selected-service">
-                    <span class="av-selected-service-icon" aria-hidden="true">
-                      <Download size={20} />
-                    </span>
-                    <div class="av-selected-service-text">
-                      <strong>{sourceSummaryTitle()}</strong>
-                      <span>{sourceSummaryMeta()}</span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      onClick={() => setActiveTab("git")}
-                    >
-                      {t("new.selection.change")}
-                    </Button>
-                  </div>
                   <details class="wb-disclosure wb-source-advanced">
                     <summary>{t("new.selection.sourceDetails")}</summary>
+                    <p class="wb-note">{sourceSummaryMeta()}</p>
                     {gitFields()}
                   </details>
                 </Show>
 
-                <FormField label={t("new.name")}>
-                  <Input
-                    id="new-capsule-name"
-                    name="name"
-                    type="text"
-                    value={name()}
-                    onInput={(e) => {
-                      setName(e.currentTarget.value);
-                      resetCompatibility();
-                    }}
-                    placeholder="my-app"
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </FormField>
+                <Show when={selectedCatalogEntry()}>
+                  {(entry) => (
+                    <section class="av-service-setup">
+                      <div class="av-service-setup-head">
+                        <h3>{t("new.catalogInput.title")}</h3>
+                        <p>{t("new.catalogInput.body")}</p>
+                      </div>
+                      <div class="av-service-setup-grid">
+                        <For each={entry().inputs}>
+                          {(field) => (
+                            <FormField
+                              label={field.label[locale()]}
+                              hint={field.helper?.[locale()]}
+                              required={field.required}
+                            >
+                              <Input
+                                id={`catalog-input-${entry().id}-${field.name}`}
+                                name={`catalogInput:${field.name}`}
+                                type="text"
+                                value={catalogInputValue(entry(), field)}
+                                onInput={(e) =>
+                                  updateCatalogInputValue(
+                                    entry(),
+                                    field,
+                                    e.currentTarget.value,
+                                  )
+                                }
+                                placeholder={field.placeholder ?? ""}
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                          )}
+                        </For>
+                      </div>
+                    </section>
+                  )}
+                </Show>
+
+                <Show when={!selectedCatalogEntry()}>
+                  <FormField label={t("new.name")}>
+                    <Input
+                      id="new-capsule-name"
+                      name="name"
+                      type="text"
+                      value={name()}
+                      onInput={(e) => {
+                        setName(e.currentTarget.value);
+                        resetCompatibility();
+                      }}
+                      placeholder="my-app"
+                      autocomplete="off"
+                      spellcheck={false}
+                    />
+                  </FormField>
+                </Show>
 
                 <Show when={supportsProjectNameInput()}>
                   <FormField label={t("new.vars.projectName")}>
@@ -1653,6 +1730,23 @@ function Inner() {
                 >
                   <summary>{t("new.vars.inputsTitle")}</summary>
                   <p class="wb-note">{t("new.vars.inputsBody")}</p>
+                  <Show when={selectedCatalogEntry()}>
+                    <FormField label={t("new.name")}>
+                      <Input
+                        id="new-capsule-name"
+                        name="name"
+                        type="text"
+                        value={name()}
+                        onInput={(e) => {
+                          setName(e.currentTarget.value);
+                          resetCompatibility();
+                        }}
+                        placeholder="my-app"
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                    </FormField>
+                  </Show>
                   <div class="wb-variable-list">
                     <For each={inputVariables()}>
                       {(row, index) => (
@@ -1802,143 +1896,127 @@ function Inner() {
                   )}
                 </Show>
 
-                <Show when={compatibility()}>
+                <Show when={compatibility() && providerRows().length > 0}>
                   <section class="wb-inline-panel">
                     <div class="wb-compat-head">
                       <h3 class="tg-card-title">{t("new.providers.title")}</h3>
                     </div>
                     <p class="wb-note">{t("new.providers.subtitle")}</p>
-                    <Show
-                      when={providerRows().length > 0}
-                      fallback={
-                        <p class="wb-note">{t("new.providers.noneRequired")}</p>
-                      }
-                    >
-                      <div class="wb-provider-grid">
-                        <For each={providerRows()}>
-                          {(row, index) => {
-                            const options = () =>
-                              providerConnectionsForProvider(
-                                row.provider,
-                                row.ownershipOptions,
-                              );
-                            return (
-                              <div class="wb-provider-row">
-                                <div class="wb-provider-meta">
-                                  <span class="wb-provider-title">
-                                    {providerLabel(row.provider)}
-                                  </span>
-                                  <Show when={row.alias}>
-                                    <span class="muted">
-                                      {t("new.providers.alias", {
-                                        alias: row.alias,
-                                      })}
-                                    </span>
-                                  </Show>
-                                  <details class="wb-inline-details">
-                                    <summary>
-                                      {t("new.providers.advanced")}
-                                    </summary>
-                                    <p>
-                                      <code>{row.provider}</code>
-                                      <Show when={row.alias}>
-                                        {(alias) => (
-                                          <>
-                                            {" "}
-                                            /{" "}
-                                            {t("new.providers.alias", {
-                                              alias: alias(),
-                                            })}
-                                          </>
-                                        )}
-                                      </Show>
-                                    </p>
-                                  </details>
-                                </div>
-                                <Select
-                                  id={`provider-connection-${index()}`}
-                                  name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
-                                  aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
-                                  value={row.connectionId}
-                                  onChange={(e) =>
-                                    updateProviderRow(index(), {
-                                      connectionId: e.currentTarget.value,
-                                    })
-                                  }
-                                >
-                                  <option value="" selected={!row.connectionId}>
-                                    {t("new.providers.selectConnection")}
-                                  </option>
-                                  <For each={options()}>
-                                    {(connection) => (
-                                      <option
-                                        value={connection.id}
-                                        selected={
-                                          connection.id === row.connectionId
-                                        }
-                                      >
-                                        {providerConnectionLabel(connection)}
-                                      </option>
-                                    )}
-                                  </For>
-                                </Select>
-                              </div>
+                    <div class="wb-provider-grid">
+                      <For each={providerRows()}>
+                        {(row, index) => {
+                          const options = () =>
+                            providerConnectionsForProvider(
+                              row.provider,
+                              row.ownershipOptions,
                             );
-                          }}
-                        </For>
-                      </div>
-                      <Show when={providerConnectionError()}>
-                        {(m) => (
-                          <p class="wb-error" role="alert">
-                            {m()}
-                          </p>
-                        )}
-                      </Show>
-                      <Show when={missingProviderRows().length > 0}>
-                        <div class="wb-action-callout" role="note">
-                          <Show
-                            when={
-                              missingOperatorManagedProviderRows().length > 0
-                            }
+                          return (
+                            <div class="wb-provider-row">
+                              <div class="wb-provider-meta">
+                                <span class="wb-provider-title">
+                                  {providerLabel(row.provider)}
+                                </span>
+                                <Show when={row.alias}>
+                                  <span class="muted">
+                                    {t("new.providers.alias", {
+                                      alias: row.alias,
+                                    })}
+                                  </span>
+                                </Show>
+                                <details class="wb-inline-details">
+                                  <summary>
+                                    {t("new.providers.advanced")}
+                                  </summary>
+                                  <p>
+                                    <code>{row.provider}</code>
+                                    <Show when={row.alias}>
+                                      {(alias) => (
+                                        <>
+                                          {" "}
+                                          /{" "}
+                                          {t("new.providers.alias", {
+                                            alias: alias(),
+                                          })}
+                                        </>
+                                      )}
+                                    </Show>
+                                  </p>
+                                </details>
+                              </div>
+                              <Select
+                                id={`provider-connection-${index()}`}
+                                name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
+                                aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
+                                value={row.connectionId}
+                                onChange={(e) =>
+                                  updateProviderRow(index(), {
+                                    connectionId: e.currentTarget.value,
+                                  })
+                                }
+                              >
+                                <option value="" selected={!row.connectionId}>
+                                  {t("new.providers.selectConnection")}
+                                </option>
+                                <For each={options()}>
+                                  {(connection) => (
+                                    <option
+                                      value={connection.id}
+                                      selected={
+                                        connection.id === row.connectionId
+                                      }
+                                    >
+                                      {providerConnectionLabel(connection)}
+                                    </option>
+                                  )}
+                                </For>
+                              </Select>
+                            </div>
+                          );
+                        }}
+                      </For>
+                    </div>
+                    <Show when={providerConnectionError()}>
+                      {(m) => (
+                        <p class="wb-error" role="alert">
+                          {m()}
+                        </p>
+                      )}
+                    </Show>
+                    <Show when={missingProviderRows().length > 0}>
+                      <div class="wb-action-callout" role="note">
+                        <Show
+                          when={
+                            missingOperatorManagedProviderRows().length > 0
+                          }
+                        >
+                          <strong>
+                            {t("new.providers.operatorMissingTitle")}
+                          </strong>
+                          <p>{t("new.providers.operatorMissingBody")}</p>
+                          <p>{t("new.providers.operatorMissingNext")}</p>
+                          <ul>
+                            <For each={missingOperatorManagedProviderRows()}>
+                              {(row) => <li>{providerLabel(row.provider)}</li>}
+                            </For>
+                          </ul>
+                        </Show>
+                        <Show when={missingOwnKeyProviderRows().length > 0}>
+                          <strong>{t("new.providers.missingTitle")}</strong>
+                          <p>{t("new.providers.missingBody")}</p>
+                          <ul>
+                            <For each={missingOwnKeyProviderRows()}>
+                              {(row) => <li>{providerLabel(row.provider)}</li>}
+                            </For>
+                          </ul>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            href={providerConnectionsHref()}
                           >
-                            <strong>
-                              {t("new.providers.operatorMissingTitle")}
-                            </strong>
-                            <p>{t("new.providers.operatorMissingBody")}</p>
-                            <p>{t("new.providers.operatorMissingNext")}</p>
-                            <ul>
-                              <For each={missingOperatorManagedProviderRows()}>
-                                {(row) => (
-                                  <li>{providerLabel(row.provider)}</li>
-                                )}
-                              </For>
-                            </ul>
-                          </Show>
-                          <Show when={missingOwnKeyProviderRows().length > 0}>
-                            <strong>{t("new.providers.missingTitle")}</strong>
-                            <p>{t("new.providers.missingBody")}</p>
-                            <ul>
-                              <For each={missingOwnKeyProviderRows()}>
-                                {(row) => (
-                                  <li>{providerLabel(row.provider)}</li>
-                                )}
-                              </For>
-                            </ul>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              href={providerConnectionsHref()}
-                            >
-                              {t("new.providers.setupMissing")}
-                            </Button>
-                          </Show>
-                        </div>
-                      </Show>
-                      <p class="wb-note">
-                        <A href={providerConnectionsHref()} class="link">
-                          {t("new.providers.manageConnections")}
-                        </A>
-                      </p>
+                            {t("new.providers.setupMissing")}
+                          </Button>
+                        </Show>
+                      </div>
                     </Show>
                   </section>
                 </Show>

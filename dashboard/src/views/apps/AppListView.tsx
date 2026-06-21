@@ -11,7 +11,6 @@ import {
   Boxes,
   ExternalLink,
   LayoutGrid,
-  Link2,
   Plus,
   Sparkles,
 } from "lucide-solid";
@@ -124,6 +123,10 @@ function Inner() {
         (inst) => effectiveInstallationStatus(inst) === "active",
       ).length,
   );
+  const showAddServiceAction = createMemo(() => {
+    const list = installations();
+    return Boolean(list && list.length > 0);
+  });
 
   const openDetail = (inst: Installation) =>
     navigate(`/capsules/${encodeURIComponent(inst.id)}`);
@@ -134,11 +137,13 @@ function Inner() {
         title={t("apps.title")}
         subtitle={t("apps.subtitle")}
         actions={
-          <div class="av-actions">
-            <Button variant="primary" href="/new" icon={<Plus size={16} />}>
-              {t("apps.add")}
-            </Button>
-          </div>
+          showAddServiceAction() ? (
+            <div class="av-actions">
+              <Button variant="primary" href="/new" icon={<Plus size={16} />}>
+                {t("apps.add")}
+              </Button>
+            </div>
+          ) : undefined
         }
       />
 
@@ -348,6 +353,7 @@ function WorkspaceStartPanel() {
       <div class="av-start-copy">
         <span class="av-start-kicker">{t("apps.start.kicker")}</span>
         <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
+        <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
       </div>
       <div class="av-start-choices">
         <a href="/new" class="av-start-choice">
@@ -359,20 +365,6 @@ function WorkspaceStartPanel() {
             <small>{t("apps.start.optionCatalogSub")}</small>
           </span>
         </a>
-        <a href="/new?mode=link" class="av-start-choice">
-          <span class="av-start-choice-icon" aria-hidden="true">
-            <Link2 size={20} />
-          </span>
-          <span>
-            <strong>{t("apps.start.optionLink")}</strong>
-            <small>{t("apps.start.optionLinkSub")}</small>
-          </span>
-        </a>
-      </div>
-      <div class="av-start-actions">
-        <Button variant="primary" href="/new" icon={<Plus size={16} />}>
-          {t("apps.start.add")}
-        </Button>
       </div>
     </section>
   );

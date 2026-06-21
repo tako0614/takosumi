@@ -20,9 +20,10 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
     expect(appListSource).toContain("when={list().length === 0}");
     expect(appListSource).toContain('href="/new"');
-    expect(appListSource).toContain('href="/new?mode=link"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
-    expect(appListSource).toContain('t("apps.start.optionLink")');
+    expect(appListSource).not.toContain('href="/new?mode=link"');
+    expect(appListSource).not.toContain('t("apps.start.optionLink")');
+    expect(appListSource).not.toContain('t("apps.start.add")');
     expect(appListSource).not.toContain('href="/connections"');
     expect(appListSource).not.toContain('t("apps.start.stepSource")');
     expect(appListSource).not.toContain('t("apps.start.stepConnection")');
@@ -44,16 +45,16 @@ describe("AppListView Workspace starter", () => {
   });
 
   test("keeps starter copy action-oriented and non-procedural in both locales", () => {
-    expect(en["apps.start.add"]).toBe("Add service");
+    expect(en).not.toHaveProperty("apps.start.add");
     expect(en).not.toHaveProperty("apps.start.stepSource");
-    expect(ja["apps.start.add"]).toContain("サービス");
+    expect(ja).not.toHaveProperty("apps.start.add");
     expect(ja).not.toHaveProperty("apps.start.stepSource");
     expect(en["apps.summary.clear"]).toContain("No attention");
     expect(ja["apps.summary.clear"]).toContain("要対応なし");
     expect(en["apps.subtitle"]).not.toContain("manage");
     expect(ja["apps.subtitle"]).not.toContain("管理");
-    expect(en["apps.start.optionLink"]).toContain("link");
-    expect(ja["apps.start.optionLink"]).toContain("リンク");
+    expect(en).not.toHaveProperty("apps.start.optionLink");
+    expect(ja).not.toHaveProperty("apps.start.optionLink");
   });
 
   test("keeps the starter responsive on mobile", () => {
@@ -63,8 +64,8 @@ describe("AppListView Workspace starter", () => {
     expect(appViewsCssSource).toContain(".av-service-card");
     expect(appViewsCssSource).toContain(".av-service-actions .tg-btn");
     expect(appViewsCssSource).toContain("grid-template-columns: 1fr;");
-    expect(appViewsCssSource).toContain(".av-start-actions .tg-btn");
-    expect(appViewsCssSource).toContain("flex: 1 1 100%;");
+    expect(appViewsCssSource).not.toContain(".av-start-actions");
+    expect(appViewsCssSource).toContain("flex: 1 1 auto;");
     expect(appViewsCssSource).toContain("flex-direction: column;");
   });
 

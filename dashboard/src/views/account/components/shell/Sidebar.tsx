@@ -7,7 +7,6 @@ import { A, useLocation } from "@solidjs/router";
 import {
   Activity,
   ArrowLeft,
-  Bell,
   CreditCard,
   Home,
   Plug,
@@ -41,7 +40,6 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
-  { href: "/notifications", labelKey: "nav.notifications", icon: Bell },
 ];
 
 const ACCOUNT: NavItem[] = [
