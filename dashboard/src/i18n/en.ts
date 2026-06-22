@@ -199,6 +199,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.source.refPath": "Version / folder",
   "app.source.status": "Fetch status",
   "app.source.loading": "Loading source info.",
+  "app.source.supportBody":
+    "Source and technical details for support. Usually no change is needed.",
   "app.info.title": "Support details",
   "app.info.id": "ID",
   "app.info.generation": "Restore point",
@@ -232,8 +234,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.bindings.none": "No cloud account is linked.",
   "app.bindings.editAdvanced": "Change cloud account mapping",
   "app.bindings.add": "Add cloud account",
+  "app.bindings.providerPlaceholder": "Cloud service",
   "app.bindings.aliasPlaceholder": "Target name (optional)",
   "app.bindings.selectConnection": "Select a cloud account",
+  "app.bindings.technicalTarget": "Technical target",
   "app.bindings.remove": "Remove",
   "app.bindings.errorProvider": "Enter the cloud service for row {index}.",
   "app.bindings.errorConnection":
@@ -243,6 +247,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Deletion is available from a separate review screen so you can inspect what will be removed first.",
   "app.settings.removeCta": "Open delete options",
   "app.settings.openCta": "Manage service options",
+  "app.settings.supportDetails": "Support info",
   "app.danger.destroyTitle": "Delete this service",
   "app.danger.destroyBody":
     "Deletion first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
@@ -323,6 +328,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.started": "Started",
   "run.details.finished": "Finished",
   "run.details.error": "Error",
+  "run.details.debug": "Identifiers",
   "run.inputs.title": "Values from connected services",
   "run.inputs.empty": "No values were received from connected services.",
   "run.connections.title": "Cloud accounts",
@@ -342,6 +348,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This did not finish. Open details only when you need troubleshooting information.",
   "run.audit.title": "Activity record",
   "run.audit.empty": "No activity records.",
+  "run.audit.detail": "Record detail",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
@@ -768,6 +775,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.session.id": "Browser session ID",
   "account.session.userAgent": "Browser",
   "account.session.details": "Support info",
+  "account.session.debug": "Session identifiers",
   "account.session.signOut": "Sign out of this browser",
   "account.session.signOutConfirm": "Sign out of this browser?",
   "account.session.otherNote":

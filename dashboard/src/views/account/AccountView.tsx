@@ -119,40 +119,45 @@ function Inner(props: { readonly session: SessionRecord }) {
             <details class="wb-disclosure wc-advanced-settings">
               <summary>{t("account.session.details")}</summary>
               <p class="muted">{t("account.session.otherNote")}</p>
-              <KVList
-                items={[
-                  {
-                    label: t("account.profile.provider"),
-                    value: props.session.provider ?? "—",
-                  },
-                  {
-                    label: t("account.profile.subject"),
-                    value: <code class="wc-code">{props.session.subject}</code>,
-                  },
-                  {
-                    label: t("account.session.id"),
-                    value: (
-                      <code class="wc-code">{props.session.sessionId}</code>
-                    ),
-                  },
-                  {
-                    label: t("account.profile.expires"),
-                    value: formatDateTime(
-                      new Date(props.session.expiresAt).toISOString(),
-                    ),
-                  },
-                  {
-                    label: t("account.session.userAgent"),
-                    value: (
-                      <span class="muted">
-                        {typeof navigator !== "undefined"
-                          ? navigator.userAgent
-                          : "—"}
-                      </span>
-                    ),
-                  },
-                ]}
-              />
+              <details class="wb-inline-details">
+                <summary>{t("account.session.debug")}</summary>
+                <KVList
+                  items={[
+                    {
+                      label: t("account.profile.provider"),
+                      value: props.session.provider ?? "—",
+                    },
+                    {
+                      label: t("account.profile.subject"),
+                      value: (
+                        <code class="wc-code">{props.session.subject}</code>
+                      ),
+                    },
+                    {
+                      label: t("account.session.id"),
+                      value: (
+                        <code class="wc-code">{props.session.sessionId}</code>
+                      ),
+                    },
+                    {
+                      label: t("account.profile.expires"),
+                      value: formatDateTime(
+                        new Date(props.session.expiresAt).toISOString(),
+                      ),
+                    },
+                    {
+                      label: t("account.session.userAgent"),
+                      value: (
+                        <span class="muted">
+                          {typeof navigator !== "undefined"
+                            ? navigator.userAgent
+                            : "—"}
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </details>
             </details>
           </CardSection>
         </Card>
