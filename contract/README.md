@@ -29,8 +29,8 @@ The target public contract is centered on the final Takosumi model:
 Current DTOs and routes may still expose legacy names from the previous
 architecture. Treat `Space`, `Installation`, `InstallConfig`, `Dependency`,
 `DependencySnapshot`, `RunGroup`, `StateSnapshot`, `OutputSnapshot`,
-`Deployment`, `Activity`, Provider Catalog, Gateway, `own_key`, and
-`takos_provided` as migration debt or implementation compatibility only unless
+`Deployment`, `Activity`, Provider Catalog, Gateway, and provider ownership
+flags as migration debt or implementation compatibility only unless
 a change deliberately maps them to the final model. In particular:
 
 - `Space` maps to the Workspace owner boundary.

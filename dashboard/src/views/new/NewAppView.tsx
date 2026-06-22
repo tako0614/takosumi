@@ -963,10 +963,6 @@ function Inner() {
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerConnectionsForProvider(row.provider, row.ownershipOptions)
       .length === 0;
-  const rowAllowsOwnKey = (row: ProviderConnectionRow) =>
-    row.ownershipOptions.includes("own_key");
-  const rowRequiresOperatorManagedOnly = (row: ProviderConnectionRow) =>
-    row.ownershipOptions.includes("takos_provided") && !rowAllowsOwnKey(row);
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
   const missingProviderRows = () =>
@@ -981,10 +977,6 @@ function Inner() {
   };
   const providerRowsRequiringChoice = () =>
     providerRows().filter(providerRowNeedsVisibleChoice);
-  const missingOwnKeyProviderRows = () =>
-    missingProviderRows().filter(rowAllowsOwnKey);
-  const missingOperatorManagedProviderRows = () =>
-    missingProviderRows().filter(rowRequiresOperatorManagedOnly);
 
   const defaultConnectionForProvider = (
     provider: string,
@@ -1093,11 +1085,6 @@ function Inner() {
         row.ownershipOptions,
       );
       if (!row.connectionId.trim()) {
-        if (rowRequiresOperatorManagedOnly(row)) {
-          return t("new.providers.errorOperatorManaged", {
-            provider: providerLabel(row.provider),
-          });
-        }
         return t("new.providers.errorConnection", {
           provider: row.provider,
         });
@@ -2163,36 +2150,20 @@ function Inner() {
                     </Show>
                     <Show when={missingProviderRows().length > 0}>
                       <div class="wb-action-callout" role="note">
-                        <Show
-                          when={missingOperatorManagedProviderRows().length > 0}
+                        <strong>{t("new.providers.missingTitle")}</strong>
+                        <p>{t("new.providers.missingBody")}</p>
+                        <ul>
+                          <For each={missingProviderRows()}>
+                            {(row) => <li>{providerLabel(row.provider)}</li>}
+                          </For>
+                        </ul>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          href={providerConnectionsHref()}
                         >
-                          <strong>
-                            {t("new.providers.operatorMissingTitle")}
-                          </strong>
-                          <p>{t("new.providers.operatorMissingBody")}</p>
-                          <p>{t("new.providers.operatorMissingNext")}</p>
-                          <ul>
-                            <For each={missingOperatorManagedProviderRows()}>
-                              {(row) => <li>{providerLabel(row.provider)}</li>}
-                            </For>
-                          </ul>
-                        </Show>
-                        <Show when={missingOwnKeyProviderRows().length > 0}>
-                          <strong>{t("new.providers.missingTitle")}</strong>
-                          <p>{t("new.providers.missingBody")}</p>
-                          <ul>
-                            <For each={missingOwnKeyProviderRows()}>
-                              {(row) => <li>{providerLabel(row.provider)}</li>}
-                            </For>
-                          </ul>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            href={providerConnectionsHref()}
-                          >
-                            {t("new.providers.setupMissing")}
-                          </Button>
-                        </Show>
+                          {t("new.providers.setupMissing")}
+                        </Button>
                       </div>
                     </Show>
                   </section>

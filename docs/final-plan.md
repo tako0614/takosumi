@@ -307,7 +307,8 @@ Operator
 ```
 
 Existing code and older docs may still use terms such as Space, Installation,
-Provider Catalog, Gateway, or takos_provided for the previous architecture.
+Provider Catalog, Gateway, or provider ownership flags from the previous
+architecture.
 Those names are migration debt unless they are deliberately mapped to the final
 model.
 

@@ -312,11 +312,9 @@ async function providerConnectionOwnership(
   operations: ControlPlaneOperations,
   providerEnv: ProviderEnv,
 ): Promise<ProviderConnection["ownership"]> {
-  if (!providerEnv.secretRef) return "own_key";
-  const connection = await operations
-    .getConnection(providerEnv.secretRef)
-    .catch(() => undefined);
-  return connection?.scope === "operator" ? "takos_provided" : "own_key";
+  void operations;
+  void providerEnv;
+  return "own_key";
 }
 
 async function publicCompatibilityReportResponse(

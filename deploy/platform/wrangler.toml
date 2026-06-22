@@ -143,11 +143,6 @@ TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
 # Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
 TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
-# Cloud-only hosted-provider-connection switch. Keep disabled/absent for OSS
-# operator deployments unless the operator intentionally offers
-# operator-scoped ProviderConnections as `takos_provided` to Spaces.
-# Takosumi Cloud realized config sets this to "enabled".
-# TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS = "enabled"
 # Cloud-only AI Gateway extension. OSS Takosumi carries the fail-closed route
 # seam for the shared platform worker, but this is not an OSS public feature.
 # Realized Takosumi Cloud/operator config must provide profiles and referenced

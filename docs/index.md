@@ -96,7 +96,7 @@ Final Plan で固定する public model は以下です。
 | Runner | checkout / tofu execution / log streaming / state sync / cleanup を行う実行主体 |
 | AuditEvent | actor / action / target / result を記録する監査イベント |
 
-既存の Space / Installation / Gateway / `takos_provided` などの語彙は旧設計由来です。今後の実装整理では、必要なものだけ
+既存の Space / Installation / Gateway / provider ownership flags などの語彙は旧設計由来です。今後の実装整理では、必要なものだけ
 Final Plan の Workspace / Project / Capsule / ProviderConnection / ProviderBinding / CredentialRecipe に写像し、不要なものは削除します。
 
 ## First MVP
