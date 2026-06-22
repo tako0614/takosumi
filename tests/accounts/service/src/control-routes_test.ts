@@ -864,7 +864,7 @@ function fakeOperations(
             displayName: "Cloudflare",
             recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
             helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-            ownershipOptions: ["takos_provided", "own_key"],
+            ownershipOptions: ["own_key"],
             allowedResources: ["cloudflare_workers_script"],
             allowedDataSources: [],
             policyPackId: "policy_cloudflare",
@@ -2108,7 +2108,7 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
   ]);
   expect(body.providerConnections.map((item) => item.ownership)).toEqual([
     "own_key",
-    "takos_provided",
+    "own_key",
   ]);
   expect(String(body.providerConnections[0]?.id).startsWith("pcn_")).toEqual(
     true,
@@ -2615,7 +2615,7 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   expect(resolution?.evidence?.connectionId).toEqual(resolution?.connectionId);
 });
 
-test("GET /api/v1/runs/:id projects operator-backed provider resolutions as takos_provided", async () => {
+test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership vocabulary", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -2697,11 +2697,9 @@ test("GET /api/v1/runs/:id projects operator-backed provider resolutions as tako
       }[];
     };
   };
-  expect(body.run.providerResolutions?.[0]?.ownership).toEqual(
-    "takos_provided",
-  );
+  expect(body.run.providerResolutions?.[0]?.ownership).toEqual("own_key");
   expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual(
-    "takos_provided",
+    "own_key",
   );
 });
 

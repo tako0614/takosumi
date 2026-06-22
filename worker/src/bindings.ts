@@ -45,12 +45,6 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS?: string;
   /**
-   * Cloud-only hosted-provider-connection switch. When set to `enabled`, the
-   * platform composition may expose Space-scoped ProviderConnections backed by
-   * operator-scoped Connections (`takos_provided`).
-   */
-  readonly TAKOSUMI_CLOUD_OPERATOR_PROVIDER_CONNECTIONS?: string;
-  /**
    * Optional operator/Cloud release activation webhook. The URL may be a plain
    * Worker var; the token must be configured as a secret binding. This generic
    * bridge does not implement provider-specific publication in the OSS worker.
