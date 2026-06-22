@@ -178,7 +178,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   const usageColumns: readonly Column<UsageEvent>[] = [
     {
       header: t("billing.usage.kind"),
-      cell: (e) => <code class="wc-code">{e.kind}</code>,
+      cell: (e) => usageKindLabel(e.kind),
     },
     {
       header: t("billing.usage.quantity"),
@@ -394,6 +394,27 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return t("billing.error.unknown");
+}
+
+function usageKindLabel(kind: string): string {
+  switch (kind) {
+    case "runner_minute":
+      return t("billing.usage.kind.runnerMinute");
+    case "operation":
+      return t("billing.usage.kind.operation");
+    case "gateway_compute":
+      return t("billing.usage.kind.compute");
+    case "gateway_storage_gb_hour":
+      return t("billing.usage.kind.storage");
+    default:
+      return kind
+        .replace(/[._-]+/g, " ")
+        .split(" ")
+        .map((word) => word.trim())
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ");
+  }
 }
 
 function formatBillingNumber(value: number): string {

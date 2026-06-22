@@ -62,7 +62,7 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 
-/** Sentinel `<select>` value for the generic own-key provider path. */
+/** Sentinel `<select>` value for the custom provider credential path. */
 const GENERIC_ENV_PROVIDER_OPTION = "__generic_env_provider__";
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
 
@@ -273,7 +273,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     await afterConnectionCreated(connection);
   });
 
-  // Generic own-key Provider Connection submit.
+  // Custom Provider Connection submit.
   const createGenericEnvProvider = createAction(async () => {
     const name = genericEnvProvider().trim();
     if (!name) throw new Error(t("conn.genericEnv.providerRequired"));

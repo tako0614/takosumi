@@ -41,8 +41,8 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("rows={providerRowsNeedingAttention()}");
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
-    expect(en["run.details.title"]).toBe("Support details");
-    expect(ja["run.details.title"]).toBe("サポート詳細");
+    expect(en["run.details.title"]).toBe("Reference info");
+    expect(ja["run.details.title"]).toBe("参照情報");
     expect(en["run.connections.reviewTitle"]).toBe(
       "Cloud account review needed",
     );
@@ -72,12 +72,12 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource.indexOf("<PlanResourceReview")).toBeGreaterThan(
       runViewSource.indexOf('summary>{t("run.details.title")}</summary>'),
     );
-    expect(en["run.resources.title"]).toBe("Technical change details");
-    expect(ja["run.resources.title"]).toBe("技術的な変更詳細");
-    expect(en["run.resources.kicker"]).toBe("Support details");
-    expect(ja["run.resources.kicker"]).toBe("サポート詳細");
-    expect(en["run.resources.identifiers"]).toBe("Support identifiers");
-    expect(ja["run.resources.identifiers"]).toBe("サポート用の識別情報");
+    expect(en["run.resources.title"]).toBe("Planned changes");
+    expect(ja["run.resources.title"]).toBe("変更予定");
+    expect(en["run.resources.kicker"]).toBe("Review");
+    expect(ja["run.resources.kicker"]).toBe("確認");
+    expect(en["run.resources.identifiers"]).toBe("Reference IDs");
+    expect(ja["run.resources.identifiers"]).toBe("参照 ID");
     expect(runViewSource).not.toContain("change.before");
     expect(runViewSource).not.toContain("change.after");
   });

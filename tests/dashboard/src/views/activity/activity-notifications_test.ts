@@ -37,10 +37,10 @@ describe("History and notifications", () => {
     expect(activitySource).toContain('<span class="muted">action</span>');
     expect(activitySource).toContain('<span class="muted">target</span>');
     expect(activitySource).toContain('t("activity.recorded")');
-    expect(en["activity.details"]).toBe("Support details");
-    expect(ja["activity.details"]).toBe("サポート詳細");
-    expect(en["activity.debug"]).toBe("Debug identifiers");
-    expect(ja["activity.debug"]).toBe("デバッグ用の識別情報");
+    expect(en["activity.details"]).toBe("Reference info");
+    expect(ja["activity.details"]).toBe("参照情報");
+    expect(en["activity.debug"]).toBe("Reference ID");
+    expect(ja["activity.debug"]).toBe("参照 ID");
     expect(en["activity.recorded"]).toBe("Recorded activity");
     expect(ja["activity.recorded"]).toBe("記録された操作");
   });
@@ -53,8 +53,8 @@ describe("History and notifications", () => {
     expect(notificationsSource).toMatch(
       /<details class="wb-disclosure wc-notif-support">[\s\S]*href="\/activity"/,
     );
-    expect(en["notif.supportSummary"]).toBe("Support details");
-    expect(ja["notif.supportSummary"]).toBe("サポート詳細");
+    expect(en["notif.supportSummary"]).toBe("Reference info");
+    expect(ja["notif.supportSummary"]).toBe("参照情報");
     expect(en["notif.viewRaw"]).toBe("Open history →");
     expect(ja["notif.viewRaw"]).toBe("履歴を開く →");
     expect(en["notif.viewRaw"].toLowerCase()).not.toContain("raw");

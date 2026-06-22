@@ -15,12 +15,12 @@ describe("dashboard catalog", () => {
     expect(CATALOG.map((entry) => entry.id)).not.toContain("takos");
   });
 
-  test("the first Worker starter is browser-openable after apply", () => {
+  test("the first web app starter is browser-openable after apply", () => {
     const hello = CATALOG.find(
       (entry) => entry.id === "cloudflare-hello-worker",
     );
     expect(hello).toBeDefined();
-    expect(hello?.description.en.toLowerCase()).toContain("workers.dev");
+    expect(hello?.description.en.toLowerCase()).toContain("public url");
     expect(
       hello?.inputs.map((field) => [field.name, field.required]),
     ).toContainEqual(["workersSubdomain", true]);

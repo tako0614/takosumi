@@ -33,10 +33,10 @@ describe("AccountView", () => {
     expect(source.indexOf('label: t("account.session.id")')).toBeGreaterThan(
       source.indexOf('t("account.session.debug")'),
     );
-    expect(en["account.session.details"]).toBe("Support info");
-    expect(ja["account.session.details"]).toBe("サポート情報");
-    expect(en["account.session.debug"]).toBe("Session identifiers");
-    expect(ja["account.session.debug"]).toBe("セッション識別情報");
+    expect(en["account.session.details"]).toBe("Session details");
+    expect(ja["account.session.details"]).toBe("セッション詳細");
+    expect(en["account.session.debug"]).toBe("Reference ID");
+    expect(ja["account.session.debug"]).toBe("参照 ID");
     expect(en).not.toHaveProperty("account.manage.title");
     expect(ja).not.toHaveProperty("account.manage.title");
     expect(en["account.session.otherNote"]).not.toContain("coming soon");

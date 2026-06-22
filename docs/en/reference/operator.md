@@ -17,7 +17,7 @@ backends.
 - operate a release activator materializer when enabled, and record app
   publication separately from the apply ledger
 - keep provider credentials, control-plane tokens, and state backend credentials out of user workloads
-- operate dashboard, API, audit, quota, and billing-placeholder surfaces
+- operate dashboard, API, audit, quota, and usage showback surfaces
 - keep evidence for tenant isolation, workspace isolation, runner isolation, and network egress policy
 
 ## OSS Boundary
@@ -57,18 +57,18 @@ closed Cloud repo.
 
 OSS Operator GA readiness:
 
-| Area | Required evidence |
-| --- | --- |
-| Website/docs | docs build, custom domain/TLS if hosted publicly |
-| Runner | non-production OpenTofu plan/apply/destroy proof |
+| Area               | Required evidence                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Website/docs       | docs build, custom domain/TLS if hosted publicly                                                                             |
+| Runner             | non-production OpenTofu plan/apply/destroy proof                                                                             |
 | Release activation | webhook/materializer proof, activation failure surfacing, rollback-independent ledger evidence if app publication is enabled |
-| Accounts/auth | dashboard, session/OIDC as configured, audit trail |
-| State | state backend, lock evidence, backup/restore drill |
-| Secrets | encrypted storage, rotation process, redaction proof |
-| Provider catalog | own-key ProviderConnection policy and helper coverage |
-| Network | provider allowlist and egress enforcement |
-| Tenant isolation | workspace/team separation and runner isolation |
-| Audit | run, secret, state, and admin action evidence |
+| Accounts/auth      | dashboard, session/OIDC as configured, audit trail                                                                           |
+| State              | state backend, lock evidence, backup/restore drill                                                                           |
+| Secrets            | encrypted storage, rotation process, redaction proof                                                                         |
+| Provider recipes   | CredentialRecipe seed, provider allowlist, ProviderConnection policy, and helper coverage                                    |
+| Network            | provider allowlist and egress enforcement                                                                                    |
+| Tenant isolation   | workspace/team separation and runner isolation                                                                               |
+| Audit              | run, secret, state, and admin action evidence                                                                                |
 
 Cloud GA adds managed resource, compatibility gateway, official billing, abuse,
 support, usage metering, and deprovision proof requirements.

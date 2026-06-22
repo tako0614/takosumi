@@ -54,12 +54,12 @@ export const CATALOG: readonly CatalogEntry[] = [
     surface: "service",
     kind: "worker",
     provider: "cloudflare",
-    suggestedName: "hello",
+    suggestedName: "web-app",
     badge: { ja: "Webアプリ", en: "Web app" },
     name: { ja: "小さなWebアプリを公開", en: "Deploy a tiny web app" },
     description: {
-      ja: "すぐ開ける小さなWebアプリを workers.dev に作ります。",
-      en: "Creates a tiny browser-openable web app on workers.dev.",
+      ja: "すぐ開ける小さなWebアプリと公開URLを作ります。",
+      en: "Creates a tiny browser-openable web app with a public URL.",
     },
     inputs: [
       {
@@ -107,7 +107,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     surface: "building_block",
     kind: "storage",
     provider: "cloudflare",
-    suggestedName: "r2-storage",
+    suggestedName: "files",
     badge: { ja: "ファイル保存", en: "File storage" },
     name: { ja: "ファイル保存場所を作成", en: "Create file storage" },
     description: {
@@ -156,12 +156,12 @@ export const CATALOG: readonly CatalogEntry[] = [
     surface: "service",
     kind: "site",
     provider: "cloudflare",
-    suggestedName: "static-site",
+    suggestedName: "website",
     badge: { ja: "Webサイト", en: "Website" },
-    name: { ja: "静的サイトをホスト", en: "Host a static website" },
+    name: { ja: "Webサイトを公開", en: "Publish a website" },
     description: {
-      ja: "静的サイトを置く場所を用意します。",
-      en: "Creates a home for a static website.",
+      ja: "HTMLや画像を置いて公開できるWebサイトを用意します。",
+      en: "Creates a website for publishing HTML and assets.",
     },
     inputs: [
       {
@@ -202,12 +202,12 @@ export const CATALOG: readonly CatalogEntry[] = [
     surface: "building_block",
     kind: "storage",
     provider: "aws",
-    suggestedName: "s3-storage",
+    suggestedName: "files-aws",
     badge: { ja: "ファイル保存", en: "File storage" },
-    name: { ja: "AWSに保存場所を作成", en: "Create storage on AWS" },
+    name: { ja: "ファイル保存場所を作成", en: "Create file storage" },
     description: {
-      ja: "AWS にファイル置き場を作ります。アプリの保存先やバックアップにも使えます。",
-      en: "Creates AWS storage for files, app data, or backups.",
+      ja: "アプリの保存先やバックアップに使えるファイル置き場を作ります。",
+      en: "Creates storage for files, app data, or backups.",
     },
     inputs: [
       {

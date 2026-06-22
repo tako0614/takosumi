@@ -23,8 +23,8 @@ export interface ProviderCredentialField {
  * A guided credential-creation helper for a provider. The point is to remove
  * the "I don't know what to create" wall: we deep-link the user to the
  * provider's OWN token-creation screen (pre-filled where possible), they click
- * through on the provider's site, then paste the resulting token back. No fake
- * OAuth — this is just a guided link plus the existing paste. The token still
+ * through on the provider's site, then paste the resulting token back. The
+ * browser flow is a guided link plus the existing paste path. The token still
  * arrives via the same write-only create-connection path.
  */
 export interface ProviderTokenHelper {
@@ -82,8 +82,9 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
 
 /**
  * Guided providers + their credential field sets. Cloudflare has a helper link;
- * the other common providers use raw env fields with stable names so users
- * don't need to fall back to the custom-env editor for normal OpenTofu cases.
+ * the other common providers use provider-specific credential fields with
+ * stable names so users don't need the custom service editor for normal
+ * OpenTofu cases.
  */
 export const PROVIDERS: readonly ProviderDescriptor[] = [
   {
