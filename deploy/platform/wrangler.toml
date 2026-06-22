@@ -143,15 +143,6 @@ TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
 # Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
 TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
-# Cloud-only AI Gateway extension. OSS Takosumi carries the fail-closed route
-# seam for the shared platform worker, but this is not an OSS public feature.
-# Realized Takosumi Cloud/operator config must provide profiles and referenced
-# upstream API keys as Worker secrets before /gateway/ai/v1 can open. The
-# profile JSON is non-secret config; it must contain apiKeyEnv names, never raw
-# apiKey values. Model metadata is returned by /gateway/ai/v1/models and must
-# stay public.
-# TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL = "deepseek/chat"
-# TAKOSUMI_AI_GATEWAY_PROFILES = '[{"id":"deepseek","provider":"deepseek","baseUrl":"https://provider.example/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY","models":[{"publicModel":"deepseek/chat","upstreamModel":"deepseek-chat","endpoints":["chat.completions"],"default":true}]}]'
 # Optional post-apply release activation bridge. This generic webhook hands
 # already-filtered, non-sensitive apply evidence to an operator/Cloud
 # materializer that owns app publication (for example Worker/assets/container
