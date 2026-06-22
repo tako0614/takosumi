@@ -2,6 +2,11 @@ import { expect, test } from "bun:test";
 
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import type {
+  D1Database,
+  D1PreparedStatement,
+  D1Result,
+} from "../../../../worker/src/bindings.ts";
 
 test("d1 store persists security findings and billing ledger rows", async () => {
   const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
@@ -272,6 +277,156 @@ test("d1 commitAppliedDeployment writes the unit atomically and rolls back a gua
   );
 });
 
+test("d1 commitAppliedDeployment rolls back when the apply lease changes after the pre-read", async () => {
+  const backing = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuDeploymentStore(
+    new LeaseChangingD1(backing, "apply_interleave", "lease_taken"),
+  );
+  const TS = "2026-06-07T00:00:00.000Z";
+
+  await store.putInstallation({
+    id: "inst_interleave",
+    spaceId: "space_1",
+    name: "shop",
+    slug: "shop",
+    sourceId: "src_1",
+    installType: "opentofu_module",
+    installConfigId: "cfg_1",
+    environment: "production",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: TS,
+    updatedAt: TS,
+  });
+  const planRun = {
+    id: "plan_interleave",
+    spaceId: "space_1",
+    installationId: "inst_interleave",
+    source: { kind: "git" as const, url: "https://example.com/repo.git" },
+    sourceDigest: "sha256:src",
+    operation: "apply" as const,
+    runnerProfileId: "rp_1",
+    variablesDigest: "sha256:vars",
+    requiredProviders: ["cloudflare"],
+    status: "succeeded" as const,
+    policy: { status: "passed" as const, reasons: [], checkedAt: 0 },
+    policyDecisionDigest: "sha256:pol",
+    auditEvents: [],
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+  const applyRun = {
+    id: "apply_interleave",
+    planRunId: "plan_interleave",
+    spaceId: "space_1",
+    installationId: "inst_interleave",
+    operation: "apply" as const,
+    runnerProfileId: "rp_1",
+    status: "queued" as const,
+    expected: {
+      planRunId: "plan_interleave",
+      runnerProfileId: "rp_1",
+      sourceDigest: "sha256:src",
+      variablesDigest: "sha256:vars",
+      policyDecisionDigest: "sha256:pol",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:art",
+    },
+    stateBackend: { kind: "encrypted-r2" as const },
+    stateLock: { status: "not_required" as const, backendRef: "ref" },
+    auditEvents: [],
+    createdAt: 2_000,
+    updatedAt: 2_000,
+  };
+  await store.putPlanRun(planRun);
+  await store.putApplyRun(applyRun);
+  const claim = await store.transitionRun({
+    id: "apply_interleave",
+    kind: "apply",
+    expectFrom: ["queued"],
+    run: { ...applyRun, status: "running" },
+    setLeaseToken: "lease_fresh",
+    heartbeatAt: 1,
+  });
+  expect(claim.won).toBe(true);
+
+  const committed = await store.commitAppliedDeployment({
+    newDeployment: {
+      id: "dep_interleave",
+      spaceId: "space_1",
+      installationId: "inst_interleave",
+      environment: "production",
+      applyRunId: "apply_interleave",
+      sourceSnapshotId: "snap_1",
+      stateGeneration: 1,
+      outputSnapshotId: "out_interleave",
+      outputsPublic: { launch_url: "https://x.example" },
+      status: "active",
+      createdAt: TS,
+    },
+    stateSnapshot: {
+      id: "state_interleave",
+      spaceId: "space_1",
+      installationId: "inst_interleave",
+      environment: "production",
+      generation: 1,
+      objectKey:
+        "spaces/space_1/installations/inst_interleave/envs/production/states/00000001.tfstate.enc",
+      digest: "sha256:state",
+      createdByRunId: "apply_interleave",
+      createdAt: TS,
+    },
+    outputSnapshot: {
+      id: "out_interleave",
+      spaceId: "space_1",
+      installationId: "inst_interleave",
+      stateGeneration: 1,
+      rawOutputArtifactKey:
+        "spaces/space_1/installations/inst_interleave/runs/apply_interleave/outputs.raw.json.enc",
+      publicOutputs: { launch_url: "https://x.example" },
+      spaceOutputs: { launch_url: "https://x.example" },
+      outputDigest: "sha256:out",
+      createdAt: TS,
+    },
+    installationPatch: {
+      id: "inst_interleave",
+      patch: {
+        currentDeploymentId: "dep_interleave",
+        status: "active",
+        currentStateGeneration: 1,
+        currentOutputSnapshotId: "out_interleave",
+        updatedAt: TS,
+      },
+      guard: { currentDeploymentId: undefined, status: "pending" },
+    },
+    applyRunTerminal: {
+      ...applyRun,
+      status: "succeeded",
+      deploymentId: "dep_interleave",
+    },
+    applyRunLeaseToken: "lease_fresh",
+    planRunApplied: {
+      ...planRun,
+      appliedApplyRunId: "apply_interleave",
+    },
+  });
+
+  expect(committed.applyRunLeaseLost).toBe(true);
+  expect(await store.getDeployment("dep_interleave")).toBeUndefined();
+  expect(await store.getOutputSnapshot("out_interleave")).toBeUndefined();
+  expect(
+    (await store.getLatestStateSnapshot("inst_interleave", "production"))
+      ?.generation,
+  ).toBeUndefined();
+  expect(
+    (await store.getInstallation("inst_interleave"))?.currentDeploymentId,
+  ).toBeUndefined();
+  expect((await store.getApplyRun("apply_interleave"))?.status).toBe("running");
+  expect(
+    (await store.getPlanRun("plan_interleave"))?.appliedApplyRunId,
+  ).toBeUndefined();
+});
+
 test("d1 store accepts operator-scoped connections without a space id", async () => {
   const store = new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1());
 
@@ -291,3 +446,80 @@ test("d1 store accepts operator-scoped connections without a space id", async ()
     "conn_operator_cf",
   ]);
 });
+
+class LeaseChangingD1 implements D1Database {
+  #changed = false;
+
+  constructor(
+    private readonly inner: D1Database,
+    private readonly runId: string,
+    private readonly newLeaseToken: string,
+  ) {}
+
+  prepare(query: string): D1PreparedStatement {
+    const statement = this.inner.prepare(query);
+    const lower = query.toLowerCase();
+    if (
+      !this.#changed &&
+      lower.includes("select") &&
+      lower.includes("lease_token") &&
+      lower.includes("from \"runs\"")
+    ) {
+      return new LeaseChangingStatement(statement, async () => {
+        if (this.#changed) return;
+        this.#changed = true;
+        await this.inner
+          .prepare("update runs set lease_token = ? where id = ?")
+          .bind(this.newLeaseToken, this.runId)
+          .run();
+      });
+    }
+    return statement;
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    if (!this.inner.batch) {
+      throw new Error("wrapped D1 binding does not support batch");
+    }
+    return this.inner.batch<T>(statements);
+  }
+}
+
+class LeaseChangingStatement implements D1PreparedStatement {
+  constructor(
+    private readonly inner: D1PreparedStatement,
+    private readonly afterFirst: () => Promise<void>,
+  ) {}
+
+  bind(...values: readonly unknown[]): D1PreparedStatement {
+    this.inner.bind(...values);
+    return this;
+  }
+
+  async first<T = unknown>(): Promise<T | null> {
+    const row = await this.inner.first<T>();
+    await this.afterFirst();
+    return row;
+  }
+
+  all<T = unknown>(): Promise<D1Result<T>> {
+    return this.inner.all<T>();
+  }
+
+  async raw<T = unknown[]>(): Promise<T[]> {
+    const statement = this.inner as D1PreparedStatement & {
+      raw?: <TValue = unknown[]>() => Promise<TValue[]>;
+    };
+    const rows = statement.raw
+      ? await statement.raw<T>()
+      : ((await this.inner.all<T>()).results ?? []);
+    await this.afterFirst();
+    return rows as T[];
+  }
+
+  run<T = unknown>(): Promise<D1Result<T>> {
+    return this.inner.run<T>();
+  }
+}

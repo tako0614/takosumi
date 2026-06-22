@@ -127,6 +127,24 @@ class ModelSqlClient implements SqlClient {
       table.set(spaceId, next);
       return { rows: [selectedResultRow(next, lower)], rowCount: 1 };
     }
+    if (tableName(lower) === "takosumi_runs") {
+      const where = whereColumns(lower);
+      const idWhere = where.find((c) => c.column === "id");
+      const id = String(params[idWhere?.indexes[0] ?? 0]);
+      const row = table.get(id);
+      if (!row) return { rows: [], rowCount: 0 };
+      const matches = where.every((c) =>
+        c.indexes.some(
+          (index) => (rowCol(row, c.column) ?? "") === String(params[index]),
+        ),
+      );
+      if (!matches) return { rows: [], rowCount: 0 };
+      const json = lastJsonParam(params) ?? row.json;
+      const columns = { ...row.columns, ...updateColumns(lower, params) };
+      const next = { id: row.id, json, columns };
+      table.set(id, next);
+      return { rows: [selectedResultRow(next, lower)], rowCount: 1 };
+    }
     // Only the guarded installation patch emits an UPDATE otherwise. Support
     // both the former handwritten-SQL parameter order and Drizzle's generated
     // order by reading predicate parameter indexes from the WHERE clause.
@@ -329,6 +347,23 @@ function insertColumns(
     out[column] =
       value === undefined || value === null ? undefined : String(value);
   });
+  return out;
+}
+
+/** Parses `update t set a = $1, b = $2 where ...` into column -> param value. */
+function updateColumns(
+  lower: string,
+  params: readonly unknown[],
+): Record<string, string | undefined> {
+  const set = /\bset\s+([\s\S]+?)\s+where\s/.exec(lower)?.[1];
+  if (!set) return {};
+  const out: Record<string, string | undefined> = {};
+  const pattern = /"?([a-z_][a-z0-9_]*)"?\s*=\s*\$(\d+)/g;
+  for (const match of set.matchAll(pattern)) {
+    const value = params[Number(match[2]) - 1];
+    out[match[1]] =
+      value === undefined || value === null ? undefined : String(value);
+  }
   return out;
 }
 
