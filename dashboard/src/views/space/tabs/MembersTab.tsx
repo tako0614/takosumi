@@ -253,7 +253,7 @@ export default function MembersTab(props: {
                   type="email"
                   value={inviteEmail()}
                   onInput={(e) => setInviteEmail(e.currentTarget.value)}
-                  placeholder="alice@example.com"
+                  placeholder="name@example.com"
                   autocomplete="email"
                   spellcheck={false}
                 />

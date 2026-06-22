@@ -1,8 +1,9 @@
 # CLI
 
-The Takosumi CLI is a developer / operator helper. The standard product flow is
-the dashboard `/install?git=...` / `/new` path: review a Git URL OpenTofu
-Capsule, choose a ProviderConnection, then plan / apply.
+The Takosumi CLI is an automation helper for actions you can also do in the
+dashboard. The normal product flow is the dashboard `/install?git=...` / `/new`
+path: choose a service, choose the cloud connection it should use, then
+plan / apply.
 
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
@@ -10,21 +11,21 @@ export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
 takosumi deploy ./my-capsule \
   --workspace @me \
-  --project my-app \
-  --capsule my-app \
+  --project photo-blog \
+  --capsule photo-blog \
   --provider-binding cloudflare.default=conn_cf \
   --var region=apac
 
 takosumi plan ./my-capsule \
   --workspace @me \
-  --project my-app \
-  --capsule my-app
+  --project photo-blog \
+  --capsule photo-blog
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-The CLI does not run OpenTofu directly. It uploads a local Capsule and asks the
-control plane to create Source / Capsule / Run records, pinning the Git commit /
+The CLI does not run OpenTofu directly. It uploads a local Capsule and asks
+Takosumi to create Source / Capsule / Run records, pinning the Git commit /
 ref / path as the Run source identity. Execution happens in the runner sandbox,
 and credentials are injected at run time from ProviderConnections and
 CredentialRecipes.
