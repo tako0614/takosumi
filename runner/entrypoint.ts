@@ -727,8 +727,8 @@ async function runGeneratedRootPlan(
     );
     const pinnedGitCommit =
       source.kind === "git"
-        ? source.commit ??
-          (await gitRevParseHead(workspace.sourceRoot, commandContext))
+        ? (source.commit ??
+          (await gitRevParseHead(workspace.sourceRoot, commandContext)))
         : undefined;
     sourceCommit = sourceCommit ?? pinnedGitCommit;
     await materializeGeneratedRootFromModule(
@@ -2689,7 +2689,7 @@ async function runCommand(
   options: { readonly cwd: string; readonly context?: CommandContext },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let timedOut = false;
-  const subprocess = Bun.spawn(command, {
+  const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.context?.env ?? baseCommandEnv(),
     stdout: "pipe",
@@ -3079,7 +3079,9 @@ function sourceCredentialRedactionValues(
   ];
 }
 
-function sourceCredentialRedactionValuesFromRequest(request: unknown): string[] {
+function sourceCredentialRedactionValuesFromRequest(
+  request: unknown,
+): string[] {
   try {
     return sourceCredentialRedactionValues(parseSourceCredentials(request));
   } catch {
@@ -3863,8 +3865,18 @@ function parseAction(value: unknown): OpenTofuRunAction | undefined {
 }
 
 async function digestBytes(data: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", data);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    arrayBufferFromBytes(data),
+  );
   return `sha256:${Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }

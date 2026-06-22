@@ -10,10 +10,37 @@
 # carries the binaries.
 FROM oven/bun:1
 
+ARG OPENTOFU_VERSION=1.12.1
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    tar \
+    unzip \
+    zstd \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+    amd64) tofu_arch="amd64" ;; \
+    arm64) tofu_arch="arm64" ;; \
+    *) echo "unsupported OpenTofu architecture: $arch" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL \
+    "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_${tofu_arch}.zip" \
+    -o /tmp/tofu.zip; \
+  unzip /tmp/tofu.zip -d /usr/local/bin tofu; \
+  rm /tmp/tofu.zip; \
+  chmod +x /usr/local/bin/tofu; \
+  tofu version
+
 # Pull docker CLI (no daemon) from the official docker image. Compose
-# implementation lives under cli-implementations/ in the same image.
+# implementation lives under cli-plugins/ in the same image.
 COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker:29-cli /usr/local/libexec/docker/cli-implementations /usr/local/libexec/docker/cli-implementations
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 
 # Sanity check at build time.
 RUN docker --version && docker compose version

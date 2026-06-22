@@ -117,10 +117,12 @@ def mint_subject_via_oauth() -> str:
     # shared cookie jar so the worker's state cookie survives the dance.
     _status, headers2, _body2 = http_request("GET", "", url=loc)
     loc2 = headers2["Location"]
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(loc2).query)["code"][0]
+    callback_query = urllib.parse.parse_qs(urllib.parse.urlparse(loc2).query)
+    code = callback_query["code"][0]
+    callback_state = callback_query["state"][0]
     status, _headers, body = http_request(
         "GET",
-        f"/v1/auth/upstream/callback?provider=google&code={code}&state={state}",
+        f"/v1/auth/upstream/callback?provider=google&code={code}&state={callback_state}",
     )
     if status != 200:
         sys.exit(f"oauth callback failed: {status} {body}")
@@ -135,6 +137,41 @@ def make_authenticator_data(rp_id: str, sign_count: int = 1) -> bytes:
     flags = bytes([0x01])  # UP
     counter = sign_count.to_bytes(4, "big")
     return rp_id_hash + flags + counter
+
+
+def cbor_text(value: str) -> bytes:
+    encoded = value.encode()
+    if len(encoded) > 23:
+        raise ValueError("local passkey smoke CBOR helper only supports short text")
+    return bytes([0x60 | len(encoded)]) + encoded
+
+
+def cbor_bytes(value: bytes) -> bytes:
+    if len(value) > 255:
+        raise ValueError("local passkey smoke CBOR helper only supports <=255 bytes")
+    return bytes([0x58, len(value)]) + value
+
+
+def registration_client_data_json(challenge: str) -> bytes:
+    return json.dumps({
+        "type": "webauthn.create",
+        "challenge": challenge,
+        "origin": ORIGIN,
+    }, separators=(",", ":")).encode()
+
+
+def none_attestation_object(rp_id: str) -> bytes:
+    # CBOR map: { "fmt": "none", "authData": authenticatorData, "attStmt": {} }.
+    auth_data = make_authenticator_data(rp_id, sign_count=0)
+    return b"".join([
+        b"\xa3",
+        cbor_text("fmt"),
+        cbor_text("none"),
+        cbor_text("authData"),
+        cbor_bytes(auth_data),
+        cbor_text("attStmt"),
+        b"\xa0",
+    ])
 
 
 def main() -> None:
@@ -166,7 +203,8 @@ def main() -> None:
     if status != 200:
         sys.exit(f"register/options failed: {status} {body}")
     reg_opts = json.loads(body)
-    print(f"      challenge={reg_opts.get('challenge', '')[:24]}...")
+    registration_challenge = reg_opts.get("challenge", "")
+    print(f"      challenge={registration_challenge[:24]}...")
 
     print("[4/7] POST /v1/auth/passkeys/register/complete...")
     status, _h, body = http_request(
@@ -177,6 +215,13 @@ def main() -> None:
             "publicKeyJwk": public_key_jwk,
             "signCount": 0,
             "transports": ["internal"],
+            "challenge": registration_challenge,
+            "clientDataJSON": b64url_encode(
+                registration_client_data_json(registration_challenge),
+            ),
+            "attestationObject": b64url_encode(
+                none_attestation_object(RP_ID),
+            ),
         },
     )
     if status != 200:

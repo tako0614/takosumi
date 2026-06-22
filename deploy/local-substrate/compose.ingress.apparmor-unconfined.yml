@@ -1,0 +1,10 @@
+services:
+  pebble:
+    security_opt:
+      - apparmor=unconfined
+  coredns:
+    security_opt:
+      - apparmor=unconfined
+  caddy:
+    security_opt:
+      - apparmor=unconfined

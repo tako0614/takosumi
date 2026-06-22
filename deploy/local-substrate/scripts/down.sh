@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
-docker compose -f compose.substrate.yml --profile postgres --profile workers down "$@" 2>/dev/null || true
-docker compose -f compose.ingress.yml down "$@"
+compose_substrate --profile postgres --profile workers down "$@" 2>/dev/null || true
+compose_ingress down "$@"

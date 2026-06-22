@@ -1,0 +1,122 @@
+services:
+  substrate-postgres:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  substrate-postgres-init:
+    depends_on:
+      substrate-postgres:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "true"
+    security_opt:
+      - apparmor=unconfined
+  substrate-redis:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  substrate-minio:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  substrate-minio-init:
+    depends_on:
+      substrate-minio:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "true"
+    security_opt:
+      - apparmor=unconfined
+  cloud-migrate:
+    command:
+      - /bin/sh
+      - -c
+      - "true"
+    security_opt:
+      - apparmor=unconfined
+  agent:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  cloud:
+    depends_on:
+      agent:
+        condition: service_started
+      cloud-migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  takosumi-service-worker-build:
+    security_opt:
+      - apparmor=unconfined
+  takosumi-service-worker:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  takosumi-website-build:
+    security_opt:
+      - apparmor=unconfined
+  takosumi-docs-build:
+    security_opt:
+      - apparmor=unconfined
+  jaeger:
+    security_opt:
+      - apparmor=unconfined
+  otel-collector:
+    security_opt:
+      - apparmor=unconfined
+  mailpit:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  oauth-mock:
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  takosumi-dashboard-build:
+    security_opt:
+      - apparmor=unconfined
+  takosumi-worker-build:
+    security_opt:
+      - apparmor=unconfined
+  takosumi-worker:
+    depends_on:
+      oauth-mock:
+        condition: service_started
+      takosumi-service-worker:
+        condition: service_started
+      takosumi-worker-build:
+        condition: service_completed_successfully
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  route-registrar:
+    depends_on:
+      cloud:
+        condition: service_started
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true
+  route-registrar-workers:
+    depends_on:
+      takosumi-service-worker:
+        condition: service_started
+    security_opt:
+      - apparmor=unconfined
+    healthcheck:
+      disable: true

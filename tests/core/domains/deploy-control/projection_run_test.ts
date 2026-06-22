@@ -122,7 +122,7 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
       planArtifact: {
         kind: "object-storage",
         ref: "key/plan.bin",
-        digest: "d",
+        digest: "sha256:artifact",
       },
       summary: { add: 2, change: 1, destroy: 0 },
       planResourceChanges: [
@@ -146,6 +146,15 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.baseStateGeneration).toBe(3);
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
+  expect(run.applyExpected).toEqual({
+    planRunId: "plan_1",
+    runnerProfileId: "cloudflare-default",
+    sourceDigest: "sha256:src",
+    variablesDigest: "sha256:vars",
+    policyDecisionDigest: "sha256:policy",
+    planDigest: "sha256:plan",
+    planArtifactDigest: "sha256:artifact",
+  });
   expect(run.summary).toEqual({ add: 2, change: 1, destroy: 0 });
   expect(run.planResources).toEqual([
     {

@@ -11,11 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
 ARGS=(run --quiet /scripts/k6-baseline.js)
 [[ "${1:-}" == "--verbose" ]] && ARGS=(run /scripts/k6-baseline.js)
 
-docker run --rm \
+local_substrate_docker_run --rm \
 	--network local-substrate_takos-local-internal \
 	-v "$SCRIPT_DIR:/scripts:ro" \
 	-v "$SUBSTRATE_DIR/caddy/runtime:/ca:ro" \

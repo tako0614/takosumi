@@ -10,7 +10,9 @@
 # without further plumbing.
 set -euo pipefail
 
-CA="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../caddy/runtime/pebble-issuance-root.pem"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 
 # 1. Jaeger UI reachable through Caddy.
 CODE=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" https://jaeger.takosumi.test/)
@@ -49,14 +51,12 @@ print(json.dumps({
 PY
 )
 
-# Post directly to the collector via docker network (skips Caddy — collector
-# isn't exposed via TLS, only to the docker network).
-docker run --rm --network local-substrate_takos-local-internal \
-	curlimages/curl:8.10.1 \
-	-s -X POST \
+# Post directly to the collector through its host-loopback OTLP/HTTP port
+# (skips Caddy; not exposed on a public interface).
+curl -sS --max-time 10 -X POST \
 	-H "Content-Type: application/json" \
 	-d "$PAYLOAD" \
-	"http://otel-collector:4318/v1/traces" >/dev/null
+	"http://127.0.0.1:14318/v1/traces" >/dev/null
 
 # 3. Poll Jaeger /api/services for the new service name (Jaeger ingests
 #    asynchronously; give it a few seconds).

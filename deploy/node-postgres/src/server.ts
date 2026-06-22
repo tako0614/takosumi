@@ -11,6 +11,7 @@
 import type {
   AccountsHandler,
   AccountsJsonWebKey,
+  ControlPlaneOperations,
   AppInstallationExportWorker,
   DeployControlFacadeOptions,
   JsonWebKeySet,
@@ -168,6 +169,18 @@ export interface ComposedServerOverrides {
     typeof buildComposedApp
   >[0]["implementations"];
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
+  readonly opentofuRunner?: Parameters<
+    typeof buildComposedApp
+  >[0]["opentofuRunner"];
+  readonly writeSourceArchive?: Parameters<
+    typeof buildComposedApp
+  >[0]["writeSourceArchive"];
+  readonly runnerProfiles?: Parameters<
+    typeof buildComposedApp
+  >[0]["runnerProfiles"];
+  readonly defaultRunnerProfileId?: Parameters<
+    typeof buildComposedApp
+  >[0]["defaultRunnerProfileId"];
 }
 
 /**
@@ -198,13 +211,30 @@ export async function buildComposedServer(
   const { app } = await buildComposedApp({
     config,
     store,
-    createAccountsHandler: (deployControl) =>
-      buildAccountsHandler(config, store, deployControl),
+    createAccountsHandler: (deployControl, controlPlaneOperations) =>
+      buildAccountsHandler(
+        config,
+        store,
+        deployControl,
+        controlPlaneOperations,
+      ),
     preHandle: (req) =>
       preHandleNonServiceRequest(req, pool, config.exportDownload),
     ...(staticAssets ? { staticAssets } : {}),
     ...(overrides.implementations
       ? { implementations: overrides.implementations }
+      : {}),
+    ...(overrides.opentofuRunner
+      ? { opentofuRunner: overrides.opentofuRunner }
+      : {}),
+    ...(overrides.writeSourceArchive
+      ? { writeSourceArchive: overrides.writeSourceArchive }
+      : {}),
+    ...(overrides.runnerProfiles
+      ? { runnerProfiles: overrides.runnerProfiles }
+      : {}),
+    ...(overrides.defaultRunnerProfileId
+      ? { defaultRunnerProfileId: overrides.defaultRunnerProfileId }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
@@ -244,6 +274,7 @@ async function buildAccountsHandler(
   config: NodeAccountsServerConfig,
   store: PostgresAccountsStore,
   deployControl?: DeployControlFacadeOptions,
+  controlPlaneOperations?: ControlPlaneOperations,
 ): Promise<AccountsHandler> {
   const exportWorker = buildExportWorker(config.exportDownload);
   const commonOptions = {
@@ -258,6 +289,7 @@ async function buildAccountsHandler(
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(deployControl ? { deployControl } : {}),
+    ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     ...(exportWorker ? { exportWorker } : {}),
   };
   const stableOidc = await buildStableOidc(config.stableOidc);

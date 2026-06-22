@@ -37,12 +37,14 @@ LOC1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 LOC2=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" "$LOC1")
 CODE=$(echo "$LOC2" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
+CALLBACK_STATE=$(echo "$LOC2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
 [[ -n "$CODE" ]] || { echo "FAIL: mock /authorize did not return a code (got: $LOC2)" >&2; exit 1; }
+[[ -n "$CALLBACK_STATE" ]] || { echo "FAIL: mock /authorize did not return state (got: $LOC2)" >&2; exit 1; }
 
 # 3. /v1/auth/upstream/callback with code+state+provider -> 200 with subject
 RESP=$(curl -sk --cacert "$CA" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"https://app.takosumi.test/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${STATE}")
+	"https://app.takosumi.test/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${CALLBACK_STATE}")
 SUBJECT=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('subject') or '')")
 SESSION_ID_IN_BODY=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('session_id') or '')")
 if [[ -z "$SUBJECT" ]]; then

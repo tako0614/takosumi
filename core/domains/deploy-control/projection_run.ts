@@ -205,6 +205,9 @@ export function projectPlanRun(
     ...(planRun.planArtifact?.ref
       ? { planArtifactKey: planRun.planArtifact.ref }
       : {}),
+    ...(planRun.planDigest && planRun.planArtifact
+      ? { applyExpected: projectApplyExpectedGuard(planRun) }
+      : {}),
     ...(planRun.summary ? { summary: planRun.summary } : {}),
     ...(planRun.planResourceChanges
       ? { planResources: planRun.planResourceChanges }
@@ -220,6 +223,35 @@ export function projectPlanRun(
     ...(iso(planRun.startedAt) ? { startedAt: iso(planRun.startedAt)! } : {}),
     ...(iso(planRun.finishedAt)
       ? { finishedAt: iso(planRun.finishedAt)! }
+      : {}),
+  };
+}
+
+function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
+  if (!planRun.planDigest || !planRun.planArtifact) return undefined;
+  return {
+    planRunId: planRun.id,
+    ...(planRun.installationId
+      ? { installationId: planRun.installationId }
+      : {}),
+    ...(planRun.installationId
+      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+      : {}),
+    runnerProfileId: planRun.runnerProfileId,
+    sourceDigest: planRun.sourceDigest,
+    variablesDigest: planRun.variablesDigest,
+    policyDecisionDigest: planRun.policyDecisionDigest,
+    planDigest: planRun.planDigest,
+    planArtifactDigest: planRun.planArtifact.digest,
+    ...(planRun.sourceCommit ? { sourceCommit: planRun.sourceCommit } : {}),
+    ...(planRun.providerLockDigest
+      ? { providerLockDigest: planRun.providerLockDigest }
+      : {}),
+    ...(planRun.resolvedProviderEnvBindingsDigest
+      ? {
+          resolvedProviderEnvBindingsDigest:
+            planRun.resolvedProviderEnvBindingsDigest,
+        }
       : {}),
   };
 }

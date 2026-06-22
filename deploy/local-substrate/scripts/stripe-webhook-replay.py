@@ -113,10 +113,12 @@ def mint_subject_via_oauth() -> str:
     # the worker's state cookie sticks across the dance.
     _status, headers2, _body2 = request("GET", "", url=headers["Location"])
     loc2 = headers2["Location"]
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(loc2).query)["code"][0]
+    callback_query = urllib.parse.parse_qs(urllib.parse.urlparse(loc2).query)
+    code = callback_query["code"][0]
+    callback_state = callback_query["state"][0]
     status, _h, body = request(
         "GET",
-        f"/v1/auth/upstream/callback?provider=google&code={code}&state={state}",
+        f"/v1/auth/upstream/callback?provider=google&code={code}&state={callback_state}",
     )
     if status != 200:
         sys.exit(f"oauth callback failed: {status} {body}")

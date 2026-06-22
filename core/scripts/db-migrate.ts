@@ -130,7 +130,7 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
       const rows = [...this.#applied.values()].sort((left, right) =>
         left.version === right.version
           ? left.id.localeCompare(right.id)
-          : left.version - right.version
+          : left.version - right.version,
       );
       return ledgerRowsAs<Row>(rows);
     }
@@ -188,11 +188,12 @@ function asRecord(
 function rowsSatisfyCallerRowType<Row extends Record<string, unknown>>(
   rows: readonly AppliedRow[],
 ): rows is readonly AppliedRow[] & readonly Row[] {
-  return rows.every((row) =>
-    typeof row.id === "string" &&
-    typeof row.version === "number" &&
-    typeof row.checksum === "string" &&
-    typeof row.applied_at === "string"
+  return rows.every(
+    (row) =>
+      typeof row.id === "string" &&
+      typeof row.version === "number" &&
+      typeof row.checksum === "string" &&
+      typeof row.applied_at === "string",
   );
 }
 
@@ -207,7 +208,7 @@ function ledgerRowsAs<Row extends Record<string, unknown>>(
 
 // ---------------------------------------------------------------------------
 // Postgres SqlClient — staging/production. Opt-in: only loaded if
-// DATABASE_URL is set. We import npm:pg lazily so local dev never needs it.
+// DATABASE_URL is set. We import pg lazily so local dev never needs it.
 // ---------------------------------------------------------------------------
 
 interface PgPoolLike {
@@ -225,19 +226,26 @@ async function createPostgresClient(databaseUrl: string): Promise<{
 }> {
   let pgModule: {
     default?: { Pool: new (cfg: { connectionString: string }) => PgPoolLike };
+    Pool?: new (cfg: { connectionString: string }) => PgPoolLike;
   };
+  const loadErrors: string[] = [];
   try {
     pgModule = await import("npm:pg@^8.11.0");
   } catch (error) {
-    throw new Error(
-      `failed to load npm:pg for --env=staging|production migrations: ${
-        (error as Error).message
-      }`,
-    );
+    loadErrors.push(`npm:pg@^8.11.0: ${(error as Error).message}`);
+    try {
+      pgModule = await import("pg");
+    } catch (fallbackError) {
+      loadErrors.push(`pg: ${(fallbackError as Error).message}`);
+      throw new Error(
+        "failed to load pg for --env=staging|production migrations: " +
+          loadErrors.join("; "),
+      );
+    }
   }
-  const Pool = pgModule.default?.Pool;
+  const Pool = pgModule.default?.Pool ?? pgModule.Pool;
   if (!Pool) {
-    throw new Error("npm:pg loaded but Pool export is missing");
+    throw new Error("pg loaded but Pool export is missing");
   }
   const pool = new Pool({ connectionString: databaseUrl });
 
@@ -323,9 +331,10 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
       description: "in-memory SqlClient (env=local)",
     };
   }
-  const candidates = env === "production"
-    ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
-    : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
+  const candidates =
+    env === "production"
+      ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
+      : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
     const value = process.env[key];
@@ -383,10 +392,10 @@ async function main(): Promise<number> {
   // in-memory ledger to surface the full SQL preview deterministically.
   const target = options.dryRun
     ? {
-      client: new InMemorySqlClient() as SqlClient,
-      close: () => Promise.resolve(),
-      description: "in-memory SqlClient (dry-run)",
-    }
+        client: new InMemorySqlClient() as SqlClient,
+        close: () => Promise.resolve(),
+        description: "in-memory SqlClient (dry-run)",
+      }
     : await resolveTarget(options.env);
 
   console.log(`[db-migrate] target: ${target.description}`);

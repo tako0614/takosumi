@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Asserts the accounts-service D1 schema is stable across worker restarts.
+# Asserts the local service-worker D1 schema is stable across worker restarts.
 #
-# accounts-service uses CREATE TABLE IF NOT EXISTS for all schema (no
+# The Cloudflare Worker local mirror uses CREATE TABLE IF NOT EXISTS for schema
 # proper up/down migrations exist), so the only thing we can drill on is
 # idempotency: starting the worker N times must produce the same schema
 # every time. A change to the init SQL that's not safe to re-run (e.g. a
@@ -17,37 +17,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
-# 1. Snapshot the worker's D1 sqlite via python (host has sqlite3 built-in,
-#    the worker image doesn't). Copy the file out so we don't lock-contend
-#    with the live miniflare.
+# 1. Snapshot the service worker's D1 sqlite via an AppArmor-compatible helper
+#    container. `docker exec` is not available on some locked-down hosts, and
+#    reading the named volume from a one-shot Python container is enough for a
+#    read-only schema projection.
 snapshot() {
 	local out=$1
-	local sqlite_path
-	sqlite_path=$(docker exec local-substrate-takosumi-worker-1 sh -c \
-		"find /data/d1 -name '*.sqlite' | head -1" 2>/dev/null)
-	if [[ -z "$sqlite_path" ]]; then
-		echo "FAIL: no .sqlite under /data/d1 in the worker container" >&2
-		return 1
-	fi
-	local tmpdir
-	tmpdir=$(mktemp -d)
-	trap 'rm -rf "$tmpdir" /tmp/d1-snap.sqlite' RETURN
-	docker cp "local-substrate-takosumi-worker-1:$sqlite_path" "$tmpdir/d1-snap.sqlite" >/dev/null
-	for suffix in -wal -shm; do
-		if docker exec local-substrate-takosumi-worker-1 test -f "${sqlite_path}${suffix}"; then
-			docker cp "local-substrate-takosumi-worker-1:${sqlite_path}${suffix}" \
-				"$tmpdir/d1-snap.sqlite${suffix}" >/dev/null
-		fi
-	done
-	python3 -c "
+	local_substrate_docker_run --rm -i \
+		-v local-substrate_takosumi-service-worker-data:/data:ro \
+		python:3.13-alpine \
+		python3 - <<'PY' > "$out"
+import os
 import sqlite3
-con = sqlite3.connect('$tmpdir/d1-snap.sqlite')
-rows = con.execute(\"SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name\").fetchall()
-print('\n'.join(r[0] for r in rows))
-" > "$out"
-	rm -rf "$tmpdir"
-	trap - RETURN
+sqlite_path = ""
+for root, _dirs, files in os.walk("/data/d1"):
+    for name in files:
+        if name.endswith(".sqlite"):
+            sqlite_path = os.path.join(root, name)
+            break
+    if sqlite_path:
+        break
+if not sqlite_path:
+    raise SystemExit("no .sqlite under /data/d1 in the worker volume")
+con = sqlite3.connect(f"file:{sqlite_path}?mode=ro&immutable=1", uri=True)
+rows = con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").fetchall()
+print("\n".join(r[0] for r in rows))
+PY
 }
 snapshot /tmp/schema-before.txt
 
@@ -58,8 +55,9 @@ if [[ "$SIZE_BEFORE" -lt 100 ]]; then
 	exit 1
 fi
 
-# 2. Recreate the worker (forces initialize() to re-run against the same D1).
-docker compose -f compose.substrate.yml --profile postgres up -d --force-recreate takosumi-worker >/dev/null 2>&1
+# 2. Recreate the service worker (forces initialize() to re-run against the same D1).
+compose_substrate --profile postgres up -d --force-recreate \
+	takosumi-service-worker-build takosumi-service-worker >/dev/null 2>&1
 # Give miniflare a moment to come up + run init.
 sleep 5
 

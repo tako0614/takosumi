@@ -1,0 +1,565 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import type {
+  OpenTofuApplyJob,
+  OpenTofuApplyResult,
+  OpenTofuCapsuleSourceFile,
+  OpenTofuCapsuleSourceFilesJob,
+  OpenTofuDestroyJob,
+  OpenTofuDestroyResult,
+  OpenTofuPlanJob,
+  OpenTofuPlanResult,
+  OpenTofuRunner,
+  OpenTofuSourceSyncJob,
+  OpenTofuSourceSyncResult,
+  ProviderInstallationEvidence,
+} from "../../../core/domains/deploy-control/mod.ts";
+import type {
+  OpenTofuPlanArtifact,
+  PlanResourceChange,
+  RunnerProfile,
+  RunDiagnostic,
+} from "@takosumi/internal/deploy-control-api";
+import type { SourceArchiveWriter } from "../../../core/api/deploy_control_shared.ts";
+import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
+
+export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
+
+export interface SourceArchiveStore {
+  readonly write: SourceArchiveWriter;
+  read(key: string): Promise<Uint8Array>;
+}
+
+export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
+  const normalizedRoot = resolve(root);
+  return {
+    write: async (key, bytes) => {
+      const path = archivePath(normalizedRoot, key);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, bytes);
+    },
+    read: async (key) =>
+      new Uint8Array(await readFile(archivePath(normalizedRoot, key))),
+  };
+}
+
+export function createLocalOpenTofuRunner(input: {
+  readonly archiveStore: SourceArchiveStore;
+}): OpenTofuRunner {
+  return new LocalOpenTofuRunner(input.archiveStore);
+}
+
+export function createLocalOpenTofuRunnerProfile(
+  now = Date.now(),
+): RunnerProfile {
+  return {
+    id: LOCAL_OPENTOFU_RUNNER_PROFILE_ID,
+    name: "Local OpenTofu",
+    substrate: "local",
+    description:
+      "Local-substrate OpenTofu runner for provider-free smoke deployments.",
+    tofuVersion: "operator-managed",
+    stateBackend: {
+      kind: "local",
+      ref: "state://local-substrate/opentofu",
+      lock: { kind: "operator", ref: "lock://local-substrate/opentofu" },
+    },
+    allowedProviders: [],
+    sourcePolicy: { allowLocalSource: true },
+    resourceLimits: {
+      maxRunSeconds: 300,
+      maxSourceArchiveBytes: 64 * 1024 * 1024,
+      maxSourceDecompressedBytes: 512 * 1024 * 1024,
+      cpu: "1",
+      memoryMb: 1024,
+    },
+    networkPolicy: { mode: "default-deny" },
+    secretExposurePolicy: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+    labels: {
+      "takosumi.com/local-substrate": "true",
+      "takosumi.com/profile-enabled": "true",
+    },
+    createdAt: now,
+  };
+}
+
+class LocalOpenTofuRunner implements OpenTofuRunner {
+  constructor(private readonly archiveStore: SourceArchiveStore) {}
+
+  async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
+    await this.restoreSourceArchive(job.planRun.id, job.sourceArchive);
+    const result = await runRunner("plan", job.planRun.id, job);
+    const planDigest = requiredString(result, "planDigest");
+    return {
+      planDigest,
+      planArtifact: parsePlanArtifact(result, job.planRun.id, planDigest),
+      ...(stringArray(result, "requiredProviders")
+        ? { requiredProviders: stringArray(result, "requiredProviders") }
+        : {}),
+      ...(stringValue(result, "sourceCommit")
+        ? { sourceCommit: stringValue(result, "sourceCommit") }
+        : {}),
+      ...(stringValue(result, "providerLockDigest")
+        ? { providerLockDigest: stringValue(result, "providerLockDigest") }
+        : {}),
+      ...(providerInstallation(result)
+        ? { providerInstallation: providerInstallation(result) }
+        : {}),
+      ...(recordValue(result, "summary")
+        ? {
+            summary: recordValue(
+              result,
+              "summary",
+            ) as OpenTofuPlanResult["summary"],
+          }
+        : {}),
+      ...(planResourceChanges(result)
+        ? { planResourceChanges: planResourceChanges(result) }
+        : {}),
+      diagnostics: diagnostics(result),
+    };
+  }
+
+  async apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult> {
+    await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
+    await copyRunnerLocalPlanArtifact(
+      job.applyRun.id,
+      job.planRun.id,
+      job.planArtifact,
+    );
+    const result = await runRunner("apply", job.applyRun.id, job);
+    return {
+      ...(recordValue(result, "outputs")
+        ? {
+            outputs: recordValue(
+              result,
+              "outputs",
+            ) as OpenTofuApplyResult["outputs"],
+          }
+        : {}),
+      ...(stringValue(result, "stateDigest")
+        ? { stateDigest: stringValue(result, "stateDigest") }
+        : {}),
+      ...(stringValue(result, "rawOutputsKey")
+        ? { rawOutputsKey: stringValue(result, "rawOutputsKey") }
+        : {}),
+      ...(providerInstallation(result)
+        ? { providerInstallation: providerInstallation(result) }
+        : {}),
+      diagnostics: diagnostics(result),
+    };
+  }
+
+  async destroy(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult> {
+    await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
+    await copyRunnerLocalPlanArtifact(
+      job.applyRun.id,
+      job.planRun.id,
+      job.planArtifact,
+    );
+    const result = await runRunner("destroy", job.applyRun.id, job);
+    return {
+      ...(providerInstallation(result)
+        ? { providerInstallation: providerInstallation(result) }
+        : {}),
+      diagnostics: diagnostics(result),
+    };
+  }
+
+  async sourceSync(
+    job: OpenTofuSourceSyncJob,
+  ): Promise<OpenTofuSourceSyncResult> {
+    const result = await runRunner("source_sync", job.runId, {
+      action: "source_sync",
+      runId: job.runId,
+      source: job.source,
+      archiveObjectKey: job.archiveObjectKey,
+      ...(job.credentials ? { credentials: job.credentials } : {}),
+    });
+    const archive = recordValue(result, "sourceArchive");
+    const archiveDigest =
+      stringValue(result, "archiveDigest") ??
+      (archive ? stringValue(archive, "digest") : undefined);
+    const archiveSizeBytes =
+      numberValue(result, "archiveSizeBytes") ??
+      (archive ? numberValue(archive, "sizeBytes") : undefined);
+    const resolvedCommit = requiredString(result, "resolvedCommit");
+    if (!archiveDigest || archiveSizeBytes === undefined) {
+      throw new Error(`source_sync ${job.runId} returned no archive metadata`);
+    }
+    const bytes = await fetchRunnerArtifact(
+      job.runId,
+      `/runs/${encodeURIComponent(job.runId)}/artifacts/source-archive`,
+    );
+    await assertDigest(bytes, archiveDigest, "source_sync archive");
+    await this.archiveStore.write(job.archiveObjectKey, bytes);
+    return { resolvedCommit, archiveDigest, archiveSizeBytes };
+  }
+
+  async readCapsuleSourceFiles(
+    job: OpenTofuCapsuleSourceFilesJob,
+  ): Promise<readonly OpenTofuCapsuleSourceFile[]> {
+    await this.restoreSourceArchive(job.runId, {
+      objectKey: job.sourceSnapshot.archiveObjectKey,
+      digest: job.sourceSnapshot.archiveDigest,
+    });
+    const result = await runRunner("compatibility_check", job.runId, {});
+    const files = result.files;
+    if (!Array.isArray(files)) {
+      throw new Error(`compatibility_check ${job.runId} returned no files`);
+    }
+    return files.map((entry) => {
+      if (!isRecord(entry)) {
+        throw new Error("compatibility_check file entry must be an object");
+      }
+      const path = requiredString(entry, "path");
+      const text = requiredString(entry, "text");
+      return { path, text };
+    });
+  }
+
+  private async restoreSourceArchive(
+    runId: string,
+    sourceArchive: OpenTofuPlanJob["sourceArchive"],
+  ): Promise<void> {
+    if (!sourceArchive) return;
+    const bytes = await this.archiveStore.read(sourceArchive.objectKey);
+    await assertDigest(bytes, sourceArchive.digest, "source archive");
+    const response = await handleRunnerRequest(
+      new Request(
+        `https://local-opentofu-runner/runs/${encodeURIComponent(runId)}/source-archive/restore`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/zstd" },
+          body: arrayBufferFromBytes(bytes),
+        },
+      ),
+    );
+    if (!response.ok) {
+      throw new Error(
+        `OpenTofu runner failed to restore source archive for ${runId}: ${await response.text()}`,
+      );
+    }
+  }
+}
+
+async function copyRunnerLocalPlanArtifact(
+  applyRunId: string,
+  planRunId: string,
+  artifact: OpenTofuPlanArtifact,
+): Promise<void> {
+  const sourceRunId = runnerLocalPlanRunId(artifact) ?? planRunId;
+  const bytes = await fetchRunnerArtifact(
+    sourceRunId,
+    `/runs/${encodeURIComponent(sourceRunId)}/artifacts/tfplan`,
+  );
+  await assertDigest(bytes, artifact.digest, "plan artifact");
+  const response = await handleRunnerRequest(
+    new Request(
+      `https://local-opentofu-runner/runs/${encodeURIComponent(applyRunId)}/artifacts/tfplan`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/vnd.opentofu.plan" },
+        body: arrayBufferFromBytes(bytes),
+      },
+    ),
+  );
+  if (!response.ok) {
+    throw new Error(
+      `OpenTofu runner failed to restore plan artifact for ${applyRunId}: ${await response.text()}`,
+    );
+  }
+}
+
+function runnerLocalPlanRunId(
+  artifact: OpenTofuPlanArtifact,
+): string | undefined {
+  return /^runner-local:\/\/([^/]+)\/tfplan$/.exec(artifact.ref)?.[1];
+}
+
+async function runRunner(
+  action: "plan" | "apply" | "destroy" | "compatibility_check" | "source_sync",
+  runId: string,
+  request: unknown,
+): Promise<Record<string, unknown>> {
+  const response = await handleRunnerRequest(
+    new Request(
+      `https://local-opentofu-runner/runs/${encodeURIComponent(runId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action,
+          runId,
+          requestedAt: new Date().toISOString(),
+          request,
+        }),
+      },
+    ),
+  );
+  const text = await response.text();
+  const body = text.trim().length > 0 ? parseObject(text) : {};
+  if (!response.ok) {
+    const detail =
+      stringValue(body, "detail") ??
+      stringValue(body, "error") ??
+      stringValue(body, "stderr") ??
+      text.slice(0, 500);
+    throw new Error(
+      `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
+    );
+  }
+  return body;
+}
+
+async function fetchRunnerArtifact(
+  runId: string,
+  path: string,
+): Promise<Uint8Array> {
+  const response = await handleRunnerRequest(
+    new Request(`https://local-opentofu-runner${path}`, { method: "GET" }),
+  );
+  if (!response.ok) {
+    throw new Error(
+      `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function parsePlanArtifact(
+  result: Record<string, unknown>,
+  runId: string,
+  planDigest: string,
+): OpenTofuPlanArtifact {
+  const artifact = recordValue(result, "planArtifact");
+  if (!artifact) {
+    throw new Error(`OpenTofu runner plan ${runId} returned no planArtifact`);
+  }
+  const kind = requiredString(artifact, "kind");
+  const ref = requiredString(artifact, "ref");
+  const digest = requiredString(artifact, "digest");
+  if (digest !== planDigest) {
+    throw new Error(
+      `OpenTofu runner plan ${runId} returned a planArtifact digest that does not match planDigest`,
+    );
+  }
+  return {
+    kind,
+    ref,
+    digest,
+    ...(stringValue(artifact, "contentType")
+      ? { contentType: stringValue(artifact, "contentType") }
+      : {}),
+    ...(numberValue(artifact, "sizeBytes") !== undefined
+      ? { sizeBytes: numberValue(artifact, "sizeBytes") }
+      : {}),
+    ...(numberValue(artifact, "createdAt") !== undefined
+      ? { createdAt: numberValue(artifact, "createdAt") }
+      : {}),
+  };
+}
+
+function providerInstallation(
+  result: Record<string, unknown>,
+): OpenTofuPlanResult["providerInstallation"] | undefined {
+  const value = result.providerInstallation;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.flatMap((entry): ProviderInstallationEvidence[] => {
+    if (!isRecord(entry)) return [];
+    const provider = stringValue(entry, "provider");
+    const method = stringValue(entry, "installationMethod");
+    if (
+      !provider ||
+      (method !== "filesystem_mirror" &&
+        method !== "direct" &&
+        method !== "unknown")
+    ) {
+      return [];
+    }
+    return [
+      {
+        provider,
+        mirrored: entry.mirrored === true,
+        installationMethod: method,
+        ...(stringValue(entry, "mirrorPath")
+          ? { mirrorPath: stringValue(entry, "mirrorPath") }
+          : {}),
+        ...(entry.attested === true ? { attested: true } : {}),
+        ...(stringValue(entry, "attestationMethod") ===
+        "forced_filesystem_mirror_init"
+          ? { attestationMethod: "forced_filesystem_mirror_init" as const }
+          : {}),
+        ...(stringValue(entry, "cliConfigDigest")
+          ? { cliConfigDigest: stringValue(entry, "cliConfigDigest") }
+          : {}),
+        ...(stringValue(entry, "installedPath")
+          ? { installedPath: stringValue(entry, "installedPath") }
+          : {}),
+        ...(stringValue(entry, "installedDigest")
+          ? { installedDigest: stringValue(entry, "installedDigest") }
+          : {}),
+      },
+    ];
+  });
+  return rows.length > 0 ? rows : undefined;
+}
+
+function planResourceChanges(
+  result: Record<string, unknown>,
+): readonly PlanResourceChange[] | undefined {
+  const value = result.planResourceChanges;
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.flatMap((entry): PlanResourceChange[] => {
+    if (!isRecord(entry)) return [];
+    const address = stringValue(entry, "address");
+    const type = stringValue(entry, "type");
+    const actions = stringArray(entry, "actions");
+    if (!address || !type || !actions) return [];
+    const scope = recordValue(entry, "scope");
+    const projectedScope = scope
+      ? {
+          ...(stringValue(scope, "cloudflareAccountId")
+            ? { cloudflareAccountId: stringValue(scope, "cloudflareAccountId") }
+            : {}),
+          ...(stringValue(scope, "cloudflareZoneId")
+            ? { cloudflareZoneId: stringValue(scope, "cloudflareZoneId") }
+            : {}),
+          ...(stringValue(scope, "awsAccountId")
+            ? { awsAccountId: stringValue(scope, "awsAccountId") }
+            : {}),
+          ...(stringValue(scope, "awsRegion")
+            ? { awsRegion: stringValue(scope, "awsRegion") }
+            : {}),
+        }
+      : undefined;
+    return [
+      {
+        address,
+        type,
+        actions,
+        ...(projectedScope && Object.keys(projectedScope).length > 0
+          ? { scope: projectedScope }
+          : {}),
+      },
+    ];
+  });
+  return rows.length > 0 ? rows : undefined;
+}
+
+function diagnostics(
+  result: Record<string, unknown>,
+): readonly RunDiagnostic[] {
+  const stderr = stringValue(result, "stderr");
+  return stderr && stderr.trim().length > 0
+    ? [{ severity: "warning", message: stderr }]
+    : [];
+}
+
+async function assertDigest(
+  bytes: Uint8Array,
+  expected: string,
+  label: string,
+): Promise<void> {
+  const digest = await digestBytes(bytes);
+  if (digest !== expected) {
+    throw new Error(
+      `${label} digest mismatch: expected ${expected}, got ${digest}`,
+    );
+  }
+}
+
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    arrayBufferFromBytes(bytes),
+  );
+  return `sha256:${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
+function archivePath(root: string, key: string): string {
+  if (
+    key.length === 0 ||
+    key.startsWith("/") ||
+    key.includes("\\") ||
+    key.includes("\0") ||
+    key.split("/").some((segment) => segment === "..") ||
+    key.startsWith("spaces/") === false
+  ) {
+    throw new Error(`unsafe source archive key: ${key}`);
+  }
+  const path = resolve(root, key);
+  if (path !== root && !path.startsWith(`${root}/`)) {
+    throw new Error(`source archive key escapes root: ${key}`);
+  }
+  return path;
+}
+
+function parseObject(text: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(text);
+  if (!isRecord(value)) throw new Error("runner response must be an object");
+  return value;
+}
+
+function requiredString(value: Record<string, unknown>, key: string): string {
+  const out = stringValue(value, key);
+  if (!out) throw new Error(`${key} is required`);
+  return out;
+}
+
+function stringValue(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const field = value[key];
+  return typeof field === "string" && field.length > 0 ? field : undefined;
+}
+
+function numberValue(
+  value: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const field = value[key];
+  return typeof field === "number" && Number.isFinite(field)
+    ? field
+    : undefined;
+}
+
+function recordValue(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const field = value[key];
+  return isRecord(field) ? field : undefined;
+}
+
+function stringArray(
+  value: Record<string, unknown>,
+  key: string,
+): readonly string[] | undefined {
+  const field = value[key];
+  if (!Array.isArray(field)) return undefined;
+  const strings = field.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return strings.length > 0 ? strings : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

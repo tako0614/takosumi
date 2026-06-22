@@ -183,7 +183,9 @@ export function analyzeOpenTofuCapsuleFiles(
   collectDependencyLockFindings(input.files, findings);
   collectFilesystemSensitiveExpressionFindings(hclFiles, findings);
 
-  if (providers.length === 0) {
+  const hasProviderBackedBlocks =
+    resources.length > 0 || dataSources.length > 0 || provisioners.length > 0;
+  if (providers.length === 0 && hasProviderBackedBlocks) {
     findings.push({
       severity: "warning",
       code: "required_providers_missing",
