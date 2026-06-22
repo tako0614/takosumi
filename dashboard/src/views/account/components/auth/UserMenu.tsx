@@ -17,7 +17,10 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../../../lib/theme.ts";
-import { isTakosumiCloudRuntime } from "../../../../lib/deployment-brand.ts";
+import {
+  dashboardDocsHref,
+  isTakosumiCloudRuntime,
+} from "../../../../lib/deployment-brand.ts";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -96,7 +99,7 @@ export default function UserMenu() {
           </Show>
           <a
             class="user-menu-item"
-            href="https://takosumi.com/docs"
+            href={dashboardDocsHref()}
             target="_blank"
             rel="external noopener"
             onClick={() => setOpen(false)}

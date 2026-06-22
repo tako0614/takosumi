@@ -177,7 +177,7 @@ function RunGroupMemberRow(props: { readonly run: Run }) {
           {(id) => (
             <a
               class="wa-run-group-service"
-              href={`/capsules/${encodeURIComponent(id())}`}
+              href={`/services/${encodeURIComponent(id())}`}
             >
               {t("runGroup.openService")}
             </a>

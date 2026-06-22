@@ -663,51 +663,53 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 <Show
                   when={tokenHelper()}
                   fallback={
-                    /* No guided helper — raw fields are the path. */
-                    <form
-                      class="wc-form"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        void create.run();
-                      }}
-                    >
-                      <Index each={fields()}>
-                        {(field) => (
-                          <FormField
-                            label={field().label}
-                            required={field().required}
+                    <details class="connection-advanced connection-help">
+                      <summary>{t("conn.advanced.summary")}</summary>
+                      <form
+                        class="wc-form"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void create.run();
+                        }}
+                      >
+                        <Index each={fields()}>
+                          {(field) => (
+                            <FormField
+                              label={field().label}
+                              required={field().required}
+                            >
+                              <Input
+                                id={`connection-field-${field().envName}`}
+                                name={`field:${field().envName}`}
+                                type={field().secret ? "password" : "text"}
+                                value={values()[field().envName] ?? ""}
+                                onInput={(e) =>
+                                  setFieldValue(
+                                    field().envName,
+                                    e.currentTarget.value,
+                                  )
+                                }
+                                placeholder={field().placeholder}
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                          )}
+                        </Index>
+                        <div class="wc-form-actions">
+                          <Button
+                            variant="primary"
+                            type="submit"
+                            busy={create.busy()}
                           >
-                            <Input
-                              id={`connection-field-${field().envName}`}
-                              name={`field:${field().envName}`}
-                              type={field().secret ? "password" : "text"}
-                              value={values()[field().envName] ?? ""}
-                              onInput={(e) =>
-                                setFieldValue(
-                                  field().envName,
-                                  e.currentTarget.value,
-                                )
-                              }
-                              placeholder={field().placeholder}
-                              autocomplete="off"
-                              spellcheck={false}
-                            />
-                          </FormField>
-                        )}
-                      </Index>
-                      <div class="wc-form-actions">
-                        <Button
-                          variant="primary"
-                          type="submit"
-                          busy={create.busy()}
-                        >
-                          {create.busy()
-                            ? t("conn.registering")
-                            : t("conn.register")}
-                        </Button>
-                      </div>
-                      <ActionError error={create.error} />
-                    </form>
+                            {create.busy()
+                              ? t("conn.registering")
+                              : t("conn.register")}
+                          </Button>
+                        </div>
+                        <ActionError error={create.error} />
+                      </form>
+                    </details>
                   }
                 >
                   {(helper) => (
@@ -745,11 +747,14 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                               })}
                             </Button>
                           </div>
-                          <ol class="wc-steps">
-                            <For each={helper().steps}>
-                              {(s) => <li>{s}</li>}
-                            </For>
-                          </ol>
+                          <details class="connection-instructions">
+                            <summary>{t("conn.guided.instructions")}</summary>
+                            <ol class="wc-steps">
+                              <For each={helper().steps}>
+                                {(s) => <li>{s}</li>}
+                              </For>
+                            </ol>
+                          </details>
 
                           <form
                             class="wc-form"

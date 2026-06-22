@@ -14,6 +14,7 @@
 import { createSignal } from "solid-js";
 import { ja } from "./ja.ts";
 import { en } from "./en.ts";
+import { dashboardProductName } from "../lib/deployment-brand.ts";
 
 export type Locale = "ja" | "en";
 export type MessageKey = keyof typeof ja;
@@ -66,10 +67,10 @@ export function t(
   );
 }
 
-/** Set the document title in the canonical "<page> — Takosumi" pattern. */
+/** Set the document title in the canonical "<page> — product" pattern. */
 export function setDocumentTitle(page: string): void {
   if (typeof document !== "undefined") {
-    document.title = `${page} — ${t("common.appName")}`;
+    document.title = `${page} — ${dashboardProductName()}`;
   }
 }
 
