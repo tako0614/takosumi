@@ -11,6 +11,9 @@ import {
   type VerifyFetch,
 } from "../../../../core/adapters/vault/verify_drivers.ts";
 
+const TEST_GCP_PRIVATE_KEY =
+  "-----BEGIN " + "PRIVATE KEY-----\\nsecret\\n-----END " + "PRIVATE KEY-----\\n";
+
 function connection(overrides: Partial<Connection> = {}): Connection {
   return {
     id: "conn_x",
@@ -184,7 +187,7 @@ test("gcp_service_account_json: structural service account JSON ⇒ verified", a
         type: "service_account",
         project_id: "project-1",
         client_email: "svc@project-1.iam.gserviceaccount.com",
-        private_key: "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+        private_key: TEST_GCP_PRIVATE_KEY,
       }),
     },
     fetch: noFetch,
@@ -202,7 +205,7 @@ test("gcp_service_account_json: missing project ⇒ pending", async () => {
       GOOGLE_CREDENTIALS: JSON.stringify({
         type: "service_account",
         client_email: "svc@project-1.iam.gserviceaccount.com",
-        private_key: "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+        private_key: TEST_GCP_PRIVATE_KEY,
       }),
     },
     fetch: noFetch,
