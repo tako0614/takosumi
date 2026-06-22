@@ -18,6 +18,7 @@ export interface CatalogEntry {
   readonly ref: string;
   readonly path: string;
   readonly installConfigId: string;
+  readonly surface: "service" | "building_block";
   readonly kind: "worker" | "storage" | "site";
   readonly provider: "cloudflare" | "aws";
   /** Suggested Installation name (pre-fills the name field). */
@@ -50,6 +51,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     ref: TAKOSUMI_CATALOG_REF,
     path: "providers/cloudflare/modules/cloudflare-hello-worker/module",
     installConfigId: "cfg-official-cloudflare-hello-worker",
+    surface: "service",
     kind: "worker",
     provider: "cloudflare",
     suggestedName: "hello",
@@ -102,6 +104,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     ref: TAKOSUMI_CATALOG_REF,
     path: "providers/cloudflare/modules/cloudflare-r2-storage/module",
     installConfigId: "cfg-official-cloudflare-r2-storage",
+    surface: "building_block",
     kind: "storage",
     provider: "cloudflare",
     suggestedName: "r2-storage",
@@ -150,6 +153,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     ref: TAKOSUMI_CATALOG_REF,
     path: "providers/cloudflare/modules/cloudflare-static-site/module",
     installConfigId: "cfg-official-cloudflare-static-site",
+    surface: "service",
     kind: "site",
     provider: "cloudflare",
     suggestedName: "static-site",
@@ -195,6 +199,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     ref: TAKOSUMI_CATALOG_REF,
     path: "providers/aws/modules/aws-s3-storage/module",
     installConfigId: "cfg-official-aws-s3-storage",
+    surface: "building_block",
     kind: "storage",
     provider: "aws",
     suggestedName: "s3-storage",

@@ -60,7 +60,18 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-catalog-grid"');
     expect(newAppViewSource).toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
+    expect(newAppViewSource).toContain("function CatalogCard");
+    expect(newAppViewSource).toContain(
+      "const PRIMARY_CATALOG = CATALOG.filter",
+    );
+    expect(newAppViewSource).toContain(
+      "const BUILDING_BLOCK_CATALOG = CATALOG.filter",
+    );
+    expect(newAppViewSource).toContain('entry.surface === "service"');
+    expect(newAppViewSource).toContain('entry.surface === "building_block"');
     expect(newAppViewSource).toContain('t("new.store.title")');
+    expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
+    expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     const storeHeadStart = newAppViewSource.indexOf(
       '<div class="av-store-head">',
@@ -99,6 +110,7 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en["new.store.title"]).toBe("Available services");
+    expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe("add from link");
     expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
       "manually",
@@ -106,6 +118,7 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja["new.store.title"]).toBe("追加できるサービス");
+    expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
     expect(ja["new.advancedImport.open"]).toBe("リンクから追加");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
@@ -198,9 +211,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("inputVariableError");
     expect(en["new.vars.errorCatalogReserved"]).toContain("Service setup");
     expect(ja["new.vars.errorCatalogReserved"]).toContain("サービス設定");
-    expect(en["new.vars.inputsBody"].toLowerCase()).toContain(
-      "visible inputs",
-    );
+    expect(en["new.vars.inputsBody"].toLowerCase()).toContain("visible inputs");
     expect(ja["new.vars.inputsBody"]).toContain("表示用の入力");
     expect(en["new.vars.inputsTitle"]).not.toBe("Advanced settings");
     expect(ja["new.vars.inputsTitle"]).not.toBe("詳細設定");

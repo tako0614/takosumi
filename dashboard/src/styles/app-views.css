@@ -381,6 +381,15 @@
   color: var(--tg-accent-text);
   font-weight: 700;
 }
+.av-catalog-more {
+  margin-top: var(--tg-s-1);
+}
+.av-catalog-more > summary {
+  font-weight: 700;
+}
+.av-catalog-grid-secondary {
+  margin-top: var(--tg-s-3);
+}
 .av-import-card {
   margin-top: var(--tg-s-3);
 }

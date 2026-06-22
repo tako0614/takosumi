@@ -341,6 +341,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.subtitle": "Choose a starter or paste an install link.",
   "new.store.aria": "Available services",
   "new.store.title": "Available services",
+  "new.store.blocksTitle": "Storage and building blocks",
   "new.catalog.select": "Add this",
   "new.advancedImport.open": "Add from link",
   "new.advancedImport.close": "Back to list",
@@ -533,8 +534,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Only owners and admins can invite, change roles, or remove members.",
 
   // --- connections -------------------------------------------------------------
-  "conn.subtitle":
-    "Connect the cloud accounts this team can use for hosting.",
+  "conn.subtitle": "Connect the cloud accounts this team can use for hosting.",
   "conn.providerConnections.title": "Cloud accounts",
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
@@ -617,9 +617,8 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.invalidProvider": "Invalid connection target.",
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
-  "conn.list.title": "Cloud account details",
-  "conn.list.empty":
-    "This workspace has no connections yet. Add one with the form above.",
+  "conn.empty.title": "No cloud accounts yet",
+  "conn.empty.message": "Add one when a service needs access to your cloud.",
   "conn.test": "Test connection",
   "conn.testing": "Testing...",
   "conn.test.notReady": "The connection is not ready yet (status: {status}).",
