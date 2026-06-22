@@ -346,6 +346,7 @@ export const ja = {
   "new.subtitle": "おすすめから選ぶか、リンクを貼って追加します。",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "追加できるサービス",
+  "new.store.blocksTitle": "保存先と部品",
   "new.catalog.select": "これを追加",
   "new.advancedImport.open": "リンクから追加",
   "new.advancedImport.close": "一覧に戻る",
@@ -456,11 +457,9 @@ export const ja = {
   "new.providers.errorOperatorManaged":
     "{provider} はこのワークスペースではまだ利用できません。",
   "new.providers.missingTitle": "クラウドアカウントの設定が必要です",
-  "new.providers.missingBody":
-    "クラウドアカウントを設定すると続けられます。",
+  "new.providers.missingBody": "クラウドアカウントを設定すると続けられます。",
   "new.providers.setupMissing": "必要なクラウドアカウントを設定",
-  "new.providers.operatorMissingTitle":
-    "必要なクラウドアカウントがありません",
+  "new.providers.operatorMissingTitle": "必要なクラウドアカウントがありません",
   "new.providers.operatorMissingBody":
     "このサービスを追加するにはクラウドアカウントが必要です。",
   "new.providers.operatorMissingNext":
@@ -609,8 +608,7 @@ export const ja = {
   "conn.guided.connect": "手動接続を保存",
   "conn.guided.connecting": "接続中...",
   "conn.custom.summary": "カスタムサービス",
-  "conn.custom.body":
-    "一覧にないサービスが必要な場合だけ使います。",
+  "conn.custom.body": "一覧にないサービスが必要な場合だけ使います。",
   "conn.custom.use": "カスタムサービスを追加",
   "conn.custom.back": "クラウドサービスに戻る",
   "conn.advanced.summary": "手動設定",
@@ -630,9 +628,9 @@ export const ja = {
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.list.title": "クラウドアカウントの詳細",
-  "conn.list.empty":
-    "このワークスペースにはまだ接続がありません。上のフォームから追加できます。",
+  "conn.empty.title": "クラウドアカウントはまだありません",
+  "conn.empty.message":
+    "サービスがクラウドを使うときに、必要なアカウントを追加します。",
   "conn.test": "接続テスト",
   "conn.testing": "確認中...",
   "conn.test.notReady": "接続はまだ利用できません（状態: {status}）。",
@@ -716,8 +714,7 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated":
-    "クラウドアカウント「{provider}」を追加しました",
+  "notif.event.connCreated": "クラウドアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "クラウドアカウントを追加しました",
   "notif.event.connRevoked":
     "クラウドアカウント「{provider}」が無効になりました",

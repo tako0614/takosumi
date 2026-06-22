@@ -61,16 +61,22 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).not.toContain("c.envNames.join");
   });
 
-  test("keeps connection creation out of the default list surface once connections exist", () => {
+  test("keeps connection creation behind an explicit action", () => {
     expect(connectionsTabSource).toContain("const shouldShowCreateForm = ()");
     expect(connectionsTabSource).toContain("const hasProviderConnections = ()");
     expect(connectionsTabSource).toContain("setCreateFormOpen(true)");
     expect(connectionsTabSource).toContain("setCreateFormOpen(false)");
+    expect(connectionsTabSource).toContain('t("conn.empty.title")');
+    expect(connectionsTabSource).toContain('t("conn.empty.message")');
     expect(connectionsTabSource).toContain('t("conn.add.open")');
     expect(connectionsTabSource).toContain('t("conn.add.close")');
-    expect(connectionsTabSource).toContain("!shouldShowCreateForm()");
+    expect(connectionsTabSource).toContain(
+      "const shouldShowCreateForm = () => createFormOpen();",
+    );
     expect(en["conn.add.open"]).toBe("Add cloud account");
     expect(ja["conn.add.open"]).toBe("クラウドアカウントを追加");
+    expect(en["conn.empty.title"]).toBe("No cloud accounts yet");
+    expect(ja["conn.empty.title"]).toBe("クラウドアカウントはまだありません");
   });
 
   test("keeps raw account subjects out of the always-visible user menu", () => {

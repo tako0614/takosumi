@@ -34,6 +34,21 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
+  test("catalog keeps hostable services first and building blocks secondary", () => {
+    const services = CATALOG.filter((entry) => entry.surface === "service");
+    const buildingBlocks = CATALOG.filter(
+      (entry) => entry.surface === "building_block",
+    );
+    expect(services.map((entry) => entry.id)).toEqual([
+      "cloudflare-hello-worker",
+      "cloudflare-static-site",
+    ]);
+    expect(buildingBlocks.map((entry) => entry.id)).toEqual([
+      "cloudflare-r2-storage",
+      "aws-s3-storage",
+    ]);
+  });
+
   test("visible cards resolve to seeded official template configs", () => {
     const seededConfigs = officialInstallConfigs();
     for (const entry of CATALOG) {
