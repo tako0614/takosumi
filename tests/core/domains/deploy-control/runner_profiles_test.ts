@@ -48,12 +48,6 @@ test("includes multiple listed profiles in env order and excludes the rest", () 
   expect(idsOf(enabled)).not.toContain("docker-custom-example");
 });
 
-test("reserved profiles fail closed even when explicitly listed", () => {
-  expect(() => resolveEnabledRunnerProfiles(SEEDS, "gcp-reserved")).toThrow(
-    "runner profile gcp-reserved is reserved",
-  );
-});
-
 test("trims whitespace and collapses duplicate ids (first wins)", () => {
   const enabled = resolveEnabledRunnerProfiles(
     SEEDS,
@@ -63,6 +57,17 @@ test("trims whitespace and collapses duplicate ids (first wins)", () => {
     "aws-provider-env-candidate",
     "cloudflare-default",
   ]);
+});
+
+test("gcp candidate can be explicitly enabled", () => {
+  const enabled = resolveEnabledRunnerProfiles(
+    SEEDS,
+    "gcp-provider-env-candidate",
+  );
+  expect(idsOf(enabled)).toEqual(["gcp-provider-env-candidate"]);
+  expect(
+    enabled[0]?.labels?.["takosumi.com/profile-enabled"],
+  ).toEqual("true");
 });
 
 test("merges takosumi.com/profile-enabled=true into every enabled profile", () => {

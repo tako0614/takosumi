@@ -3462,6 +3462,9 @@ async function createControlConnection(
   const provider = sourceGitKind
     ? sourceGitKind
     : (stringValue(body.provider) ?? "cloudflare");
+  const normalizedProvider = isGoogleCloudProvider(provider)
+    ? "google"
+    : provider;
   const values = stringRecord(body.values);
   if (!values || Object.keys(values).length === 0) {
     return errorJson("invalid_request", "values is required", 400);
@@ -3474,24 +3477,28 @@ async function createControlConnection(
     );
   }
   const scopeHints = connectionScopeHintsFromValues(
-    provider,
+    normalizedProvider,
     values,
     body.scopeHints,
   );
   const createRequest: CreateConnectionRequest = {
     spaceId,
-    provider,
+    provider: normalizedProvider,
     credentialDriver: sourceGitKind
       ? "static_secret"
-      : provider === "cloudflare"
+      : normalizedProvider === "cloudflare"
         ? "cloudflare_api_token"
+        : normalizedProvider === "google"
+          ? "gcp_service_account_json"
         : "generic_env",
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.
     kind: sourceGitKind
       ? sourceGitKind
-      : provider === "cloudflare"
+      : normalizedProvider === "cloudflare"
         ? "cloudflare_api_token"
+        : normalizedProvider === "google"
+          ? "gcp_service_account_json"
         : "generic_env_provider",
     authMethod: "static_secret",
     // Force Space scope: the dashboard session surface never mints an operator
@@ -4167,6 +4174,9 @@ function connectionScopeHints(
     "repoUrl",
     "username",
     "knownHostsEntry",
+    "awsRegion",
+    "gcpProjectId",
+    "gcpServiceAccountEmail",
     "templateId",
   ] as const) {
     const v = stringValue(value[key]);
@@ -4187,6 +4197,12 @@ function connectionScopeHintsFromValues(
     const accountId = stringValue(values.CLOUDFLARE_ACCOUNT_ID);
     if (accountId) derived.accountId = accountId;
   }
+  if (isGoogleCloudProvider(provider)) {
+    const projectId =
+      stringValue(values.GOOGLE_CLOUD_PROJECT) ??
+      stringValue(values.GOOGLE_PROJECT);
+    if (projectId) derived.gcpProjectId = projectId;
+  }
   const hints = {
     ...derived,
     ...(connectionScopeHints(explicit) ?? {}),
@@ -4194,6 +4210,11 @@ function connectionScopeHintsFromValues(
   return Object.keys(hints).length > 0
     ? (hints as ConnectionScopeHints)
     : undefined;
+}
+
+function isGoogleCloudProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "gcp" || normalized === "google";
 }
 
 function spaceTypeValue(value: unknown): SpaceType | undefined {

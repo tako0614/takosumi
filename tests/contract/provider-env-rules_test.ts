@@ -91,7 +91,7 @@ test("every rule's envNames superset includes all required-group members", () =>
   }
 });
 
-test("providerCredentialArgs maps cloudflare/aws and resolves by short or path form", () => {
+test("providerCredentialArgs maps cloudflare/aws/google and resolves by short or path form", () => {
   expect(providerCredentialArgs("cloudflare")).toEqual([
     { envName: "CLOUDFLARE_API_TOKEN", arg: "api_token" },
   ]);
@@ -104,6 +104,13 @@ test("providerCredentialArgs maps cloudflare/aws and resolves by short or path f
     { envName: "AWS_SECRET_ACCESS_KEY", arg: "secret_key" },
     { envName: "AWS_SESSION_TOKEN", arg: "token" },
   ]);
+  expect(providerCredentialArgs("gcp")).toEqual([
+    { envName: "GOOGLE_CREDENTIALS", arg: "credentials" },
+    { envName: "GOOGLE_CLOUD_PROJECT", arg: "project" },
+  ]);
+  expect(providerCredentialArgs("hashicorp/google")).toEqual(
+    providerCredentialArgs("google"),
+  );
   // A provider without an arg mapping (and an unknown provider) get no split.
   expect(providerCredentialArgs("kubernetes")).toEqual([]);
   expect(providerCredentialArgs("totally-unknown")).toEqual([]);

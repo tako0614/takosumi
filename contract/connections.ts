@@ -26,6 +26,8 @@ export const CONNECTIONS_GCP_OAUTH_CALLBACK_PATH =
   `${INTERNAL_V1_PREFIX}/connections/gcp/oauth/callback` as const;
 export const CONNECTIONS_GCP_IMPERSONATION_PATH =
   `${INTERNAL_V1_PREFIX}/connections/gcp/impersonation` as const;
+export const CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_PATH =
+  `${INTERNAL_V1_PREFIX}/connections/gcp/service-account-json` as const;
 export const CONNECTION_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}`;
 export const CONNECTION_TEST_PATH = (id: string): string =>
@@ -163,6 +165,7 @@ export type ConnectionKind =
   | "cloudflare_api_token"
   | "aws_assume_role"
   | "gcp_oauth_bootstrap"
+  | "gcp_service_account_json"
   | "gcp_service_account_impersonation"
   | "static_secret"
   | "generic_env_provider"
@@ -173,6 +176,7 @@ export type ConnectionCredentialDriver =
   | "cloudflare_api_token"
   | "aws_assume_role"
   | "gcp_oauth_bootstrap"
+  | "gcp_service_account_json"
   | "gcp_service_account_impersonation"
   | "generic_env"
   | "static_secret"

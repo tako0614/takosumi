@@ -3457,6 +3457,60 @@ test("Connections create: registers a Space-owned source Git HTTPS token; token 
   expect(text).not.toContain("GIT_HTTPS_TOKEN");
 });
 
+test("Connections create: normalizes Google Cloud to service-account JSON driver", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const serviceAccountJson = JSON.stringify({
+    type: "service_account",
+    project_id: "project-1",
+    client_email: "svc@project-1.iam.gserviceaccount.com",
+    private_key:
+      "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+  });
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "gcp",
+      displayName: "Google Cloud",
+      values: {
+        GOOGLE_CREDENTIALS: serviceAccountJson,
+        GOOGLE_CLOUD_PROJECT: "project-1",
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    spaceId?: string;
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    scope?: string;
+    scopeHints?: { gcpProjectId?: string };
+    values?: Record<string, string>;
+  };
+  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.provider).toEqual("google");
+  expect(passed.kind).toEqual("gcp_service_account_json");
+  expect(passed.credentialDriver).toEqual("gcp_service_account_json");
+  expect(passed.scope).toEqual("space");
+  expect(passed.scopeHints?.gcpProjectId).toEqual("project-1");
+  expect(passed.values?.GOOGLE_CREDENTIALS).toEqual(serviceAccountJson);
+
+  const text = await response!.text();
+  expect(text).not.toContain("private_key");
+  expect(text).not.toContain("BEGIN PRIVATE KEY");
+});
+
 test("Connections create: requires spaceId and values", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

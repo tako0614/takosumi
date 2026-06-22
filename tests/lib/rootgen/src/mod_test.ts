@@ -257,6 +257,23 @@ test("generateInstallationRoot golden provider-aliased main.tf", () => {
   );
 });
 
+test("generateGenericCapsuleRoot normalizes gcp bindings to google provider args", () => {
+  const { files } = generateGenericCapsuleRoot({
+    requiredProviders: ["registry.opentofu.org/hashicorp/google"],
+    inputs: {},
+    outputAllowlist: {},
+    providerEnvBindings: [{ provider: "gcp" }],
+  });
+  const main = files["main.tf"]!;
+  expect(main).toContain('variable "google_credentials" {');
+  expect(main).toContain('variable "google_project" {');
+  expect(main).toContain('provider "google" {');
+  expect(main).toContain("  credentials = var.google_credentials");
+  expect(main).toContain("  project = var.google_project");
+  expect(main).toContain("    google = google");
+  expect(main).not.toContain('provider "gcp"');
+});
+
 test("generateInstallationRoot rejects multiple aliases for one child provider without configuration_aliases metadata", () => {
   expect(() =>
     generateInstallationRoot({

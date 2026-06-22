@@ -396,6 +396,55 @@ test("test() keeps reserved gcp helpers pending", async () => {
   expect(persisted?.verifiedAt).toBeUndefined();
 });
 
+test("test() verifies and mints gcp service account JSON Provider Connections", async () => {
+  const { store, vault } = makeVault();
+  const serviceAccountJson = JSON.stringify({
+    type: "service_account",
+    project_id: "project-1",
+    client_email: "svc@project-1.iam.gserviceaccount.com",
+    private_key:
+      "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+  });
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "google",
+    kind: "gcp_service_account_json",
+    credentialDriver: "gcp_service_account_json",
+    authMethod: "static_secret",
+    values: {
+      GOOGLE_CREDENTIALS: serviceAccountJson,
+      GOOGLE_CLOUD_PROJECT: "   ",
+    },
+  });
+  expect(connection.envNames).toEqual([
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CREDENTIALS",
+  ]);
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+    { provider: "registry.opentofu.org/hashicorp/google", connectionId: connection.id },
+  ]);
+  expect(bundle.env.TF_VAR_google_credentials).toEqual(serviceAccountJson);
+  expect(bundle.env.TF_VAR_google_project).toEqual("project-1");
+  expect(bundle.providerCredentialEvidence).toEqual([
+    {
+      providerEnvId: connection.id,
+      connectionId: connection.id,
+      provider: "google",
+      delivery: "generated_root_variable",
+      rootOnly: true,
+      temporary: false,
+      ttlEnforced: false,
+      issuer: "static_secret",
+    },
+  ]);
+});
+
 test("mint rejects reserved gcp helpers even if a row is manually verified", async () => {
   const { store, vault } = makeVault();
   const connection = await markVerified(

@@ -640,6 +640,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
         "GOOGLE_CLOUD_PROJECT",
       ],
       helpers: [
+        "gcp_service_account_json",
         "gcp_oauth_bootstrap",
         "gcp_service_account_impersonation",
         "generic_env",
