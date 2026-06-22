@@ -119,6 +119,9 @@ describe("/new Provider Connections return context", () => {
         /await afterConnectionCreated\(connection\)/g,
       ) ?? [],
     ).toHaveLength(3);
+    expect(
+      connectionsTabSource.match(/await runTest\(connection\.id\)/g) ?? [],
+    ).toHaveLength(3);
     expect(connectionsTabSource).toContain('"conn.saved.message"');
     expect(connectionsTabSource).toContain('"conn.saved.needsTest"');
     expect(connectionsTabSource).toContain('"conn.saved.testCta"');
