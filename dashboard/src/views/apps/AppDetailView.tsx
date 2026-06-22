@@ -602,9 +602,13 @@ function DeploysTab(props: {
         </Show>
         <Show when={props.backupResult}>
           {(record) => (
-            <p class="wa-notice">
-              {t("app.deploys.backupCreated", { id: record().id })}
-            </p>
+            <div class="wa-notice">
+              {t("app.deploys.backupCreated")}
+              <details class="wb-inline-details">
+                <summary>{t("app.deploys.backupSupportRef")}</summary>
+                <code>{record().id}</code>
+              </details>
+            </div>
           )}
         </Show>
         <Show when={props.backupError}>

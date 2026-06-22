@@ -16,11 +16,16 @@ describe("RunGroupView", () => {
     expect(source).toContain('class="wa-run-group-list"');
     expect(source).toContain("RunGroupMemberRow");
     expect(source).toContain('t("runGroup.openService")');
+    expect(source).toContain('t("runGroup.openRun")');
     expect(source).toContain('<summary>{t("run.details.title")}</summary>');
+    expect(source).not.toContain('class="wa-run-group-details"');
+    expect(source).not.toContain('t("run.details.runId")');
     expect(source).not.toContain('header: "Run"');
     expect(source).not.toContain("<DataTable");
     expect(source).not.toContain("<KVList items={items()} />");
     expect(en["runGroup.title"]).toBe("Batch update");
+    expect(en["runGroup.openRun"]).toBe("Review change");
+    expect(ja["runGroup.openRun"]).toBe("変更内容を開く");
     expect(en["runGroup.approveAll"]).not.toContain("executions");
     expect(en["runGroup.members"]).not.toContain("executions");
     expect(ja["runGroup.approveAll"]).not.toContain("実行");

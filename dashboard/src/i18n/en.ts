@@ -217,7 +217,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.advancedActionsBody":
     "Create a backup when you need a recovery point or export before making changes.",
   "app.deploys.backup": "Create backup",
-  "app.deploys.backupCreated": "Backup created: {id}",
+  "app.deploys.backupCreated": "Backup created.",
+  "app.deploys.backupSupportRef": "Support identifier",
   "app.recentRuns.title": "Recent checks",
   "app.recentRuns.empty": "No recent checks.",
   "app.recentRuns.open": "Details",
@@ -305,6 +306,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.resources.actionUpdate": "Update",
   "run.resources.actionDelete": "Delete",
   "run.resources.actionReplace": "Replace",
+  "run.resources.identifiers": "Support identifiers",
+  "run.resources.address": "Address",
+  "run.resources.type": "Type",
+  "run.resources.scope": "Scope",
   "run.details.title": "Support details",
   "run.details.runId": "Execution ID",
   "run.details.type": "Type",
@@ -333,6 +338,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.connections.empty": "No cloud account review info.",
   "run.diagnostics.title": "Diagnostics",
   "run.diagnostics.empty": "No diagnostics.",
+  "run.diagnostics.failed":
+    "This did not finish. Open details only when you need troubleshooting information.",
   "run.audit.title": "Activity record",
   "run.audit.empty": "No activity records.",
 
@@ -414,6 +421,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.progress.fetching": "Checking the contents. Keep this page open.",
   "new.progress.slow":
     "This is taking a little longer. You can continue when it finishes.",
+  "new.progress.details": "Detailed progress",
   "new.progress.status": "Status: {status}",
   "new.compat.title": "Check",
   "new.compat.details": "Detailed check result",
@@ -426,6 +434,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Review the items above. Some issues require app changes, while others can be resolved by setting up the required cloud account.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
+  "new.compat.summary.reviewRequired":
+    "An item needs review before this can be added.",
   "new.compat.issue.providerCredentials.message":
     "{provider} private values are written in the source.",
   "new.compat.issue.providerCredentials.detail":
@@ -710,12 +720,17 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.shareApproved": "Approved shared values",
   "notif.event.shareRevoked": "Revoked shared values",
   "notif.event.groupCreated": "Started a grouped update",
+  "notif.event.recorded": "Recorded activity",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "Activity history",
   "activity.subtitle":
     "Service and account events for troubleshooting, newest first.",
   "activity.details": "Support details",
+  "activity.detailsBody":
+    "Use these details only when support asks for an event reference.",
+  "activity.debug": "Debug identifiers",
+  "activity.recorded": "Recorded activity",
   "activity.empty.title": "No activity yet",
   "activity.empty.message": "Operations in this workspace are recorded here.",
 
@@ -727,6 +742,7 @@ export const en: Record<keyof typeof ja, string> = {
   "runGroup.members": "Services in this update",
   "runGroup.membersEmpty": "No services in this update.",
   "runGroup.openService": "Open service",
+  "runGroup.openRun": "Review change",
   "runGroup.change": "Change",
   "runGroup.groupId": "Group ID",
 

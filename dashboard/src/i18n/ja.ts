@@ -221,7 +221,8 @@ export const ja = {
   "app.deploys.advancedActionsBody":
     "変更前の復元ポイントやエクスポートが必要な場合だけ、バックアップを作成します。",
   "app.deploys.backup": "バックアップを作成",
-  "app.deploys.backupCreated": "バックアップを作成しました: {id}",
+  "app.deploys.backupCreated": "バックアップを作成しました。",
+  "app.deploys.backupSupportRef": "サポート用の識別情報",
   "app.recentRuns.title": "最近の確認",
   "app.recentRuns.empty": "最近の確認はありません。",
   "app.recentRuns.open": "詳細",
@@ -310,6 +311,10 @@ export const ja = {
   "run.resources.actionUpdate": "変更",
   "run.resources.actionDelete": "削除",
   "run.resources.actionReplace": "置換",
+  "run.resources.identifiers": "サポート用の識別情報",
+  "run.resources.address": "アドレス",
+  "run.resources.type": "種別",
+  "run.resources.scope": "対象範囲",
   "run.details.title": "サポート詳細",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
@@ -338,6 +343,8 @@ export const ja = {
   "run.connections.empty": "クラウドアカウントの確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
+  "run.diagnostics.failed":
+    "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
   "run.audit.title": "活動記録",
   "run.audit.empty": "活動記録はありません。",
 
@@ -421,6 +428,7 @@ export const ja = {
   "new.progress.title": "追加できるか確認しています",
   "new.progress.fetching": "内容を確認しています。このままお待ちください。",
   "new.progress.slow": "少し時間がかかっています。完了すると次に進めます。",
+  "new.progress.details": "詳しい進行状況",
   "new.progress.status": "状態: {status}",
   "new.compat.title": "確認",
   "new.compat.details": "詳しい確認結果",
@@ -433,6 +441,8 @@ export const ja = {
     "表示された内容を確認してください。アプリ側の修正が必要な場合と、クラウドアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
+  "new.compat.summary.reviewRequired":
+    "追加する前に確認が必要な項目があります。",
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
@@ -726,12 +736,17 @@ export const ja = {
   "notif.event.shareApproved": "値の共有を承認しました",
   "notif.event.shareRevoked": "値の共有を取り消しました",
   "notif.event.groupCreated": "まとめての更新を開始しました",
+  "notif.event.recorded": "記録された操作",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "操作履歴",
   "activity.subtitle":
     "トラブルシュート用にサービスやアカウントの出来事を新しい順に記録します。",
   "activity.details": "サポート詳細",
+  "activity.detailsBody":
+    "サポートから参照を求められた場合だけ確認する情報です。",
+  "activity.debug": "デバッグ用の識別情報",
+  "activity.recorded": "記録された操作",
   "activity.empty.title": "まだ記録はありません",
   "activity.empty.message":
     "このワークスペースで操作が行われると、ここに記録されます。",
@@ -743,6 +758,7 @@ export const ja = {
   "runGroup.members": "この更新に含まれるサービス",
   "runGroup.membersEmpty": "この更新に含まれるサービスはありません。",
   "runGroup.openService": "サービスを開く",
+  "runGroup.openRun": "変更内容を開く",
   "runGroup.change": "変更",
   "runGroup.groupId": "Group ID",
 

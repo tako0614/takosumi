@@ -20,25 +20,36 @@ const notificationsSource = readFileSync(
 );
 
 describe("History and notifications", () => {
-  test("keeps raw audit identifiers inside support details", () => {
+  test("keeps raw audit identifiers inside nested debug details", () => {
     const detailsIndex = activitySource.indexOf(
       '<summary>{t("activity.details")}</summary>',
+    );
+    const debugIndex = activitySource.indexOf(
+      '<summary>{t("activity.debug")}</summary>',
     );
     const actorIndex = activitySource.indexOf(
       "<Show when={props.event.actorId}>",
     );
 
     expect(detailsIndex).toBeGreaterThan(-1);
-    expect(actorIndex).toBeGreaterThan(detailsIndex);
+    expect(debugIndex).toBeGreaterThan(detailsIndex);
+    expect(actorIndex).toBeGreaterThan(debugIndex);
     expect(activitySource).toContain('<span class="muted">action</span>');
     expect(activitySource).toContain('<span class="muted">target</span>');
+    expect(activitySource).toContain('t("activity.recorded")');
     expect(en["activity.details"]).toBe("Support details");
     expect(ja["activity.details"]).toBe("サポート詳細");
+    expect(en["activity.debug"]).toBe("Debug identifiers");
+    expect(ja["activity.debug"]).toBe("デバッグ用の識別情報");
+    expect(en["activity.recorded"]).toBe("Recorded activity");
+    expect(ja["activity.recorded"]).toBe("記録された操作");
   });
 
   test("notifications link to history without advertising raw audit logs", () => {
     expect(notificationsSource).toContain('href="/activity"');
     expect(notificationsSource).toContain('t("notif.supportSummary")');
+    expect(notificationsSource).toContain('t("notif.event.recorded")');
+    expect(notificationsSource).not.toContain("title: event.action");
     expect(notificationsSource).toMatch(
       /<details class="wb-disclosure wc-notif-support">[\s\S]*href="\/activity"/,
     );
@@ -52,5 +63,7 @@ describe("History and notifications", () => {
     expect(ja["notif.viewRaw"]).not.toContain("生");
     expect(ja["notif.viewRaw"]).not.toContain("監査");
     expect(ja["notif.viewRaw"]).not.toContain("サポート");
+    expect(en["notif.event.recorded"]).toBe("Recorded activity");
+    expect(ja["notif.event.recorded"]).toBe("記録された操作");
   });
 });
