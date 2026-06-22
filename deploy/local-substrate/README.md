@@ -53,6 +53,13 @@ probe host 経由の run ledger surface を検証する。
 
 CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。現在は `smoke` job が submodule checkout 経由で takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた smoke chain を毎 PR で再現する。Playwright dashboard job は現時点では未実装で、signed-in browser UX は `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` の operator evidence として扱う。
 
+local-substrate の signed-in dashboard regression は ecosystem-root の
+`capture:takosumi-local-dashboard-evidence` で収集する。この script は
+headless Chrome に local dev session cookie だけを入れ、`/`・`/new`・`/runs`
+を desktop/mobile で撮影し、sign-in fallback、空白画面、mock copy、console
+error、failed request、横 overflow を失敗扱いにする。証跡は gitignored
+`tmp/takosumi-local-dashboard-evidence/` に保存する。
+
 For a fresh local verification, run `bash scripts/up.sh --profile postgres`
 followed by `bash scripts/smoke.sh`. Do not treat old pass-count notes as
 current readiness evidence; record fresh output in the relevant evidence file
@@ -130,6 +137,9 @@ bun run dev:web
 # from the repository root
 cd takosumi/dashboard
 PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 bun run e2e
+
+# from the repository root
+bun run capture:takosumi-local-dashboard-evidence
 ```
 
 詳細は [docs/root-ca-install.md](docs/root-ca-install.md) と [docs/operator-runbook.md](docs/operator-runbook.md)。
@@ -200,6 +210,7 @@ CI で自動検証されるパス:
 - ecosystem-root の `.github/workflows/local-substrate-smoke.yml`
   - `smoke` job: `up.sh → sudo bash scripts/ca-install.sh → bash scripts/smoke.sh`
   - browser UX evidence: root の `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` で operator が別途収集・検証する
+  - local dashboard UX regression: root の `capture:takosumi-local-dashboard-evidence` で signed-in local dashboard を別途収集・検証する
 
 ローカル目視は dev iteration の中で実行し、上記 table に行追加して commit する。
 

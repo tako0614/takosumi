@@ -37,6 +37,7 @@ import {
   ARTIFACTS_MANIFEST_OBJECT_KEY,
   type BackupArtifactPointer,
   type BackupRecord,
+  type BackupRestoreTarget,
   CONTROL_BACKUP_CONTENT_TYPE,
   CONTROL_BACKUP_OBJECT_KEY,
   type ListBackupsResponse,
@@ -268,6 +269,7 @@ export class BackupsService {
           ? { installationId: request.installationId }
           : {}),
         ...(request.environment ? { environment: request.environment } : {}),
+        ...restoreTargetFromBundle(bundle.stateSnapshots, request),
         objectKey,
         digest,
         sizeBytes,
@@ -1349,6 +1351,29 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+}
+
+function restoreTargetFromBundle(
+  stateSnapshots: readonly BundleStateSnapshot[],
+  request: CreateBackupRequest,
+): { readonly restoreTarget?: BackupRestoreTarget } {
+  if (!request.installationId || !request.environment) return {};
+  const latest = stateSnapshots
+    .filter(
+      (snapshot) =>
+        snapshot.installationId === request.installationId &&
+        snapshot.environment === request.environment,
+    )
+    .at(-1);
+  if (!latest) return {};
+  return {
+    restoreTarget: {
+      installationId: latest.installationId,
+      environment: latest.environment,
+      stateGeneration: latest.generation,
+      stateSnapshotId: latest.id,
+    },
+  };
 }
 
 /**

@@ -663,8 +663,13 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
   "backups.col.contents": "Contents",
+  "backups.col.actions": "Actions",
   "backups.col.artifact": "Settings backup",
   "backups.restorePoint": "Restore point",
+  "backups.restoreGeneration": "State generation {generation}",
+  "backups.restore": "Prepare restore",
+  "backups.restoreUnavailable":
+    "Create a backup from a service before restoring it.",
   "backups.col.serviceData": "Service data",
   "backups.col.source": "Source",
   "backups.col.run": "Execution",
