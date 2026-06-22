@@ -163,7 +163,10 @@ export interface NormalizationConfig {
   readonly allowAliasInjection: boolean;
 }
 
-export type InstallConfigCatalogSurface = "service" | "building_block";
+export type InstallConfigCatalogSurface =
+  | "service"
+  | "building_block"
+  | "example";
 export type InstallConfigCatalogKind = "worker" | "storage" | "site";
 export type InstallConfigCatalogDefault =
   | "service-name"

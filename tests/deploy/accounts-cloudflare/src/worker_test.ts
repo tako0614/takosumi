@@ -970,6 +970,82 @@ test("Cloudflare Accounts Worker bridges billing redirect allowlist from env", a
   assert.equal(body.error?.code, "invalid_redirect_uri");
 });
 
+test("Cloudflare Accounts Worker bridges billing checkout smoke token from operator env", async () => {
+  const d1 = new MemoryD1Database();
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () =>
+      ({
+        spaces: {
+          getSpace: async (id: string) => ({
+            id,
+            handle: id,
+            displayName: id,
+            type: "personal" as const,
+            ownerUserId: "tsub_takosumi_local",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          }),
+        },
+      }) as unknown as ControlPlaneOperations,
+  });
+  registerSessionHashSaltConfig({ allowDevFallback: true });
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
+    LOCAL_SUBSTRATE_TEST_BED: "1",
+    TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: "closed",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "smoke_operator_token",
+    TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test_worker",
+    TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET: "whsec_test_worker",
+    TAKOSUMI_BILLING_PLANS: JSON.stringify([
+      {
+        id: "starter",
+        kind: "subscription",
+        stripePriceId: "price_test_worker",
+        credits: 1000,
+        name: { ja: "Starter", en: "Starter" },
+        priceDisplay: { ja: "1000 JPY / month", en: "1000 JPY / month" },
+      },
+    ]),
+    TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST: "https://app.takosumi.test",
+  });
+
+  const blocked = await worker.fetch(
+    new Request("https://app.takosumi.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sess_local_substrate",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    }),
+    env,
+  );
+  assert.equal(blocked.status, 503, await blocked.clone().text());
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sess_local_substrate",
+        "content-type": "application/json",
+        "x-takosumi-billing-smoke-token": "smoke_operator_token",
+      },
+      body: JSON.stringify({
+        subject: "tsub_takosumi_local",
+        planId: "starter",
+        spaceId: "space_local",
+        successUrl: "https://evil.example/checkout/success",
+        cancelUrl: "https://app.takosumi.test/workspace/settings/billing",
+      }),
+    }),
+    env,
+  );
+
+  assert.equal(response.status, 400, await response.clone().text());
+  const body = (await response.json()) as { error?: { code?: string } };
+  assert.equal(body.error?.code, "invalid_redirect_uri");
+});
+
 test("platform-readiness 'open' refuses an invalid issuer URL", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();

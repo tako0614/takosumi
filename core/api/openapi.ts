@@ -957,7 +957,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
               additionalProperties: false,
             },
             order: { type: "integer", minimum: 0 },
-            surface: { enum: ["service", "building_block"] },
+            surface: { enum: ["service", "building_block", "example"] },
             kind: { enum: ["worker", "storage", "site"] },
             provider: { type: "string" },
             suggestedName: { type: "string" },
