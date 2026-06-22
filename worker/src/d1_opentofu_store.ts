@@ -98,6 +98,8 @@ import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   CommitAppliedDeploymentResult,
+  CommitRestoredStateInput,
+  CommitRestoredStateResult,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -110,6 +112,7 @@ import type {
 import {
   clampActivityLimit,
   InstallationPatchGuardConflict,
+  InstallationStateGenerationGuardConflict,
 } from "../../core/domains/deploy-control/store.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1Result } from "./bindings.ts";
@@ -304,17 +307,20 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
         : input.kind === "apply"
           ? [RUN_KIND_APPLY, "destroy_apply"]
-          : [RUN_KIND_SOURCE_SYNC];
+          : input.kind === "source_sync"
+            ? [RUN_KIND_SOURCE_SYNC]
+            : [RUN_KIND_RESTORE];
     // Resolve the heartbeat (input override wins over the value on `run`) and
     // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun | SourceSyncRun =
+    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       heartbeatAt === undefined
         ? input.run
         : ({ ...input.run, heartbeatAt } as
             | PlanRun
             | ApplyRun
-            | SourceSyncRun);
+            | SourceSyncRun
+            | Run);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -354,7 +360,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         ? await this.getPlanRun(input.id)
         : input.kind === "apply"
           ? await this.getApplyRun(input.id)
-          : await this.getSourceSyncRun(input.id);
+          : input.kind === "source_sync"
+            ? await this.getSourceSyncRun(input.id)
+            : await this.getBackupRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 
@@ -818,10 +826,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     const statements = [
       ...(input.applyRunTerminal && input.applyRunLeaseToken !== undefined
         ? [
-            d1ApplyLeaseGuardStmt(
+            d1RunLeaseGuardStmt(
               this.#orm,
               input.applyRunTerminal.id,
               input.applyRunLeaseToken,
+              [RUN_KIND_APPLY, "destroy_apply"],
             ),
           ]
         : []),
@@ -879,7 +888,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           statements as [(typeof statements)[number], ...typeof statements],
         );
       } catch (error) {
-        if (isD1ApplyLeaseLostError(error)) {
+        if (isD1RunLeaseLostError(error)) {
           return { applyRunLeaseLost: true };
         }
         throw error;
@@ -888,11 +897,103 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       try {
         for (const statement of statements) await statement;
       } catch (error) {
-        if (isD1ApplyLeaseLostError(error)) {
+        if (isD1RunLeaseLostError(error)) {
           return { applyRunLeaseLost: true };
         }
         throw error;
       }
+    }
+    return { installation: updated };
+  }
+
+  async commitRestoredState(
+    input: CommitRestoredStateInput,
+  ): Promise<CommitRestoredStateResult> {
+    await this.#ensureSchema();
+    const { installationPatch } = input;
+    const row = await this.#orm
+      .select({ leaseToken: schema.runs.leaseToken })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.id, input.restoreRunTerminal.id),
+          eq(schema.runs.type, RUN_KIND_RESTORE),
+        ),
+      )
+      .get();
+    if (row?.leaseToken !== input.restoreRunLeaseToken) {
+      return { restoreRunLeaseLost: true };
+    }
+    const current = await this.getInstallation(installationPatch.id);
+    if (!current) return { installation: undefined };
+    const guard = installationPatch.guard;
+    if (
+      current.currentStateGeneration !== guard.currentStateGeneration ||
+      (guard.status !== undefined && current.status !== guard.status)
+    ) {
+      throw new InstallationStateGenerationGuardConflict({
+        id: installationPatch.id,
+        expectedCurrentStateGeneration: guard.currentStateGeneration,
+        actualCurrentStateGeneration: current.currentStateGeneration,
+        expectedStatus: guard.status,
+        actualStatus: current.status,
+      });
+    }
+    const updated: Installation = { ...current, ...installationPatch.patch };
+    const statements = [
+      d1RunLeaseGuardStmt(
+        this.#orm,
+        input.restoreRunTerminal.id,
+        input.restoreRunLeaseToken,
+        [RUN_KIND_RESTORE],
+      ),
+      d1InstallationStateGuardStmt(
+        this.#orm,
+        installationPatch.id,
+        guard.currentStateGeneration,
+        guard.status,
+      ),
+      d1UpsertStateSnapshotStmt(this.#orm, input.stateSnapshot),
+      d1UpsertRunStmt(this.#orm, RUN_KIND_RESTORE, input.restoreRunTerminal),
+      this.#orm
+        .update(schema.installations)
+        .set({
+          currentDeploymentId: updated.currentDeploymentId ?? null,
+          currentStateGeneration: updated.currentStateGeneration,
+          currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
+          status: updated.status,
+          recordJson: updated,
+          updatedAt: updated.updatedAt,
+        })
+        .where(eq(schema.installations.id, updated.id)),
+    ];
+    const runBatch = async (): Promise<void> => {
+      if (typeof this.db.batch === "function") {
+        await this.#orm.batch(
+          statements as [(typeof statements)[number], ...typeof statements],
+        );
+        return;
+      }
+      for (const statement of statements) await statement;
+    };
+    try {
+      await runBatch();
+    } catch (error) {
+      if (isD1RunLeaseLostError(error)) {
+        return { restoreRunLeaseLost: true };
+      }
+      if (isD1InstallationStateGuardError(error)) {
+        const actual = await this.getInstallation(installationPatch.id);
+        if (!actual) return { installation: undefined };
+        throw new InstallationStateGenerationGuardConflict({
+          id: installationPatch.id,
+          expectedCurrentStateGeneration: guard.currentStateGeneration,
+          actualCurrentStateGeneration: actual.currentStateGeneration,
+          expectedStatus: guard.status,
+          actualStatus: actual.status,
+        });
+      }
+      throw error;
     }
     return { installation: updated };
   }
@@ -2480,15 +2581,16 @@ function coerceRunRowStatus<R extends PlanRun | ApplyRun>(
 function d1UpsertRunStmt(
   orm: DrizzleD1Database<typeof schema>,
   type: string,
-  run: PlanRun | ApplyRun,
+  run: PlanRun | ApplyRun | Run,
 ) {
+  const generic = run as Partial<Run>;
   const values = {
     id: run.id,
-    runGroupId: null,
+    runGroupId: generic.runGroupId ?? null,
     spaceId: run.spaceId,
-    sourceId: null,
+    sourceId: generic.sourceId ?? null,
     installationId: run.installationId ?? null,
-    environment: null,
+    environment: generic.environment ?? null,
     type,
     status: run.status,
     leaseToken: null,
@@ -2502,10 +2604,11 @@ function d1UpsertRunStmt(
     .onConflictDoUpdate({ target: schema.runs.id, set: values });
 }
 
-function d1ApplyLeaseGuardStmt(
+function d1RunLeaseGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
   runId: string,
   leaseToken: string,
+  types: readonly string[],
 ) {
   const expectedLease = orm
     .select({ one: sql`1` })
@@ -2513,7 +2616,7 @@ function d1ApplyLeaseGuardStmt(
     .where(
       and(
         eq(schema.runs.id, runId),
-        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        inArray(schema.runs.type, [...types]),
         eq(schema.runs.status, "running"),
         eq(schema.runs.leaseToken, leaseToken),
       ),
@@ -2539,10 +2642,61 @@ function d1ApplyLeaseGuardStmt(
   );
 }
 
-function isD1ApplyLeaseLostError(error: unknown): boolean {
+function d1InstallationStateGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  installationId: string,
+  currentStateGeneration: number,
+  status: Installation["status"] | undefined,
+) {
+  const expected = orm
+    .select({ one: sql`1` })
+    .from(schema.installations)
+    .where(
+      and(
+        eq(schema.installations.id, installationId),
+        eq(schema.installations.currentStateGeneration, currentStateGeneration),
+        status === undefined
+          ? undefined
+          : eq(schema.installations.status, status),
+      ),
+    );
+  return orm.insert(schema.installations).select(
+    orm
+      .select({
+        id: schema.installations.id,
+        spaceId: schema.installations.spaceId,
+        name: schema.installations.name,
+        slug: schema.installations.slug,
+        sourceId: schema.installations.sourceId,
+        installType: schema.installations.installType,
+        installConfigId: schema.installations.installConfigId,
+        environment: schema.installations.environment,
+        currentDeploymentId: schema.installations.currentDeploymentId,
+        currentStateGeneration: schema.installations.currentStateGeneration,
+        currentOutputSnapshotId: schema.installations.currentOutputSnapshotId,
+        status: schema.installations.status,
+        recordJson: schema.installations.recordJson,
+        createdAt: schema.installations.createdAt,
+        updatedAt: schema.installations.updatedAt,
+      })
+      .from(schema.installations)
+      .where(
+        and(eq(schema.installations.id, installationId), notExists(expected)),
+      ),
+  );
+}
+
+function isD1RunLeaseLostError(error: unknown): boolean {
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: runs.id") ||
         error.message.includes("constraint failed: runs.id")
+    : false;
+}
+
+function isD1InstallationStateGuardError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes("UNIQUE constraint failed: installations.id") ||
+        error.message.includes("constraint failed: installations.id")
     : false;
 }
 

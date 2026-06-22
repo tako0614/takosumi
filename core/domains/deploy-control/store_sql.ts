@@ -87,6 +87,8 @@ import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   CommitAppliedDeploymentResult,
+  CommitRestoredStateInput,
+  CommitRestoredStateResult,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -96,7 +98,11 @@ import type {
   TransitionRunInput,
   TransitionRunResult,
 } from "./store.ts";
-import { clampActivityLimit, InstallationPatchGuardConflict } from "./store.ts";
+import {
+  clampActivityLimit,
+  InstallationPatchGuardConflict,
+  InstallationStateGenerationGuardConflict,
+} from "./store.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
@@ -295,17 +301,20 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ? [...RUN_KINDS_PLAN, "drift_check"]
         : input.kind === "apply"
           ? [...RUN_KINDS_APPLY]
-          : [RUN_KIND_SOURCE_SYNC];
+          : input.kind === "source_sync"
+            ? [RUN_KIND_SOURCE_SYNC]
+            : [RUN_KIND_RESTORE];
     // Resolve the heartbeat (input override wins over the value on `run`) and
     // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun | SourceSyncRun =
+    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
       heartbeatAt === undefined
         ? input.run
         : ({ ...input.run, heartbeatAt } as
             | PlanRun
             | ApplyRun
-            | SourceSyncRun);
+            | SourceSyncRun
+            | Run);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -339,6 +348,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       | PlanRun
       | ApplyRun
       | SourceSyncRun
+      | Run
       | undefined;
     if (won) return { won: true, run: won };
     // Lost the CAS race (or the row vanished): re-read the now-current row so
@@ -348,7 +358,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ? await this.getPlanRun(input.id)
         : input.kind === "apply"
           ? await this.getApplyRun(input.id)
-          : await this.getSourceSyncRun(input.id);
+          : input.kind === "source_sync"
+            ? await this.getSourceSyncRun(input.id)
+            : await this.getBackupRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 
@@ -853,6 +865,82 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
+  async commitRestoredState(
+    input: CommitRestoredStateInput,
+  ): Promise<CommitRestoredStateResult> {
+    return await this.#client.transaction(
+      async (transaction: SqlTransaction) => {
+        const db = this.#drizzleForClient(transaction);
+        const restoreRunCommitted = await pgUpdateTerminalRunWithLease(
+          db,
+          RUN_KIND_RESTORE,
+          [RUN_KIND_RESTORE],
+          input.restoreRunTerminal,
+          input.restoreRunLeaseToken,
+        );
+        if (!restoreRunCommitted) return { restoreRunLeaseLost: true };
+        await pgUpsertStateSnapshot(db, input.stateSnapshot);
+
+        const { installationPatch } = input;
+        const current = await this.#getInstallationOn(db, installationPatch.id);
+        if (!current) return { installation: undefined };
+        const guard = installationPatch.guard;
+        if (
+          current.currentStateGeneration !== guard.currentStateGeneration ||
+          (guard.status !== undefined && current.status !== guard.status)
+        ) {
+          throw new InstallationStateGenerationGuardConflict({
+            id: installationPatch.id,
+            expectedCurrentStateGeneration: guard.currentStateGeneration,
+            actualCurrentStateGeneration: current.currentStateGeneration,
+            expectedStatus: guard.status,
+            actualStatus: current.status,
+          });
+        }
+
+        const updated: Installation = {
+          ...current,
+          ...installationPatch.patch,
+        };
+        const values = installationValues(updated);
+        const rows = await db
+          .update(pgSchema.installations)
+          .set({
+            spaceId: values.spaceId,
+            name: values.name,
+            environment: values.environment,
+            sourceId: values.sourceId,
+            installConfigId: values.installConfigId,
+            currentDeploymentId: values.currentDeploymentId,
+            status: values.status,
+            installationJson: values.installationJson,
+            updatedAt: values.updatedAt,
+          })
+          .where(
+            and(
+              eq(pgSchema.installations.id, updated.id),
+              sql`COALESCE((${pgSchema.installations.installationJson}->>'currentStateGeneration')::integer, 0) = ${guard.currentStateGeneration}`,
+              guard.status === undefined
+                ? sql`true`
+                : eq(pgSchema.installations.status, guard.status),
+            ),
+          )
+          .returning({ json: pgSchema.installations.installationJson });
+        const patched = parseRow(rows[0]) as Installation | undefined;
+        if (patched) return { installation: patched };
+        const actual = await this.#getInstallationOn(db, installationPatch.id);
+        if (!actual) return { installation: undefined };
+        throw new InstallationStateGenerationGuardConflict({
+          id: installationPatch.id,
+          expectedCurrentStateGeneration: guard.currentStateGeneration,
+          actualCurrentStateGeneration: actual.currentStateGeneration,
+          expectedStatus: guard.status,
+          actualStatus: actual.status,
+        });
+      },
+    );
+  }
+
   /**
    * Runs the apply-commit write set against the given drizzle handle (the shared
    * `#db` or a transaction-bound one). Returns `{ installation }` patched, or
@@ -871,6 +959,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         input.applyRunTerminal.operation === "destroy"
           ? "destroy_apply"
           : "apply",
+        RUN_KINDS_APPLY,
         input.applyRunTerminal,
         input.applyRunLeaseToken,
       );
@@ -2630,7 +2719,8 @@ async function pgUpsertRun(
     kind,
     spaceId: run.spaceId,
     sourceId: null,
-    installationId: run.installationId ?? null,
+    installationId:
+      "installationId" in run ? (run.installationId ?? null) : null,
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
@@ -2659,14 +2749,16 @@ async function pgUpsertRun(
 async function pgUpdateTerminalRunWithLease(
   db: PgRemoteDatabase<typeof pgSchema>,
   kind: string,
-  run: ApplyRun,
+  allowedKinds: readonly string[],
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
   leaseToken: string,
 ): Promise<boolean> {
   const values = {
     kind,
     spaceId: run.spaceId,
-    sourceId: null,
-    installationId: run.installationId ?? null,
+    sourceId: "sourceId" in run ? (run.sourceId ?? null) : null,
+    installationId:
+      "installationId" in run ? (run.installationId ?? null) : null,
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
@@ -2679,7 +2771,7 @@ async function pgUpdateTerminalRunWithLease(
     .where(
       and(
         eq(pgSchema.runs.id, run.id),
-        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.kind, [...allowedKinds]),
         eq(pgSchema.runs.status, "running"),
         eq(pgSchema.runs.leaseToken, leaseToken),
       ),

@@ -195,6 +195,35 @@ export class InstallationPatchGuardConflict extends Error {
   }
 }
 
+export class InstallationStateGenerationGuardConflict extends Error {
+  readonly expectedCurrentStateGeneration: number;
+  readonly actualCurrentStateGeneration: number;
+  readonly expectedStatus?: Installation["status"];
+  readonly actualStatus?: Installation["status"];
+
+  constructor(input: {
+    readonly id: string;
+    readonly expectedCurrentStateGeneration: number;
+    readonly actualCurrentStateGeneration: number;
+    readonly expectedStatus?: Installation["status"];
+    readonly actualStatus?: Installation["status"];
+  }) {
+    super(
+      `installation ${input.id} currentStateGeneration guard lost the race: ` +
+        `expected ${input.expectedCurrentStateGeneration} but row is ` +
+        `${input.actualCurrentStateGeneration}` +
+        (input.expectedStatus === undefined
+          ? ""
+          : `; status expected ${input.expectedStatus} but row is ${input.actualStatus}`),
+    );
+    this.name = "InstallationStateGenerationGuardConflict";
+    this.expectedCurrentStateGeneration = input.expectedCurrentStateGeneration;
+    this.actualCurrentStateGeneration = input.actualCurrentStateGeneration;
+    this.expectedStatus = input.expectedStatus;
+    this.actualStatus = input.actualStatus;
+  }
+}
+
 export interface CommitAppliedDeploymentResult {
   readonly installation?: Installation;
   /**
@@ -284,6 +313,29 @@ export interface CommitAppliedDeploymentInput {
   readonly planRunApplied?: PlanRun;
 }
 
+export interface CommitRestoredStateResult {
+  readonly installation?: Installation;
+  /**
+   * The restore run no longer holds the expected lease fence. No restore ledger
+   * writes were applied; callers must treat this as a stale worker/no-op.
+   */
+  readonly restoreRunLeaseLost?: true;
+}
+
+export interface CommitRestoredStateInput {
+  readonly stateSnapshot: StateSnapshot;
+  readonly installationPatch: {
+    readonly id: string;
+    readonly patch: InstallationPatch;
+    readonly guard: {
+      readonly currentStateGeneration: number;
+      readonly status?: Installation["status"];
+    };
+  };
+  readonly restoreRunTerminal: Run;
+  readonly restoreRunLeaseToken: string;
+}
+
 /**
  * Status-conditional, lease-fenced compare-and-set transition of a single run
  * row (the most correctness-critical primitive of the queue consumer). Unlike
@@ -294,8 +346,9 @@ export interface CommitAppliedDeploymentInput {
  * claim cannot both win.
  *
  *   - `id` / `kind` — the row to transition; `kind` selects the run family
- *     (`plan` PlanRun rows, `apply` ApplyRun rows, or `source_sync`
- *     SourceSyncRun rows) so the discriminator can't be crossed.
+ *     (`plan` PlanRun rows, `apply` ApplyRun rows, `source_sync`
+ *     SourceSyncRun rows, or `restore` backup/restore rows) so the discriminator
+ *     can't be crossed.
  *   - `expectFrom` — the set of statuses the row MUST currently be in for the
  *     CAS to fire. A row whose status is outside this set loses (`won: false`).
  *   - `expectLeaseToken` — when set, the CAS additionally requires the row's
@@ -321,11 +374,11 @@ export interface CommitAppliedDeploymentInput {
  */
 export interface TransitionRunInput {
   readonly id: string;
-  readonly kind: "plan" | "apply" | "source_sync";
+  readonly kind: "plan" | "apply" | "source_sync" | "restore";
   readonly expectFrom: readonly RunStatus[];
   readonly expectLeaseToken?: string;
   readonly expectHeartbeatAt?: number | null;
-  readonly run: PlanRun | ApplyRun | SourceSyncRun;
+  readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
   readonly heartbeatAt?: number;
@@ -333,7 +386,7 @@ export interface TransitionRunInput {
 
 export interface TransitionRunResult {
   readonly won: boolean;
-  readonly run?: PlanRun | ApplyRun | SourceSyncRun;
+  readonly run?: PlanRun | ApplyRun | SourceSyncRun | Run;
 }
 
 export interface OpenTofuDeploymentStore {
@@ -436,6 +489,10 @@ export interface OpenTofuDeploymentStore {
   commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
   ): Promise<CommitAppliedDeploymentResult>;
+
+  commitRestoredState(
+    input: CommitRestoredStateInput,
+  ): Promise<CommitRestoredStateResult>;
 
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
@@ -865,12 +922,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    * re-reads (here: returns the unchanged in-memory row) with `won: false`.
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
-    const map: Map<string, PlanRun | ApplyRun | SourceSyncRun> =
+    const map: Map<string, PlanRun | ApplyRun | SourceSyncRun | Run> =
       input.kind === "plan"
         ? this.#planRuns
         : input.kind === "apply"
           ? this.#applyRuns
-          : this.#sourceSyncRuns;
+          : input.kind === "source_sync"
+            ? this.#sourceSyncRuns
+            : this.#backupRuns;
     const current = map.get(input.id);
     if (!current) return Promise.resolve({ won: false });
     const currentLease = this.#runLeases.get(input.id);
@@ -888,10 +947,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
     // explicit `heartbeatAt` wins, else the heartbeat carried on `run`.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun | SourceSyncRun = {
+    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run = {
       ...input.run,
       ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
-    } as PlanRun | ApplyRun | SourceSyncRun;
+    } as PlanRun | ApplyRun | SourceSyncRun | Run;
     map.set(input.id, persisted);
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);
@@ -1186,6 +1245,43 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve({ installation: updated });
   }
 
+  commitRestoredState(
+    input: CommitRestoredStateInput,
+  ): Promise<CommitRestoredStateResult> {
+    if (
+      this.#runLeases.get(input.restoreRunTerminal.id) !==
+      input.restoreRunLeaseToken
+    ) {
+      return Promise.resolve({ restoreRunLeaseLost: true });
+    }
+    const { installationPatch } = input;
+    const existing = this.#installations.get(installationPatch.id);
+    if (!existing) {
+      return Promise.resolve({ installation: undefined });
+    }
+    const guard = installationPatch.guard;
+    if (
+      existing.currentStateGeneration !== guard.currentStateGeneration ||
+      (guard.status !== undefined && existing.status !== guard.status)
+    ) {
+      return Promise.reject(
+        new InstallationStateGenerationGuardConflict({
+          id: installationPatch.id,
+          expectedCurrentStateGeneration: guard.currentStateGeneration,
+          actualCurrentStateGeneration: existing.currentStateGeneration,
+          expectedStatus: guard.status,
+          actualStatus: existing.status,
+        }),
+      );
+    }
+    const updated: Installation = { ...existing, ...installationPatch.patch };
+    this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
+    this.#backupRuns.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
+    this.#runLeases.delete(input.restoreRunTerminal.id);
+    this.#installations.set(installationPatch.id, updated);
+    return Promise.resolve({ installation: updated });
+  }
+
   putDeployment(deployment: Deployment): Promise<Deployment> {
     this.#deployments.set(deployment.id, deployment);
     return Promise.resolve(deployment);
@@ -1310,8 +1406,8 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
-    const rows = Array.from(this.#providerEnvs.values()).filter(
-      (env) => (spaceId === undefined ? true : env.spaceId === spaceId),
+    const rows = Array.from(this.#providerEnvs.values()).filter((env) =>
+      spaceId === undefined ? true : env.spaceId === spaceId,
     );
     return Promise.resolve(
       rows.sort(

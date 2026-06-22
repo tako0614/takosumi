@@ -135,6 +135,13 @@ export interface Run {
   readonly createdBy: string;
   readonly createdAt: string;
   readonly startedAt?: string;
+  /**
+   * Internal liveness marker refreshed while an executable Run is owned by a
+   * runner. Normal public projections do not need to render it, but backup /
+   * restore rows share the single runs ledger and use the same lease fencing as
+   * plan/apply/source_sync.
+   */
+  readonly heartbeatAt?: number;
   readonly finishedAt?: string;
 }
 
