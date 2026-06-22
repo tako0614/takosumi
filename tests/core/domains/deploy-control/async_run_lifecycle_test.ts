@@ -306,6 +306,46 @@ test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async (
   ).toEqual(false);
 });
 
+test("DLQ backstop does not clobber a running run with a fresh owner", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(6500),
+    newId: deterministicIds(),
+    runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { installationId: "inst_dlq_live" });
+  const { planRun } = await controller.createPlanRun(request);
+  expect(planRun.status).toEqual("queued");
+
+  const claimed = await store.transitionRun({
+    id: planRun.id,
+    kind: "plan",
+    expectFrom: ["queued"],
+    setLeaseToken: "lease_live",
+    heartbeatAt: 6501,
+    run: {
+      ...planRun,
+      status: "running",
+      heartbeatAt: 6501,
+      updatedAt: 6501,
+      startedAt: 6501,
+    },
+  });
+  expect(claimed.won).toEqual(true);
+
+  const transitioned = await controller.markRunFailed(
+    "plan",
+    planRun.id,
+    "retries-exhausted",
+  );
+
+  expect(transitioned).toEqual(false);
+  expect((await store.getPlanRun(planRun.id))?.status).toEqual("running");
+});
+
 // --- state generation guard ---
 
 test("state generation: a successful apply increments the installation generation", async () => {

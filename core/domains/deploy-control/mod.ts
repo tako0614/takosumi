@@ -2753,6 +2753,7 @@ export class OpenTofuDeploymentController {
     if (action === "plan") {
       const planRun = await this.#store.getPlanRun(runId);
       if (!planRun || isTerminalStatus(planRun.status)) return false;
+      if (planRun.status === "running") return false;
       await this.#failPlanRun(planRun, undefined, new Error(reason));
       await this.#store.deletePlanRunInputs(runId);
       return true;
@@ -2772,6 +2773,7 @@ export class OpenTofuDeploymentController {
     }
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun || isTerminalStatus(applyRun.status)) return false;
+    if (applyRun.status === "running") return false;
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
     await this.#failApplyRun(
       applyRun,
@@ -4225,30 +4227,41 @@ export class OpenTofuDeploymentController {
           ? { requireMirror: true }
           : undefined;
       const runner = this.#runnerForProfile(profile);
-      const result = await runner.plan({
-        planRun: running,
-        runnerProfile: profile,
-        variables,
-        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-        // Generated-root dispatch (§7): built-in modules and generic Capsules
-        // use the same generated-root/moduleFiles shape. Empty only for the
-        // lower-level raw `/internal/v1/plan-runs` compatibility path.
-        ...(dispatch.generatedRoot
-          ? { generatedRoot: dispatch.generatedRoot }
-          : {}),
-        ...(dispatch.build ? { build: dispatch.build } : {}),
-        // M2 env dispatch (state scope + source archive). Absent without env ctx.
-        ...(envDispatch.stateScope
-          ? { stateScope: envDispatch.stateScope }
-          : {}),
-        ...(envDispatch.sourceArchive
-          ? { sourceArchive: envDispatch.sourceArchive }
-          : {}),
-        // remote_state dependency states materialized into /work/deps (spec §15).
-        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
-        // Dispatch-only: the minted env never lands on the persisted run.
-        ...(credentials ? { credentials } : {}),
-      });
+      const result = await this.#withRunRenewal(
+        "plan",
+        running,
+        leaseToken,
+        undefined,
+        () =>
+          runner.plan({
+            planRun: running,
+            runnerProfile: profile,
+            variables,
+            ...(providerInstallationPolicy
+              ? { providerInstallationPolicy }
+              : {}),
+            // Generated-root dispatch (§7): built-in modules and generic Capsules
+            // use the same generated-root/moduleFiles shape. Empty only for the
+            // lower-level raw `/internal/v1/plan-runs` compatibility path.
+            ...(dispatch.generatedRoot
+              ? { generatedRoot: dispatch.generatedRoot }
+              : {}),
+            ...(dispatch.build ? { build: dispatch.build } : {}),
+            // M2 env dispatch (state scope + source archive). Absent without env ctx.
+            ...(envDispatch.stateScope
+              ? { stateScope: envDispatch.stateScope }
+              : {}),
+            ...(envDispatch.sourceArchive
+              ? { sourceArchive: envDispatch.sourceArchive }
+              : {}),
+            // remote_state dependency states materialized into /work/deps (spec §15).
+            ...(envDispatch.depStates
+              ? { depStates: envDispatch.depStates }
+              : {}),
+            // Dispatch-only: the minted env never lands on the persisted run.
+            ...(credentials ? { credentials } : {}),
+          }),
+      );
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
         running,

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   OpenTofuDeploymentController,
+  type OpenTofuPlanResult,
   type OpenTofuApplyResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
@@ -17,6 +18,7 @@ import { seedInstallationModel } from "../../../helpers/deploy-control/model_fix
 import type {
   ApplyRun,
   PlanRun,
+  RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
@@ -129,12 +131,21 @@ function controllerWith(
   options: {
     coordination?: InstallationCoordination;
     now?: () => number;
+    plan?: () => Promise<OpenTofuPlanResult>;
     apply?: () => Promise<OpenTofuApplyResult>;
     runRenewalIntervalMs?: number;
+    runnerProfiles?: readonly RunnerProfile[];
+    defaultRunnerProfileId?: string;
   } = {},
 ) {
   return new OpenTofuDeploymentController({
     store,
+    ...(options.runnerProfiles
+      ? { runnerProfiles: options.runnerProfiles }
+      : {}),
+    ...(options.defaultRunnerProfileId
+      ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
+      : {}),
     ...(options.coordination
       ? { installationCoordination: options.coordination }
       : {}),
@@ -147,7 +158,7 @@ function controllerWith(
       return (p) => `${p}_${(n += 1).toString().padStart(4, "0")}`;
     })(),
     runner: {
-      plan: () => Promise.reject(new Error("not used")),
+      plan: options.plan ?? (() => Promise.reject(new Error("not used"))),
       apply: options.apply ?? (() => Promise.resolve({})),
     },
   });
@@ -360,5 +371,91 @@ test("the run heartbeat is re-stamped AND the lease renewed while a long apply b
   // A renewal tick re-stamped the heartbeat past the claim value and renewed the
   // installation lease while the apply was blocked in the runner.
   expect(renewCalls).toBeGreaterThan(0);
+  expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
+});
+
+test("the plan heartbeat is re-stamped while a long plan blocks in the runner", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const { installation, source, snapshot } = await seedInstallationModel(store, {
+    installationId: "ins_plan_hb",
+  });
+  await store.putInstallation({
+    ...installation,
+    currentDeploymentId: "dep_seed_plan_hb",
+    currentStateGeneration: 0,
+    status: "active",
+  });
+  const planRun: PlanRun = {
+    id: "plan_hb_long",
+    spaceId: installation.spaceId,
+    installationId: installation.id,
+    installationCurrentDeploymentId: "dep_seed_plan_hb",
+    source: {
+      kind: "git",
+      url: source.url,
+      commit: "abcdef0123456789abcdef0123456789abcdef01",
+    },
+    sourceSnapshotId: snapshot.id,
+    sourceDigest: "sha256:src",
+    operation: "update",
+    runnerProfileId: "provider-free",
+    requiredProviders: [],
+    status: "queued",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    baseStateGeneration: 0,
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await store.putPlanRun(planRun);
+  await store.putPlanRunInputs({
+    planRunId: planRun.id,
+    variables: {},
+    generatedRoot: {
+      files: { "main.tf": 'module "app" { source = "./template-module" }' },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  });
+
+  let clock = 2000;
+  const now = () => (clock += 1);
+  let claimHeartbeat = 0;
+  let midFlightHeartbeat = 0;
+  const controller = controllerWith(store, {
+    now,
+    runRenewalIntervalMs: 5,
+    runnerProfiles: [
+      {
+        id: "provider-free",
+        name: "Provider-free",
+        substrate: "test",
+        stateBackend: { kind: "local", ref: "state://test" } as never,
+        allowedProviders: [],
+        createdAt: 1,
+      },
+    ],
+    defaultRunnerProfileId: "provider-free",
+    plan: async () => {
+      claimHeartbeat = (await store.getPlanRun("plan_hb_long"))?.heartbeatAt ?? 0;
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline) {
+        const current =
+          (await store.getPlanRun("plan_hb_long"))?.heartbeatAt ?? 0;
+        if (current > claimHeartbeat) {
+          midFlightHeartbeat = current;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return {
+        planDigest: PLAN_DIGEST,
+        planArtifact: planArtifact(),
+      };
+    },
+  });
+
+  const response = await controller.runQueuedPlan("plan_hb_long");
+
+  expect(response?.status).toBe("succeeded");
   expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
 });
