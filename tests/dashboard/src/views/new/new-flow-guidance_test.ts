@@ -14,10 +14,6 @@ const appViewsCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/app-views.css"),
   "utf8",
 );
-const catalogSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/catalog.ts"),
-  "utf8",
-);
 
 describe("/new flow guidance", () => {
   test("keeps /new focused instead of layering guide and progress chrome", () => {
@@ -61,11 +57,11 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).toContain("function CatalogCard");
+    expect(newAppViewSource).toContain("const catalogEntries = createMemo");
+    expect(newAppViewSource).toContain("config.catalog?.source");
+    expect(newAppViewSource).toContain("const primaryCatalog = createMemo");
     expect(newAppViewSource).toContain(
-      "const PRIMARY_CATALOG = CATALOG.filter",
-    );
-    expect(newAppViewSource).toContain(
-      "const BUILDING_BLOCK_CATALOG = CATALOG.filter",
+      "const buildingBlockCatalog = createMemo",
     );
     expect(newAppViewSource).toContain('entry.surface === "service"');
     expect(newAppViewSource).toContain('entry.surface === "building_block"');
@@ -130,25 +126,23 @@ describe("/new flow guidance", () => {
   });
 
   test("catalog exposes multiple runnable service choices backed by official configs", () => {
-    expect(catalogSource).toContain('"cloudflare-hello-worker"');
-    expect(catalogSource).toContain('"cloudflare-r2-storage"');
-    expect(catalogSource).toContain('"cloudflare-static-site"');
-    expect(catalogSource).toContain('"aws-s3-storage"');
-    expect(catalogSource).toContain(
-      'installConfigId: "cfg-official-cloudflare-hello-worker"',
+    const officialSeedSource = readFileSync(
+      resolve(
+        here,
+        "../../../../../core/domains/installations/official_seed.ts",
+      ),
+      "utf8",
     );
-    expect(catalogSource).toContain(
-      'installConfigId: "cfg-official-cloudflare-r2-storage"',
+    expect(officialSeedSource).toContain('"cloudflare-hello-worker"');
+    expect(officialSeedSource).toContain('"cloudflare-r2-storage"');
+    expect(officialSeedSource).toContain('"cloudflare-static-site"');
+    expect(officialSeedSource).toContain('"aws-s3-storage"');
+    expect(officialSeedSource).toContain("catalogMetadataForTemplate");
+    expect(officialSeedSource).toContain('name: "accountId"');
+    expect(officialSeedSource).toContain('name: "bucketName"');
+    expect(officialSeedSource).toContain(
+      'defaultValue: "service-name-with-space"',
     );
-    expect(catalogSource).toContain(
-      'installConfigId: "cfg-official-cloudflare-static-site"',
-    );
-    expect(catalogSource).toContain(
-      'installConfigId: "cfg-official-aws-s3-storage"',
-    );
-    expect(catalogSource).toContain('name: "accountId"');
-    expect(catalogSource).toContain('name: "bucketName"');
-    expect(catalogSource).toContain('defaultValue: "service-name-with-space"');
   });
 
   test("selected catalog services use friendly setup fields instead of raw variables", () => {

@@ -1,23 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { CATALOG } from "../../../dashboard/src/catalog.ts";
 import { officialInstallConfigs } from "../../../core/domains/installations/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
 
 describe("dashboard catalog", () => {
+  const catalogEntries = () =>
+    officialInstallConfigs()
+      .filter((config) => config.catalog)
+      .map((config) => ({
+        installConfigId: config.id,
+        ...config.catalog!,
+      }));
+
   test("curated install entries are pinned to immutable refs", () => {
-    for (const entry of CATALOG) {
-      expect(entry.ref, entry.id).toMatch(/^[0-9a-f]{40}$/);
-      expect(["main", "latest", "HEAD"]).not.toContain(entry.ref);
+    for (const entry of catalogEntries()) {
+      expect(entry.source?.ref, entry.templateId).toMatch(/^[0-9a-f]{40}$/);
+      expect(["main", "latest", "HEAD"]).not.toContain(entry.source?.ref);
     }
   });
 
   test("product distributions are not generic Takosumi starter cards", () => {
-    expect(CATALOG.map((entry) => entry.id)).not.toContain("takos");
+    expect(catalogEntries().map((entry) => entry.templateId)).not.toContain(
+      "takos",
+    );
   });
 
   test("the first web app starter is browser-openable after apply", () => {
-    const hello = CATALOG.find(
-      (entry) => entry.id === "cloudflare-hello-worker",
+    const hello = catalogEntries().find(
+      (entry) => entry.templateId === "cloudflare-hello-worker",
     );
     expect(hello).toBeDefined();
     expect(hello?.description.en.toLowerCase()).toContain("public url");
@@ -35,30 +44,33 @@ describe("dashboard catalog", () => {
   });
 
   test("catalog keeps hostable services first and building blocks secondary", () => {
-    const services = CATALOG.filter((entry) => entry.surface === "service");
-    const buildingBlocks = CATALOG.filter(
+    const entries = catalogEntries();
+    const services = entries.filter((entry) => entry.surface === "service");
+    const buildingBlocks = entries.filter(
       (entry) => entry.surface === "building_block",
     );
-    expect(services.map((entry) => entry.id)).toEqual([
-      "cloudflare-hello-worker",
-      "cloudflare-static-site",
-    ]);
-    expect(buildingBlocks.map((entry) => entry.id)).toEqual([
-      "cloudflare-r2-storage",
-      "aws-s3-storage",
-    ]);
+    expect(
+      services
+        .sort((a, b) => a.order - b.order)
+        .map((entry) => entry.templateId),
+    ).toEqual(["cloudflare-hello-worker", "cloudflare-static-site"]);
+    expect(
+      buildingBlocks
+        .sort((a, b) => a.order - b.order)
+        .map((entry) => entry.templateId),
+    ).toEqual(["cloudflare-r2-storage", "aws-s3-storage"]);
   });
 
   test("visible cards resolve to seeded official template configs", () => {
     const seededConfigs = officialInstallConfigs();
-    for (const entry of CATALOG) {
+    for (const entry of catalogEntries()) {
       const config = seededConfigs.find(
         (seeded) => seeded.id === entry.installConfigId,
       );
-      expect(config, entry.id).toBeDefined();
+      expect(config, entry.templateId).toBeDefined();
       expect(config?.sourceKind).toBe("first_party_capsule");
-      expect(config?.templateBinding, entry.id).toBeDefined();
-      expect(config?.templateBinding?.templateId).toBe(entry.id);
+      expect(config?.templateBinding, entry.templateId).toBeDefined();
+      expect(config?.templateBinding?.templateId).toBe(entry.templateId);
       const template = defaultTemplateRegistry.require(
         config!.templateBinding!.templateId,
         config!.templateBinding!.templateVersion,
@@ -66,14 +78,14 @@ describe("dashboard catalog", () => {
       for (const field of entry.inputs) {
         expect(
           Object.keys(template.inputs),
-          `${entry.id}.${field.name}`,
+          `${entry.templateId}.${field.name}`,
         ).toContain(field.name);
       }
       for (const [name, input] of Object.entries(template.inputs)) {
         if (input.required) {
           expect(
             entry.inputs.map((field) => field.name),
-            `${entry.id}.${name}`,
+            `${entry.templateId}.${name}`,
           ).toContain(name);
         }
       }

@@ -22,6 +22,11 @@
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 import type {
   InstallConfig,
+  InstallConfigCatalogInput,
+  InstallConfigCatalogKind,
+  InstallConfigCatalogMetadata,
+  InstallConfigCatalogSurface,
+  InstallConfigCatalogText,
   InstallType,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -33,6 +38,10 @@ import {
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
+export const TAKOSUMI_OFFICIAL_CATALOG_SOURCE = {
+  git: "https://github.com/tako0614/takosumi.git",
+  ref: "fcc47907b0154d8bf53872a3336e5653fc88792e",
+} as const;
 
 export const RETIRED_OFFICIAL_INSTALL_CONFIG_IDS = [
   "cfg-official-talk",
@@ -67,6 +76,231 @@ interface NamedOfficialInstall {
 const NAMED_OFFICIAL_INSTALLS: readonly NamedOfficialInstall[] = [
   { name: "core", templateId: "core", installType: "core" },
 ];
+
+function text(ja: string, en: string): InstallConfigCatalogText {
+  return { ja, en };
+}
+
+interface OfficialCatalogSpec {
+  readonly sourcePath: string;
+  readonly order: number;
+  readonly surface: InstallConfigCatalogSurface;
+  readonly kind: InstallConfigCatalogKind;
+  readonly provider: string;
+  readonly suggestedName: string;
+  readonly badge: InstallConfigCatalogText;
+  readonly name: InstallConfigCatalogText;
+  readonly description: InstallConfigCatalogText;
+  readonly inputs: readonly InstallConfigCatalogInput[];
+}
+
+const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
+  "cloudflare-hello-worker": {
+    sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
+    order: 10,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "web-app",
+    badge: text("Webアプリ", "Web app"),
+    name: text("小さなWebアプリを公開", "Deploy a tiny web app"),
+    description: text(
+      "すぐ開ける小さなWebアプリと公開URLを作ります。",
+      "Creates a tiny browser-openable web app with a public URL.",
+    ),
+    inputs: [
+      {
+        name: "appName",
+        type: "string",
+        required: true,
+        defaultValue: "service-name-with-space",
+        label: text("公開名", "Public name"),
+        helper: text(
+          "公開URLにも使われる名前です。",
+          "Also used in the public URL.",
+        ),
+        placeholder: "hello-worker",
+      },
+      {
+        name: "accountId",
+        type: "string",
+        required: true,
+        label: text("Cloudflare アカウント", "Cloudflare account"),
+        helper: text(
+          "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
+        ),
+        placeholder: "0123abcd...",
+      },
+      {
+        name: "workersSubdomain",
+        type: "string",
+        required: true,
+        label: text("公開サブドメイン", "Public subdomain"),
+        helper: text(
+          "公開URLの先頭部分です。例: my-team",
+          "The first part of the public URL, for example: my-team.",
+        ),
+        placeholder: "my-team",
+      },
+    ],
+  },
+  "cloudflare-r2-storage": {
+    sourcePath: "providers/cloudflare/modules/cloudflare-r2-storage/module",
+    order: 30,
+    surface: "building_block",
+    kind: "storage",
+    provider: "cloudflare",
+    suggestedName: "files",
+    badge: text("ファイル保存", "File storage"),
+    name: text("ファイル保存場所を作成", "Create file storage"),
+    description: text(
+      "ファイルやバックアップ用の保存場所を作ります。",
+      "Creates storage for files or backups.",
+    ),
+    inputs: [
+      {
+        name: "bucketName",
+        type: "string",
+        required: true,
+        defaultValue: "service-name-with-space",
+        label: text("バケット名", "Bucket name"),
+        helper: text(
+          "同じ Cloudflare アカウント内で一意にしてください。",
+          "Must be unique in the Cloudflare account.",
+        ),
+        placeholder: "my-files",
+      },
+      {
+        name: "accountId",
+        type: "string",
+        required: true,
+        label: text("Cloudflare アカウント", "Cloudflare account"),
+        helper: text(
+          "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
+        ),
+        placeholder: "0123abcd...",
+      },
+      {
+        name: "location",
+        type: "string",
+        label: text("保存場所（任意）", "Location hint (optional)"),
+        helper: text(
+          "指定しない場合は Cloudflare の標準設定を使います。",
+          "Leave empty to use Cloudflare's default placement.",
+        ),
+        placeholder: "apac",
+      },
+    ],
+  },
+  "cloudflare-static-site": {
+    sourcePath: "providers/cloudflare/modules/cloudflare-static-site/module",
+    order: 20,
+    surface: "service",
+    kind: "site",
+    provider: "cloudflare",
+    suggestedName: "website",
+    badge: text("Webサイト", "Website"),
+    name: text("Webサイトを公開", "Publish a website"),
+    description: text(
+      "HTMLや画像を置いて公開できるWebサイトを用意します。",
+      "Creates a website for publishing HTML and assets.",
+    ),
+    inputs: [
+      {
+        name: "projectName",
+        type: "string",
+        required: true,
+        defaultValue: "service-name-with-space",
+        label: text("プロジェクト名", "Project name"),
+        helper: text(
+          "*.pages.dev の名前にも使われます。",
+          "Also used for the *.pages.dev subdomain label.",
+        ),
+        placeholder: "my-site",
+      },
+      {
+        name: "accountId",
+        type: "string",
+        required: true,
+        label: text("Cloudflare アカウント", "Cloudflare account"),
+        helper: text(
+          "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
+          "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
+        ),
+        placeholder: "0123abcd...",
+      },
+      {
+        name: "productionBranch",
+        type: "string",
+        defaultValue: "main",
+        label: text("本番ブランチ", "Production branch"),
+        placeholder: "main",
+      },
+    ],
+  },
+  "aws-s3-storage": {
+    sourcePath: "providers/aws/modules/aws-s3-storage/module",
+    order: 40,
+    surface: "building_block",
+    kind: "storage",
+    provider: "aws",
+    suggestedName: "files-aws",
+    badge: text("ファイル保存", "File storage"),
+    name: text("ファイル保存場所を作成", "Create file storage"),
+    description: text(
+      "アプリの保存先やバックアップに使えるファイル置き場を作ります。",
+      "Creates storage for files, app data, or backups.",
+    ),
+    inputs: [
+      {
+        name: "bucketName",
+        type: "string",
+        required: true,
+        defaultValue: "service-name-with-space",
+        label: text("バケット名", "Bucket name"),
+        helper: text(
+          "S3 bucket 名はグローバルに一意である必要があります。",
+          "S3 bucket names must be globally unique.",
+        ),
+        placeholder: "my-files",
+      },
+      {
+        name: "region",
+        type: "string",
+        defaultValue: "us-east-1",
+        label: text("リージョン", "Region"),
+        placeholder: "us-east-1",
+      },
+    ],
+  },
+};
+
+function catalogMetadataForTemplate(
+  template: TemplateDefinition,
+): InstallConfigCatalogMetadata | undefined {
+  const spec = OFFICIAL_CATALOG[template.id];
+  if (!spec) return undefined;
+  return {
+    templateId: template.id,
+    templateVersion: template.version,
+    source: {
+      git: TAKOSUMI_OFFICIAL_CATALOG_SOURCE.git,
+      ref: TAKOSUMI_OFFICIAL_CATALOG_SOURCE.ref,
+      path: spec.sourcePath,
+    },
+    order: spec.order,
+    surface: spec.surface,
+    kind: spec.kind,
+    provider: spec.provider,
+    suggestedName: spec.suggestedName,
+    badge: spec.badge,
+    name: spec.name,
+    description: spec.description,
+    inputs: spec.inputs,
+  };
+}
 
 function defaultCapsuleInstallConfig(now: string): InstallConfig {
   return {
@@ -124,6 +358,7 @@ export function installConfigFromTemplate(
     readonly installType?: InstallType;
   } = {},
 ): InstallConfig {
+  const catalog = catalogMetadataForTemplate(template);
   return {
     id: options.id ?? installConfigIdForTemplate(template.id),
     name: options.name ?? template.id,
@@ -133,6 +368,7 @@ export function installConfigFromTemplate(
     variableMapping: {},
     outputAllowlist: outputAllowlistFromTemplate(template),
     policy: policyFromTemplate(template),
+    ...(catalog ? { catalog } : {}),
     templateBinding: {
       templateId: template.id,
       templateVersion: template.version,

@@ -3,6 +3,13 @@ export * from "./sources.ts";
 export * from "./spaces.ts";
 export type {
   BackupConfig,
+  InstallConfigCatalogDefault,
+  InstallConfigCatalogInput,
+  InstallConfigCatalogKind,
+  InstallConfigCatalogMetadata,
+  InstallConfigCatalogSource,
+  InstallConfigCatalogSurface,
+  InstallConfigCatalogText,
   InstallBuildConfig,
   InstallationStatus,
   NormalizationConfig,

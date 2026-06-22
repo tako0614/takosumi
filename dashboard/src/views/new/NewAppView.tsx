@@ -3,8 +3,8 @@
  * second, one underlying flow.
  *
  * Three entry shapes, identical install path:
- *   - Examples: curated first-party / known service coordinates (src/catalog.ts).
- *     Picking one pre-fills the Git tab.
+ *   - Examples: curated first-party / known service coordinates returned by
+ *     the InstallConfig API. Picking one pre-fills the Git tab.
  *   - Link/source import: an advanced path for app install links or raw source
  *     URLs when a service is not in the catalog.
  *   - External install link: another site links `/install?git=…` (or the
@@ -54,11 +54,6 @@ import {
   installReturnPathFromPrefill,
   providerConnectionsHrefForInstallReturn,
 } from "../../lib/install-return-context.ts";
-import {
-  CATALOG,
-  type CatalogEntry,
-  type CatalogInputField,
-} from "../../catalog.ts";
 import {
   checkCapsuleCompatibility,
   ControlApiError,
@@ -135,10 +130,12 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
-const PRIMARY_CATALOG = CATALOG.filter((entry) => entry.surface === "service");
-const BUILDING_BLOCK_CATALOG = CATALOG.filter(
-  (entry) => entry.surface === "building_block",
-);
+
+type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
+  readonly id: string;
+  readonly installConfigId: string;
+};
+type CatalogInputField = CatalogEntry["inputs"][number];
 
 function CatalogCard(props: {
   readonly entry: CatalogEntry;
@@ -327,6 +324,10 @@ function catalogInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
 }
 
+function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
+  return surface === "service" ? 0 : 1;
+}
+
 function catalogDefaultInputValue(
   entry: CatalogEntry,
   field: CatalogInputField,
@@ -491,6 +492,33 @@ function Inner() {
   const configList = createMemo<readonly InstallConfig[]>(
     () => configs() ?? [],
   );
+  const catalogEntries = createMemo<readonly CatalogEntry[]>(() =>
+    configList()
+      .filter(
+        (
+          config,
+        ): config is InstallConfig & {
+          readonly catalog: NonNullable<InstallConfig["catalog"]>;
+        } => Boolean(config.catalog?.source),
+      )
+      .map((config) => ({
+        id: config.catalog.templateId ?? config.id,
+        installConfigId: config.id,
+        ...config.catalog,
+      }))
+      .sort(
+        (a, b) =>
+          catalogSurfaceRank(a.surface) - catalogSurfaceRank(b.surface) ||
+          a.order - b.order ||
+          a.name[locale()].localeCompare(b.name[locale()]),
+      ),
+  );
+  const primaryCatalog = createMemo(() =>
+    catalogEntries().filter((entry) => entry.surface === "service"),
+  );
+  const buildingBlockCatalog = createMemo(() =>
+    catalogEntries().filter((entry) => entry.surface === "building_block"),
+  );
   const defaultGitInstallConfig = () =>
     configList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
@@ -508,7 +536,9 @@ function Inner() {
   };
   const selectedCatalogEntry = () => {
     const id = selectedCatalogId();
-    return id ? (CATALOG.find((entry) => entry.id === id) ?? null) : null;
+    return id
+      ? (catalogEntries().find((entry) => entry.id === id) ?? null)
+      : null;
   };
   const catalogInputValue = (entry: CatalogEntry, field: CatalogInputField) => {
     const key = catalogInputKey(entry.id, field.name);
@@ -1098,10 +1128,13 @@ function Inner() {
   };
 
   const pickCatalogEntry = (entry: CatalogEntry) => {
-    setGitUrl(entry.git);
-    setRef(displayRef(entry.ref));
-    setPinnedFullRef(isFullCommitSha(entry.ref) ? entry.ref : null);
-    setPath(entry.path);
+    if (!entry.source) return;
+    setGitUrl(entry.source.git);
+    setRef(displayRef(entry.source.ref));
+    setPinnedFullRef(
+      isFullCommitSha(entry.source.ref) ? entry.source.ref : null,
+    );
+    setPath(entry.source.path);
     setName(entry.suggestedName);
     setSelectedCatalogId(entry.id);
     setInstallConfigId(entry.installConfigId);
@@ -1645,17 +1678,17 @@ function Inner() {
               </div>
             </div>
             <ul class="av-catalog-grid">
-              <For each={PRIMARY_CATALOG}>
+              <For each={primaryCatalog()}>
                 {(entry) => (
                   <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
                 )}
               </For>
             </ul>
-            <Show when={BUILDING_BLOCK_CATALOG.length > 0}>
+            <Show when={buildingBlockCatalog().length > 0}>
               <details class="wb-disclosure av-catalog-more">
                 <summary>{t("new.store.blocksTitle")}</summary>
                 <ul class="av-catalog-grid av-catalog-grid-secondary">
-                  <For each={BUILDING_BLOCK_CATALOG}>
+                  <For each={buildingBlockCatalog()}>
                     {(entry) => (
                       <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
                     )}
