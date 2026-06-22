@@ -65,6 +65,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
       "/installations",
       "/connections",
       "/billing",
+      "/runs",
       "/advanced/workspace",
       "/account",
     ]) {

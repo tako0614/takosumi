@@ -26,8 +26,10 @@ import {
   createResource,
   createSignal,
   For,
+  Match,
   onCleanup,
   Show,
+  Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import {
@@ -94,6 +96,8 @@ import {
   Input,
   PageHeader,
   Select,
+  Skeleton,
+  Toast,
   type Tone,
 } from "../../components/ui/index.ts";
 
@@ -1677,25 +1681,61 @@ function Inner() {
                 <h2>{t("new.store.title")}</h2>
               </div>
             </div>
-            <ul class="av-catalog-grid">
-              <For each={primaryCatalog()}>
-                {(entry) => (
-                  <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
-                )}
-              </For>
-            </ul>
-            <Show when={buildingBlockCatalog().length > 0}>
-              <details class="wb-disclosure av-catalog-more">
-                <summary>{t("new.store.blocksTitle")}</summary>
-                <ul class="av-catalog-grid av-catalog-grid-secondary">
-                  <For each={buildingBlockCatalog()}>
-                    {(entry) => (
-                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
-                    )}
-                  </For>
-                </ul>
-              </details>
-            </Show>
+            <Switch>
+              <Match when={configs.loading}>
+                <div class="av-catalog-grid" aria-busy="true">
+                  <Skeleton variant="row" count={3} />
+                </div>
+              </Match>
+              <Match when={configs.error}>
+                <Toast tone="error">
+                  {t("common.fetchFailed", {
+                    message: (configs.error as ControlApiError).message,
+                  })}
+                </Toast>
+              </Match>
+              <Match when={!configs.loading && catalogEntries().length === 0}>
+                <EmptyState
+                  icon={<Download size={28} />}
+                  title={t("new.store.empty.title")}
+                  message={t("new.store.empty.message")}
+                  action={
+                    <Button variant="primary" href="/new?mode=link">
+                      {t("new.advancedImport.open")}
+                    </Button>
+                  }
+                />
+              </Match>
+              <Match when={catalogEntries().length > 0}>
+                <>
+                  <ul class="av-catalog-grid">
+                    <For each={primaryCatalog()}>
+                      {(entry) => (
+                        <CatalogCard
+                          entry={entry}
+                          onSelect={pickCatalogEntry}
+                        />
+                      )}
+                    </For>
+                  </ul>
+                  <Show when={buildingBlockCatalog().length > 0}>
+                    <details class="wb-disclosure av-catalog-more">
+                      <summary>{t("new.store.blocksTitle")}</summary>
+                      <ul class="av-catalog-grid av-catalog-grid-secondary">
+                        <For each={buildingBlockCatalog()}>
+                          {(entry) => (
+                            <CatalogCard
+                              entry={entry}
+                              onSelect={pickCatalogEntry}
+                            />
+                          )}
+                        </For>
+                      </ul>
+                    </details>
+                  </Show>
+                </>
+              </Match>
+            </Switch>
             <div class="av-manual-import">
               <Button
                 variant="ghost"
