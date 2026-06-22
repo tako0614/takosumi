@@ -42,6 +42,7 @@ const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
+const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const GraphView = lazy(() => import("./views/graph/GraphView.tsx"));
@@ -125,6 +126,7 @@ function App() {
       <Route path="/billing" component={BillingView} />
       <Route path="/services/:id" component={AppDetailView} />
       <Route path="/services/:id/:tab" component={AppDetailView} />
+      <Route path="/runs" component={RunsListView} />
       <Route path="/runs/:id" component={RunView} />
       <Route path="/run-groups/:id" component={RunGroupView} />
       <Route path="/graph" component={GraphView} />

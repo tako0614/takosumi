@@ -23,7 +23,7 @@ import {
   needsAttention,
 } from "../../lib/installations-ui.ts";
 import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
-import { t } from "../../i18n/index.ts";
+import { formatDateTime, t } from "../../i18n/index.ts";
 import {
   Button,
   EmptyState,
@@ -181,12 +181,36 @@ function ServiceList(props: {
                   label={installationStatusLabel}
                   tone={installationTone}
                 />
+                <span class="av-service-updated">
+                  {t("apps.updated", {
+                    date: formatDateTime(inst.updatedAt),
+                  })}
+                </span>
               </div>
-              <div class="av-service-meta" aria-hidden="true" />
+              <div class="av-service-meta">
+                <span>{inst.environment}</span>
+              </div>
             </button>
-            <Show when={props.launchUrls.get(inst.id)}>
-              {(url) => (
-                <div class="av-service-actions">
+            <div class="av-service-actions">
+              <Show
+                when={props.launchUrls.get(inst.id)}
+                fallback={
+                  <>
+                    <span class="av-service-link-state">
+                      {t("apps.noOpenLink")}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={() => props.openDetail(inst)}
+                    >
+                      {t("apps.viewDetails")}
+                    </Button>
+                  </>
+                }
+              >
+                {(url) => (
                   <Button
                     variant="primary"
                     size="sm"
@@ -197,9 +221,9 @@ function ServiceList(props: {
                   >
                     {t("apps.openApp")}
                   </Button>
-                </div>
-              )}
-            </Show>
+                )}
+              </Show>
+            </div>
           </li>
         )}
       </For>

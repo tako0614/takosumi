@@ -78,13 +78,15 @@ describe("AppListView Workspace starter", () => {
 
   test("keeps open as the first-class row action when a public link exists", () => {
     expect(appListSource).toContain('t("apps.openApp")');
-    expect(appListSource).not.toContain('t("apps.noOpenLink")');
-    expect(appListSource).toContain("<Show when={props.launchUrls.get(inst.id)}>");
+    expect(appListSource).toContain("when={props.launchUrls.get(inst.id)}");
     expect(appListSource).toContain('class="av-service-actions"');
     expect(appListSource).toContain("icon={<ExternalLink size={14} />}");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("onClick={() => props.openDetail(inst)}");
+    expect(appListSource).toContain('t("apps.noOpenLink")');
+    expect(appListSource).toContain('t("apps.viewDetails")');
+    expect(appListSource).toContain('t("apps.updated"');
+    expect(appListSource).toContain("formatDateTime(inst.updatedAt)");
     expect(appListSource).not.toContain("window.open");
-    expect(appListSource).not.toContain('t("apps.viewDetails")');
   });
 });
