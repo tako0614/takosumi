@@ -7,7 +7,14 @@
  * via `GET /api/v1/spaces` and defaults to the first Space when none is
  * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
  */
-import { createEffect, createMemo, createResource, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  For,
+  onCleanup,
+  Show,
+} from "solid-js";
 import {
   type ControlApiError,
   listSpaces,
@@ -22,7 +29,7 @@ import { t } from "../../../../i18n/index.ts";
 import { Select } from "../../../../components/ui/Form.tsx";
 
 export default function SpaceSwitcher() {
-  const [spaces] = createResource(listSpaces);
+  const [spaces, { refetch }] = createResource(listSpaces);
   const loadedSpaces = createMemo(() => spaces() ?? []);
 
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
@@ -40,6 +47,14 @@ export default function SpaceSwitcher() {
     if (spaces.loading) return;
     onLoaded(loadedSpaces());
   });
+
+  if (typeof window !== "undefined") {
+    const refreshSpaces = () => void refetch();
+    window.addEventListener("takosumi:spaces-changed", refreshSpaces);
+    onCleanup(() =>
+      window.removeEventListener("takosumi:spaces-changed", refreshSpaces),
+    );
+  }
 
   return (
     <div class="topbar-space">

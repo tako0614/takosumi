@@ -68,6 +68,14 @@ export const ja = {
   "space.select": "ワークスペースを選択してください",
   "space.selectMessage":
     "右上のワークスペース選択からワークスペースを選ぶと表示されます。",
+  "space.defaultName": "自分のワークスペース",
+  "space.start.aria": "ワークスペースの開始",
+  "space.start.kicker": "ワークスペースがありません",
+  "space.start.title": "ワークスペースを作成して始める",
+  "space.start.body":
+    "サービス、デプロイ履歴、設定はワークスペースにまとめて保存されます。",
+  "space.start.create": "ワークスペースを作成",
+  "space.start.creating": "作成中...",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -269,9 +277,12 @@ export const ja = {
   "run.summary.waitingApproval":
     "この変更の実行には承認が必要です。内容を確認して承認してください。",
   "run.summary.ready": "「{name}」をデプロイする準備ができました。",
+  "run.summary.readyGeneric": "このサービスをデプロイする準備ができました。",
   "run.summary.readyChanges": "作成 {create} / 変更 {update} / 削除 {delete}",
   "run.summary.destroyReady":
     "「{name}」を削除する準備ができました。実行すると元に戻せません。",
+  "run.summary.destroyReadyGeneric":
+    "このサービスを削除する準備ができました。実行すると元に戻せません。",
   "run.summary.applied":
     "デプロイを開始しました。反映までしばらくお待ちください。",
   "run.summary.applying": "デプロイを実行しています…",
