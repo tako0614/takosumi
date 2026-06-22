@@ -2,8 +2,8 @@
  * Locale-aware status / operation labels (successor of status-labels.ts).
  *
  * Single source of truth for turning backend enum strings into user-facing
- * wording in the active locale. Unknown values render as their raw string so
- * a new backend status stays truthful instead of disappearing.
+ * wording in the active locale. Unknown operations render as neutral copy in
+ * primary UI; raw backend values belong in folded support/debug details.
  *
  * Vocabulary contract: Capsule / 追加 / 変更を確認 / デプロイ / デプロイ済み
  * (Capsule / Add / Review changes / Deploy / Deployed) — see i18n/ja.ts.
@@ -96,7 +96,7 @@ const OPERATION: Record<string, MessageKey> = {
 export function operationLabel(operation: string | undefined): string {
   if (!operation) return t("op.generic");
   const key = OPERATION[operation];
-  return key ? t(key) : operation;
+  return key ? t(key) : t("op.generic");
 }
 
 // --- tones (UI colour treatment per status) -----------------------------------

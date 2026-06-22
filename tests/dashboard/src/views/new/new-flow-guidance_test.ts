@@ -242,6 +242,25 @@ describe("/new flow guidance", () => {
       'step === "running" || step === "error"',
     );
     expect(newAppViewSource).toContain("showSetupProgress()");
+    expect(newAppViewSource).toContain('t("new.progress.details")');
+    expect(newAppViewSource.indexOf('t("new.progress.status"')).toBeGreaterThan(
+      newAppViewSource.indexOf('t("new.progress.details")'),
+    );
     expect(newAppViewSource).not.toContain('stepSource() !== "idle"');
+    expect(en["new.progress.details"]).toBe("Detailed progress");
+    expect(ja["new.progress.details"]).toBe("詳しい進行状況");
+  });
+
+  test("uses neutral compatibility summaries for unknown backend diagnostics", () => {
+    expect(newAppViewSource).toContain(
+      't("new.compat.summary.reviewRequired")',
+    );
+    expect(newAppViewSource).not.toContain("return result.summary;");
+    expect(en["new.compat.summary.reviewRequired"]).toBe(
+      "An item needs review before this can be added.",
+    );
+    expect(ja["new.compat.summary.reviewRequired"]).toBe(
+      "追加する前に確認が必要な項目があります。",
+    );
   });
 });

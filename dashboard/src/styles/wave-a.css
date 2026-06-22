@@ -48,9 +48,9 @@
 }
 .wa-run-group-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: var(--tg-s-3);
-  align-items: start;
+  align-items: center;
   padding: var(--tg-s-4);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
@@ -69,8 +69,10 @@
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
 }
-.wa-run-group-details {
-  grid-column: 1 / -1;
+.wa-run-group-review {
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 /* --- Inline code / id chips ------------------------------------------------- */
@@ -261,6 +263,13 @@
   }
   .wa-provider-resolution-row {
     grid-template-columns: 1fr;
+  }
+  .wa-run-group-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .wa-run-group-review {
+    white-space: normal;
   }
 }
 .wa-diag {

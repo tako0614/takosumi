@@ -405,6 +405,22 @@ function planResourceScopeLabel(
   return parts.length > 0 ? parts.join(" / ") : undefined;
 }
 
+function planResourceDisplayLabel(resource: RunPlanResource): string {
+  const tail = resource.type.trim().split(".").at(-1) ?? resource.type;
+  const withoutProvider = tail.replace(
+    /^(cloudflare|aws|google|google-beta|hcloud|digitalocean|vultr|scaleway|openstack)_/,
+    "",
+  );
+  const words = withoutProvider
+    .split("_")
+    .map((word) => word.trim())
+    .filter(Boolean);
+  if (words.length === 0) return resource.type || resource.address;
+  return words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function PlanResourceReview(props: {
   readonly resources: readonly RunPlanResource[];
 }) {
@@ -432,13 +448,26 @@ function PlanResourceReview(props: {
                   {planResourceActionLabel(resource)}
                 </Badge>
                 <div class="wa-plan-resource-main">
-                  <code>{resource.address}</code>
-                  <span class="muted">{resource.type}</span>
-                  <Show when={planResourceScopeLabel(resource.scope)}>
-                    {(scope) => (
-                      <span class="wa-plan-resource-scope">{scope()}</span>
-                    )}
-                  </Show>
+                  <strong>{planResourceDisplayLabel(resource)}</strong>
+                  <details class="wb-inline-details">
+                    <summary>{t("run.resources.identifiers")}</summary>
+                    <p>
+                      <span class="muted">{t("run.resources.address")}</span>{" "}
+                      <code>{resource.address}</code>
+                    </p>
+                    <p>
+                      <span class="muted">{t("run.resources.type")}</span>{" "}
+                      <code>{resource.type}</code>
+                    </p>
+                    <Show when={planResourceScopeLabel(resource.scope)}>
+                      {(scope) => (
+                        <p class="wa-plan-resource-scope">
+                          <span class="muted">{t("run.resources.scope")}</span>{" "}
+                          {scope()}
+                        </p>
+                      )}
+                    </Show>
+                  </details>
                 </div>
               </div>
             )}
@@ -1035,20 +1064,6 @@ function Inner() {
                     </div>
                   </details>
                 </Show>
-                <Show when={planResources().some(isActionablePlanResource)}>
-                  <details class="wb-disclosure">
-                    <summary>
-                      {t("run.resources.title")}{" "}
-                      <Badge tone="muted">
-                        {t("run.resources.count", {
-                          n: planResources().filter(isActionablePlanResource)
-                            .length,
-                        })}
-                      </Badge>
-                    </summary>
-                    <PlanResourceReview resources={planResources()} />
-                  </details>
-                </Show>
               </Card>
 
               <Show when={providerRowsNeedingAttention().length > 0}>
@@ -1079,30 +1094,20 @@ function Inner() {
                       </p>
                     </Match>
                     <Match when={diagnosticRows().length > 0}>
-                      <Show
-                        when={r().status !== "failed"}
-                        fallback={
-                          <ul class="wa-diags">
-                            <For each={diagnosticRows()}>
-                              {(d) => <DiagnosticRow diagnostic={d} />}
-                            </For>
-                          </ul>
-                        }
-                      >
-                        <details class="wb-disclosure">
-                          <summary>
-                            {t("common.details")}{" "}
-                            <Badge tone="muted">
-                              {diagnosticRows().length}
-                            </Badge>
-                          </summary>
-                          <ul class="wa-diags">
-                            <For each={diagnosticRows()}>
-                              {(d) => <DiagnosticRow diagnostic={d} />}
-                            </For>
-                          </ul>
-                        </details>
+                      <Show when={r().status === "failed"}>
+                        <p class="wa-error">{t("run.diagnostics.failed")}</p>
                       </Show>
+                      <details class="wb-disclosure">
+                        <summary>
+                          {t("common.details")}{" "}
+                          <Badge tone="muted">{diagnosticRows().length}</Badge>
+                        </summary>
+                        <ul class="wa-diags">
+                          <For each={diagnosticRows()}>
+                            {(d) => <DiagnosticRow diagnostic={d} />}
+                          </For>
+                        </ul>
+                      </details>
                     </Match>
                   </Switch>
                 </Card>
@@ -1115,6 +1120,11 @@ function Inner() {
                   <Card>
                     <KVList items={detailItems(r())} />
                   </Card>
+                  <Show when={planResources().some(isActionablePlanResource)}>
+                    <Card>
+                      <PlanResourceReview resources={planResources()} />
+                    </Card>
+                  </Show>
                   <Card>
                     <CardHeader title={t("run.inputs.title")} />
                     <Show

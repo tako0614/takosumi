@@ -49,6 +49,12 @@ describe("Installation detail deployment surface", () => {
     );
   });
 
+  test("keeps backup identifiers out of the primary success notice", () => {
+    expect(source).toContain('t("app.deploys.backupCreated")');
+    expect(source).toContain('t("app.deploys.backupSupportRef")');
+    expect(source).not.toContain('t("app.deploys.backupCreated", { id:');
+  });
+
   test("keeps technical source details and deletion out of the default overview", () => {
     expect(source).toContain("function OverviewTab");
     expect(source).toContain("function SettingsTab");

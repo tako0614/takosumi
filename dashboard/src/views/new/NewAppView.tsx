@@ -285,7 +285,7 @@ function compatibilitySummaryDisplay(
       ),
     });
   }
-  return result.summary;
+  return t("new.compat.summary.reviewRequired");
 }
 
 function shouldShowCompatibilityPanel(
@@ -1943,11 +1943,14 @@ function Inner() {
                     </p>
                     <Show when={sourceSyncRunStatus()}>
                       {(status) => (
-                        <span class="wb-status-meta">
-                          {t("new.progress.status", {
-                            status: runStatusLabel(status()),
-                          })}
-                        </span>
+                        <details class="wb-inline-details">
+                          <summary>{t("new.progress.details")}</summary>
+                          <span class="wb-status-meta">
+                            {t("new.progress.status", {
+                              status: runStatusLabel(status()),
+                            })}
+                          </span>
+                        </details>
                       )}
                     </Show>
                   </div>

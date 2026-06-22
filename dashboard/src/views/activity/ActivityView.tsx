@@ -106,7 +106,7 @@ function activityTitle(event: ActivityEvent): string {
     case "run_group.created":
       return t("notif.event.groupCreated");
     default:
-      return event.action;
+      return t("activity.recorded");
   }
 }
 
@@ -123,25 +123,30 @@ function ActivityRow(props: { event: ActivityEvent }) {
       </div>
       <details class="wb-disclosure">
         <summary>{t("activity.details")}</summary>
-        <div class="wa-meta">
-          <Show when={props.event.actorId}>
-            {(actorId) => (
-              <span class="wa-meta-chip">
-                <span class="muted">actor</span>=<code>{actorId()}</code>
-              </span>
-            )}
-          </Show>
-          <span class="wa-meta-chip">
-            <span class="muted">action</span>=<code>{props.event.action}</code>
-          </span>
-          <span class="wa-meta-chip">
-            <span class="muted">target</span>=
-            <code>
-              {props.event.targetType}:{props.event.targetId}
-            </code>
-          </span>
-        </div>
-        <MetadataChips metadata={props.event.metadata} />
+        <p class="muted">{t("activity.detailsBody")}</p>
+        <details class="wb-inline-details">
+          <summary>{t("activity.debug")}</summary>
+          <div class="wa-meta">
+            <Show when={props.event.actorId}>
+              {(actorId) => (
+                <span class="wa-meta-chip">
+                  <span class="muted">actor</span>=<code>{actorId()}</code>
+                </span>
+              )}
+            </Show>
+            <span class="wa-meta-chip">
+              <span class="muted">action</span>=
+              <code>{props.event.action}</code>
+            </span>
+            <span class="wa-meta-chip">
+              <span class="muted">target</span>=
+              <code>
+                {props.event.targetType}:{props.event.targetId}
+              </code>
+            </span>
+          </div>
+          <MetadataChips metadata={props.event.metadata} />
+        </details>
       </details>
     </li>
   );
