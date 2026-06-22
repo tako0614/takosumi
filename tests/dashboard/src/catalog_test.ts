@@ -24,11 +24,12 @@ describe("dashboard catalog", () => {
     );
   });
 
-  test("the first web app starter is browser-openable after apply", () => {
+  test("the example web app starter is browser-openable after apply", () => {
     const hello = catalogEntries().find(
       (entry) => entry.templateId === "cloudflare-hello-worker",
     );
     expect(hello).toBeDefined();
+    expect(hello?.surface).toBe("example");
     expect(hello?.description.en.toLowerCase()).toContain("public url");
     expect(
       hello?.inputs.map((field) => [field.name, field.required]),
@@ -43,22 +44,26 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("catalog keeps hostable services first and building blocks secondary", () => {
+  test("catalog keeps hostable services first and examples out of the primary path", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
       (entry) => entry.surface === "building_block",
     );
+    const examples = entries.filter((entry) => entry.surface === "example");
     expect(
       services
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
-    ).toEqual(["cloudflare-hello-worker", "cloudflare-static-site"]);
+    ).toEqual(["cloudflare-static-site"]);
     expect(
       buildingBlocks
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
     ).toEqual(["cloudflare-r2-storage", "aws-s3-storage"]);
+    expect(examples.map((entry) => entry.templateId)).toEqual([
+      "cloudflare-hello-worker",
+    ]);
   });
 
   test("visible cards resolve to seeded official template configs", () => {

@@ -4075,6 +4075,109 @@ test("accounts handler blocks Stripe checkout when platform readiness access is 
   expect(portalDenied.platform_access).toEqual("closed");
 });
 
+test("accounts handler lets operator checkout smoke bypass only the readiness gate", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const checkoutSession = seedAccountSession(store, "tsub_account");
+
+  let checkoutCalled = 0;
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+    billingCheckoutSmokeToken: "smoke_token",
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      stripeApiBase: "https://api.stripe.test/v1",
+      fetch: (input, init) => {
+        checkoutCalled += 1;
+        const request = new Request(input, init);
+        expect(request.url).toEqual(
+          "https://api.stripe.test/v1/checkout/sessions",
+        );
+        return Promise.resolve(
+          Response.json({
+            id: "cs_smoke",
+            url: "https://checkout.stripe.test/cs_smoke",
+          }),
+        );
+      },
+    },
+    billingRedirectAllowlist: ["https://accounts.example.test"],
+    billingPlans: [
+      {
+        id: "plus",
+        kind: "subscription",
+        stripePriceId: "price_1",
+        credits: 1000,
+        name: { ja: "プラス", en: "Plus" },
+        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
+      },
+    ],
+    controlPlaneOperations: checkoutControlOps("tsub_account"),
+  });
+
+  const invalidToken = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(checkoutSession),
+        "content-type": "application/json",
+        "x-takosumi-billing-smoke-token": "wrong",
+      },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(invalidToken.status).toEqual(503);
+  expect((await invalidToken.json()).error.code).toEqual(
+    "launch_readiness_not_complete",
+  );
+  expect(checkoutCalled).toEqual(0);
+
+  const noSession = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-takosumi-billing-smoke-token": "smoke_token",
+      },
+      body: JSON.stringify({}),
+    }),
+  );
+  expect(noSession.status).toEqual(401);
+  expect(checkoutCalled).toEqual(0);
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(checkoutSession),
+        "content-type": "application/json",
+        "x-takosumi-billing-smoke-token": "smoke_token",
+      },
+      body: JSON.stringify({
+        subject: "tsub_account",
+        planId: "plus",
+        spaceId: "space_a",
+        successUrl: "https://accounts.example.test/success",
+        cancelUrl: "https://accounts.example.test/cancel",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(200);
+  expect(await response.json()).toEqual({
+    session_id: "cs_smoke",
+    url: "https://checkout.stripe.test/cs_smoke",
+  });
+  expect(checkoutCalled).toEqual(1);
+});
+
 test("accounts handler receives Stripe webhooks into billing state", async () => {
   const store = new InMemoryAccountsStore();
   store.saveAccount({

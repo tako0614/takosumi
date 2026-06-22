@@ -137,8 +137,8 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('"run.cost.billingCta"');
     expect(runViewSource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");
-    expect(en["run.cost.operatorHelp"]).toContain("admin");
+    expect(en["run.cost.operatorHelp"]).toContain("workspace");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");
-    expect(ja["run.cost.operatorHelp"]).toContain("管理者");
+    expect(ja["run.cost.operatorHelp"]).toContain("ワークスペース");
   });
 });

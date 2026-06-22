@@ -412,7 +412,7 @@ export interface InstallConfig {
       readonly path: string;
     };
     readonly order: number;
-    readonly surface: "service" | "building_block";
+    readonly surface: "service" | "building_block" | "example";
     readonly kind: "worker" | "storage" | "site";
     readonly provider: string;
     readonly suggestedName: string;

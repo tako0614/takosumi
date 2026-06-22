@@ -328,7 +328,9 @@ function catalogInputKey(entryId: string, fieldName: string): string {
 }
 
 function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
-  return surface === "service" ? 0 : 1;
+  if (surface === "service") return 0;
+  if (surface === "building_block") return 1;
+  return 2;
 }
 
 function catalogDefaultInputValue(
@@ -522,6 +524,9 @@ function Inner() {
   const buildingBlockCatalog = createMemo(() =>
     catalogEntries().filter((entry) => entry.surface === "building_block"),
   );
+  const exampleCatalog = createMemo(() =>
+    catalogEntries().filter((entry) => entry.surface === "example"),
+  );
   const defaultGitInstallConfig = () =>
     configList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
@@ -584,6 +589,12 @@ function Inner() {
     for (const field of entry.inputs) {
       const value = catalogInputValue(entry, field).trim();
       if (field.required && !value) {
+        if (
+          isConnectionScopedCatalogInput(entry, field) &&
+          (!compatibility() || providerConnectionError() !== null)
+        ) {
+          continue;
+        }
         return t("new.catalogInput.errorRequired", {
           label: field.label[locale()],
         });
@@ -830,10 +841,29 @@ function Inner() {
     field.required &&
     !catalogInputTouched()[catalogInputKey(entry.id, field.name)] &&
     catalogScopeHintValue(entry, field) !== undefined;
+  const isConnectionScopedCatalogInput = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) => entry.provider === "cloudflare" && field.name === "accountId";
   const visibleCatalogInputs = (entry: CatalogEntry) =>
-    entry.inputs.filter((field) => !catalogInputHasImplicitValue(entry, field));
+    entry.inputs.filter(
+      (field) =>
+        !isConnectionScopedCatalogInput(entry, field) &&
+        !catalogInputHasImplicitValue(entry, field),
+    );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
-    entry.inputs.filter((field) => catalogInputHasImplicitValue(entry, field));
+    entry.inputs.filter(
+      (field) =>
+        isConnectionScopedCatalogInput(entry, field) ||
+        catalogInputHasImplicitValue(entry, field),
+    );
+  const hasMissingAdvancedCatalogInputs = () => {
+    const entry = selectedCatalogEntry();
+    if (!entry || !compatibility()) return false;
+    return advancedCatalogInputs(entry).some(
+      (field) => field.required && !catalogInputValue(entry, field).trim(),
+    );
+  };
   const sourceGitConnections = () =>
     visibleConnections().filter(
       (connection) =>
@@ -1720,6 +1750,21 @@ function Inner() {
                       </ul>
                     </details>
                   </Show>
+                  <Show when={exampleCatalog().length > 0}>
+                    <details class="wb-disclosure av-catalog-more">
+                      <summary>{t("new.store.examplesTitle")}</summary>
+                      <ul class="av-catalog-grid av-catalog-grid-secondary">
+                        <For each={exampleCatalog()}>
+                          {(entry) => (
+                            <CatalogCard
+                              entry={entry}
+                              onSelect={pickCatalogEntry}
+                            />
+                          )}
+                        </For>
+                      </ul>
+                    </details>
+                  </Show>
                 </>
               </Match>
             </Switch>
@@ -1860,7 +1905,10 @@ function Inner() {
 
                 <details
                   class="wb-disclosure wb-input-vars"
-                  open={shouldOpenServiceAdvanced()}
+                  open={
+                    shouldOpenServiceAdvanced() ||
+                    hasMissingAdvancedCatalogInputs()
+                  }
                 >
                   <summary>{t("new.serviceAdvanced.title")}</summary>
                   <Show when={selectedCatalogEntry()}>

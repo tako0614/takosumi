@@ -246,6 +246,9 @@ export type { PasskeyChallengeIntent } from "./passkey-challenge-store.ts";
 
 export type AccountsHandler = (request: Request) => Promise<Response>;
 
+export const TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER =
+  "x-takosumi-billing-smoke-token";
+
 export interface AccountsHandlerOptions {
   issuer?: string;
   jwks?: JsonWebKeySet;
@@ -281,6 +284,13 @@ export interface AccountsHandlerOptions {
    * space-separated list of origins).
    */
   billingRedirectAllowlist?: readonly string[];
+  /**
+   * Operator-only token that lets the billing readiness checker exercise
+   * Stripe checkout while hosted platform access is still closed. This bypasses
+   * only the launch-readiness gate; account session, Space ownership, redirect
+   * allowlist, plan catalog, and Stripe validation still run normally.
+   */
+  billingCheckoutSmokeToken?: string;
   /**
    * Operator billing plan catalog (spec §32): the subscription plans / credit
    * packs the dashboard offers, each bound server-side to a Stripe price.
@@ -321,6 +331,7 @@ export interface EphemeralAccountsHandlerOptions {
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   billingRedirectAllowlist?: readonly string[];
+  billingCheckoutSmokeToken?: string;
   billingPlans?: readonly BillingPlan[];
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
@@ -879,7 +890,13 @@ export function createAccountsHandler(
       // offering surfaces stay blocked.
       const limited = checkoutLimiter.consume(request);
       if (limited) return limited;
-      const blocked = platformAccessBlocked(options.platformAccess);
+      const checkoutSmokeAllowed = billingCheckoutSmokeAllowed({
+        request,
+        token: options.billingCheckoutSmokeToken,
+      });
+      const blocked = checkoutSmokeAllowed
+        ? null
+        : platformAccessBlocked(options.platformAccess);
       if (blocked) return blocked;
       const session = await requireAccountSession({
         request: request.clone(),
@@ -1454,6 +1471,17 @@ function requireServiceGraphMaterialResolverAccess(input: {
     undefined,
     { "www-authenticate": "Bearer" },
   );
+}
+
+function billingCheckoutSmokeAllowed(input: {
+  request: Request;
+  token: string | undefined;
+}): boolean {
+  if (!input.token) return false;
+  const header =
+    input.request.headers.get(TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER) ??
+    "";
+  return constantTimeEqual(header, input.token);
 }
 
 function installationRouteAccountAccess(
