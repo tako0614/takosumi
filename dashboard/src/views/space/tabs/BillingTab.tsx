@@ -175,24 +175,29 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     }
   };
 
-  const usageColumns: readonly Column<UsageEvent>[] = [
-    {
-      header: t("billing.usage.kind"),
-      cell: (e) => usageKindLabel(e.kind),
-    },
-    {
-      header: t("billing.usage.quantity"),
-      cell: (e) => formatBillingNumber(e.quantity),
-    },
-    {
-      header: t("billing.usage.credits"),
-      cell: (e) => formatBillingNumber(e.credits),
-    },
-    {
+  const usageColumns = createMemo<readonly Column<UsageEvent>[]>(() => {
+    const columns: Column<UsageEvent>[] = [
+      {
+        header: t("billing.usage.kind"),
+        cell: (e) => usageKindLabel(e.kind),
+      },
+      {
+        header: t("billing.usage.quantity"),
+        cell: (e) => formatBillingNumber(e.quantity),
+      },
+    ];
+    if (cloudBilling()) {
+      columns.push({
+        header: t("billing.usage.credits"),
+        cell: (e) => formatBillingNumber(e.credits),
+      });
+    }
+    columns.push({
       header: t("billing.usage.created"),
       cell: (e) => formatDateTime(e.createdAt),
-    },
-  ];
+    });
+    return columns;
+  });
 
   const planCard = (plan: PublicBillingPlan) => (
     <li class="av-plan-card">
@@ -374,7 +379,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
                       fallback={<p class="muted">{t("billing.usage.empty")}</p>}
                     >
                       <DataTable
-                        columns={usageColumns}
+                        columns={usageColumns()}
                         rows={rows()}
                         rowKey={(_e, i) => i}
                       />
