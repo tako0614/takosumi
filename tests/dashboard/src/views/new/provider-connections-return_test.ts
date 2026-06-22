@@ -41,6 +41,10 @@ const appDetailViewSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/apps/AppDetailView.tsx"),
   "utf8",
 );
+const runViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/runs/RunView.tsx"),
+  "utf8",
+);
 const accountViewSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/account/AccountView.tsx"),
   "utf8",
@@ -396,6 +400,27 @@ describe("/new Provider Connections return context", () => {
     expect(ja).not.toHaveProperty("conn.guided.intro");
     expect(en).not.toHaveProperty("conn.genericEnv.intro");
     expect(ja).not.toHaveProperty("conn.genericEnv.intro");
+  });
+
+  test("provider connection labels fall back to friendly service names", () => {
+    expect(newAppViewSource).toContain(
+      "connection.displayName || providerLabel(connection.providerSource)",
+    );
+    expect(appDetailViewSource).toContain(
+      "providerDisplayName(providerConnection.providerSource)",
+    );
+    expect(runViewSource).toContain(
+      "connection.displayName || providerDisplayName(connection.providerSource)",
+    );
+    expect(newAppViewSource).not.toContain(
+      "connection.displayName || connection.providerSource",
+    );
+    expect(appDetailViewSource).not.toContain(
+      "providerConnection.displayName || providerConnection.providerSource",
+    );
+    expect(runViewSource).not.toContain(
+      "connection?.displayName || connection?.providerSource",
+    );
   });
 
   test("deep-linked detail views import their view CSS explicitly", () => {

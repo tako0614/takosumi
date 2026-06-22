@@ -300,7 +300,9 @@ function providerConnectionName(
 ): string | undefined {
   if (!connectionId) return undefined;
   const connection = connectionsById.get(connectionId);
-  return connection?.displayName || connection?.providerSource;
+  return connection
+    ? connection.displayName || providerDisplayName(connection.providerSource)
+    : undefined;
 }
 
 function providerResolutionRows(
