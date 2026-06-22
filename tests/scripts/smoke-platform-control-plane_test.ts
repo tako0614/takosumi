@@ -39,8 +39,13 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     "plan",
     "apply",
     "deploymentVerified",
+    "publicUrlVerified",
     "destroy",
   ]);
+  expect(result.workerUrl).toBe(
+    "https://takosumi-smoke-test.<redacted>.workers.dev",
+  );
+  expect(result.publicUrlVerified).toBe(true);
   expect(result.destroyVerified).toBe(true);
   expect(result.inputs.accountSessionTokenSource).toBe("file");
   expect(result.inputs.cloudflareApiTokenSource).toBe("file");
@@ -99,6 +104,7 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
     "plan",
     "apply",
     "deploymentVerified",
+    "publicUrlVerified",
     "backupRestoreRehearsal",
     "destroy",
   ]);
