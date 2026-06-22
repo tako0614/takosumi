@@ -104,6 +104,7 @@ import { log } from "../../shared/log.ts";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
+  InstallationStateGenerationGuardConflict,
   type OpenTofuDeploymentStore,
   type PlanRunInputs,
 } from "./store.ts";
@@ -2532,27 +2533,116 @@ export class OpenTofuDeploymentController {
   async runQueuedRestore(runId: string): Promise<Run | undefined> {
     const run = await this.#store.getBackupRun(runId);
     if (!run || run.type !== "restore") return undefined;
-    if (run.status !== "queued") return run;
-    const startedAt = new Date(this.#now()).toISOString();
-    const running: Run = { ...run, status: "running", startedAt };
-    await this.#store.putBackupRun(running);
+    if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) return run;
+    let leaseTarget: {
+      readonly installationId: string;
+      readonly environment: string;
+    };
     try {
-      const completed = await this.#completeRestoreRun(running);
-      await this.#store.putBackupRun(completed);
-      return completed;
+      leaseTarget = await this.#restoreLeaseTarget(run);
     } catch (error) {
-      const failed: Run = {
-        ...running,
-        status: "failed",
-        errorCode: compactErrorCode(errorMessage(error)),
-        finishedAt: new Date(this.#now()).toISOString(),
-      };
-      await this.#store.putBackupRun(failed);
+      await this.#failRestoreRun(run, undefined, error);
+      throw error;
+    }
+    const runWork = (handle?: LeaseHandle) =>
+      this.#runSerialized(
+        `restore:${leaseTarget.installationId}:${leaseTarget.environment}`,
+        () => this.#executeRestore(run, handle),
+      );
+    if (this.#installationCoordination) {
+      return await withInstallationLease(
+        this.#installationCoordination,
+        {
+          installationId: leaseTarget.installationId,
+          environment: leaseTarget.environment,
+          holderId: run.id,
+        },
+        runWork,
+      );
+    }
+    return await runWork();
+  }
+
+  async #restoreLeaseTarget(
+    run: Run,
+  ): Promise<{
+    readonly installationId: string;
+    readonly environment: string;
+  }> {
+    if (!run.backupId || run.restoreStateGeneration === undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "restore run is missing backupId or restoreStateGeneration",
+      );
+    }
+    const backup = await this.#store.getBackupRecord(run.backupId);
+    if (!backup || backup.spaceId !== run.spaceId) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `backup ${run.backupId} not found`,
+      );
+    }
+    if (run.planDigest && backup.digest !== run.planDigest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "backup digest changed before restore dispatch",
+      );
+    }
+    const installationId = run.installationId ?? backup.installationId;
+    if (!installationId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "restore run has no target installation",
+      );
+    }
+    const installation = await this.#store.getInstallation(installationId);
+    if (!installation || installation.spaceId !== run.spaceId) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `installation ${installationId} not found`,
+      );
+    }
+    const environment =
+      run.environment ?? backup.environment ?? installation.environment;
+    return { installationId: installation.id, environment };
+  }
+
+  async #executeRestore(run: Run, lease?: LeaseHandle): Promise<Run> {
+    const current = await this.#store.getBackupRun(run.id);
+    if (!current || current.type !== "restore") return run;
+    if (!this.#shouldProcessRun(current.status, current.heartbeatAt)) {
+      return current;
+    }
+    const startedAtMs = this.#now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const running: Run = {
+      ...current,
+      status: "running",
+      startedAt: current.startedAt ?? startedAt,
+      heartbeatAt: startedAtMs,
+    };
+    const claim = await this.#claimRestoreRunning(
+      current.status,
+      running,
+      startedAtMs,
+      current.heartbeatAt ?? null,
+    );
+    if (!claim.won) return claim.run;
+    try {
+      return await this.#withRunRenewal(
+        "restore",
+        claim.run,
+        claim.leaseToken,
+        lease,
+        () => this.#completeRestoreRun(claim.run, claim.leaseToken),
+      );
+    } catch (error) {
+      await this.#failRestoreRun(claim.run, claim.leaseToken, error);
       throw error;
     }
   }
 
-  async #completeRestoreRun(run: Run): Promise<Run> {
+  async #completeRestoreRun(run: Run, leaseToken: string): Promise<Run> {
     if (!run.backupId || run.restoreStateGeneration === undefined) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2672,7 +2762,6 @@ export class OpenTofuDeploymentController {
       createdByRunId: run.id,
       createdAt: now,
     };
-    await this.#store.putStateSnapshot(restoredState);
     const sourceOutput = (
       await this.#store.listOutputSnapshots(installation.id)
     ).find((snapshot) => snapshot.stateGeneration === source.generation);
@@ -2681,12 +2770,35 @@ export class OpenTofuDeploymentController {
           installation.currentOutputSnapshotId,
         )
       : undefined;
-    await this.#store.patchInstallation(installation.id, {
-      currentStateGeneration: nextGeneration,
-      ...(sourceOutput ? { currentOutputSnapshotId: sourceOutput.id } : {}),
-      status: "stale",
-      updatedAt: now,
+    const completed: Run = {
+      ...run,
+      status: "succeeded",
+      heartbeatAt: nowMs,
+      restoredStateSnapshotId: restoredState.id,
+      ...(restoredServiceData ? { restoredServiceData } : {}),
+      finishedAt: now,
+    };
+    const committed = await this.#store.commitRestoredState({
+      stateSnapshot: restoredState,
+      installationPatch: {
+        id: installation.id,
+        patch: {
+          currentStateGeneration: nextGeneration,
+          ...(sourceOutput ? { currentOutputSnapshotId: sourceOutput.id } : {}),
+          status: "stale",
+          updatedAt: now,
+        },
+        guard: {
+          currentStateGeneration: installation.currentStateGeneration,
+          status: installation.status,
+        },
+      },
+      restoreRunTerminal: completed,
+      restoreRunLeaseToken: leaseToken,
     });
+    if (committed.restoreRunLeaseLost) {
+      return (await this.#store.getBackupRun(run.id)) ?? run;
+    }
     if (sourceOutput) {
       await this.#markDownstreamInstallationsStale({
         installation,
@@ -2718,13 +2830,7 @@ export class OpenTofuDeploymentController {
           : {}),
       },
     });
-    return {
-      ...run,
-      status: "succeeded",
-      restoredStateSnapshotId: restoredState.id,
-      ...(restoredServiceData ? { restoredServiceData } : {}),
-      finishedAt: now,
-    };
+    return completed;
   }
 
   /**
@@ -2764,13 +2870,23 @@ export class OpenTofuDeploymentController {
       if (!run || run.type !== "restore" || isTerminalStatus(run.status)) {
         return false;
       }
-      await this.#store.putBackupRun({
+      if (run.status === "running") return false;
+      const failed: Run = {
         ...run,
         status: "failed",
+        heartbeatAt: this.#now(),
         errorCode: reason,
         finishedAt: new Date(this.#now()).toISOString(),
+      };
+      const result = await this.#store.transitionRun({
+        id: run.id,
+        kind: "restore",
+        expectFrom: [run.status],
+        run: failed,
+        clearLeaseToken: true,
+        heartbeatAt: failed.heartbeatAt,
       });
-      return true;
+      return result.won;
     }
     const applyRun = await this.#store.getApplyRun(runId);
     if (!applyRun || isTerminalStatus(applyRun.status)) return false;
@@ -3862,7 +3978,15 @@ export class OpenTofuDeploymentController {
       ...restoreRun,
       status: "queued",
     };
-    await this.#store.putBackupRun(approved);
+    const approveResult = await this.#store.transitionRun({
+      id: restoreRun.id,
+      kind: "restore",
+      expectFrom: ["waiting_approval"],
+      run: approved,
+    });
+    if (!approveResult.won) {
+      return (approveResult.run as Run | undefined) ?? restoreRun;
+    }
     await this.#recordActivity({
       spaceId: approved.spaceId,
       ...(input.approvedBy ? { actorId: input.approvedBy } : {}),
@@ -3907,9 +4031,7 @@ export class OpenTofuDeploymentController {
   // sibling already owns the run — or a cancel won the row — and the caller must
   // NOT dispatch the runner. The claim stamps the run id as the lease fence
   // token + the heartbeat, so a concurrent claim/cancel cannot both win.
-  async #markPlanRunning(
-    planRun: PlanRun,
-  ): Promise<RunClaimResult<PlanRun>> {
+  async #markPlanRunning(planRun: PlanRun): Promise<RunClaimResult<PlanRun>> {
     const startedAt = this.#now();
     const expectedHeartbeatAt = planRun.heartbeatAt ?? null;
     const running: PlanRun = {
@@ -3989,10 +4111,39 @@ export class OpenTofuDeploymentController {
       expectFrom,
       run: running,
       setLeaseToken: leaseToken,
-      ...(fromStatus === "running" ? { expectHeartbeatAt: expectedHeartbeatAt } : {}),
+      ...(fromStatus === "running"
+        ? { expectHeartbeatAt: expectedHeartbeatAt }
+        : {}),
       heartbeatAt,
     });
     const run = (result.run ?? running) as R;
+    return result.won ? { won: true, run, leaseToken } : { won: false, run };
+  }
+
+  async #claimRestoreRunning(
+    fromStatus: RunStatus,
+    running: Run,
+    heartbeatAt: number,
+    expectedHeartbeatAt: number | null,
+  ): Promise<
+    | { readonly won: true; readonly run: Run; readonly leaseToken: string }
+    | { readonly won: false; readonly run: Run }
+  > {
+    const expectFrom: RunStatus[] =
+      fromStatus === "running" ? ["running"] : ["queued"];
+    const leaseToken = this.#newId("runlease");
+    const result = await this.#store.transitionRun({
+      id: running.id,
+      kind: "restore",
+      expectFrom,
+      run: running,
+      setLeaseToken: leaseToken,
+      ...(fromStatus === "running"
+        ? { expectHeartbeatAt: expectedHeartbeatAt }
+        : {}),
+      heartbeatAt,
+    });
+    const run = (result.run ?? running) as Run;
     return result.won ? { won: true, run, leaseToken } : { won: false, run };
   }
 
@@ -4003,8 +4154,8 @@ export class OpenTofuDeploymentController {
    * bumped by the crashed prior owner. A lost CAS is a no-op (the run moved on).
    */
   async #heartbeatRunningRun(
-    kind: "plan" | "apply",
-    run: PlanRun | ApplyRun,
+    kind: "plan" | "apply" | "restore",
+    run: PlanRun | ApplyRun | Run,
     leaseToken: string,
   ): Promise<void> {
     const now = this.#now();
@@ -4027,8 +4178,8 @@ export class OpenTofuDeploymentController {
    * error is swallowed so it can never reject `work`'s result or crash the run.
    */
   async #withRunRenewal<T>(
-    kind: "plan" | "apply",
-    run: PlanRun | ApplyRun,
+    kind: "plan" | "apply" | "restore",
+    run: PlanRun | ApplyRun | Run,
     leaseToken: string,
     lease: LeaseHandle | undefined,
     work: () => Promise<T>,
@@ -4088,6 +4239,31 @@ export class OpenTofuDeploymentController {
       won: result.won,
       run: (result.won ? terminal : (result.run ?? terminal)) as R,
     };
+  }
+
+  async #failRestoreRun(
+    running: Run,
+    leaseToken: string | undefined,
+    error: unknown,
+  ): Promise<Run> {
+    const finishedAtMs = this.#now();
+    const failed: Run = {
+      ...running,
+      status: "failed",
+      heartbeatAt: finishedAtMs,
+      errorCode: compactErrorCode(errorMessage(error)),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+    };
+    const result = await this.#store.transitionRun({
+      id: failed.id,
+      kind: "restore",
+      expectFrom: NON_TERMINAL_RUN_STATUSES,
+      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      run: failed,
+      clearLeaseToken: true,
+      heartbeatAt: finishedAtMs,
+    });
+    return (result.won ? failed : (result.run ?? failed)) as Run;
   }
 
   // Failure ceremony shared by the three catch bodies: clone the running run
@@ -4871,20 +5047,25 @@ export class OpenTofuDeploymentController {
         envDispatch,
         persistGeneration,
         providerInstallationPolicy,
-      } = await this.#withRunRenewal("apply", runningWithEnv, leaseToken, lease, () =>
-        this.#dispatchApply({
-          running: runningWithEnv,
-          planRun,
-          profile,
-          dispatch,
-          credentials: runEnvironment.credentials,
-          // Flip the runner-dispatched flag ONLY when the runner is actually
-          // invoked, so a throw from the pre-dispatch env/policy resolution does
-          // not record runner-minute usage (matches the pre-extraction order).
-          onDispatch: () => {
-            runnerDispatched = true;
-          },
-        }),
+      } = await this.#withRunRenewal(
+        "apply",
+        runningWithEnv,
+        leaseToken,
+        lease,
+        () =>
+          this.#dispatchApply({
+            running: runningWithEnv,
+            planRun,
+            profile,
+            dispatch,
+            credentials: runEnvironment.credentials,
+            // Flip the runner-dispatched flag ONLY when the runner is actually
+            // invoked, so a throw from the pre-dispatch env/policy resolution does
+            // not record runner-minute usage (matches the pre-extraction order).
+            onDispatch: () => {
+              runnerDispatched = true;
+            },
+          }),
       );
       const now = this.#now();
       const projected = await this.#projectAndRecordApplyOutputs({
@@ -5706,34 +5887,41 @@ export class OpenTofuDeploymentController {
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
       // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
       // long destroy is not taken over by a sibling. clearInterval on every exit.
-      const result = await this.#withRunRenewal("apply", running, leaseToken, lease, () =>
-        destroyFn.call(runner, {
-          applyRun: running,
-          planRun,
-          planArtifact: planRun.planArtifact!,
-          installation,
-          runnerProfile: profile,
-          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-          // Generated-root dispatch: destroy tofu in the reviewed root.
-          ...(dispatch.generatedRoot
-            ? { generatedRoot: dispatch.generatedRoot }
-            : {}),
-          ...(dispatch.build ? { build: dispatch.build } : {}),
-          // M2 env dispatch (state scope at base+1 + source archive).
-          ...(envDispatch.stateScope
-            ? { stateScope: envDispatch.stateScope }
-            : {}),
-          ...(envDispatch.sourceArchive
-            ? { sourceArchive: envDispatch.sourceArchive }
-            : {}),
-          // remote_state dependency states materialized into /work/deps (§15):
-          // the teardown config still refreshes its `terraform_remote_state` data
-          // sources, so the producer state files must be present.
-          ...(envDispatch.depStates
-            ? { depStates: envDispatch.depStates }
-            : {}),
-          ...(credentials ? { credentials } : {}),
-        }),
+      const result = await this.#withRunRenewal(
+        "apply",
+        running,
+        leaseToken,
+        lease,
+        () =>
+          destroyFn.call(runner, {
+            applyRun: running,
+            planRun,
+            planArtifact: planRun.planArtifact!,
+            installation,
+            runnerProfile: profile,
+            ...(providerInstallationPolicy
+              ? { providerInstallationPolicy }
+              : {}),
+            // Generated-root dispatch: destroy tofu in the reviewed root.
+            ...(dispatch.generatedRoot
+              ? { generatedRoot: dispatch.generatedRoot }
+              : {}),
+            ...(dispatch.build ? { build: dispatch.build } : {}),
+            // M2 env dispatch (state scope at base+1 + source archive).
+            ...(envDispatch.stateScope
+              ? { stateScope: envDispatch.stateScope }
+              : {}),
+            ...(envDispatch.sourceArchive
+              ? { sourceArchive: envDispatch.sourceArchive }
+              : {}),
+            // remote_state dependency states materialized into /work/deps (§15):
+            // the teardown config still refreshes its `terraform_remote_state` data
+            // sources, so the producer state files must be present.
+            ...(envDispatch.depStates
+              ? { depStates: envDispatch.depStates }
+              : {}),
+            ...(credentials ? { credentials } : {}),
+          }),
       );
       const now = this.#now();
       // Build the post-teardown StateSnapshot at the SAME generation the DO

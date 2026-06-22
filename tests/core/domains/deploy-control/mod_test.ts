@@ -1651,6 +1651,174 @@ test("restore marks the Installation stale because it restores state, not live r
   expect(restored?.status).toBe("stale");
 });
 
+test("restore does not publish state after losing its run lease", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const installation = await store.getInstallation(installationId);
+  expect(installation).toBeDefined();
+  await store.putStateSnapshot({
+    id: "state_restore_lost_source",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    generation: 1,
+    objectKey: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: "bkp_restore_lost",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    objectKey:
+      "spaces/space_test/backups/bkp_restore_lost/control.json.zst.enc",
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    ...installation!,
+    status: "destroyed",
+    currentStateGeneration: 2,
+    updatedAt: "2026-06-06T00:00:01.000Z",
+  });
+  let restoreRunId = "";
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(700),
+    newId: deterministicIds(),
+    runner: {
+      restore: async ({ stateScope }) => {
+        const current = await store.getBackupRun(restoreRunId);
+        expect(current?.status).toBe("running");
+        const takeover = await store.transitionRun({
+          id: restoreRunId,
+          kind: "restore",
+          expectFrom: ["running"],
+          expectHeartbeatAt: current?.heartbeatAt ?? null,
+          run: {
+            ...(current as NonNullable<typeof current>),
+            status: "running",
+            heartbeatAt: 999_000,
+          },
+          setLeaseToken: "lease_other_restore_owner",
+          heartbeatAt: 999_000,
+        });
+        expect(takeover.won).toBe(true);
+        return {
+          state: {
+            objectKey: `states/${stateScope.generation}.tfstate.enc`,
+            digest: PLAN_DIGEST,
+          },
+        };
+      },
+    },
+  });
+  const restore = await controller.createRestoreRun(
+    installation!.spaceId,
+    "bkp_restore_lost",
+    {
+      installationId,
+      environment: installation!.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  restoreRunId = restore.id;
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  await controller.runQueuedRestore(restore.id);
+
+  const restored = await store.getInstallation(installationId);
+  const restoreRun = await store.getBackupRun(restore.id);
+  expect(restoreRun?.status).toBe("running");
+  expect(restoreRun?.heartbeatAt).toBe(999_000);
+  expect(restored?.currentStateGeneration).toBe(2);
+  expect(
+    (
+      await store.listStateSnapshots(installationId, installation!.environment)
+    ).find((snapshot) => snapshot.generation === 3),
+  ).toBeUndefined();
+});
+
+test("restore renews the run heartbeat while the runner blocks", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const installation = await store.getInstallation(installationId);
+  expect(installation).toBeDefined();
+  await store.putStateSnapshot({
+    id: "state_restore_heartbeat_source",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    generation: 1,
+    objectKey: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: "bkp_restore_heartbeat",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    objectKey:
+      "spaces/space_test/backups/bkp_restore_heartbeat/control.json.zst.enc",
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  let clock = 800;
+  let restoreRunId = "";
+  let claimHeartbeat = 0;
+  let midFlightHeartbeat = 0;
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: () => (clock += 1),
+    newId: deterministicIds(),
+    runRenewalIntervalMs: 5,
+    runner: {
+      restore: async ({ stateScope }) => {
+        claimHeartbeat =
+          (await store.getBackupRun(restoreRunId))?.heartbeatAt ?? 0;
+        const deadline = Date.now() + 1000;
+        while (Date.now() < deadline) {
+          const current =
+            (await store.getBackupRun(restoreRunId))?.heartbeatAt ?? 0;
+          if (current > claimHeartbeat) {
+            midFlightHeartbeat = current;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        return {
+          state: {
+            objectKey: `states/${stateScope.generation}.tfstate.enc`,
+            digest: PLAN_DIGEST,
+          },
+        };
+      },
+    },
+  });
+  const restore = await controller.createRestoreRun(
+    installation!.spaceId,
+    "bkp_restore_heartbeat",
+    {
+      installationId,
+      environment: installation!.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  restoreRunId = restore.id;
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  await controller.runQueuedRestore(restore.id);
+
+  expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
+  expect((await store.getBackupRun(restore.id))?.status).toBe("succeeded");
+});
+
 test("restore dispatches service-data artifacts only when requested and acknowledged", async () => {
   const { store, installationId } = await seedUpdatableInstallation();
   const serviceData = {

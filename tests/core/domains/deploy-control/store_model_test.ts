@@ -3,6 +3,7 @@ import { afterAll, expect, test } from "bun:test";
 import {
   InMemoryOpenTofuDeploymentStore,
   InstallationPatchGuardConflict,
+  InstallationStateGenerationGuardConflict,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
@@ -33,7 +34,7 @@ import type {
   OutputShare,
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
-import type { ArtifactRecord, RunGroup } from "takosumi-contract/runs";
+import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
@@ -668,6 +669,23 @@ function sourceSyncRun(over: Partial<SourceSyncRun> = {}): SourceSyncRun {
     status: "queued",
     createdAt: TS,
     updatedAt: TS,
+    ...over,
+  };
+}
+
+function restoreRun(over: Partial<Run> = {}): Run {
+  return {
+    id: "restore_1",
+    spaceId: "space_1",
+    installationId: "inst_1",
+    environment: "production",
+    type: "restore",
+    status: "queued",
+    backupId: "backup_1",
+    restoreStateGeneration: 1,
+    restoredFromStateSnapshotId: "state_source",
+    createdBy: "system",
+    createdAt: TS,
     ...over,
   };
 }
@@ -1476,7 +1494,10 @@ test("commitAppliedDeployment: stale apply lease loses before any ledger write",
 
     expect(committed.applyRunLeaseLost, label).toBe(true);
     expect(await store.getDeployment("dep_stale_lease"), label).toBeUndefined();
-    expect(await store.getOutputSnapshot("out_stale_lease"), label).toBeUndefined();
+    expect(
+      await store.getOutputSnapshot("out_stale_lease"),
+      label,
+    ).toBeUndefined();
     expect((await store.getInstallation("inst_lease"))?.status, label).toBe(
       "pending",
     );
@@ -1965,8 +1986,268 @@ test("transitionRun: source_sync rows use the same lease fence", async () => {
       heartbeatAt: 101,
     });
     expect(terminal.won, label).toBe(true);
-    expect((await store.getSourceSyncRun("run_t_source_sync"))?.status, label)
-      .toBe("succeeded");
+    expect(
+      (await store.getSourceSyncRun("run_t_source_sync"))?.status,
+      label,
+    ).toBe("succeeded");
+  }
+});
+
+test("transitionRun: restore rows use the same lease fence", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putBackupRun(restoreRun({ id: "run_t_restore" }));
+
+    const claim = await store.transitionRun({
+      id: "run_t_restore",
+      kind: "restore",
+      expectFrom: ["queued"],
+      run: restoreRun({ id: "run_t_restore", status: "running" }),
+      setLeaseToken: "lease_restore",
+      heartbeatAt: 200,
+    });
+    expect(claim.won, label).toBe(true);
+    expect(claim.run?.status, label).toBe("running");
+    expect(claim.run?.heartbeatAt, label).toBe(200);
+
+    const stale = await store.transitionRun({
+      id: "run_t_restore",
+      kind: "restore",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_stale",
+      run: restoreRun({ id: "run_t_restore", status: "failed" }),
+    });
+    expect(stale.won, label).toBe(false);
+    expect(stale.run?.status, label).toBe("running");
+
+    const terminal = await store.transitionRun({
+      id: "run_t_restore",
+      kind: "restore",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_restore",
+      run: restoreRun({
+        id: "run_t_restore",
+        status: "succeeded",
+        heartbeatAt: 201,
+        restoredStateSnapshotId: "state_restored",
+      }),
+      clearLeaseToken: true,
+      heartbeatAt: 201,
+    });
+    expect(terminal.won, label).toBe(true);
+    expect((await store.getBackupRun("run_t_restore"))?.status, label).toBe(
+      "succeeded",
+    );
+  }
+});
+
+test("commitRestoredState writes state, installation, and restore terminal atomically", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putInstallation(
+      installation({
+        id: "inst_restore_commit",
+        currentStateGeneration: 1,
+        status: "active",
+      }),
+    );
+    await store.putBackupRun(
+      restoreRun({
+        id: "restore_commit",
+        installationId: "inst_restore_commit",
+        status: "running",
+        heartbeatAt: 300,
+      }),
+    );
+    const claim = await store.transitionRun({
+      id: "restore_commit",
+      kind: "restore",
+      expectFrom: ["running"],
+      expectHeartbeatAt: 300,
+      run: restoreRun({
+        id: "restore_commit",
+        installationId: "inst_restore_commit",
+        status: "running",
+      }),
+      setLeaseToken: "lease_restore_commit",
+      heartbeatAt: 301,
+    });
+    expect(claim.won, label).toBe(true);
+
+    const committed = await store.commitRestoredState({
+      stateSnapshot: stateSnapshot({
+        id: "state_restore_commit",
+        installationId: "inst_restore_commit",
+        generation: 2,
+        createdByRunId: "restore_commit",
+      }),
+      installationPatch: {
+        id: "inst_restore_commit",
+        patch: {
+          currentStateGeneration: 2,
+          status: "stale",
+          updatedAt: "2026-06-06T00:00:02.000Z",
+        },
+        guard: { currentStateGeneration: 1, status: "active" },
+      },
+      restoreRunTerminal: restoreRun({
+        id: "restore_commit",
+        installationId: "inst_restore_commit",
+        status: "succeeded",
+        heartbeatAt: 302,
+        restoredStateSnapshotId: "state_restore_commit",
+      }),
+      restoreRunLeaseToken: "lease_restore_commit",
+    });
+
+    expect(committed.restoreRunLeaseLost, label).toBeUndefined();
+    expect(committed.installation?.currentStateGeneration, label).toBe(2);
+    expect(
+      (
+        await store.listStateSnapshots("inst_restore_commit", "production")
+      ).find((snapshot) => snapshot.generation === 2),
+      label,
+    ).toMatchObject({ id: "state_restore_commit" });
+    expect((await store.getBackupRun("restore_commit"))?.status, label).toBe(
+      "succeeded",
+    );
+  }
+});
+
+test("commitRestoredState writes nothing when the restore lease is lost", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putInstallation(
+      installation({
+        id: "inst_restore_lost",
+        currentStateGeneration: 1,
+        status: "active",
+      }),
+    );
+    await store.putBackupRun(
+      restoreRun({
+        id: "restore_lost",
+        installationId: "inst_restore_lost",
+        status: "running",
+      }),
+    );
+    await store.transitionRun({
+      id: "restore_lost",
+      kind: "restore",
+      expectFrom: ["running"],
+      run: restoreRun({
+        id: "restore_lost",
+        installationId: "inst_restore_lost",
+        status: "running",
+      }),
+      setLeaseToken: "lease_fresh_owner",
+      heartbeatAt: 401,
+    });
+
+    const committed = await store.commitRestoredState({
+      stateSnapshot: stateSnapshot({
+        id: "state_restore_lost",
+        installationId: "inst_restore_lost",
+        generation: 2,
+        createdByRunId: "restore_lost",
+      }),
+      installationPatch: {
+        id: "inst_restore_lost",
+        patch: {
+          currentStateGeneration: 2,
+          status: "stale",
+          updatedAt: "2026-06-06T00:00:02.000Z",
+        },
+        guard: { currentStateGeneration: 1, status: "active" },
+      },
+      restoreRunTerminal: restoreRun({
+        id: "restore_lost",
+        installationId: "inst_restore_lost",
+        status: "succeeded",
+        restoredStateSnapshotId: "state_restore_lost",
+      }),
+      restoreRunLeaseToken: "lease_stale_owner",
+    });
+
+    expect(committed.restoreRunLeaseLost, label).toBe(true);
+    expect(
+      (await store.listStateSnapshots("inst_restore_lost", "production")).find(
+        (snapshot) => snapshot.generation === 2,
+      ),
+      label,
+    ).toBeUndefined();
+    expect(
+      (await store.getInstallation("inst_restore_lost"))
+        ?.currentStateGeneration,
+      label,
+    ).toBe(1);
+    expect((await store.getBackupRun("restore_lost"))?.status, label).toBe(
+      "running",
+    );
+  }
+});
+
+test("commitRestoredState writes nothing when the installation generation moved", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putInstallation(
+      installation({
+        id: "inst_restore_guard",
+        currentStateGeneration: 2,
+        status: "active",
+      }),
+    );
+    await store.putBackupRun(
+      restoreRun({
+        id: "restore_guard",
+        installationId: "inst_restore_guard",
+        status: "running",
+      }),
+    );
+    await store.transitionRun({
+      id: "restore_guard",
+      kind: "restore",
+      expectFrom: ["running"],
+      run: restoreRun({
+        id: "restore_guard",
+        installationId: "inst_restore_guard",
+        status: "running",
+      }),
+      setLeaseToken: "lease_restore_guard",
+      heartbeatAt: 501,
+    });
+
+    await expect(
+      store.commitRestoredState({
+        stateSnapshot: stateSnapshot({
+          id: "state_restore_guard",
+          installationId: "inst_restore_guard",
+          generation: 3,
+          createdByRunId: "restore_guard",
+        }),
+        installationPatch: {
+          id: "inst_restore_guard",
+          patch: {
+            currentStateGeneration: 3,
+            status: "stale",
+            updatedAt: "2026-06-06T00:00:03.000Z",
+          },
+          guard: { currentStateGeneration: 1, status: "active" },
+        },
+        restoreRunTerminal: restoreRun({
+          id: "restore_guard",
+          installationId: "inst_restore_guard",
+          status: "succeeded",
+          restoredStateSnapshotId: "state_restore_guard",
+        }),
+        restoreRunLeaseToken: "lease_restore_guard",
+      }),
+    ).rejects.toBeInstanceOf(InstallationStateGenerationGuardConflict);
+    expect(
+      (await store.listStateSnapshots("inst_restore_guard", "production")).find(
+        (snapshot) => snapshot.generation === 3,
+      ),
+      label,
+    ).toBeUndefined();
+    expect((await store.getBackupRun("restore_guard"))?.status, label).toBe(
+      "running",
+    );
   }
 });
 
