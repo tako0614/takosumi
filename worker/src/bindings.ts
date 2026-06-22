@@ -16,6 +16,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_BACKUPS?: R2Bucket;
   readonly RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly COORDINATION: DurableObjectNamespace;
+  /**
+   * Per-run Durable Object that owns execution after a queue delivery is
+   * validated. Queue consumers schedule this object and ack quickly; the object
+   * drives controller dispatch, retries, and final DLQ-style failure handling.
+   */
+  readonly RUN_OWNER?: DurableObjectNamespace;
   readonly RUNNER?: DurableObjectNamespace;
   /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;

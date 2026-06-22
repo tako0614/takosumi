@@ -28,6 +28,7 @@ import {
   createInProcessDeployControlSeam,
   type QueueBatch,
   CoordinationObject,
+  OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
@@ -40,7 +41,7 @@ import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
 
-export { CoordinationObject, OpenTofuRunnerObject };
+export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
 
 // In-process deploy-control seam, one cached service per env, shared with the
 // unified Takos worker. The accounts deploy-control facade calls the typed

@@ -171,40 +171,43 @@ test("Cloudflare Worker preserves method, query, headers, and body", async () =>
   assert.equal(call.body, body);
 });
 
-test("OpenTofu run queue consumer rethrows for retry on a non-final attempt", async () => {
-  // Async run lifecycle: the consumer loads the run from the in-process
-  // deploy-control controller (D1-backed). The fake D1 returns no rows, so the
-  // run is not found; on a non-final attempt the consumer rethrows so Cloudflare
-  // Queues retries the message. (Happy-path / idempotency / mint behavior is
-  // covered against the controller directly in the deploy-control consumer tests.)
+test("OpenTofu run queue consumer schedules a run owner and acks quickly", async () => {
   const worker = createCloudflareWorker();
-  await assert.rejects(
-    worker.queue(
-      createQueueBatch(
-        {
-          kind: "takosumi.opentofu-run@v1",
-          action: "plan",
-          runId: "run_queue_1",
-          spaceId: "space_test",
-        },
-        { attempts: 1 },
-      ),
-      createEnv(),
+  const runOwnerCalls: CapturedRequest[] = [];
+  const acked: string[] = [];
+
+  await worker.queue(
+    createQueueBatch(
+      {
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "run_queue_1",
+        spaceId: "space_test",
+      },
+      { attempts: 1, onAck: () => acked.push("run") },
     ),
-    (error) => {
-      assert.ok(error instanceof Error);
-      assert.equal(error.message, "opentofu run dispatch failed");
-      assert.equal(error.message.includes("run_queue_1"), false);
-      assert.equal(error.cause, undefined);
-      return true;
-    },
+    createEnv({ runOwnerCalls }),
   );
+
+  assert.deepEqual(acked, ["run"]);
+  assert.equal(runOwnerCalls.length, 1);
+  assert.equal(runOwnerCalls[0].app, "opentofu-run-owner");
+  assert.equal(runOwnerCalls[0].method, "POST");
+  assert.equal(runOwnerCalls[0].url, "https://opentofu-run-owner/start");
+  assert.deepEqual(JSON.parse(runOwnerCalls[0].body), {
+    kind: "takosumi.opentofu-run-owner.start@v1",
+    action: "plan",
+    runId: "run_queue_1",
+    spaceId: "space_test",
+    queueAttempt: 1,
+    messageId: "msg_1",
+  });
 });
 
 test("OpenTofu run queue consumer acks and continues on the final attempt", async () => {
-  // On the final delivery the consumer must not rethrow (that would redeliver
-  // forever); the message is acked after the best-effort failed transition and
-  // the rest of the batch is still processed.
+  // On a final scheduling failure the consumer must not rethrow (that would
+  // redeliver forever); the message is acked after the best-effort failed
+  // transition and the rest of the batch is still processed.
   const worker = createCloudflareWorker();
   const acked: string[] = [];
   await worker.queue(
@@ -234,7 +237,7 @@ test("OpenTofu run queue consumer acks and continues on the final attempt", asyn
         },
       ],
     },
-    createEnv({ internalEdgeIngress: true }),
+    createEnv({ internalEdgeIngress: true, runOwnerStatus: 503 }),
   );
   assert.deepEqual(acked, ["final", "invalid"]);
 });
@@ -425,11 +428,14 @@ test("Cloudflare Worker does not expose the coordination Durable Object route", 
   const env = createEnv({ deployControlToken: "operator-secret" });
 
   const response = await worker.fetch(
-    new Request(`https://worker.example/internal/v1/${"coordination"}/list-alarms`, {
-      method: "POST",
-      body: "{}",
-      headers: { authorization: "Bearer operator-secret" },
-    }),
+    new Request(
+      `https://worker.example/internal/v1/${"coordination"}/list-alarms`,
+      {
+        method: "POST",
+        body: "{}",
+        headers: { authorization: "Bearer operator-secret" },
+      },
+    ),
     env,
   );
   assert.equal(response.status, 404);
@@ -478,6 +484,8 @@ async function captureRequest(
 
 interface CreateEnvOptions {
   readonly runnerCalls?: CapturedRequest[];
+  readonly runOwnerCalls?: CapturedRequest[];
+  readonly runOwnerStatus?: number;
   readonly deployControlToken?: string;
   readonly internalEdgeIngress?: boolean;
 }
@@ -490,6 +498,18 @@ function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
     options.runnerCalls?.push(await captureRequest("opentofu-runner", request));
     return Response.json({ ok: true, runner: "opentofu" });
   });
+  const runOwner = new FakeNamespace(async (request) => {
+    options.runOwnerCalls?.push(
+      await captureRequest("opentofu-run-owner", request),
+    );
+    return Response.json(
+      {
+        ok:
+          options.runOwnerStatus === undefined || options.runOwnerStatus < 400,
+      },
+      { status: options.runOwnerStatus ?? 202 },
+    );
+  });
   return {
     TAKOSUMI_CONTROL_DB: new FakeD1Database(),
     R2_ARTIFACTS: new FakeR2Bucket(),
@@ -497,6 +517,7 @@ function createEnv(options: CreateEnvOptions = {}): CloudflareWorkerEnv {
       send: () => Promise.resolve(),
     },
     COORDINATION: coordination,
+    RUN_OWNER: runOwner,
     RUNNER: runner,
     ...(options.deployControlToken
       ? { TAKOSUMI_DEPLOY_CONTROL_TOKEN: options.deployControlToken }

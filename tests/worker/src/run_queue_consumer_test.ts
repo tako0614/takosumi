@@ -90,7 +90,7 @@ test("a non-OpenTofu payload is classified separately, not invalid", () => {
 
 // --- lease-busy is scheduling, not failure ---
 
-test("a lease-busy dispatch retries with a delay and never marks retries-exhausted (run stays queued)", async () => {
+test("a lease-busy schedule failure retries with a delay and never marks retries-exhausted (run stays queued)", async () => {
   let exhaustedCalls = 0;
   const deps: ConsumeOpenTofuRunDeps = {
     dispatch: () =>
@@ -114,7 +114,7 @@ test("a lease-busy dispatch retries with a delay and never marks retries-exhaust
   expect(exhaustedCalls).toBe(0);
 });
 
-test("an ordinary dispatch failure on the final attempt DOES mark retries-exhausted and acks", async () => {
+test("an ordinary schedule failure on the final attempt DOES mark retries-exhausted and acks", async () => {
   let exhaustedCalls = 0;
   const deps: ConsumeOpenTofuRunDeps = {
     dispatch: () => Promise.reject(new Error("opentofu init failed")),
@@ -127,14 +127,14 @@ test("an ordinary dispatch failure on the final attempt DOES mark retries-exhaus
 
   await consumeOpenTofuRunBatch(batchOf(message), FAKE_ENV, deps);
 
-  // Contrast with lease-busy: an ordinary failure on the final attempt is acked
-  // after the ledger update, and never retried.
+  // Contrast with lease-busy: an ordinary scheduling failure on the final
+  // attempt is acked after the ledger update, and never retried.
   expect(exhaustedCalls).toBe(1);
   expect(message.acked()).toBe(1);
   expect(message.retried()).toEqual([]);
 });
 
-test("an ordinary dispatch failure before the final attempt rethrows (Queues retries the message)", async () => {
+test("an ordinary schedule failure before the final attempt rethrows (Queues retries the message)", async () => {
   const deps: ConsumeOpenTofuRunDeps = {
     dispatch: () => Promise.reject(new Error("transient")),
     markRetriesExhausted: () => Promise.resolve(),

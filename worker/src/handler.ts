@@ -25,6 +25,7 @@ export {
 // DO classes the wrangler bindings reference — from one entry point.
 export { CoordinationObject } from "./durable/CoordinationObject.ts";
 export { OpenTofuRunnerObject } from "./durable/OpenTofuRunnerObject.ts";
+export { OpenTofuRunOwnerObject } from "./durable/OpenTofuRunOwnerObject.ts";
 
 export interface CloudflareWorkerHandler {
   fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response>;

@@ -47,7 +47,9 @@ Durable Object, whose Cloudflare Container materializes source snapshots, writes
 restores that reviewed artifact from R2, verifies the digest, recreates the source workspace if needed, and executes
 `tofu apply <tfplan>`. The Durable Object also restores and persists `terraform.tfstate` through an operator-managed R2
 sidecar. Apply does not depend on a still-warm runner-local file and does not re-plan with `-auto-approve`. The
-`RUN_QUEUE` binding remains available for asynchronous runner integration, but it is not a separate public API.
+`RUN_QUEUE` binding remains available for asynchronous runner integration, but it is not a separate public API. Queue
+deliveries schedule the per-run `OpenTofuRunOwnerObject`; that owner Durable Object drives the long controller dispatch
+and retry bookkeeping outside the queue delivery lifetime.
 
 Internal/service paths are also forwarded to the embedded service app:
 

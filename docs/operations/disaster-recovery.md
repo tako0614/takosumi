@@ -103,8 +103,8 @@ failover 前:
    - CredentialRecipe resolution、ProviderConnection status、
      ProviderBinding status、egress/custom runner policy の整合性を確認する。
 4. runtime service を reattach する。
-   - Takosumi platform worker、queue、CoordinationObject、OpenTofuRunnerObject、
-     runner container を起動する。
+   - Takosumi platform worker、queue、CoordinationObject、
+     OpenTofuRunOwnerObject、OpenTofuRunnerObject、runner container を起動する。
    - health endpoint が green であることを確認する。
    - runner pool が recovery target で plan を受けられることを確認する。
 5. customer-facing の critical path を検証する。
