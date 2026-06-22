@@ -121,15 +121,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
     : undefined;
-  const installReturnDetails = () =>
-    installReturn
-      ? t("conn.return.subtitle", {
-          source: installReturn.sourceLabel,
-          ref: installReturn.displayRef || t("conn.return.defaultRef"),
-          path: installReturn.path || t("conn.return.rootPath"),
-        })
-      : "";
-
   // ----- register form state -----------------------------------------------
   const [provider, setProvider] = createSignal(PROVIDERS[0]?.provider ?? "");
   const [displayName, setDisplayName] = createSignal("");
@@ -480,7 +471,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             title={t("conn.return.title", {
               name: installReturn?.label ?? "",
             })}
-            subtitle={installReturnDetails()}
+            subtitle={t("conn.return.subtitle")}
             actions={
               <Show
                 when={shouldOfferInstallReturn()}
@@ -845,7 +836,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 </Show>
               }
             >
-              {/* Generic own-key Provider Connection editor. */}
+              {/* Custom service editor for providers without a preset form. */}
               <div class="wc-guided">
                 <div class="wc-form-actions">
                   <Button

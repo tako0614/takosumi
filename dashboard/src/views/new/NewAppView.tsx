@@ -888,7 +888,7 @@ function Inner() {
   });
 
   const providerConnectionLabel = (connection: ProviderConnection) =>
-    connection.displayName || connection.providerSource;
+    connection.displayName || providerLabel(connection.providerSource);
 
   const canonicalProvider = (provider: string) => provider.toLowerCase().trim();
   const providerTail = (provider: string) => {
