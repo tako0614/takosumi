@@ -571,29 +571,26 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       </Show>
 
       <Show when={(providerConnections() ?? []).length > 0}>
-        <Card>
-          <CardHeader
-            title={t("conn.providerConnections.title")}
-            actions={
-              <Show when={!createFormOpen()}>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  type="button"
-                  icon={<Plus size={14} />}
-                  onClick={() => setCreateFormOpen(true)}
-                >
-                  {t("conn.add.open")}
-                </Button>
-              </Show>
-            }
-          />
+        <div class="wc-stack-sm">
+          <Show when={!createFormOpen()}>
+            <div class="wc-card-action-row">
+              <Button
+                variant="primary"
+                size="sm"
+                type="button"
+                icon={<Plus size={14} />}
+                onClick={() => setCreateFormOpen(true)}
+              >
+                {t("conn.add.open")}
+              </Button>
+            </div>
+          </Show>
           <ActionError error={remove.error} />
           <Show when={testError()}>
             {(m) => <Toast tone="error">{m()}</Toast>}
           </Show>
           {providerConnectionList()}
-        </Card>
+        </div>
       </Show>
       <Show when={providerConnections.error}>
         <Toast tone="error">
@@ -823,55 +820,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                           </form>
                         </details>
                       </div>
-
-                      {/* Advanced fallback: raw multi-field form, demoted. */}
-                      <details class="connection-advanced">
-                        <summary>{t("conn.advanced.summary")}</summary>
-                        <form
-                          class="wc-form"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void create.run();
-                          }}
-                        >
-                          <Index each={fields()}>
-                            {(field) => (
-                              <FormField
-                                label={field().label}
-                                required={field().required}
-                              >
-                                <Input
-                                  id={`connection-advanced-field-${field().envName}`}
-                                  name={`advancedField:${field().envName}`}
-                                  type={field().secret ? "password" : "text"}
-                                  value={values()[field().envName] ?? ""}
-                                  onInput={(e) =>
-                                    setFieldValue(
-                                      field().envName,
-                                      e.currentTarget.value,
-                                    )
-                                  }
-                                  placeholder={field().placeholder}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                            )}
-                          </Index>
-                          <div class="wc-form-actions">
-                            <Button
-                              variant="secondary"
-                              type="submit"
-                              busy={create.busy()}
-                            >
-                              {create.busy()
-                                ? t("conn.registering")
-                                : t("conn.advanced.register")}
-                            </Button>
-                          </div>
-                          <ActionError error={create.error} />
-                        </form>
-                      </details>
                     </>
                   )}
                 </Show>

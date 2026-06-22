@@ -50,9 +50,23 @@
   gap: var(--tg-s-3);
   flex-wrap: wrap;
 }
+.wc-card-action-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--tg-s-3);
+  margin-bottom: var(--tg-s-3);
+}
 @media (max-width: 640px) {
   .wc-quick-links .tg-btn {
     flex: 1 1 100%;
+  }
+
+  .wc-card-action-row {
+    justify-content: stretch;
+  }
+
+  .wc-card-action-row .tg-btn {
+    flex: 1 1 auto;
   }
 
   .wc-inline-feedback {
@@ -90,6 +104,9 @@
 
 /* ===== Connections: registered list rows ===== */
 .wc-conn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-3);

@@ -38,7 +38,7 @@ export const ja = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "サービス",
   "nav.add": "追加",
-  "nav.connections": "接続",
+  "nav.connections": "クラウドアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "サポートログ",
   "nav.manage": "管理",
@@ -229,18 +229,19 @@ export const ja = {
   "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
-  "app.bindings.title": "サービスの接続先",
+  "app.bindings.title": "クラウドアカウント",
   "app.bindings.subtitle":
-    "このサービスが使う外部サービスです。通常は変更不要です。",
-  "app.bindings.none": "外部サービス接続は紐づいていません。",
-  "app.bindings.editAdvanced": "接続の割り当てを変更",
-  "app.bindings.add": "接続先を追加",
+    "このサービスが使えるクラウドアカウントです。通常は変更不要です。",
+  "app.bindings.none": "クラウドアカウントは紐づいていません。",
+  "app.bindings.editAdvanced": "クラウドアカウントの割り当てを変更",
+  "app.bindings.add": "クラウドアカウントを追加",
   "app.bindings.aliasPlaceholder": "対象名（任意）",
-  "app.bindings.selectConnection": "接続を選択",
+  "app.bindings.selectConnection": "クラウドアカウントを選択",
   "app.bindings.remove": "削除",
-  "app.bindings.errorProvider": "接続 {index} の接続先を入力してください。",
+  "app.bindings.errorProvider":
+    "{index} 行目のクラウドサービスを入力してください。",
   "app.bindings.errorConnection":
-    "{provider} の利用可能な接続を選択してください。",
+    "{provider} の利用可能なクラウドアカウントを選択してください。",
   "app.settings.removeTitle": "このサービスを削除しますか？",
   "app.settings.removeBody":
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
@@ -301,15 +302,15 @@ export const ja = {
   "run.changes.create": "作成",
   "run.changes.update": "変更",
   "run.changes.delete": "削除",
-  "run.resources.kicker": "詳細",
-  "run.resources.title": "細かい変更",
+  "run.resources.kicker": "サポート詳細",
+  "run.resources.title": "技術的な変更詳細",
   "run.resources.count": "{n} 件",
   "run.resources.more": "ほか {n} 件の変更があります。",
   "run.resources.actionCreate": "作成",
   "run.resources.actionUpdate": "変更",
   "run.resources.actionDelete": "削除",
   "run.resources.actionReplace": "置換",
-  "run.details.title": "詳しい情報",
+  "run.details.title": "サポート詳細",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "安全確認",
@@ -324,17 +325,17 @@ export const ja = {
   "run.details.error": "エラー",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
-  "run.connections.title": "接続",
-  "run.connections.reviewTitle": "接続の確認が必要です",
+  "run.connections.title": "クラウドアカウント",
+  "run.connections.reviewTitle": "クラウドアカウントの確認が必要です",
   "run.connections.reviewBody":
-    "続行する前に確認が必要な外部サービス接続があります。認証情報の値は表示しません。",
-  "run.connections.provider": "外部サービス",
-  "run.connections.connection": "接続",
+    "続行する前に確認が必要なクラウドアカウントがあります。非公開の値は表示しません。",
+  "run.connections.provider": "クラウドサービス",
+  "run.connections.connection": "クラウドアカウント",
   "run.connections.status": "状態",
   "run.connections.statusResolved": "利用できます",
-  "run.connections.statusMissing": "接続が必要",
+  "run.connections.statusMissing": "アカウントが必要",
   "run.connections.statusBlocked": "ポリシーで停止",
-  "run.connections.empty": "接続解決情報はありません。",
+  "run.connections.empty": "クラウドアカウントの確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
   "run.audit.title": "活動記録",
@@ -394,7 +395,7 @@ export const ja = {
   "new.serviceAdvanced.title": "その他のサービス設定",
   "new.vars.inputsTitle": "その他の設定",
   "new.vars.inputsBody":
-    "上にない非 secret の入力をアプリから求められた場合だけ使います。",
+    "上にない表示用の入力をアプリから求められた場合だけ使います。",
   "new.vars.inputName": "設定名",
   "new.vars.inputValue": "値",
   "new.vars.addInput": "入力を追加",
@@ -402,7 +403,7 @@ export const ja = {
   "new.vars.errorNameRequired":
     "変数名を入力するか、空の行を削除してください。",
   "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力値として渡せません。secret は外部サービス接続を使ってください。",
+    "「{name}」はリンク/入力値として渡せません。非公開の値はクラウドアカウントから渡してください。",
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
@@ -428,17 +429,17 @@ export const ja = {
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
   "new.compat.patchHelp":
-    "表示された内容を確認してください。アプリ側の修正が必要な場合と、外部サービス接続の設定で進められる場合があります。",
+    "表示された内容を確認してください。アプリ側の修正が必要な場合と、クラウドアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
-    "{provider} の認証情報を取得元から外す必要があります。",
+    "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.issue.providerCredentials.message":
-    "{provider} の認証情報が取得元の中に書かれています。",
+    "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、外部サービス接続から実行時だけ渡してください。認証値を外して、{provider} 接続を設定すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、{provider} のクラウドアカウントからデプロイ時だけ渡してください。値を外してアカウントを接続すると続行できます。",
   "new.compat.issue.providerLift.message":
-    "{provider} の接続設定は、認証情報を外せば安全な実行用設定として扱えます。",
+    "{provider} のアカウント設定は、非公開値を外せば安全な実行用設定として扱えます。",
   "new.compat.issue.lockfile.message":
-    "利用する外部サービスの固定情報が含まれています。認証情報を外したあと、追加時に固定内容を確認します。",
+    "利用するクラウドサービスの固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認",
@@ -447,21 +448,23 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "使う接続",
+  "new.providers.title": "使うクラウドアカウント",
   "new.providers.alias": "対象: {alias}",
-  "new.providers.selectConnection": "接続を選択",
+  "new.providers.selectConnection": "クラウドアカウントを選択",
   "new.providers.errorConnection":
-    "{provider} の利用可能な接続を選択してください。",
+    "{provider} の利用可能なクラウドアカウントを選択してください。",
   "new.providers.errorOperatorManaged":
     "{provider} はこのワークスペースではまだ利用できません。",
-  "new.providers.missingTitle": "接続の設定が必要です",
-  "new.providers.missingBody": "接続を設定すると続けられます。",
-  "new.providers.setupMissing": "必要な接続を設定",
-  "new.providers.operatorMissingTitle": "必要な接続がありません",
+  "new.providers.missingTitle": "クラウドアカウントの設定が必要です",
+  "new.providers.missingBody":
+    "クラウドアカウントを設定すると続けられます。",
+  "new.providers.setupMissing": "必要なクラウドアカウントを設定",
+  "new.providers.operatorMissingTitle":
+    "必要なクラウドアカウントがありません",
   "new.providers.operatorMissingBody":
-    "このサービスを追加するには外部サービス接続が必要です。",
+    "このサービスを追加するにはクラウドアカウントが必要です。",
   "new.providers.operatorMissingNext":
-    "接続を追加するか、管理者に追加を依頼してください。",
+    "クラウドアカウントを追加するか、管理者に追加を依頼してください。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
@@ -483,7 +486,7 @@ export const ja = {
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "ワークスペース設定",
+  "spaceSettings.title": "チーム設定",
   "spaceSettings.subtitle":
     "ワークスペース名、メンバー、接続、使用量設定を管理します。",
   "spaceSettings.tab.general": "一般",
@@ -542,9 +545,9 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "このワークスペースがデプロイ先として使う外部サービスを接続します。保存した secret は二度と表示しません。",
-  "conn.providerConnections.title": "外部サービス接続",
-  "conn.providerConnections.provider": "接続先",
+    "このチームがホスト先として使うクラウドアカウントを接続します。",
+  "conn.providerConnections.title": "クラウドアカウント",
+  "conn.providerConnections.provider": "サービス",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
   "conn.oauth.connected": "Cloudflare に接続しました。",
@@ -559,11 +562,11 @@ export const ja = {
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
-  "conn.add.title": "外部サービスを接続",
-  "conn.add.open": "接続を追加",
+  "conn.add.title": "クラウドアカウントを接続",
+  "conn.add.open": "クラウドアカウントを追加",
   "conn.add.close": "閉じる",
-  "conn.add.provider": "外部サービス",
-  "conn.add.genericEnvOption": "一覧にないサービスを接続",
+  "conn.add.provider": "クラウドサービス",
+  "conn.add.genericEnvOption": "カスタムサービス",
   "conn.add.optionalSettings": "任意の設定",
   "conn.add.displayName": "表示名（任意）",
   "conn.add.displayNamePlaceholder": "本番 Cloudflare",
@@ -599,19 +602,19 @@ export const ja = {
   "conn.provider.s3.endpoint.label": "S3 エンドポイント URL",
   "conn.guided.openProvider": "{provider} の token 画面を開く",
   "conn.guided.oauth": "{provider} で自動接続",
-  "conn.guided.stepsSummary": "手動 token 設定",
+  "conn.guided.stepsSummary": "手動設定",
   "conn.guided.instructions": "手順を表示",
   "conn.guided.pasteLabel": "Token",
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "手動接続を保存",
   "conn.guided.connecting": "接続中...",
-  "conn.custom.summary": "一覧にないサービス",
+  "conn.custom.summary": "カスタムサービス",
   "conn.custom.body":
-    "一覧にない外部サービスを使う場合だけ、必要な値を直接登録します。",
-  "conn.custom.use": "詳細な接続を追加",
-  "conn.custom.back": "通常の接続先に戻る",
-  "conn.advanced.summary": "詳細な接続情報",
-  "conn.advanced.register": "詳細な接続情報を保存",
+    "一覧にないサービスが必要な場合だけ使います。",
+  "conn.custom.use": "カスタムサービスを追加",
+  "conn.custom.back": "クラウドサービスに戻る",
+  "conn.advanced.summary": "手動設定",
+  "conn.advanced.register": "手動設定を保存",
   "conn.register": "接続を保存",
   "conn.registering": "登録中...",
   "conn.genericEnv.providerName": "サービス名",
@@ -619,7 +622,7 @@ export const ja = {
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "値を追加",
-  "conn.genericEnv.providerRequired": "外部サービス名を入力してください。",
+  "conn.genericEnv.providerRequired": "カスタムサービス名を入力してください。",
   "conn.genericEnv.cloudflareGuided":
     "Cloudflare は上のプロバイダから登録してください（専用フローがあります）。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
@@ -627,7 +630,7 @@ export const ja = {
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.list.title": "接続の詳細",
+  "conn.list.title": "クラウドアカウントの詳細",
   "conn.list.empty":
     "このワークスペースにはまだ接続がありません。上のフォームから追加できます。",
   "conn.test": "接続テスト",
@@ -635,7 +638,7 @@ export const ja = {
   "conn.test.notReady": "接続はまだ利用できません（状態: {status}）。",
   "conn.remove.confirmTitle": "接続を削除",
   "conn.remove.confirmMessage":
-    "本当に {name} を削除しますか？保存された認証情報も削除され、取り消せません。",
+    "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle": "復元に使う保存ポイントを管理します。",
@@ -695,8 +698,8 @@ export const ja = {
     "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.supportSummary": "詳しい記録",
-  "notif.viewRaw": "記録を開く →",
+  "notif.supportSummary": "サポート詳細",
+  "notif.viewRaw": "履歴を開く →",
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
@@ -713,10 +716,12 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated": "接続「{provider}」を追加しました",
-  "notif.event.connCreatedGeneric": "接続を追加しました",
-  "notif.event.connRevoked": "接続「{provider}」が無効になりました",
-  "notif.event.connRevokedGeneric": "接続が無効になりました",
+  "notif.event.connCreated":
+    "クラウドアカウント「{provider}」を追加しました",
+  "notif.event.connCreatedGeneric": "クラウドアカウントを追加しました",
+  "notif.event.connRevoked":
+    "クラウドアカウント「{provider}」が無効になりました",
+  "notif.event.connRevokedGeneric": "クラウドアカウントが無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
   "notif.event.depCreated": "サービス間の連携を追加しました",
   "notif.event.depDeleted": "サービス間の連携を解除しました",
@@ -729,7 +734,7 @@ export const ja = {
   "activity.title": "操作履歴",
   "activity.subtitle":
     "トラブルシュート用にサービスやアカウントの出来事を新しい順に記録します。",
-  "activity.details": "詳しいイベントデータ",
+  "activity.details": "サポート詳細",
   "activity.empty.title": "まだ記録はありません",
   "activity.empty.message":
     "このワークスペースで操作が行われると、ここに記録されます。",
@@ -766,7 +771,7 @@ export const ja = {
   "account.session.title": "現在のセッション",
   "account.session.id": "ブラウザセッション ID",
   "account.session.userAgent": "ブラウザ",
-  "account.session.details": "詳しいサインイン情報",
+  "account.session.details": "サポート情報",
   "account.session.signOut": "このブラウザからサインアウト",
   "account.session.signOutConfirm": "このブラウザからサインアウトしますか？",
   "account.session.otherNote":

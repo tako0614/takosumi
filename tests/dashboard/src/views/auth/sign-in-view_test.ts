@@ -128,7 +128,7 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain("function BrandLogoMark()");
     expect(signInViewSource).toContain("auth-brand-mark");
     expect(signInViewSource).toContain(
-      '<LogoMark size={48} title="Takosumi" />',
+      "<LogoMark size={48} title={dashboardProductName()} />",
     );
     expect(signInViewSource).not.toContain("img src");
     expect(signInViewSource).not.toContain("TemporaryBrandMark");

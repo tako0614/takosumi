@@ -62,15 +62,28 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).toContain('t("new.store.title")');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
-    expect(newAppViewSource).toContain('t("new.advancedImport.title")');
-    expect(newAppViewSource).toMatch(
-      /<details class="wb-disclosure av-manual-import">[\s\S]*t\("new\.advancedImport\.open"\)[\s\S]*setActiveTab\("git"\)/,
-    );
     const storeHeadStart = newAppViewSource.indexOf(
       '<div class="av-store-head">',
     );
     const catalogGridStart = newAppViewSource.indexOf(
       '<ul class="av-catalog-grid">',
+    );
+    const manualImportStart = newAppViewSource.indexOf(
+      '<div class="av-manual-import">',
+    );
+    const importCardStart = newAppViewSource.indexOf(
+      '<Card class="av-import-card">',
+    );
+    expect(manualImportStart).toBeGreaterThan(catalogGridStart);
+    expect(importCardStart).toBeGreaterThan(manualImportStart);
+    const manualImportSource = newAppViewSource.slice(
+      manualImportStart,
+      importCardStart,
+    );
+    expect(manualImportSource).toContain('t("new.advancedImport.open")');
+    expect(manualImportSource).toContain('setActiveTab("git")');
+    expect(newAppViewSource).not.toContain(
+      '<details class="wb-disclosure av-manual-import">',
     );
     expect(storeHeadStart).toBeGreaterThan(-1);
     expect(catalogGridStart).toBeGreaterThan(storeHeadStart);
@@ -85,15 +98,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
-    expect(en["new.store.title"]).toBe("Recommended services");
-    expect(en["new.advancedImport.open"].toLowerCase()).toContain("own app");
+    expect(en["new.store.title"]).toBe("Available services");
+    expect(en["new.advancedImport.open"].toLowerCase()).toBe("add from link");
     expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
       "manually",
     );
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
-    expect(ja["new.store.title"]).toBe("おすすめサービス");
-    expect(ja["new.advancedImport.open"]).toContain("自分のアプリ");
+    expect(ja["new.store.title"]).toBe("追加できるサービス");
+    expect(ja["new.advancedImport.open"]).toBe("リンクから追加");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");
@@ -173,7 +186,7 @@ describe("/new flow guidance", () => {
     expect(hintSource).not.toContain("knownHostsEntry");
   });
 
-  test("keeps arbitrary non-secret OpenTofu inputs in the add flow", () => {
+  test("keeps arbitrary visible OpenTofu inputs in the add flow", () => {
     expect(newAppViewSource).toContain("const shouldOpenServiceAdvanced = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
@@ -185,8 +198,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("inputVariableError");
     expect(en["new.vars.errorCatalogReserved"]).toContain("Service setup");
     expect(ja["new.vars.errorCatalogReserved"]).toContain("サービス設定");
-    expect(en["new.vars.inputsBody"].toLowerCase()).toContain("non-secret");
-    expect(ja["new.vars.inputsBody"]).toContain("非 secret");
+    expect(en["new.vars.inputsBody"].toLowerCase()).toContain(
+      "visible inputs",
+    );
+    expect(ja["new.vars.inputsBody"]).toContain("表示用の入力");
     expect(en["new.vars.inputsTitle"]).not.toBe("Advanced settings");
     expect(ja["new.vars.inputsTitle"]).not.toBe("詳細設定");
   });
