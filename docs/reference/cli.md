@@ -8,14 +8,23 @@ ProviderConnection を選んで plan / apply する導線です。
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-takosumi deploy ./my-capsule --space @me --name my-app --provider cloudflare=conn_cf --var region=apac
-takosumi plan   ./my-capsule --space @me --name my-app
+takosumi deploy ./my-capsule \
+  --workspace @me \
+  --project my-app \
+  --capsule my-app \
+  --provider-binding cloudflare.default=conn_cf \
+  --var region=apac
+
+takosumi plan ./my-capsule \
+  --workspace @me \
+  --project my-app \
+  --capsule my-app
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
 CLI は OpenTofu を直接実行しません。ローカル Capsule を upload し、control plane に
-SourceSnapshot / Capsule / Run を作らせます。実行は runner sandbox で行い、
+Source / Capsule / Run を作らせ、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
 credential は ProviderConnection と CredentialRecipe から run 時だけ env/file として注入されます。
 
 ## Connections

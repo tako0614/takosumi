@@ -3,8 +3,8 @@
  * Hosted Takosumi Layer-2 smoke.
  *
  * This proves the product control-plane loop, not only the raw provider/module:
- * signed-in Account session -> Space ProviderConnection -> upload Capsule ->
- * plan/apply -> Deployment ->
+ * signed-in Account session -> Workspace ProviderConnection -> upload Capsule ->
+ * plan/apply -> Run / StateVersion / Output ledger ->
  * Cloudflare verification -> destroy-plan/approval/destroy-apply.
  *
  * Secret values are read only from the operator environment or files and are
@@ -106,6 +106,7 @@ interface CliArgs {
   readonly dryRun?: boolean;
   readonly json?: boolean;
   readonly keepConnection?: boolean;
+  readonly ensureWorkspace?: boolean;
   readonly ensureSpace?: boolean;
   readonly backupRestoreRehearsal?: boolean;
   readonly url?: string;
@@ -116,7 +117,9 @@ interface CliArgs {
   readonly cloudflareWorkersSubdomain?: string;
   readonly cloudflareWorkersSubdomainFile?: string;
   readonly space?: string;
+  readonly workspace?: string;
   readonly spaceDisplayName?: string;
+  readonly workspaceDisplayName?: string;
   readonly appName?: string;
   readonly environment?: string;
   readonly capsuleDir?: string;
@@ -254,9 +257,13 @@ export async function resolveOptions(
   if (!url) {
     throw new Error("--url or TAKOSUMI_PLATFORM_URL is required");
   }
-  const space = args.space ?? env.TAKOSUMI_SMOKE_SPACE;
+  const space =
+    args.workspace ??
+    args.space ??
+    env.TAKOSUMI_SMOKE_WORKSPACE ??
+    env.TAKOSUMI_SMOKE_SPACE;
   if (!space) {
-    throw new Error("--space or TAKOSUMI_SMOKE_SPACE is required");
+    throw new Error("--workspace or TAKOSUMI_SMOKE_WORKSPACE is required");
   }
   const cloudflareAccountId = await readNonSecretInput({
     file: args.cloudflareAccountIdFile ?? env.CLOUDFLARE_ACCOUNT_ID_FILE,
@@ -265,8 +272,7 @@ export async function resolveOptions(
     envName: "CLOUDFLARE_ACCOUNT_ID",
     label: "Cloudflare account id",
     dryRun: args.dryRun === true,
-    hint:
-      "pass --cloudflare-account-id-file, --cloudflare-account-id, or set CLOUDFLARE_ACCOUNT_ID",
+    hint: "pass --cloudflare-account-id-file, --cloudflare-account-id, or set CLOUDFLARE_ACCOUNT_ID",
   });
   const cloudflareWorkersSubdomain = await readNonSecretInput({
     file:
@@ -277,8 +283,7 @@ export async function resolveOptions(
     envName: "CLOUDFLARE_WORKERS_SUBDOMAIN",
     label: "Cloudflare Workers subdomain",
     dryRun: args.dryRun === true,
-    hint:
-      "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
+    hint: "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
   });
   const accountSessionToken = await readSecret({
     file: args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE,
@@ -330,10 +335,10 @@ export async function resolveOptions(
     dryRun: args.dryRun === true,
     json: args.json === true,
     keepConnection: args.keepConnection === true,
-    ensureSpace: args.ensureSpace === true,
+    ensureSpace: args.ensureWorkspace === true || args.ensureSpace === true,
     backupRestoreRehearsal: args.backupRestoreRehearsal === true,
-    ...(args.spaceDisplayName
-      ? { spaceDisplayName: args.spaceDisplayName }
+    ...((args.workspaceDisplayName ?? args.spaceDisplayName)
+      ? { spaceDisplayName: args.workspaceDisplayName ?? args.spaceDisplayName }
       : {}),
   };
 }
@@ -624,7 +629,7 @@ function failedNextAction(input: {
     input.error.method === "POST" &&
     input.error.path === `${API_PREFIX}/deploy`
   ) {
-    return "The deploy request timed out before returning a plan run id. Check the scratch Space for a pending smoke Installation with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the compatibility check or plan creation step that did not return.";
+    return "The deploy request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the compatibility check or plan creation step that did not return.";
   }
   if (input.connectionRevokeSkippedReason !== undefined) {
     return "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke.";
@@ -689,7 +694,7 @@ async function resolveSpaceId(
       return createdId;
     }
     throw new Error(
-      `space @${normalized} was not found; pass --ensure-space or create the scratch Space first`,
+      `workspace @${normalized} was not found; pass --ensure-workspace or create the scratch Workspace first`,
     );
   }
   return match.id;
@@ -1343,9 +1348,7 @@ async function readNonSecretInput(input: {
       source: "env",
     };
   }
-  throw new Error(
-    `${input.label} is required: ${input.hint}`,
-  );
+  throw new Error(`${input.label} is required: ${input.hint}`);
 }
 
 function parsePositiveInteger(
@@ -1386,8 +1389,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     cloudflareApiTokenSource: options.cloudflareApiTokenSource,
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
     cloudflareAccountIdDigest: sha256(options.cloudflareAccountId),
-    cloudflareWorkersSubdomainSource:
-      options.cloudflareWorkersSubdomainSource,
+    cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
     capsuleDir: options.capsuleDir,
   };
 }
@@ -1430,7 +1432,7 @@ function writeResult(
         : "DRY RUN";
   console.log(`${label} ${result.kind}`);
   console.log(`service: ${result.serviceUrl}`);
-  console.log(`space: ${result.scratchSpaceId}`);
+  console.log(`workspace: ${result.scratchSpaceId}`);
   console.log(`capsule: ${result.capsuleModule}`);
   console.log(`app: ${result.appName}`);
   if (result.installationId)
@@ -1453,7 +1455,7 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_selftest",
+      workspace: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
@@ -1491,7 +1493,7 @@ async function runSelfTest(): Promise<void> {
       dryRun: true,
       backupRestoreRehearsal: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_selftest",
+      workspace: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
@@ -1551,7 +1553,7 @@ async function runSelfTest(): Promise<void> {
     {
       dryRun: true,
       url: "https://app-staging.takosumi.com",
-      space: "space_selftest",
+      workspace: "space_selftest",
       cloudflareAccountIdFile: "/private/cloudflare-account-id",
       cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
       appName: "takosumi-smoke-selftest",
@@ -1606,11 +1608,11 @@ function sleep(ms: number): Promise<void> {
 
 function printHelp(): void {
   console.log(`Usage:
-  bun run smoke:platform-control-plane -- --url <origin> --space <space_...|@handle> --cloudflare-api-token-file <path> --cloudflare-account-id-file <path>
+  bun run smoke:platform-control-plane -- --url <origin> --workspace <workspace_...|@handle> --cloudflare-api-token-file <path> --cloudflare-account-id-file <path>
 
 Required inputs:
   --url <origin>                                  or TAKOSUMI_PLATFORM_URL
-  --space <space_...|@handle>                     or TAKOSUMI_SMOKE_SPACE
+  --workspace <workspace_...|@handle>             or TAKOSUMI_SMOKE_WORKSPACE
   --session-token-file <path>                     or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
   --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN
   --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE
@@ -1621,14 +1623,14 @@ Required inputs:
 Options:
   --app-name <name>                               default takosumi-smoke-<random>
   --environment <name>                            default inferred from --url
-  --ensure-space                                  create @handle scratch Space when missing; validates space_... ids
-  --space-display-name <name>                     display name used with --ensure-space
+  --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
+  --workspace-display-name <name>                 display name used with --ensure-workspace
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default 120
   --poll-interval-ms <n>                          default 2000
-  --backup-restore-rehearsal                      create an Installation backup, approve a restore Run, and verify it succeeds before cleanup
-  --keep-connection                               keep the temporary Space ProviderConnection
+  --backup-restore-rehearsal                      create a Capsule state backup, approve a restore Run, and verify it succeeds before cleanup
+  --keep-connection                               keep the temporary Workspace ProviderConnection
   --dry-run                                       validate shape and print redacted plan
   --json                                          print JSON only
   --self-test                                     run offline redaction/shape self-test

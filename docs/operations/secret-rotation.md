@@ -26,7 +26,7 @@ mint が run / phase / provider scoped な material に変換して generated ro
 2. [Secret Rotation Policy](secret-rotation-policy.md) の cadence、authorized role、maintenance window を確認する。
 3. current secret の参照先が repo 外の operator vault にあり、rollback 用に保持できることを確認する。
 4. rotation 中に触る API / CLI / provider dashboard の audit trail が有効であることを確認する。
-5. 対象 Provider Connection がどの ownership と provider policy に属するか、OAuth / own-key provider policy /
+5. 対象 Provider Connection がどの CredentialRecipe / provider policy に属するか、OAuth helper / user-managed credential policy /
    egress policy / custom runner class に影響するかを確認する。provider policy は credential ではないため、token rotation
    では通常変更しない。
 

@@ -91,8 +91,8 @@ State transition は timeline に残します。Takosumi incident tracking が�
    - deploy success / rollback metric
    - runner container health / queue backlog
    - database / queue / object storage の状態
-   - Provider Catalog changes、Provider Connection changes、egress
-     policy changes、Connection driver deploy
+   - CredentialRecipe seed changes、provider allowlist changes、Provider Connection changes、
+     egress policy changes、Connection driver deploy
    - 直近の deploy、config / secret rotation
 6. 最もリスクの低い mitigation を選び、実行前に judgement を channel に書く。
 

@@ -14,24 +14,24 @@ This document tracks conformance to [Core Spec](./core-spec.md) and
 
 ## Boundary
 
-| Area | Status | Notes |
-| --- | --- | --- |
-| Existing provider execution | partial | Runner, generated root, ProviderConnection, and vault paths exist, but code still contains legacy `Space` / `Installation` / `ProviderEnv` names. |
-| ProviderConnection | partial | OSS contract now exposes own-key ProviderConnection only; Cloud managed connections belong to closed Takosumi Cloud. |
-| CredentialRecipe | gap | Credential behavior exists in scattered provider rules/vault drivers; it still needs recipe files for Cloudflare, AWS, GCP, S3-compatible, and generic env. |
-| ProviderBinding | partial | Existing installation provider-env binding should be renamed/projected as ProviderBinding. |
-| StateVersion | partial | State storage exists; the public model should be renamed from StateSnapshot to StateVersion where user-facing. |
-| Outputs | conformant | Output capture and projection paths exist. |
-| Outputs-to-inputs | partial | DependencySnapshot path exists; public docs should use Capsule input wiring. |
-| Run ledger | conformant | Runs, logs, plan/apply records, approval, and audit evidence exist. |
-| Runner protocol | partial | Worker/container runner paths exist; local/docker/remote runner UX needs cleanup. |
+| Area                                                                                                                                                                              | Status     | Notes                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Existing provider execution                                                                                                                                                       | partial    | Runner, generated root, ProviderConnection, and vault paths exist, but code still contains legacy `Space` / `Installation` / `ProviderEnv` names.                |
+| ProviderConnection                                                                                                                                                                | partial    | OSS contract exposes ProviderConnections backed by user/operator-managed credential material; Cloud-managed connections belong only to closed Takosumi Cloud.    |
+| CredentialRecipe                                                                                                                                                                  | gap        | Credential behavior exists in scattered provider rules/vault drivers; it still needs recipe files for Cloudflare, AWS, GCP, S3-compatible, and generic env.      |
+| ProviderBinding                                                                                                                                                                   | partial    | Existing installation provider-env binding should be renamed/projected as ProviderBinding.                                                                       |
+| StateVersion                                                                                                                                                                      | partial    | State storage exists; the public model should be renamed from StateSnapshot to StateVersion where user-facing.                                                   |
+| Outputs                                                                                                                                                                           | conformant | Output capture and projection paths exist.                                                                                                                       |
+| Outputs-to-inputs                                                                                                                                                                 | partial    | DependencySnapshot path exists; public docs should use Capsule input wiring.                                                                                     |
+| Run ledger                                                                                                                                                                        | conformant | Runs, logs, plan/apply records, approval, and audit evidence exist.                                                                                              |
+| Runner protocol                                                                                                                                                                   | partial    | Worker/container runner paths exist; local/docker/remote runner UX needs cleanup.                                                                                |
 | first-party OpenTofu Capsule module catalog (`aws-s3-storage`, `cloudflare-hello-worker`, `cloudflare-r2-storage`, `cloudflare-static-site`, `cloudflare-worker-service`, `core`) | conformant | The tracked module catalog matches `opentofu-modules/module-files.ts`; these are normal OpenTofu modules using existing providers, not managed-resource drivers. |
-| Web UI | partial | Dashboard exists but still contains legacy product names in places. |
-| CLI | partial | CLI is an operator/developer helper, not the primary user flow. |
-| Takosumi for Operators | partial | Multi-tenant/account-plane pieces exist but need final-plan vocabulary and readiness cleanup. |
-| Takosumi Cloud | cloud-only | Closed official hosted implementation. |
-| Compatibility Gateway | cloud-only | Removed from OSS public contract/routes/registry. |
-| Managed resources | cloud-only | Must live in closed Cloud implementation. |
+| Web UI                                                                                                                                                                            | partial    | Dashboard exists but still contains legacy product names in places.                                                                                              |
+| CLI                                                                                                                                                                               | partial    | CLI is an operator/developer helper, not the primary user flow.                                                                                                  |
+| Takosumi for Operators                                                                                                                                                            | partial    | Multi-tenant/account-plane pieces exist but need final-plan vocabulary and readiness cleanup.                                                                    |
+| Takosumi Cloud                                                                                                                                                                    | cloud-only | Closed official hosted implementation.                                                                                                                           |
+| Compatibility Gateway                                                                                                                                                             | cloud-only | Removed from OSS public contract/routes/registry.                                                                                                                |
+| Managed resources                                                                                                                                                                 | cloud-only | Must live in closed Cloud implementation.                                                                                                                        |
 
 ## Current Verification
 

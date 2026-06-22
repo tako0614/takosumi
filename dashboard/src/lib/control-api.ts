@@ -523,10 +523,10 @@ export interface RunPlanResource {
 }
 
 export interface RunApplyExpectedGuard {
-  readonly planRunId: string;
+  readonly reviewedPlanId: string;
   readonly installationId?: string;
-  readonly currentDeploymentId?: string | null;
-  readonly runnerProfileId: string;
+  readonly currentApplyLedgerId?: string | null;
+  readonly runnerId: string;
   readonly sourceDigest: string;
   readonly variablesDigest: string;
   readonly policyDecisionDigest: string;

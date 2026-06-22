@@ -230,14 +230,16 @@ export function projectPlanRun(
 function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
   if (!planRun.planDigest || !planRun.planArtifact) return undefined;
   return {
-    planRunId: planRun.id,
+    reviewedPlanId: planRun.id,
     ...(planRun.installationId
       ? { installationId: planRun.installationId }
       : {}),
     ...(planRun.installationId
-      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+      ? {
+          currentApplyLedgerId: planRun.installationCurrentDeploymentId ?? null,
+        }
       : {}),
-    runnerProfileId: planRun.runnerProfileId,
+    runnerId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
     variablesDigest: planRun.variablesDigest,
     policyDecisionDigest: planRun.policyDecisionDigest,

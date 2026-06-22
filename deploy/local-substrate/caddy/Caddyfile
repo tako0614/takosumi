@@ -62,7 +62,7 @@ jaeger.takosumi.test {
 # is served from static build output, exactly like the worker mirror below.
 app.takosumi.test {
 	route {
-		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /internal/* /healthz /readyz /__takosumi/exports/*
+		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1* /internal/* /healthz /readyz /__takosumi/exports/*
 		handle @api {
 			reverse_proxy cloud:8787
 		}
@@ -109,8 +109,8 @@ service.takosumi.test, service-worker.takosumi.test {
 #   *.app.takos.jp     → tenant deploy (= Takosumi が dispatch、 動的 subdomain)
 #   road.takos.jp      → road-to-me (= road.takos.test で mirror)
 #   yurucommu.com      → yurucommu (= yurucommu.test で mirror)
-# bundled apps (takos-docs / takos-slide / takos-excel / takos-computer) は
-# **Takos space 内に install されて *.app.takos.jp tenant subdomain で
+# bundled apps (takos-office / takos-computer / yurucommu) は
+# **Takos Workspace 内に install されて *.app.takos.jp tenant subdomain で
 # serve** されるため、 専用 dev hostname は持たない (= 各 Vite dev server を
 # localhost で直起動して Takos UI 内から iframe / launch する model)。
 

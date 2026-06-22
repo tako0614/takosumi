@@ -8,16 +8,26 @@ Capsule, choose a ProviderConnection, then plan / apply.
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-takosumi deploy ./my-capsule --space @me --name my-app --provider cloudflare=conn_cf --var region=apac
-takosumi plan   ./my-capsule --space @me --name my-app
+takosumi deploy ./my-capsule \
+  --workspace @me \
+  --project my-app \
+  --capsule my-app \
+  --provider-binding cloudflare.default=conn_cf \
+  --var region=apac
+
+takosumi plan ./my-capsule \
+  --workspace @me \
+  --project my-app \
+  --capsule my-app
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
 The CLI does not run OpenTofu directly. It uploads a local Capsule and asks the
-control plane to create SourceSnapshot / Capsule / Run records. Execution
-happens in the runner sandbox, and credentials are injected at run time from
-ProviderConnections and CredentialRecipes.
+control plane to create Source / Capsule / Run records, pinning the Git commit /
+ref / path as the Run source identity. Execution happens in the runner sandbox,
+and credentials are injected at run time from ProviderConnections and
+CredentialRecipes.
 
 ## Connections
 
