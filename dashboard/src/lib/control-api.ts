@@ -290,6 +290,14 @@ export interface CreditReservation {
 export interface BackupRecord {
   readonly id: string;
   readonly spaceId: string;
+  readonly installationId?: string;
+  readonly environment?: string;
+  readonly restoreTarget?: {
+    readonly installationId: string;
+    readonly environment: string;
+    readonly stateGeneration: number;
+    readonly stateSnapshotId: string;
+  };
   readonly objectKey: string;
   readonly digest: string;
   readonly sizeBytes: number;
@@ -1302,6 +1310,26 @@ export async function listSpaceBackups(
     `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
     (body) => (body.backups as readonly BackupRecord[]) ?? [],
   );
+}
+
+export async function createBackupRestore(
+  spaceId: string,
+  backupId: string,
+  input: {
+    readonly installationId: string;
+    readonly environment: string;
+    readonly stateGeneration: number;
+    readonly expectedBackupDigest: string;
+  },
+): Promise<Run> {
+  const body = await controlFetch<{ run: Run }>(
+    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
+    {
+      method: "POST",
+      body: input,
+    },
+  );
+  return body.run;
 }
 
 // --- Dependencies ----------------------------------------------------------

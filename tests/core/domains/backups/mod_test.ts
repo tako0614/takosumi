@@ -636,6 +636,53 @@ test("installation-scoped backup records installation and environment on the Bac
   });
 });
 
+test("installation-scoped backup records the latest restore target generation", async () => {
+  const stateObjectKey1 = "spaces/space_1/.../states/00000001.tfstate.enc";
+  const stateObjectKey2 = "spaces/space_1/.../states/00000002.tfstate.enc";
+  const { service, store } = makeService({
+    stateObjects: {
+      [stateObjectKey1]: new TextEncoder().encode("SEALED-TFSTATE-1"),
+      [stateObjectKey2]: new TextEncoder().encode("SEALED-TFSTATE-2"),
+    },
+  });
+  const seeded = await seedInstallationModel(store, { spaceId: "space_1" });
+  await store.putStateSnapshot({
+    id: "st_1",
+    spaceId: "space_1",
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    generation: 1,
+    objectKey: stateObjectKey1,
+    digest: "sha256:" + "b".repeat(64),
+    createdByRunId: "apply_1",
+    createdAt: TS,
+  });
+  await store.putStateSnapshot({
+    id: "st_2",
+    spaceId: "space_1",
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    generation: 2,
+    objectKey: stateObjectKey2,
+    digest: "sha256:" + "c".repeat(64),
+    createdByRunId: "apply_2",
+    createdAt: TS,
+  });
+
+  const record = await service.createBackup({
+    spaceId: "space_1",
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+  });
+
+  expect(record.restoreTarget).toEqual({
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    stateGeneration: 2,
+    stateSnapshotId: "st_2",
+  });
+});
+
 test("service-data runner-local refs are recorded as missing, not exported", async () => {
   const { service, store, artifactStore } = makeService({
     serviceDataRunner: {

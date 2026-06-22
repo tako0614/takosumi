@@ -31,10 +31,10 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
-  { href: "/runs", labelKey: "nav.runs", icon: Clock3 },
 ];
 
 const ACCOUNT: NavItem[] = [
+  { href: "/runs", labelKey: "nav.runs", icon: Clock3 },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 

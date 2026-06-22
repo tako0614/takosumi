@@ -102,6 +102,7 @@ export interface BackupRecord {
   readonly spaceId: string;
   readonly installationId?: string;
   readonly environment?: string;
+  readonly restoreTarget?: BackupRestoreTarget;
   readonly objectKey: string;
   readonly digest: string;
   readonly sizeBytes: number;
@@ -110,6 +111,14 @@ export interface BackupRecord {
   readonly serviceData?: ServiceDataBackupPointer;
   readonly createdByRunId?: string;
   readonly createdAt: string;
+}
+
+/** Public pointer to the state generation this backup can restore. */
+export interface BackupRestoreTarget {
+  readonly installationId: string;
+  readonly environment: string;
+  readonly stateGeneration: number;
+  readonly stateSnapshotId: string;
 }
 
 /** Pointer to a backup object, when present. */

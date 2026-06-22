@@ -61,7 +61,7 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
       { label: "まず使用量を見せるだけのモード、止めずに運用も選べます" },
       { label: "残高が足りなければ承認の前で止まり、勝手に課金されません" },
     ],
-    cta: { label: "案内を待つ", href: "https://app.takosumi.com/" },
+    cta: { label: "ローンチ情報を見る", href: "/docs/" },
     highlight: true,
   },
 ];

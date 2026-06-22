@@ -675,8 +675,13 @@ export const ja = {
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
   "backups.col.contents": "内容",
+  "backups.col.actions": "操作",
   "backups.col.artifact": "設定バックアップ",
   "backups.restorePoint": "復元ポイント",
+  "backups.restoreGeneration": "状態世代 {generation}",
+  "backups.restore": "復元を準備",
+  "backups.restoreUnavailable":
+    "復元するには、サービスからバックアップを作成してください。",
   "backups.col.serviceData": "サービスデータ",
   "backups.col.source": "作成元",
   "backups.col.run": "実行",
