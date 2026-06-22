@@ -1912,6 +1912,64 @@ test("transitionRun: stale-running takeover is fenced on the observed heartbeat"
   }
 });
 
+test("transitionRun: source_sync rows use the same lease fence", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putSourceSyncRun({
+      ...sourceSyncRun({ id: "run_t_source_sync" }),
+      status: "queued",
+    });
+
+    const claim = await store.transitionRun({
+      id: "run_t_source_sync",
+      kind: "source_sync",
+      expectFrom: ["queued"],
+      run: {
+        ...sourceSyncRun({ id: "run_t_source_sync" }),
+        status: "running",
+      },
+      setLeaseToken: "lease_source_sync",
+      heartbeatAt: 100,
+    });
+    expect(claim.won, label).toBe(true);
+    expect(claim.run?.status, label).toBe("running");
+    expect(claim.run?.heartbeatAt, label).toBe(100);
+
+    const stale = await store.transitionRun({
+      id: "run_t_source_sync",
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_stale",
+      run: {
+        ...sourceSyncRun({ id: "run_t_source_sync" }),
+        status: "failed",
+      },
+    });
+    expect(stale.won, label).toBe(false);
+    expect(stale.run?.status, label).toBe("running");
+
+    const terminal = await store.transitionRun({
+      id: "run_t_source_sync",
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_source_sync",
+      run: {
+        ...sourceSyncRun({ id: "run_t_source_sync" }),
+        status: "succeeded",
+        heartbeatAt: 101,
+        resolvedCommit: "abcdef",
+        archiveDigest: "sha256:" + "a".repeat(64),
+        archiveSizeBytes: 256,
+        snapshotId: "snap_source_sync",
+      },
+      clearLeaseToken: true,
+      heartbeatAt: 101,
+    });
+    expect(terminal.won, label).toBe(true);
+    expect((await store.getSourceSyncRun("run_t_source_sync"))?.status, label)
+      .toBe("succeeded");
+  }
+});
+
 test("transitionRun: two concurrent queued→running claims, exactly one wins", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putPlanRun({ ...makePlanRun("run_t_d"), status: "queued" });

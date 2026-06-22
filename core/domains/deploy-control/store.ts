@@ -294,8 +294,8 @@ export interface CommitAppliedDeploymentInput {
  * claim cannot both win.
  *
  *   - `id` / `kind` — the row to transition; `kind` selects the run family
- *     (`plan` PlanRun rows or `apply` ApplyRun rows) so the discriminator can't
- *     be crossed.
+ *     (`plan` PlanRun rows, `apply` ApplyRun rows, or `source_sync`
+ *     SourceSyncRun rows) so the discriminator can't be crossed.
  *   - `expectFrom` — the set of statuses the row MUST currently be in for the
  *     CAS to fire. A row whose status is outside this set loses (`won: false`).
  *   - `expectLeaseToken` — when set, the CAS additionally requires the row's
@@ -305,8 +305,8 @@ export interface CommitAppliedDeploymentInput {
  *     current heartbeat column to equal this value (`null` means absent). This
  *     fences stale-`running` takeovers so only the first consumer that observed
  *     the stale heartbeat can re-claim the run.
- *   - `run` — the new PlanRun/ApplyRun to persist on a win; its `status` is the
- *     SET target (the row's status column + run JSON both move to `run.status`).
+ *   - `run` — the new run payload to persist on a win; its `status` is the SET
+ *     target (the row's status column + run JSON both move to `run.status`).
  *   - `setLeaseToken` / `clearLeaseToken` — the lease column write on a win:
  *     `setLeaseToken` stamps a new fence token, `clearLeaseToken` nulls it.
  *     Mutually exclusive; omit both to leave the lease column unchanged.
@@ -321,11 +321,11 @@ export interface CommitAppliedDeploymentInput {
  */
 export interface TransitionRunInput {
   readonly id: string;
-  readonly kind: "plan" | "apply";
+  readonly kind: "plan" | "apply" | "source_sync";
   readonly expectFrom: readonly RunStatus[];
   readonly expectLeaseToken?: string;
   readonly expectHeartbeatAt?: number | null;
-  readonly run: PlanRun | ApplyRun;
+  readonly run: PlanRun | ApplyRun | SourceSyncRun;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
   readonly heartbeatAt?: number;
@@ -333,7 +333,7 @@ export interface TransitionRunInput {
 
 export interface TransitionRunResult {
   readonly won: boolean;
-  readonly run?: PlanRun | ApplyRun;
+  readonly run?: PlanRun | ApplyRun | SourceSyncRun;
 }
 
 export interface OpenTofuDeploymentStore {
@@ -865,8 +865,12 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    * re-reads (here: returns the unchanged in-memory row) with `won: false`.
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
-    const map: Map<string, PlanRun | ApplyRun> =
-      input.kind === "plan" ? this.#planRuns : this.#applyRuns;
+    const map: Map<string, PlanRun | ApplyRun | SourceSyncRun> =
+      input.kind === "plan"
+        ? this.#planRuns
+        : input.kind === "apply"
+          ? this.#applyRuns
+          : this.#sourceSyncRuns;
     const current = map.get(input.id);
     if (!current) return Promise.resolve({ won: false });
     const currentLease = this.#runLeases.get(input.id);
@@ -884,10 +888,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
     // explicit `heartbeatAt` wins, else the heartbeat carried on `run`.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun = {
+    const persisted: PlanRun | ApplyRun | SourceSyncRun = {
       ...input.run,
       ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
-    } as PlanRun | ApplyRun;
+    } as PlanRun | ApplyRun | SourceSyncRun;
     map.set(input.id, persisted);
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);

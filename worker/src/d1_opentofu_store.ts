@@ -302,14 +302,19 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     const types =
       input.kind === "plan"
         ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
-        : [RUN_KIND_APPLY, "destroy_apply"];
+        : input.kind === "apply"
+          ? [RUN_KIND_APPLY, "destroy_apply"]
+          : [RUN_KIND_SOURCE_SYNC];
     // Resolve the heartbeat (input override wins over the value on `run`) and
     // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun =
+    const persisted: PlanRun | ApplyRun | SourceSyncRun =
       heartbeatAt === undefined
         ? input.run
-        : ({ ...input.run, heartbeatAt } as PlanRun | ApplyRun);
+        : ({ ...input.run, heartbeatAt } as
+            | PlanRun
+            | ApplyRun
+            | SourceSyncRun);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -347,7 +352,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     const current =
       input.kind === "plan"
         ? await this.getPlanRun(input.id)
-        : await this.getApplyRun(input.id);
+        : input.kind === "apply"
+          ? await this.getApplyRun(input.id)
+          : await this.getSourceSyncRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 
