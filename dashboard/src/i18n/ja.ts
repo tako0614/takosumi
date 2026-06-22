@@ -385,6 +385,7 @@ export const ja = {
   "new.store.title": "何をホストしますか？",
   "new.store.subtitle": "おすすめを選ぶと、必要な項目だけ入力して始められます。",
   "new.store.blocksTitle": "保存先と部品",
+  "new.store.examplesTitle": "サンプル",
   "new.store.empty.title": "追加できるサービスがありません",
   "new.store.empty.message": "リンクから追加できます。",
   "new.catalog.select": "選択",

@@ -381,6 +381,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.store.title": "What do you want to host?",
   "new.store.subtitle": "Pick a starter, then fill only the fields it needs.",
   "new.store.blocksTitle": "Storage and building blocks",
+  "new.store.examplesTitle": "Examples",
   "new.store.empty.title": "No services are available",
   "new.store.empty.message": "You can add one from a link.",
   "new.catalog.select": "Select",

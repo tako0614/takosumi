@@ -90,7 +90,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
     configs
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined),
-  ).toEqual([10, 30, 20, 40]);
+  ).toEqual([90, 30, 20, 40]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -106,9 +106,29 @@ test("hostable official configs expose public catalog metadata for the dashboard
     "workersSubdomain",
   );
   expect(hello?.catalog?.name.ja).toContain("Webアプリ");
+  expect(hello?.catalog?.surface).toBe("example");
 
   const hidden = configs.find((config) => config.name === "core");
   expect(hidden?.catalog).toBeUndefined();
+});
+
+test("official catalog source can be operator-selected without changing templates", () => {
+  const configs = officialInstallConfigs({
+    now: NOW,
+    officialCatalogSource: {
+      git: "https://github.com/example/takosumi-release.git",
+      ref: "0123456789abcdef0123456789abcdef01234567",
+    },
+  });
+  const site = configs.find(
+    (config) => config.catalog?.templateId === "cloudflare-static-site",
+  );
+  expect(site?.catalog?.source?.git).toBe(
+    "https://github.com/example/takosumi-release.git",
+  );
+  expect(site?.catalog?.source?.ref).toBe(
+    "0123456789abcdef0123456789abcdef01234567",
+  );
 });
 
 test("seeded config output allowlist mirrors the template public outputs", () => {

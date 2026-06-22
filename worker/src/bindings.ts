@@ -50,6 +50,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * minutes before the caller receives an actionable failure.
    */
   readonly TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS?: string;
+  readonly TAKOSUMI_OFFICIAL_CATALOG_GIT?: string;
+  readonly TAKOSUMI_OFFICIAL_CATALOG_REF?: string;
   /**
    * Optional operator/Cloud release activation webhook. The URL may be a plain
    * Worker var; the token must be configured as a secret binding. This generic

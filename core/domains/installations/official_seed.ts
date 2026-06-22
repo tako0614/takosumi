@@ -38,7 +38,12 @@ import {
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
-export const TAKOSUMI_OFFICIAL_CATALOG_SOURCE = {
+export interface OfficialCatalogSource {
+  readonly git: string;
+  readonly ref: string;
+}
+
+export const TAKOSUMI_OFFICIAL_CATALOG_SOURCE: OfficialCatalogSource = {
   git: "https://github.com/tako0614/takosumi.git",
   ref: "fcc47907b0154d8bf53872a3336e5653fc88792e",
 } as const;
@@ -97,8 +102,8 @@ interface OfficialCatalogSpec {
 const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   "cloudflare-hello-worker": {
     sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
-    order: 10,
-    surface: "service",
+    order: 90,
+    surface: "example",
     kind: "worker",
     provider: "cloudflare",
     suggestedName: "web-app",
@@ -279,6 +284,7 @@ const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
 
 function catalogMetadataForTemplate(
   template: TemplateDefinition,
+  source: OfficialCatalogSource = TAKOSUMI_OFFICIAL_CATALOG_SOURCE,
 ): InstallConfigCatalogMetadata | undefined {
   const spec = OFFICIAL_CATALOG[template.id];
   if (!spec) return undefined;
@@ -286,8 +292,8 @@ function catalogMetadataForTemplate(
     templateId: template.id,
     templateVersion: template.version,
     source: {
-      git: TAKOSUMI_OFFICIAL_CATALOG_SOURCE.git,
-      ref: TAKOSUMI_OFFICIAL_CATALOG_SOURCE.ref,
+      git: source.git,
+      ref: source.ref,
       path: spec.sourcePath,
     },
     order: spec.order,
@@ -356,9 +362,13 @@ export function installConfigFromTemplate(
     readonly id?: string;
     readonly name?: string;
     readonly installType?: InstallType;
+    readonly officialCatalogSource?: OfficialCatalogSource;
   } = {},
 ): InstallConfig {
-  const catalog = catalogMetadataForTemplate(template);
+  const catalog = catalogMetadataForTemplate(
+    template,
+    options.officialCatalogSource,
+  );
   return {
     id: options.id ?? installConfigIdForTemplate(template.id),
     name: options.name ?? template.id,
@@ -389,6 +399,7 @@ export function officialInstallConfigs(
   options: {
     readonly registry?: TemplateRegistry;
     readonly now?: () => Date;
+    readonly officialCatalogSource?: OfficialCatalogSource;
   } = {},
 ): readonly InstallConfig[] {
   const registry = options.registry ?? defaultTemplateRegistry;
@@ -403,13 +414,18 @@ export function officialInstallConfigs(
         id: installConfigIdForName(named.name),
         name: named.name,
         installType: named.installType,
+        officialCatalogSource: options.officialCatalogSource,
       }),
     );
     boundTemplateIds.add(template.id);
   }
   for (const template of registry.list()) {
     if (boundTemplateIds.has(template.id)) continue;
-    configs.push(installConfigFromTemplate(template, nowIso));
+    configs.push(
+      installConfigFromTemplate(template, nowIso, {
+        officialCatalogSource: options.officialCatalogSource,
+      }),
+    );
   }
   return configs;
 }
@@ -423,6 +439,7 @@ export async function seedOfficialInstallConfigs(
   options: {
     readonly registry?: TemplateRegistry;
     readonly now?: () => Date;
+    readonly officialCatalogSource?: OfficialCatalogSource;
   } = {},
 ): Promise<void> {
   for (const config of officialInstallConfigs(options)) {

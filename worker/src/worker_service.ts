@@ -92,6 +92,7 @@ export async function createWorkerServiceApp(
     : undefined;
   const releaseActivator =
     options.releaseActivator ?? releaseActivatorFromEnv(env, runtimeEnv);
+  const officialCatalogSource = officialCatalogSourceFromEnv(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -102,6 +103,7 @@ export async function createWorkerServiceApp(
     opentofuDeploymentStore: createCloudflareD1OpenTofuDeploymentStore(
       env.TAKOSUMI_CONTROL_DB,
     ),
+    ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     ownKeyProviderRunner: opentofuRunner,
     secretCrypto,
@@ -133,6 +135,20 @@ export async function createWorkerServiceApp(
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+}
+
+function officialCatalogSourceFromEnv(env: CloudflareWorkerEnv):
+  | { readonly git: string; readonly ref: string }
+  | undefined {
+  const git =
+    typeof env.TAKOSUMI_OFFICIAL_CATALOG_GIT === "string"
+      ? env.TAKOSUMI_OFFICIAL_CATALOG_GIT.trim()
+      : "";
+  const ref =
+    typeof env.TAKOSUMI_OFFICIAL_CATALOG_REF === "string"
+      ? env.TAKOSUMI_OFFICIAL_CATALOG_REF.trim()
+      : "";
+  return git && ref ? { git, ref } : undefined;
 }
 
 /**

@@ -127,6 +127,7 @@ export interface CloudflareWorkerEnv {
   // Shared deploy-control bearer for the in-process transport; must match the
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
@@ -406,6 +407,7 @@ async function buildAccountsHandler(
     billingRedirectAllowlist: splitList(
       env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
     ),
+    billingCheckoutSmokeToken: billingCheckoutSmokeTokenFromEnv(env),
     billingPlans: parseBillingPlans(optionalString(env.TAKOSUMI_BILLING_PLANS)),
   };
   const stableOidc = await parseStableOidcFlow(env);
@@ -1286,6 +1288,15 @@ function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
       ready: true,
       evidenceDigest,
     },
+  );
+}
+
+function billingCheckoutSmokeTokenFromEnv(
+  env: CloudflareWorkerEnv,
+): string | undefined {
+  return (
+    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN) ??
+    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
   );
 }
 

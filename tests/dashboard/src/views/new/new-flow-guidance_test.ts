@@ -63,11 +63,14 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "const buildingBlockCatalog = createMemo",
     );
+    expect(newAppViewSource).toContain("const exampleCatalog = createMemo");
     expect(newAppViewSource).toContain('entry.surface === "service"');
     expect(newAppViewSource).toContain('entry.surface === "building_block"');
+    expect(newAppViewSource).toContain('entry.surface === "example"');
     expect(newAppViewSource).toContain('t("new.store.title")');
     expect(newAppViewSource).toContain('t("new.store.subtitle")');
     expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
+    expect(newAppViewSource).toContain('t("new.store.examplesTitle")');
     expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
     const storeHeadStart = newAppViewSource.indexOf(
@@ -109,6 +112,7 @@ describe("/new flow guidance", () => {
     expect(en["new.store.title"]).toBe("What do you want to host?");
     expect(en["new.store.subtitle"]).toContain("Pick a starter");
     expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
+    expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
       "add another link",
     );
@@ -120,6 +124,7 @@ describe("/new flow guidance", () => {
     expect(ja["new.store.title"]).toBe("何をホストしますか？");
     expect(ja["new.store.subtitle"]).toContain("おすすめを選ぶ");
     expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
+    expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
@@ -143,6 +148,7 @@ describe("/new flow guidance", () => {
     expect(officialSeedSource).toContain('"cloudflare-static-site"');
     expect(officialSeedSource).toContain('"aws-s3-storage"');
     expect(officialSeedSource).toContain("catalogMetadataForTemplate");
+    expect(officialSeedSource).toContain("officialCatalogSource");
     expect(officialSeedSource).toContain('name: "accountId"');
     expect(officialSeedSource).toContain('name: "bucketName"');
     expect(officialSeedSource).toContain(
@@ -189,6 +195,8 @@ describe("/new flow guidance", () => {
     expect(hintSource).toContain("connection.scopeHints?.accountId");
     expect(hintSource).toContain("connection.scopeHints?.awsRegion");
     expect(newAppViewSource).toContain("catalogInputTouched");
+    expect(newAppViewSource).toContain("isConnectionScopedCatalogInput");
+    expect(newAppViewSource).toContain("hasMissingAdvancedCatalogInputs");
     expect(newAppViewSource).toContain(
       "catalogScopeHintValue(entry, field) ??",
     );
@@ -207,7 +215,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
     expect(newAppViewSource).toContain("selectedCatalogVariableNames");
-    expect(newAppViewSource).toContain("open={shouldOpenServiceAdvanced()}");
+    expect(newAppViewSource).toContain("shouldOpenServiceAdvanced() ||");
+    expect(newAppViewSource).toContain("hasMissingAdvancedCatalogInputs()");
     expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
     expect(newAppViewSource).toContain("name={`varName:${index()}`}");
     expect(newAppViewSource).toContain("name={`varValue:${index()}`}");
