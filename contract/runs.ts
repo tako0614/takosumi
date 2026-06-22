@@ -28,10 +28,10 @@ export type RunType =
   | "drift_check"
   | "backup"
   // `restore` is a destructive Backup-backed state restore. It is created in
-  // `waiting_approval`; approval dispatches it to write a new StateSnapshot
-  // generation and mark downstream consumers stale. Service-data restore remains
-  // explicitly not_implemented until a provider/container restore contract is
-  // shipped.
+  // `waiting_approval`; approval dispatches it to write a new StateVersion
+  // generation and mark downstream consumers stale. Service-data restore is
+  // opt-in and succeeds only when the runner acknowledges the service-data
+  // artifact restored.
   | "restore";
 
 export type RunStatus =
@@ -84,6 +84,15 @@ export interface RunApplyExpectedGuard {
   readonly resolvedProviderEnvBindingsDigest?: string;
 }
 
+/** Non-secret service-data restore evidence recorded on restore Runs. */
+export interface RunServiceDataRestoreResult {
+  readonly status: "restored";
+  readonly objectKey: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly restoredCount?: number;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -118,8 +127,10 @@ export interface Run {
   readonly requiresApproval?: boolean;
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
+  readonly restoreServiceData?: boolean;
   readonly restoredStateSnapshotId?: string;
   readonly restoredFromStateSnapshotId?: string;
+  readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
   readonly createdBy: string;
   readonly createdAt: string;

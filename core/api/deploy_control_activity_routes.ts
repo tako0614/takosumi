@@ -87,6 +87,7 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
       operationId: "createBackupRestore",
       openapi: {
         pathParams: ["spaceId", "backupId"],
+        requestSchema: "CreateRestoreRequest",
         okStatus: "201",
         okSchema: "CreateRestoreResponse",
       },

@@ -537,6 +537,14 @@ export interface RunApplyExpectedGuard {
   readonly resolvedProviderEnvBindingsDigest?: string;
 }
 
+export interface RunServiceDataRestoreResult {
+  readonly status: "restored";
+  readonly objectKey: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly restoredCount?: number;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -560,6 +568,12 @@ export interface Run {
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
   readonly requiresApproval?: boolean;
+  readonly backupId?: string;
+  readonly restoreStateGeneration?: number;
+  readonly restoreServiceData?: boolean;
+  readonly restoredStateSnapshotId?: string;
+  readonly restoredFromStateSnapshotId?: string;
+  readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
   readonly createdBy: string;
   readonly createdAt: string;
@@ -1322,6 +1336,7 @@ export async function createBackupRestore(
     readonly environment: string;
     readonly stateGeneration: number;
     readonly expectedBackupDigest: string;
+    readonly restoreServiceData?: boolean;
   },
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
