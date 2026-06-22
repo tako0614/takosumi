@@ -853,23 +853,17 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     input: CommitAppliedDeploymentInput,
   ): Promise<CommitAppliedDeploymentResult> {
     const { installationPatch } = input;
-    if (
-      input.applyRunTerminal &&
-      input.applyRunLeaseToken !== undefined
-    ) {
-      const rows = await db
-        .select({ leaseToken: pgSchema.runs.leaseToken })
-        .from(pgSchema.runs)
-        .where(
-          and(
-            eq(pgSchema.runs.id, input.applyRunTerminal.id),
-            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
-          ),
-        )
-        .limit(1);
-      if (rows[0]?.leaseToken !== input.applyRunLeaseToken) {
-        return { applyRunLeaseLost: true };
-      }
+    let applyRunCommitted = false;
+    if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
+      applyRunCommitted = await pgUpdateTerminalRunWithLease(
+        db,
+        input.applyRunTerminal.operation === "destroy"
+          ? "destroy_apply"
+          : "apply",
+        input.applyRunTerminal,
+        input.applyRunLeaseToken,
+      );
+      if (!applyRunCommitted) return { applyRunLeaseLost: true };
     }
     if (input.newDeployment) {
       await pgUpsertDeployment(db, input.newDeployment);
@@ -885,7 +879,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     // the SAME interactive transaction as the Deployment. The apply terminal
     // clears its lease fence (`lease_token = NULL`, mirrors transitionRun
     // clearLeaseToken); the plan patch is a plain row write (already terminal).
-    if (input.applyRunTerminal) {
+    if (input.applyRunTerminal && !applyRunCommitted) {
       await pgUpsertRun(
         db,
         input.applyRunTerminal.operation === "destroy"
@@ -2649,6 +2643,38 @@ async function pgUpsertRun(
         runJson: values.runJson,
       },
     });
+}
+
+async function pgUpdateTerminalRunWithLease(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  kind: string,
+  run: ApplyRun,
+  leaseToken: string,
+): Promise<boolean> {
+  const values = {
+    kind,
+    spaceId: run.spaceId,
+    sourceId: null,
+    installationId: run.installationId ?? null,
+    status: run.status,
+    leaseToken: null as string | null,
+    heartbeatAt: run.heartbeatAt ?? null,
+    createdAt: String(run.createdAt),
+    runJson: run,
+  };
+  const rows = await db
+    .update(pgSchema.runs)
+    .set(values)
+    .where(
+      and(
+        eq(pgSchema.runs.id, run.id),
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        eq(pgSchema.runs.status, "running"),
+        eq(pgSchema.runs.leaseToken, leaseToken),
+      ),
+    )
+    .returning({ id: pgSchema.runs.id });
+  return rows.length > 0;
 }
 
 async function pgUpsertDeployment(

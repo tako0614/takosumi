@@ -34,6 +34,7 @@ import {
   isNull,
   lt,
   ne,
+  notExists,
   or,
   type SQL,
   sql,
@@ -758,30 +759,25 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
    * advance — is committed in ONE `this.#orm.batch(...)` call; a crash between
    * statements can no longer leave torn state.
    *
-   * The guarded Installation advance can't be a fenced UPDATE that gates the
-   * other (unconditional) batch writes, because D1 batch cannot make one
-   * statement's success depend on another's row count. Instead the guard is
-   * evaluated in JS against a pre-batch READ of the row, exactly mirroring the
-   * guard predicate {@link patchInstallation} fences in SQL:
+   * The guarded Installation advance is still evaluated before the batch because
+   * D1 cannot branch a batch on an UPDATE row count. Apply ownership is stricter:
+   * when an apply terminal row carries a lease token, the batch starts with a
+   * guard statement that raises a deliberate SQL error unless the current run
+   * row is still `running` with that token. That error rolls the whole batch
+   * back, so a stale owner cannot write Deployment/State/Output rows after
+   * another worker has taken the run over.
+   *
+   * The Installation guard mirrors {@link patchInstallation}:
    *   - row gone -> `{ installation: undefined }` (no writes), same as today;
    *   - guard mismatch -> throw {@link InstallationPatchGuardConflict} (no writes);
    *   - guard match -> batch all writes + the (now-safe) unconditional UPDATE.
-   *
-   * This leaves a tiny read-then-write window between the guard read and the
-   * batch — but it is PRE-EXISTING (D1 is effectively single-writer; the runner
-   * serializes a Run's apply) and no wider than the prior per-statement write
-   * sequence, which had the same window plus the torn-state hazard this fix
-   * removes.
    */
   async commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
   ): Promise<CommitAppliedDeploymentResult> {
     await this.#ensureSchema();
     const { installationPatch } = input;
-    if (
-      input.applyRunTerminal &&
-      input.applyRunLeaseToken !== undefined
-    ) {
+    if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
       const row = await this.#orm
         .select({ leaseToken: schema.runs.leaseToken })
         .from(schema.runs)
@@ -813,6 +809,15 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     }
     const updated: Installation = { ...current, ...installationPatch.patch };
     const statements = [
+      ...(input.applyRunTerminal && input.applyRunLeaseToken !== undefined
+        ? [
+            d1ApplyLeaseGuardStmt(
+              this.#orm,
+              input.applyRunTerminal.id,
+              input.applyRunLeaseToken,
+            ),
+          ]
+        : []),
       ...(input.newDeployment
         ? [d1UpsertDeploymentStmt(this.#orm, input.newDeployment)]
         : []),
@@ -862,11 +867,25 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     // (test) binding omits it, fall back to the prior non-atomic sequence — the
     // same behavior as before this fix, never worse.
     if (typeof this.db.batch === "function") {
-      await this.#orm.batch(
-        statements as [(typeof statements)[number], ...typeof statements],
-      );
+      try {
+        await this.#orm.batch(
+          statements as [(typeof statements)[number], ...typeof statements],
+        );
+      } catch (error) {
+        if (isD1ApplyLeaseLostError(error)) {
+          return { applyRunLeaseLost: true };
+        }
+        throw error;
+      }
     } else {
-      for (const statement of statements) await statement;
+      try {
+        for (const statement of statements) await statement;
+      } catch (error) {
+        if (isD1ApplyLeaseLostError(error)) {
+          return { applyRunLeaseLost: true };
+        }
+        throw error;
+      }
     }
     return { installation: updated };
   }
@@ -2474,6 +2493,50 @@ function d1UpsertRunStmt(
     .insert(schema.runs)
     .values(values)
     .onConflictDoUpdate({ target: schema.runs.id, set: values });
+}
+
+function d1ApplyLeaseGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  runId: string,
+  leaseToken: string,
+) {
+  const expectedLease = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(
+      and(
+        eq(schema.runs.id, runId),
+        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        eq(schema.runs.status, "running"),
+        eq(schema.runs.leaseToken, leaseToken),
+      ),
+    );
+  return orm.insert(schema.runs).select(
+    orm
+      .select({
+        id: schema.runs.id,
+        runGroupId: schema.runs.runGroupId,
+        spaceId: schema.runs.spaceId,
+        sourceId: schema.runs.sourceId,
+        installationId: schema.runs.installationId,
+        environment: schema.runs.environment,
+        type: schema.runs.type,
+        status: schema.runs.status,
+        leaseToken: schema.runs.leaseToken,
+        heartbeatAt: schema.runs.heartbeatAt,
+        runJson: schema.runs.runJson,
+        createdAt: schema.runs.createdAt,
+      })
+      .from(schema.runs)
+      .where(and(eq(schema.runs.id, runId), notExists(expectedLease))),
+  );
+}
+
+function isD1ApplyLeaseLostError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes("UNIQUE constraint failed: runs.id") ||
+        error.message.includes("constraint failed: runs.id")
+    : false;
 }
 
 function d1UpsertStateSnapshotStmt(
