@@ -18,7 +18,10 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../lib/theme.ts";
-import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
+import {
+  dashboardProductName,
+  isTakosumiCloudRuntime,
+} from "../../lib/deployment-brand.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
 import { refreshSession } from "../account/lib/session.ts";
@@ -219,27 +222,29 @@ export function SignInPanel() {
           </button>
         </div>
       </Show>
-      <p class="sign-in-terms">
-        {t("auth.termsPrefix")}{" "}
-        <a
-          href="https://takosumi.com/docs/legal/terms-of-service"
-          class="link"
-          target="_blank"
-          rel="noopener"
-        >
-          {t("auth.termsOfService")}
-        </a>
-        {t("auth.and")}
-        <a
-          href="https://takosumi.com/docs/legal/privacy-policy"
-          class="link"
-          target="_blank"
-          rel="noopener"
-        >
-          {t("auth.privacyPolicy")}
-        </a>
-        {t("auth.termsSuffix")}
-      </p>
+      <Show when={isTakosumiCloudRuntime()}>
+        <p class="sign-in-terms">
+          {t("auth.termsPrefix")}{" "}
+          <a
+            href="https://takosumi.com/docs/legal/terms-of-service"
+            class="link"
+            target="_blank"
+            rel="noopener"
+          >
+            {t("auth.termsOfService")}
+          </a>
+          {t("auth.and")}
+          <a
+            href="https://takosumi.com/docs/legal/privacy-policy"
+            class="link"
+            target="_blank"
+            rel="noopener"
+          >
+            {t("auth.privacyPolicy")}
+          </a>
+          {t("auth.termsSuffix")}
+        </p>
+      </Show>
     </div>
   );
 }
@@ -247,7 +252,7 @@ export function SignInPanel() {
 function BrandLogoMark() {
   return (
     <span class="auth-brand-mark" aria-hidden="true">
-      <LogoMark size={48} title="Takosumi" />
+      <LogoMark size={48} title={dashboardProductName()} />
     </span>
   );
 }
@@ -280,7 +285,7 @@ export default function SignInView() {
         <a href="/" class="auth-brand">
           <BrandLogoMark />
           <span class="auth-brand-text">
-            Takosumi
+            {dashboardProductName()}
             <Show when={isTakosumiCloudRuntime()}>
               <span class="auth-brand-sub">Cloud</span>
             </Show>

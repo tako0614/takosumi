@@ -77,7 +77,7 @@ function Inner() {
   });
 
   const openDetail = (inst: Installation) =>
-    navigate(`/capsules/${encodeURIComponent(inst.id)}`);
+    navigate(`/services/${encodeURIComponent(inst.id)}`);
 
   return (
     <AppShell>
@@ -215,17 +215,10 @@ function WorkspaceStartPanel() {
         <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
         <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
       </div>
-      <div class="av-start-choices">
-        <a href="/new" class="av-start-choice">
-          <span class="av-start-choice-icon" aria-hidden="true">
-            <Sparkles size={20} />
-          </span>
-          <span>
-            <strong>{t("apps.start.optionCatalog")}</strong>
-            <small>{t("apps.start.optionCatalogSub")}</small>
-          </span>
-        </a>
-      </div>
+      <a href="/new" class="av-start-action">
+        <Sparkles size={18} aria-hidden="true" />
+        <span>{t("apps.start.optionCatalog")}</span>
+      </a>
     </section>
   );
 }

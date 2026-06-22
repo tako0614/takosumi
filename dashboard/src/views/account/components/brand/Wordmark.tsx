@@ -5,6 +5,7 @@ interface Props {
   size?: number;
   href?: string;
   showSub?: boolean;
+  productName?: string;
   class?: string;
 }
 
@@ -19,7 +20,7 @@ export default function Wordmark(props: Props): JSX.Element {
         <LogoMark size={props.size ?? 26} />
       </span>
       <span class="wordmark-text">
-        Takosumi
+        {props.productName ?? "Takosumi"}
         {props.showSub === true && (
           <span class="wordmark-sub" style="margin-left:6px">
             Cloud

@@ -76,16 +76,13 @@
 
 /* ===== Workspace starter (home) ===== */
 .av-start {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
-  gap: var(--tg-s-5);
-  align-items: start;
-  padding: var(--tg-s-5);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--tg-s-4);
+  max-width: 560px;
+  padding: var(--tg-s-2) 0 var(--tg-s-5);
   margin-bottom: var(--tg-s-5);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-sm);
 }
 .av-start-copy {
   min-width: 0;
@@ -112,53 +109,26 @@
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
 }
-.av-start-choices {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--tg-s-3);
-}
-.av-start-choice {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--tg-s-3);
-  align-items: start;
-  min-width: 0;
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
+.av-start-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tg-s-2);
+  min-height: 40px;
+  padding: 0 var(--tg-s-4);
+  border: 1px solid var(--tg-accent);
   border-radius: var(--tg-r-md);
-  background: var(--tg-bg);
-  color: var(--tg-fg);
+  background: var(--tg-accent);
+  color: var(--tg-accent-text);
+  font-weight: 700;
   transition:
     border-color 120ms ease,
     background 120ms ease;
 }
-.av-start-choice:hover {
-  border-color: var(--tg-line-strong);
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg);
-}
-.av-start-choice-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: var(--tg-r-md);
-  background: var(--tg-accent-soft);
+.av-start-action:hover {
+  border-color: var(--tg-accent-strong);
+  background: var(--tg-accent-strong);
   color: var(--tg-accent-text);
-}
-.av-start-choice span:last-child {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.av-start-choice strong {
-  font-size: var(--tg-fs-base);
-}
-.av-start-choice small {
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  line-height: 1.45;
 }
 /* ===== service grid (home) ===== */
 .av-service-grid {
@@ -414,6 +384,11 @@
 .av-import-card {
   margin-top: var(--tg-s-3);
 }
+.av-manual-import {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--tg-s-2);
+}
 .av-service-setup {
   display: grid;
   gap: var(--tg-s-3);
@@ -457,9 +432,12 @@ button.tg-tab {
   }
 
   .av-start {
-    grid-template-columns: 1fr;
-    gap: var(--tg-s-4);
-    padding: var(--tg-s-4);
+    max-width: none;
+    padding: var(--tg-s-1) 0 var(--tg-s-4);
+  }
+
+  .av-start-action {
+    width: 100%;
   }
 
   .av-service-grid {
@@ -488,7 +466,32 @@ button.tg-tab {
   }
 
   .av-catalog-card {
+    min-height: 0;
+    flex-direction: row;
+    align-items: center;
     gap: var(--tg-s-3);
+    padding: var(--tg-s-3);
+  }
+
+  .av-catalog-icon {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+  }
+
+  .av-catalog-name {
+    font-size: var(--tg-fs-base);
+  }
+
+  .av-catalog-desc {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .av-catalog-card .tg-btn {
+    flex: 0 0 auto;
   }
 
   .av-service-setup {

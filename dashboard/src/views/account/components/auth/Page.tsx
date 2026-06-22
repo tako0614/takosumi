@@ -1,11 +1,12 @@
 import { createEffect, type JSX } from "solid-js";
 import AuthGuard from "./AuthGuard.tsx";
 import type { SessionRecord } from "../../lib/session.ts";
+import { dashboardProductName } from "../../../../lib/deployment-brand.ts";
 
 interface Props {
   /**
    * Document title. The repeated dashboard pattern always appends
-   * " — Takosumi", so pass only the page-specific prefix. Omit on routes
+   * " — product", so pass only the page-specific prefix. Omit on routes
    * that set the title dynamically inside their body.
    */
   title?: string;
@@ -26,7 +27,7 @@ interface Props {
 export default function Page(props: Props) {
   createEffect(() => {
     if (props.title && typeof document !== "undefined") {
-      document.title = `${props.title} — Takosumi`;
+      document.title = `${props.title} — ${dashboardProductName()}`;
     }
   });
   return <AuthGuard>{(session) => props.children(session)}</AuthGuard>;

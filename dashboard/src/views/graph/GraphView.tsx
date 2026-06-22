@@ -41,7 +41,7 @@ function NodeBox(props: {
       <div class="wb-graph-node-head">
         <a
           class="wb-graph-node-name"
-          href={`/capsules/${encodeURIComponent(props.node.installationId)}`}
+          href={`/services/${encodeURIComponent(props.node.installationId)}`}
         >
           {props.node.name}
         </a>

@@ -20,3 +20,12 @@
   color: var(--tg-fg-muted);
   margin-bottom: var(--tg-s-3);
 }
+.connection-instructions {
+  margin: var(--tg-s-2) 0 var(--tg-s-3);
+}
+.connection-instructions > summary {
+  cursor: pointer;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
