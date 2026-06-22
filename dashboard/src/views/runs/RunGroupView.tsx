@@ -190,29 +190,9 @@ function RunGroupMemberRow(props: { readonly run: Run }) {
         label={runStatusLabel}
         tone={runTone}
       />
-      <details class="wb-disclosure wa-run-group-details">
-        <summary>{t("run.details.title")}</summary>
-        <div class="wb-stack-sm">
-          <div>
-            <span class="muted">{t("run.details.runId")}</span>
-            <div>
-              <a href={`/runs/${run().id}`}>
-                <code>{run().id}</code>
-              </a>
-            </div>
-          </div>
-          <Show when={run().installationId}>
-            {(id) => (
-              <div>
-                <span class="muted">{t("app.installationSub")}</span>
-                <div>
-                  <code>{id()}</code>
-                </div>
-              </div>
-            )}
-          </Show>
-        </div>
-      </details>
+      <a class="wa-run-group-review" href={`/runs/${run().id}`}>
+        {t("runGroup.openRun")}
+      </a>
     </li>
   );
 }

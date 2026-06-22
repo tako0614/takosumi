@@ -62,15 +62,22 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("PlanResourceReview");
     expect(runViewSource).toContain("PLAN_RESOURCE_REVIEW_LIMIT");
     expect(runViewSource).toContain("run.latest?.planResources ?? []");
+    expect(runViewSource).toContain("planResourceDisplayLabel");
     expect(runViewSource).toContain("planResourceActionLabel");
     expect(runViewSource).toContain('t("run.resources.title")');
+    expect(runViewSource).toContain('t("run.resources.identifiers")');
     expect(runViewSource).toContain(
       "<PlanResourceReview resources={planResources()} />",
+    );
+    expect(runViewSource.indexOf("<PlanResourceReview")).toBeGreaterThan(
+      runViewSource.indexOf('summary>{t("run.details.title")}</summary>'),
     );
     expect(en["run.resources.title"]).toBe("Technical change details");
     expect(ja["run.resources.title"]).toBe("技術的な変更詳細");
     expect(en["run.resources.kicker"]).toBe("Support details");
     expect(ja["run.resources.kicker"]).toBe("サポート詳細");
+    expect(en["run.resources.identifiers"]).toBe("Support identifiers");
+    expect(ja["run.resources.identifiers"]).toBe("サポート用の識別情報");
     expect(runViewSource).not.toContain("change.before");
     expect(runViewSource).not.toContain("change.after");
   });
@@ -79,9 +86,15 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("const diagnosticRows = createMemo");
     expect(runViewSource).toContain("const showDiagnosticsPanel = createMemo");
     expect(runViewSource).toContain("<Show when={showDiagnosticsPanel()}>");
+    expect(runViewSource).toContain('t("run.diagnostics.failed")');
+    expect(runViewSource).not.toContain(
+      'fallback={\\n                          <ul class="wa-diags">',
+    );
     expect(runViewSource).not.toContain(
       '<p class="muted">{t("run.diagnostics.empty")}</p>',
     );
+    expect(en["run.diagnostics.failed"]).toContain("Open details");
+    expect(ja["run.diagnostics.failed"]).toContain("詳細");
   });
 
   test("keeps the copy explicit that private values are not displayed", () => {

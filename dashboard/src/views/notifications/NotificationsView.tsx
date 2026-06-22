@@ -61,7 +61,7 @@ function metaNumber(
 
 /**
  * One plain-language sentence per event, from recorded metadata only. Unknown
- * actions fall back to the raw verb so nothing is silently dropped.
+ * actions use neutral copy; raw backend verbs stay in the activity debug layer.
  */
 function describeEvent(event: ActivityEvent): {
   readonly title: string;
@@ -172,7 +172,7 @@ function describeEvent(event: ActivityEvent): {
       return { title: t("notif.event.groupCreated") };
     }
     default: {
-      return { title: event.action };
+      return { title: t("notif.event.recorded") };
     }
   }
 }
