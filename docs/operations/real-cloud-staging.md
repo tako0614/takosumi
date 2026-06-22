@@ -47,6 +47,36 @@ repo.
    bun test
    ```
 
+   From the Takosumi repo root, the same hosted-GA operator gates are exposed as
+   proxy scripts so contributors do not have to remember that the implementation
+   lives in the ecosystem root:
+
+   ```bash
+   bun run ga:status -- --json
+   bun run ga:live-prereqs -- --environment staging --scope smoke --json
+   bun run ga:billing-readiness -- --environment staging --skip-api --json
+   bun run ga:billing-bootstrap -- --environment staging --dry-run --json
+   bun run ga:browser-ux-evidence -- --environment staging --json
+   bun run ga:synthetic-flow -- --environment staging --json
+   bun run ga:sync-readiness -- --json
+   bun run ga:deploy-host-check
+   ```
+
+   These proxy scripts already resolve the standard `takosumi-private/` layout
+   from the ecosystem root. Do not pass `--private-root ../takosumi-private`
+   from inside `takosumi/`; that points at the wrong directory.
+
+   Billing bootstrap can be dry-run without Stripe credentials when the
+   operator-private plan spec exists. Creating/reusing real Stripe prices,
+   writing secret files, putting Wrangler secrets, and running checkout smoke
+   still require the operator's Stripe session or Stripe secret key; do not
+   replace those with placeholder price ids just to satisfy the readiness gate.
+
+   Browser UX evidence can pass as smoke evidence before a full plan/apply
+   rehearsal exists. `ga:synthetic-flow` is stricter: it should remain blocked
+   until the signed-in browser evidence, control-plane plan/apply smoke, and
+   export probe all pass.
+
    `check:deploy-config-bindings -- --require-production --require-staging`
    scans the public deploy templates and requires realized operator config for
    both production and staging. The default repo gate keeps those private files

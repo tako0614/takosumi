@@ -138,7 +138,7 @@ takosumi/
 ├── package.json
 ├── worker/
 │   └── src/            single-Worker entry (index.ts / handler.ts / routes.ts), durable/ (CoordinationObject,
-│                       OpenTofuRunnerObject), state crypto, D1 stores — the worker shell
+│                       OpenTofuRunOwnerObject, OpenTofuRunnerObject), state crypto, D1 stores — the worker shell
 ├── contract/           public control-plane vocabulary: DTOs / contracts (the wire shape)
 ├── core/               provider-AGNOSTIC control plane: api/ + domains/* (sources, installations, runs,
 │                       deploy-control, policy) + adapters/. Reads per-provider data only through the
