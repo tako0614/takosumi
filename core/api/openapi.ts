@@ -2869,8 +2869,8 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     RunApplyExpectedGuard: {
       type: "object",
       required: [
-        "planRunId",
-        "runnerProfileId",
+        "reviewedPlanId",
+        "runnerId",
         "sourceDigest",
         "variablesDigest",
         "policyDecisionDigest",
@@ -2878,12 +2878,12 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         "planArtifactDigest",
       ],
       properties: {
-        planRunId: { type: "string" },
+        reviewedPlanId: { type: "string" },
         installationId: { type: "string" },
-        currentDeploymentId: {
+        currentApplyLedgerId: {
           oneOf: [{ type: "string" }, { type: "null" }],
         },
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
         sourceDigest: { type: "string" },
         variablesDigest: { type: "string" },
         policyDecisionDigest: { type: "string" },

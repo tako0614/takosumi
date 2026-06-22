@@ -10,7 +10,7 @@ backends.
 
 - configure control-plane auth and token boundaries
 - define runner substrate, runner image, resource limits, and provider allowlist seed
-- manage Provider Catalog and Provider Connection policy
+- manage CredentialRecipe seeds, provider allowlists, and ProviderConnection policy
 - manage sealed backing material and secret delivery for ProviderConnections
 - manage state and lock backends
 - manage local/docker/remote/operator runner pools

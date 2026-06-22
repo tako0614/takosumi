@@ -190,7 +190,7 @@ repo.
    )" \
      bun run smoke:platform-control-plane -- \
        --url https://app-staging.takosumi.com \
-       --space <scratch-space-id-or-handle> \
+      --workspace <scratch-workspace-id-or-handle> \
        --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
        --json
    ```

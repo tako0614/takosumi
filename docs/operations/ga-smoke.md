@@ -56,7 +56,7 @@ CLOUDFLARE_ACCOUNT_ID="$(
 )" \
   bun run smoke:platform-control-plane -- \
     --url https://app-staging.takosumi.com \
-    --space <scratch-space-id-or-handle> \
+    --workspace <scratch-workspace-id-or-handle> \
     --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
     --json
 ```
@@ -73,7 +73,7 @@ The command:
 6. verifies the Worker script is gone, then revokes the temporary Workspace
    ProviderConnection unless `--keep-connection` is set.
 
-R2 remains a Layer 1 / own-key direct integration smoke. Do not use
+R2 remains a Layer 1 / direct ProviderConnection integration smoke. Do not use
 `cloudflare-r2-storage` as the Layer 2 proof; Layer 2 is the product
 control-plane path and uses `cloudflare-hello-worker` because it needs no build
 artifact and can be created, verified, and destroyed by the platform loop.
@@ -88,7 +88,7 @@ non-destructive equivalent and record the final transcript in private evidence a
 
 - `bun run production-hardening:gates` — platform opening evidence gate. The
   enforced manifest requires container smoke, Layer 2 platform control-plane
-  smoke, egress enforcement, restore rehearsal, provider catalog coverage,
+  smoke, egress enforcement, restore rehearsal, CredentialRecipe / provider allowlist coverage,
   cost-attribution JSON evidence, and secret-boundary evidence.
 - `bun run release-activation:evidence` — optional post-apply publication
   evidence gate. Required only when `TAKOSUMI_RELEASE_ACTIVATOR_URL` is enabled;
