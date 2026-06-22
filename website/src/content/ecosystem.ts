@@ -28,7 +28,7 @@ export const PROVIDERS: readonly Chip[] = [
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "OpenTofu-native deploy control plane。Capsule / Run / StateVersion / Output を記録し、provider resource は cloud、VM、cluster、管理サービス側に作る。",
+    "OpenTofu-native control plane。サービス、変更履歴、状態、出力を記録し、実際の resource は cloud、VM、cluster、管理サービス側に作る。",
 };
 
 export const ACCOUNTS = {

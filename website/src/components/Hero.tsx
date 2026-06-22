@@ -16,20 +16,24 @@ export default function Hero() {
           <span class="hero-line grad-text">your server.</span>
         </h1>
         <p class="lede">
-          Git のインフラコードを、好きなクラウドに。
+          アプリやインフラを、ブラウザから自分のクラウドへ。
           <br />
-          <em class="em">鍵も、状態も、履歴も</em>、ぜんぶ自分の手元に。
+          <em class="em">鍵も、状態も、履歴も</em>、Takosumi が管理します。
         </p>
         <div class="cta-row">
           <a
             class="btn btn-primary"
+            href="https://app.takosumi.com/"
+            rel="noopener"
+          >
+            Takosumi Cloud を開く
+          </a>
+          <a
+            class="btn btn-secondary"
             href="/docs/getting-started/quickstart"
             rel="external"
           >
             セルフホストで始める
-          </a>
-          <a class="btn btn-secondary" href="#pricing">
-            Cloud の案内を見る
           </a>
         </div>
       </div>

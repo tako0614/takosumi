@@ -1,6 +1,6 @@
 /**
- * Add a service (`/new`) — service catalog first, advanced install/source link
- * second, one underlying flow.
+ * Add a service (`/new`) — service catalog first, link/source import second,
+ * one underlying flow.
  *
  * Three entry shapes, identical install path:
  *   - Examples: curated first-party / known service coordinates returned by
@@ -13,11 +13,10 @@
  *     summary states the provenance and the visitor still confirms in this
  *     client (compatibility check → explicit add). No worker-side handling.
  *
- * The flow runs five explicit steps — register/fetch → compatibility →
- * provider connection review → create the current compatibility record → plan — and
- * lands on `/runs/:id`. A 409 source_sync_required surfaces a humane retry
- * instead of a raw error. OSS Takosumi requires a ready Provider Connection
- * before apply.
+ * The flow registers/fetches the Source, checks compatibility, reviews
+ * Provider Connections, creates the current service record, and opens the first
+ * change review. Technical progress stays available without dominating the
+ * normal hosted-service UX.
  */
 import "../../styles/wave-b.css";
 import {
@@ -1642,7 +1641,7 @@ function Inner() {
 
   return (
     <AppShell>
-      <PageHeader title={t("new.title")} />
+      <PageHeader title={t("new.title")} subtitle={t("new.subtitle")} />
 
       <Show
         when={spaceId()}
@@ -1666,6 +1665,7 @@ function Inner() {
             <div class="av-store-head">
               <div>
                 <h2>{t("new.store.title")}</h2>
+                <p>{t("new.store.subtitle")}</p>
               </div>
             </div>
             <Switch>
@@ -1747,7 +1747,8 @@ function Inner() {
               }
               subtitle={
                 usingSelectedService()
-                  ? undefined
+                  ? (selectedCatalogEntry()?.description[locale()] ??
+                    t("new.selection.subtitle"))
                   : t("new.advancedImport.subtitle")
               }
               actions={
@@ -1790,6 +1791,7 @@ function Inner() {
                     <section class="av-service-setup">
                       <div class="av-service-setup-head">
                         <h3>{t("new.catalogInput.title")}</h3>
+                        <p>{t("new.catalogInput.subtitle")}</p>
                       </div>
                       <div class="av-service-setup-grid">
                         <FormField label={t("new.name")}>

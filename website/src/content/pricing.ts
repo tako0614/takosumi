@@ -1,16 +1,7 @@
 /**
- * Pricing / ownership facts — written fact-first, no invented numbers.
- *
- * Two honest paths:
- *  - Self-host: free & open source. The control plane ships a billing
- *    "disabled" mode (BillingMode = "disabled" in contract/billing.ts),
- *    so there is no charging machinery at all — you `tofu apply` onto your own
- *    infrastructure and own it.
- *  - Takosumi Cloud: credit-based official hosting. The model exists
- *    (showback / enforce modes, credits with a per-run apply reservation), but public
- *    access, actual prices, and the credit-cost formula depend on operator
- *    evidence and are intentionally withheld here ("ローンチ時に案内"). Do NOT
- *    invent numbers.
+ * Pricing / ownership facts. Public numbers mirror the operator plan specs:
+ * Starter is JPY 980/month with 1,000 credits; an extra 1,000 credit pack is
+ * JPY 1,200. Stripe IDs and readiness evidence stay in operator-private state.
  */
 
 export interface PlanFeature {
@@ -34,7 +25,7 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
     id: "self-host",
     name: "自分で動かす (セルフホスト)",
     price: "無料",
-    priceNote: "オープンソース。課金の仕組みそのものが入っていません。",
+    priceNote: "オープンソース。Takosumi への利用料はありません。",
     tagline: "あなたのインフラに、あなたが置く。",
     features: [
       {
@@ -52,16 +43,16 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   {
     id: "platform",
     name: "Takosumi Cloud",
-    price: "ローンチ時に案内",
-    priceNote: "クレジットベース。一般公開と金額はローンチ時に案内します。",
+    price: "月額980円",
+    priceNote: "1,000 credits 付き。追加 1,000 credits は 1,200円。",
     tagline: "公式ホスティング版。セットアップ不要ですぐ使えます。",
     features: [
-      { label: "一般公開はローンチ時に案内します" },
+      { label: "公式ホスティング。ブラウザからサービスを追加・更新できます" },
       { label: "クレジット制 — 実行する前に必要量を見積もって確保します" },
       { label: "まず使用量を見せるだけのモード、止めずに運用も選べます" },
       { label: "残高が足りなければ承認の前で止まり、勝手に課金されません" },
     ],
-    cta: { label: "ローンチ情報を見る", href: "/docs/" },
+    cta: { label: "Cloud を開く", href: "https://app.takosumi.com/" },
     highlight: true,
   },
 ];

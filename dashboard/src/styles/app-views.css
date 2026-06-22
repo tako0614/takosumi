@@ -375,6 +375,12 @@
   font-size: var(--tg-fs-lg);
   letter-spacing: 0;
 }
+.av-store-head p {
+  margin: var(--tg-s-1) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+}
 .av-catalog-grid {
   list-style: none;
   margin: 0;
@@ -457,6 +463,12 @@
   font-size: var(--tg-fs-md);
   letter-spacing: 0;
 }
+.av-service-setup-head p {
+  margin: var(--tg-s-1) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+}
 .av-service-setup-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -522,7 +534,8 @@ button.tg-tab {
 
   .av-catalog-card {
     min-height: 0;
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--tg-s-3);
     padding: var(--tg-s-3);
@@ -544,6 +557,7 @@ button.tg-tab {
 
   .av-catalog-card .tg-btn {
     flex: 0 0 auto;
+    min-width: 72px;
   }
 
   .av-service-setup {

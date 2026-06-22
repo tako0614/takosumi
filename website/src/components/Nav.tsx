@@ -56,8 +56,8 @@ export default function Nav() {
           </a>
           <a
             class="btn btn-primary nav-cta"
-            href="/docs/getting-started/quickstart"
-            rel="external"
+            href="https://app.takosumi.com/"
+            rel="noopener"
           >
             始める
           </a>
