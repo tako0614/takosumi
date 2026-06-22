@@ -89,17 +89,20 @@ export interface PlatformControlPlaneSmokeResult {
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
   readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
+  readonly deploymentLedger?: DeploymentLedgerVerificationResult;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
   readonly deploymentVerified: boolean;
   readonly publicUrlVerified: boolean;
+  readonly deploymentLedgerVerified: boolean;
   readonly destroyVerified: boolean;
   readonly connectionRevoked?: boolean;
   readonly timedOutRunId?: string;
   readonly runCancellationStatus?: "cancelled" | "already_terminal" | "failed";
   readonly runCancellationError?: string;
   readonly connectionRevokeSkippedReason?: string;
+  readonly failureCleanup?: FailureCleanupResult;
   readonly error?: string;
   readonly nextAction?: string;
   readonly inputs: {
@@ -215,6 +218,15 @@ interface DeploymentRecord {
   readonly createdAt: string;
 }
 
+interface DeploymentLedgerVerificationResult {
+  readonly installationStatus: string;
+  readonly deploymentId: string;
+  readonly stateGeneration: number;
+  readonly applyRunId: string;
+  readonly publicOutputNames: readonly string[];
+  readonly publicOutputDigest: string;
+}
+
 interface BackupRestoreRehearsalResult {
   readonly backupId: string;
   readonly backupRunId?: string;
@@ -229,6 +241,13 @@ interface BackupRestoreRehearsalResult {
   readonly restoreStartedAt?: string;
   readonly restoreFinishedAt?: string;
   readonly restoreTargetSmoke: "passed";
+}
+
+interface FailureCleanupResult {
+  readonly attempted: true;
+  readonly cloudflareWorkerGone: boolean;
+  readonly installationMarkedError: boolean;
+  readonly error?: string;
 }
 
 if (import.meta.main) {
@@ -390,7 +409,17 @@ export function dryRunResult(
     workerUrl: publicWorkerUrl(options),
     deploymentVerified: true,
     publicUrlVerified: true,
+    deploymentLedgerVerified: true,
     destroyVerified: true,
+    connectionRevoked: options.keepConnection ? undefined : true,
+    deploymentLedger: {
+      installationStatus: "active",
+      deploymentId: "dep_dry_run",
+      stateGeneration: 1,
+      applyRunId: "apply_dry_run",
+      publicOutputNames: ["url", "worker_name"],
+      publicOutputDigest: `sha256:${"0".repeat(64)}`,
+    },
     inputs: publicInputSummary(options),
   };
 }
@@ -408,6 +437,7 @@ export async function runPlatformControlPlaneSmoke(
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
   let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
+  let deploymentLedger: DeploymentLedgerVerificationResult | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -418,6 +448,7 @@ export async function runPlatformControlPlaneSmoke(
     | undefined;
   let runCancellationError: string | undefined;
   let connectionRevokeSkippedReason: string | undefined;
+  let failureCleanup: FailureCleanupResult | undefined;
   let failure: unknown;
 
   try {
@@ -453,6 +484,11 @@ export async function runPlatformControlPlaneSmoke(
     assertRunSucceeded(completedApply, "apply");
     await assertCloudflareWorkerExists(options);
     await assertPublicWorkerUrl(options);
+    deploymentLedger = await assertDeploymentLedger(options, {
+      spaceId,
+      installationId,
+      applyRunId,
+    });
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
         spaceId,
@@ -495,6 +531,11 @@ export async function runPlatformControlPlaneSmoke(
 
     if (!options.keepConnection) {
       connectionRevoked = await revokeConnection(options, connectionId);
+      if (!connectionRevoked) {
+        throw new Error(
+          "temporary ProviderConnection revoke did not confirm success",
+        );
+      }
     }
     return {
       kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
@@ -515,6 +556,7 @@ export async function runPlatformControlPlaneSmoke(
       destroyPlanRunId,
       destroyApplyRunId,
       backupRestoreRehearsal,
+      deploymentLedger,
       capsuleGateStatus: "passed",
       policyStatus:
         completedApply.policyStatus === "deny" ||
@@ -524,6 +566,7 @@ export async function runPlatformControlPlaneSmoke(
       workerUrl: publicWorkerUrl(options),
       deploymentVerified: true,
       publicUrlVerified: true,
+      deploymentLedgerVerified: true,
       destroyVerified: true,
       connectionRevoked,
       inputs: publicInputSummary(options),
@@ -542,10 +585,16 @@ export async function runPlatformControlPlaneSmoke(
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
-    await markPendingSmokeInstallationError(options, {
-      spaceId,
-      installationId,
-    }).catch(() => undefined);
+    if (installationId && applyRunId && !destroyApplyRunId) {
+      failureCleanup = await cleanupAppliedSmokeFailure(options, {
+        installationId,
+      });
+    } else {
+      await markPendingSmokeInstallationError(options, {
+        spaceId,
+        installationId,
+      }).catch(() => undefined);
+    }
     failure = error;
   } finally {
     if (
@@ -567,6 +616,7 @@ export async function runPlatformControlPlaneSmoke(
     destroyPlanRunId,
     destroyApplyRunId,
     backupRestoreRehearsal,
+    deploymentLedger,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -574,6 +624,7 @@ export async function runPlatformControlPlaneSmoke(
     runCancellationStatus,
     runCancellationError,
     connectionRevokeSkippedReason,
+    failureCleanup,
     error: failure,
   });
 }
@@ -590,6 +641,7 @@ function failedResult(
     readonly destroyPlanRunId?: string;
     readonly destroyApplyRunId?: string;
     readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
+    readonly deploymentLedger?: DeploymentLedgerVerificationResult;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -600,6 +652,7 @@ function failedResult(
       | "failed";
     readonly runCancellationError?: string;
     readonly connectionRevokeSkippedReason?: string;
+    readonly failureCleanup?: FailureCleanupResult;
     readonly error: unknown;
   },
 ): PlatformControlPlaneSmokeResult {
@@ -622,17 +675,20 @@ function failedResult(
     destroyPlanRunId: input.destroyPlanRunId,
     destroyApplyRunId: input.destroyApplyRunId,
     backupRestoreRehearsal: input.backupRestoreRehearsal,
+    deploymentLedger: input.deploymentLedger,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl: publicWorkerUrl(options),
     deploymentVerified: false,
     publicUrlVerified: false,
+    deploymentLedgerVerified: false,
     destroyVerified: false,
     connectionRevoked: input.connectionRevoked,
     timedOutRunId: input.timedOutRunId,
     runCancellationStatus: input.runCancellationStatus,
     runCancellationError: input.runCancellationError,
     connectionRevokeSkippedReason: input.connectionRevokeSkippedReason,
+    failureCleanup: input.failureCleanup,
     error: publicErrorMessage(input.error),
     nextAction: failedNextAction(input),
     inputs: publicInputSummary(options),
@@ -933,6 +989,49 @@ async function markPendingSmokeInstallationError(
   return true;
 }
 
+async function cleanupAppliedSmokeFailure(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly installationId: string;
+  },
+): Promise<FailureCleanupResult> {
+  let cloudflareWorkerGone = false;
+  let installationMarkedError = false;
+  let cleanupError: string | undefined;
+  try {
+    const deleted = await cloudflareScriptRequest(options, "DELETE");
+    cloudflareWorkerGone = deleted.status === 404 || deleted.ok;
+    if (!cloudflareWorkerGone) {
+      await assertCloudflareWorkerGone(options);
+      cloudflareWorkerGone = true;
+    }
+  } catch (error) {
+    cleanupError = publicErrorMessage(error);
+  }
+  try {
+    await requestJson({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "PATCH",
+      path: `${API_PREFIX}/installations/${encodeURIComponent(
+        input.installationId,
+      )}`,
+      body: { status: "error" },
+    });
+    installationMarkedError = true;
+  } catch (error) {
+    cleanupError = cleanupError
+      ? `${cleanupError}; ${publicErrorMessage(error)}`
+      : publicErrorMessage(error);
+  }
+  return {
+    attempted: true,
+    cloudflareWorkerGone,
+    installationMarkedError,
+    ...(cleanupError ? { error: cleanupError } : {}),
+  };
+}
+
 async function pollRun(
   options: PlatformControlPlaneSmokeOptions,
   runId: string,
@@ -1160,6 +1259,138 @@ async function assertPublicWorkerUrl(
   );
 }
 
+async function assertDeploymentLedger(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly installationId: string;
+    readonly applyRunId: string;
+  },
+): Promise<DeploymentLedgerVerificationResult> {
+  const installationResponse = await requestJson<{
+    readonly installation?: {
+      readonly id?: string;
+      readonly spaceId?: string;
+      readonly status?: string;
+      readonly currentDeploymentId?: string;
+      readonly currentStateGeneration?: number;
+    };
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      input.installationId,
+    )}`,
+  });
+  const installation = installationResponse.installation;
+  if (!installation) {
+    throw new Error("installation ledger response did not include installation");
+  }
+  if (installation.id !== input.installationId) {
+    throw new Error("installation ledger returned an unexpected installation id");
+  }
+  if (installation.spaceId !== input.spaceId) {
+    throw new Error("installation ledger returned an unexpected Workspace id");
+  }
+  if (installation.status !== "active") {
+    throw new Error(
+      `installation ledger status was ${installation.status ?? "unknown"}; expected active`,
+    );
+  }
+  if (
+    !Number.isInteger(installation.currentStateGeneration) ||
+    Number(installation.currentStateGeneration) < 1
+  ) {
+    throw new Error("installation ledger did not advance state generation");
+  }
+  if (!installation.currentDeploymentId) {
+    throw new Error("installation ledger did not expose currentDeploymentId");
+  }
+  const currentDeploymentId = installation.currentDeploymentId;
+  const currentStateGeneration = installation.currentStateGeneration;
+
+  const deploymentsResponse = await requestJson<{
+    readonly deployments?: readonly {
+      readonly id?: string;
+      readonly spaceId?: string;
+      readonly installationId?: string;
+      readonly environment?: string;
+      readonly applyRunId?: string;
+      readonly stateGeneration?: number;
+      readonly outputsPublic?: Record<string, unknown>;
+      readonly status?: string;
+    }[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      input.installationId,
+    )}/deployments`,
+  });
+  const deployments = deploymentsResponse.deployments ?? [];
+  const deployment =
+    deployments.find((item) => item.id === currentDeploymentId) ??
+    deployments.find((item) => item.applyRunId === input.applyRunId);
+  if (!deployment) {
+    throw new Error("deployment ledger did not include the applied deployment");
+  }
+  if (!deployment.id || deployment.id !== currentDeploymentId) {
+    throw new Error("deployment ledger does not match currentDeploymentId");
+  }
+  const deploymentId = deployment.id;
+  if (deployment.spaceId !== input.spaceId) {
+    throw new Error("deployment ledger returned an unexpected Workspace id");
+  }
+  if (deployment.installationId !== input.installationId) {
+    throw new Error("deployment ledger returned an unexpected installation id");
+  }
+  if (deployment.environment !== options.environment) {
+    throw new Error(
+      `deployment ledger environment was ${deployment.environment ?? "unknown"}; expected ${options.environment}`,
+    );
+  }
+  if (deployment.applyRunId !== input.applyRunId) {
+    throw new Error("deployment ledger returned an unexpected applyRunId");
+  }
+  if (deployment.status !== "active") {
+    throw new Error(
+      `deployment ledger status was ${deployment.status ?? "unknown"}; expected active`,
+    );
+  }
+  if (
+    !Number.isInteger(deployment.stateGeneration) ||
+    deployment.stateGeneration !== currentStateGeneration
+  ) {
+    throw new Error("deployment ledger state generation did not match installation");
+  }
+  const stateGeneration = deployment.stateGeneration;
+  const outputsPublic = deployment.outputsPublic;
+  if (!isRecord(outputsPublic)) {
+    throw new Error("deployment ledger did not expose outputsPublic");
+  }
+  if (
+    outputsPublic.worker_name !== undefined &&
+    outputsPublic.worker_name !== options.appName
+  ) {
+    throw new Error("deployment outputsPublic.worker_name did not match appName");
+  }
+  if (
+    outputsPublic.url !== undefined &&
+    outputsPublic.url !== publicWorkerUrl(options)
+  ) {
+    throw new Error("deployment outputsPublic.url did not match public Worker URL");
+  }
+  const publicOutputNames = Object.keys(outputsPublic).sort();
+  return {
+    installationStatus: installation.status,
+    deploymentId,
+    stateGeneration,
+    applyRunId: input.applyRunId,
+    publicOutputNames,
+    publicOutputDigest: digestJson(outputsPublic),
+  };
+}
+
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -1178,7 +1409,7 @@ async function assertCloudflareWorkerGone(
 
 async function cloudflareScriptRequest(
   options: PlatformControlPlaneSmokeOptions,
-  method: "GET",
+  method: "GET" | "DELETE",
 ): Promise<Response> {
   return await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
@@ -1456,8 +1687,32 @@ function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function digestJson(value: unknown): string {
+  return sha256(stableJson(value));
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function requiredSteps(
-  options?: Pick<PlatformControlPlaneSmokeOptions, "backupRestoreRehearsal">,
+  options?: Pick<
+    PlatformControlPlaneSmokeOptions,
+    "backupRestoreRehearsal" | "keepConnection"
+  >,
 ): readonly string[] {
   const steps = [
     "spaceScopedProviderConnection",
@@ -1467,11 +1722,15 @@ function requiredSteps(
     "apply",
     "deploymentVerified",
     "publicUrlVerified",
+    "deploymentLedgerVerified",
   ];
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");
   }
   steps.push("destroy");
+  if (options && !options.keepConnection) {
+    steps.push("connectionRevoked");
+  }
   return steps;
 }
 

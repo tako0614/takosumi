@@ -470,12 +470,18 @@ function validManifest(): any {
           "plan",
           "apply",
           "deploymentVerified",
+          "publicUrlVerified",
+          "deploymentLedgerVerified",
           "destroy",
+          "connectionRevoked",
         ],
         capsuleGateStatus: "passed",
         policyStatus: "passed",
         deploymentVerified: true,
+        publicUrlVerified: true,
+        deploymentLedgerVerified: true,
         destroyVerified: true,
+        connectionRevoked: true,
       },
       egressEnforcement: {
         evidenceRef:

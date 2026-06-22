@@ -144,6 +144,8 @@ test("production hardening evidence requires layer-2 platform control-plane cove
     "plan",
     "apply",
     "deploymentVerified",
+    "publicUrlVerified",
+    "deploymentLedgerVerified",
   ];
 
   expect(() => validateProductionHardeningEvidence(manifest)).toThrow(
@@ -304,12 +306,18 @@ function validManifest(): any {
           "plan",
           "apply",
           "deploymentVerified",
+          "publicUrlVerified",
+          "deploymentLedgerVerified",
           "destroy",
+          "connectionRevoked",
         ],
         capsuleGateStatus: "passed",
         policyStatus: "passed",
         deploymentVerified: true,
+        publicUrlVerified: true,
+        deploymentLedgerVerified: true,
         destroyVerified: true,
+        connectionRevoked: true,
       },
       egressEnforcement: {
         evidenceRef:
