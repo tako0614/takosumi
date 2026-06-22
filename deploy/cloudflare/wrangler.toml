@@ -41,10 +41,11 @@ binding = "RUN_QUEUE"
 queue = "takosumi-runs"
 
 # Async OpenTofu run lifecycle. The create path persists the run `queued` and
-# returns; this consumer mints credentials and drives the container DO. One run
-# per delivery (max_batch_size = 1) so a failure only retries its own run. NOTE:
-# the queue consumer invocation budget (~15 min) bounds a single run; detaching
-# long runs from the consumer invocation is future work.
+# returns; this consumer validates an identity-only message, stores it in the
+# per-run RUN_OWNER Durable Object, and acks quickly. RUN_OWNER then mints
+# credentials through the controller path, drives the container DO, and owns
+# retry/final-failure handling outside the queue delivery lifetime. One run per
+# delivery (max_batch_size = 1) keeps scheduling failures isolated.
 [[queues.consumers]]
 queue = "takosumi-runs"
 max_batch_size = 1
@@ -64,6 +65,10 @@ name = "COORDINATION"
 class_name = "CoordinationObject"
 
 [[durable_objects.bindings]]
+name = "RUN_OWNER"
+class_name = "OpenTofuRunOwnerObject"
+
+[[durable_objects.bindings]]
 name = "RUNNER"
 class_name = "OpenTofuRunnerObject"
 
@@ -80,6 +85,10 @@ new_sqlite_classes = ["CoordinationObject"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["OpenTofuRunnerObject"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["OpenTofuRunOwnerObject"]
 
 # OpenTofu run executor. The embedded Takosumi service calls this
 # container-backed Durable Object through its OpenTofu runner adapter.

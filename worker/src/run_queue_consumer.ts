@@ -8,9 +8,10 @@ import { InstallationLeaseBusyError } from "../../core/domains/deploy-control/in
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 // Queue consumer config (mirrors deploy/*/wrangler.toml `max_retries`): one
-// initial delivery + this many retries. On the final attempt the consumer
-// records the run failed instead of rethrowing, so the message is not endlessly
-// redelivered; earlier attempts rethrow so Cloudflare Queues retries.
+// initial delivery + this many retries for scheduling the per-run owner DO. On
+// the final scheduling attempt the consumer records the run failed instead of
+// rethrowing, so a broken binding/message is not endlessly redelivered; run
+// execution retries happen inside OpenTofuRunOwnerObject.
 const OPENTOFU_RUN_MAX_RETRIES = 2;
 const OPENTOFU_RUN_DLQ_SUFFIX = "-dlq";
 const OPENTOFU_RUN_QUEUE_NAME = "takosumi-runs";
@@ -26,25 +27,29 @@ const OPENTOFU_RUN_LEASE_BUSY_DELAY_SECONDS = 10;
 /**
  * Drives a batch of OpenTofu run-dispatch messages.
  *
- * Main queue: load the run via the in-process deploy-control controller, run the
- * idempotency-guarded consumer (which mints credentials and dispatches to the
- * container DO), then `ack`. A thrown error is rethrown on non-final attempts so
- * Queues retries; on the final attempt the run is marked failed (the controller
- * already records redacted diagnostics) and the message is acked so it is not
- * redelivered forever.
+ * Main queue: validate the identity-only run message, persist it into the
+ * per-run `OpenTofuRunOwnerObject`, then `ack`. The owner DO drives the
+ * idempotency-guarded controller consumer, credentials minting, container
+ * dispatch, retries, and final failure bookkeeping. Queue delivery lifetime no
+ * longer bounds a long OpenTofu run.
  *
  * DLQ: a run that exhausted retries is marked failed ("retries-exhausted") if it
  * is not already terminal, then acked.
  */
 /**
  * Injection seam for {@link consumeOpenTofuRunBatch}: the two side-effecting
- * steps a unit test overrides (the run dispatch and the DLQ failure-record). The
- * production caller omits `deps` and gets the real in-process controller path.
+ * steps a unit test overrides (the run-owner schedule and the DLQ
+ * failure-record). The production caller omits `deps` and gets the real Durable
+ * Object schedule path.
  */
 export interface ConsumeOpenTofuRunDeps {
   readonly dispatch: (
     run: OpenTofuRunQueueMessage,
     env: CloudflareWorkerEnv,
+    metadata: {
+      readonly messageId: string;
+      readonly queueAttempt: number;
+    },
   ) => Promise<void>;
   readonly markRetriesExhausted: (
     run: OpenTofuRunQueueMessage,
@@ -95,7 +100,10 @@ export async function consumeOpenTofuRunBatch(
     const attempt = typeof message.attempts === "number" ? message.attempts : 1;
     const finalAttempt = attempt > OPENTOFU_RUN_MAX_RETRIES;
     try {
-      await deps.dispatch(run, env);
+      await deps.dispatch(run, env, {
+        messageId: message.id,
+        queueAttempt: attempt,
+      });
       message.ack?.();
     } catch (error) {
       // Lease-busy is SCHEDULING, not failure: another write run for the same
@@ -148,40 +156,40 @@ async function recordQueueAgeMetric(
 }
 
 /**
- * Loads the deploy-control controller for this env and runs the queued plan/apply
- * consumer. The controller mints credentials just before the container dispatch
- * and records the terminal run status; this function never serializes or logs
- * the run body or any credential value.
+ * Schedules the per-run owner Durable Object. The owner persists only the run
+ * identity and queue metadata, then later invokes deploy-control dispatch from
+ * its alarm handler. This function never serializes or logs the run body or any
+ * credential value.
  */
 async function dispatchOpenTofuRun(
   run: OpenTofuRunQueueMessage,
   env: CloudflareWorkerEnv,
+  metadata: {
+    readonly messageId: string;
+    readonly queueAttempt: number;
+  },
 ): Promise<void> {
-  if (run.action === "destroy") {
-    // Destroy is an apply-run variant; the controller routes by the PlanRun
-    // operation. Treat it as an apply dispatch for the consumer.
-    await dispatchToController(env, "apply", run.runId, run.spaceId);
-    return;
+  const namespace = env.RUN_OWNER;
+  if (!namespace) {
+    throw new Error("RUN_OWNER binding is not configured");
   }
-  if (run.action === "backup" || run.action === "compatibility_check") {
-    throw new Error(`${run.action} is not a queued controller action`);
-  }
-  switch (run.action) {
-    case "plan":
-    case "apply":
-    case "source_sync":
-    case "restore":
-      await dispatchToController(env, run.action, run.runId, run.spaceId);
-      return;
-    default:
-      // Fail-closed against any action the controller does not implement. This
-      // exhaustive default keeps the consumer closed if a future destructive
-      // action reaches the queue before its handler exists. The unknown action
-      // is treated as a poison message: the caller marks the run failed on the
-      // final attempt instead of dispatching an unsupported action.
-      throw new Error(
-        `unsupported OpenTofu run action: ${assertNeverAction(run.action)}`,
-      );
+  const id = namespace.idFromName(run.runId);
+  const response = await namespace.get(id).fetch(
+    new Request("https://opentofu-run-owner/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run-owner.start@v1",
+        action: run.action,
+        runId: run.runId,
+        spaceId: run.spaceId,
+        queueAttempt: metadata.queueAttempt,
+        messageId: metadata.messageId,
+      }),
+    }),
+  );
+  if (!response.ok) {
+    throw new Error("opentofu run owner scheduling failed");
   }
 }
 
@@ -194,27 +202,6 @@ async function opentofuRunQueueMetricSink(
   } catch {
     return undefined;
   }
-}
-
-/**
- * Compile-time exhaustiveness guard for {@link OpenTofuRunAction}. The `destroy`
- * / `backup` / `compatibility_check` actions are handled before this point, so
- * the only reachable values are the dispatchable run actions. If a new action is added
- * to `OpenTofuRunAction` without a dispatch branch, this stops compiling. At
- * runtime it returns the offending value for the fail-closed error message.
- */
-function assertNeverAction(action: never): string {
-  return String(action);
-}
-
-async function dispatchToController(
-  env: CloudflareWorkerEnv,
-  action: "plan" | "apply" | "source_sync" | "restore",
-  runId: string,
-  spaceId: string,
-): Promise<void> {
-  const service = await cachedDeployControlService(env);
-  await service.operations.dispatchQueuedRun({ action, runId, spaceId });
 }
 
 async function markOpenTofuRunRetriesExhausted(
