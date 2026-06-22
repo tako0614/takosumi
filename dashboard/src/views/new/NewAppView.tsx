@@ -306,6 +306,19 @@ function displayRef(value: string): string {
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
 }
 
+function sourceHostLabel(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    return url.hostname.replace(/^www\./iu, "");
+  } catch {
+    return value.trim() || "-";
+  }
+}
+
+function displayModulePath(value: string): string {
+  return value.trim().replace(/^\/+|\/+$/gu, "") || ".";
+}
+
 function slugInputValue(value: string): string {
   return (
     value
@@ -1717,6 +1730,44 @@ function Inner() {
     </>
   );
 
+  const prefilledLinkReview = () => {
+    const capsule = capsuleNameFromUrl(gitUrl() || prefill?.git || "");
+    return (
+      <>
+        <section class="av-link-review" aria-label={t("new.deeplink.aria")}>
+          <div class="av-link-review-icon" aria-hidden="true">
+            <Download size={20} />
+          </div>
+          <div class="av-link-review-main">
+            <span class="av-link-review-kicker">
+              {t("new.deeplink.kicker")}
+            </span>
+            <h3>{t("new.deeplink.title", { capsule })}</h3>
+            <p>{t("new.deeplink.body")}</p>
+            <dl class="av-link-review-meta">
+              <div>
+                <dt>{t("new.deeplink.source")}</dt>
+                <dd>{sourceHostLabel(gitUrl())}</dd>
+              </div>
+              <div>
+                <dt>{t("new.deeplink.version")}</dt>
+                <dd>{displayRef(ref())}</dd>
+              </div>
+              <div>
+                <dt>{t("new.deeplink.folder")}</dt>
+                <dd>{displayModulePath(path())}</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+        <details class="wb-disclosure wb-source-edit">
+          <summary>{t("new.deeplink.editSource")}</summary>
+          {gitFields()}
+        </details>
+      </>
+    );
+  };
+
   return (
     <AppShell>
       <PageHeader title={t("new.title")} subtitle={t("new.subtitle")} />
@@ -1864,16 +1915,6 @@ function Inner() {
               }
             />
             <CardSection>
-              {/* Link-seeded landing: say WHERE the values came from, and that
-                  confirmation is still required — the fields stay editable. */}
-              <Show when={prefill}>
-                <p class="wb-summary-line" role="note">
-                  {t("new.deeplink.summary", {
-                    capsule: capsuleNameFromUrl(gitUrl() || prefill!.git),
-                  })}
-                </p>
-              </Show>
-
               <form
                 class="wb-install-form wb-install-source-form"
                 onSubmit={(e) => {
@@ -1883,7 +1924,9 @@ function Inner() {
                   else setError(proceedBlocker());
                 }}
               >
-                <Show when={!usingSelectedService()}>{gitFields()}</Show>
+                <Show when={!usingSelectedService()}>
+                  {prefill ? prefilledLinkReview() : gitFields()}
+                </Show>
 
                 <Show when={selectedCatalogEntry()}>
                   {(entry) => (
