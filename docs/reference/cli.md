@@ -1,8 +1,8 @@
 # CLI
 
-Takosumi CLI は developer / operator 向けの補助です。標準 product flow は
-dashboard の `/install?git=...` / `/new` から Git URL の OpenTofu Capsule を確認し、
-ProviderConnection を選んで plan / apply する導線です。
+Takosumi CLI は、画面でできる操作を自動化したい場合の補助です。通常は
+dashboard の `/install?git=...` / `/new` からサービスを選び、接続するクラウドを選んで
+plan / apply します。
 
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
@@ -10,20 +10,20 @@ export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
 takosumi deploy ./my-capsule \
   --workspace @me \
-  --project my-app \
-  --capsule my-app \
+  --project photo-blog \
+  --capsule photo-blog \
   --provider-binding cloudflare.default=conn_cf \
   --var region=apac
 
 takosumi plan ./my-capsule \
   --workspace @me \
-  --project my-app \
-  --capsule my-app
+  --project photo-blog \
+  --capsule photo-blog
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-CLI は OpenTofu を直接実行しません。ローカル Capsule を upload し、control plane に
+CLI は OpenTofu を直接実行しません。ローカル Capsule を upload し、Takosumi に
 Source / Capsule / Run を作らせ、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
 credential は ProviderConnection と CredentialRecipe から run 時だけ env/file として注入されます。
 

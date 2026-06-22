@@ -873,7 +873,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                       onInput={(e) =>
                         setGenericEnvProvider(e.currentTarget.value)
                       }
-                      placeholder="aws / google / kubernetes / …"
+                      placeholder="private-api"
                       autocomplete="off"
                       spellcheck={false}
                     />
@@ -891,7 +891,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                             onInput={(e) =>
                               setEnvPair(index, { name: e.currentTarget.value })
                             }
-                            placeholder="AWS_ACCESS_KEY_ID"
+                            placeholder="API_TOKEN"
                             autocomplete="off"
                             spellcheck={false}
                           />

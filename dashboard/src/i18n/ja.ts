@@ -304,7 +304,7 @@ export const ja = {
   "run.cost.capacityBlocked":
     "このワークスペースではこの操作を実行できません。",
   "run.cost.billingCta": "お支払いを開く",
-  "run.cost.operatorHelp": "必要であれば管理者に確認してください。",
+  "run.cost.operatorHelp": "このワークスペースではまだこの操作を実行できません。",
   "run.changes.title": "変更される内容",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
@@ -422,7 +422,7 @@ export const ja = {
   "new.sourceAccess.sshConnection": "SSH 取得元アクセス",
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "サービス名",
-  "new.vars.projectName": "管理用の名前",
+  "new.vars.projectName": "サービスID",
   "new.serviceAdvanced.title": "その他のサービス設定",
   "new.vars.inputsTitle": "その他の設定",
   "new.vars.inputsBody":
@@ -438,7 +438,7 @@ export const ja = {
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
-    "project_name は内部名の接頭辞の欄で指定してください。",
+    "project_name はサービスIDの欄で指定してください。",
   "new.vars.errorCatalogReserved":
     "「{name}」はサービス設定の欄で指定してください。",
   "new.vars.errorDuplicate": "「{name}」が重複しています。",
