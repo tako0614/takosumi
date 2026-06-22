@@ -839,7 +839,10 @@ function readyProviderConnectionsForProvider(
 function providerConnectionLabel(
   providerConnection: ProviderConnection,
 ): string {
-  return providerConnection.displayName || providerConnection.providerSource;
+  return (
+    providerConnection.displayName ||
+    providerDisplayName(providerConnection.providerSource)
+  );
 }
 
 function providerDisplayName(provider: string): string {
