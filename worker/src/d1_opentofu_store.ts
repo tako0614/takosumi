@@ -96,6 +96,7 @@ import type {
 import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
+  CommitAppliedDeploymentResult,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -329,6 +330,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           input.expectLeaseToken === undefined
             ? undefined
             : eq(schema.runs.leaseToken, input.expectLeaseToken),
+          input.expectHeartbeatAt === undefined
+            ? undefined
+            : input.expectHeartbeatAt === null
+              ? isNull(schema.runs.heartbeatAt)
+              : eq(schema.runs.heartbeatAt, input.expectHeartbeatAt),
         ),
       )
       .run();
@@ -769,9 +775,27 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
    */
   async commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
-  ): Promise<{ readonly installation: Installation | undefined }> {
+  ): Promise<CommitAppliedDeploymentResult> {
     await this.#ensureSchema();
     const { installationPatch } = input;
+    if (
+      input.applyRunTerminal &&
+      input.applyRunLeaseToken !== undefined
+    ) {
+      const row = await this.#orm
+        .select({ leaseToken: schema.runs.leaseToken })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.id, input.applyRunTerminal.id),
+            inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+          ),
+        )
+        .get();
+      if (row?.leaseToken !== input.applyRunLeaseToken) {
+        return { applyRunLeaseLost: true };
+      }
+    }
     const current = await this.getInstallation(installationPatch.id);
     if (!current) return { installation: undefined };
     const guard = installationPatch.guard;

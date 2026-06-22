@@ -195,6 +195,15 @@ export class InstallationPatchGuardConflict extends Error {
   }
 }
 
+export interface CommitAppliedDeploymentResult {
+  readonly installation?: Installation;
+  /**
+   * The apply run no longer holds the expected lease fence. No commit writes were
+   * applied; callers must treat this as a stale worker/no-op.
+   */
+  readonly applyRunLeaseLost?: true;
+}
+
 /** Fields a controller may patch on an Installation row. */
 export type InstallationPatch = Partial<
   Pick<
@@ -263,6 +272,12 @@ export interface CommitAppliedDeploymentInput {
    */
   readonly applyRunTerminal?: ApplyRun;
   /**
+   * Fence token held by the worker attempting to commit `applyRunTerminal`.
+   * A mismatch means a stale worker lost ownership; stores return
+   * `{ applyRunLeaseLost: true }` without writing any part of the apply ledger.
+   */
+  readonly applyRunLeaseToken?: string;
+  /**
    * Source PlanRun with its `appliedApplyRunId` marker (apply-once), committed
    * atomically with the Deployment. Plain row write (no lease change).
    */
@@ -286,6 +301,10 @@ export interface CommitAppliedDeploymentInput {
  *   - `expectLeaseToken` — when set, the CAS additionally requires the row's
  *     current `leaseToken` to equal this value (a stale fence token loses). When
  *     unset, the lease column is NOT part of the predicate.
+ *   - `expectHeartbeatAt` — when set, the CAS additionally requires the row's
+ *     current heartbeat column to equal this value (`null` means absent). This
+ *     fences stale-`running` takeovers so only the first consumer that observed
+ *     the stale heartbeat can re-claim the run.
  *   - `run` — the new PlanRun/ApplyRun to persist on a win; its `status` is the
  *     SET target (the row's status column + run JSON both move to `run.status`).
  *   - `setLeaseToken` / `clearLeaseToken` — the lease column write on a win:
@@ -305,6 +324,7 @@ export interface TransitionRunInput {
   readonly kind: "plan" | "apply";
   readonly expectFrom: readonly RunStatus[];
   readonly expectLeaseToken?: string;
+  readonly expectHeartbeatAt?: number | null;
   readonly run: PlanRun | ApplyRun;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
@@ -415,7 +435,7 @@ export interface OpenTofuDeploymentStore {
    */
   commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
-  ): Promise<{ readonly installation: Installation | undefined }>;
+  ): Promise<CommitAppliedDeploymentResult>;
 
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
@@ -854,7 +874,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const leaseMatches =
       input.expectLeaseToken === undefined ||
       input.expectLeaseToken === currentLease;
-    if (!statusMatches || !leaseMatches) {
+    const currentHeartbeat = current.heartbeatAt ?? null;
+    const heartbeatMatches =
+      input.expectHeartbeatAt === undefined ||
+      input.expectHeartbeatAt === currentHeartbeat;
+    if (!statusMatches || !leaseMatches || !heartbeatMatches) {
       return Promise.resolve({ won: false, run: current });
     }
     // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
@@ -1099,8 +1123,16 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
    */
   commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
-  ): Promise<{ readonly installation: Installation | undefined }> {
+  ): Promise<CommitAppliedDeploymentResult> {
     const { installationPatch } = input;
+    if (
+      input.applyRunTerminal &&
+      input.applyRunLeaseToken !== undefined &&
+      this.#runLeases.get(input.applyRunTerminal.id) !==
+        input.applyRunLeaseToken
+    ) {
+      return Promise.resolve({ applyRunLeaseLost: true });
+    }
     const existing = this.#installations.get(installationPatch.id);
     if (!existing) {
       return Promise.resolve({ installation: undefined });

@@ -86,6 +86,7 @@ import type {
 import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
+  CommitAppliedDeploymentResult,
   InstallationPatch,
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
@@ -321,6 +322,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           input.expectLeaseToken === undefined
             ? sql`true`
             : eq(pgSchema.runs.leaseToken, input.expectLeaseToken),
+          input.expectHeartbeatAt === undefined
+            ? sql`true`
+            : input.expectHeartbeatAt === null
+              ? isNull(pgSchema.runs.heartbeatAt)
+              : eq(pgSchema.runs.heartbeatAt, input.expectHeartbeatAt),
         ),
       )
       .returning({ json: pgSchema.runs.runJson });
@@ -827,7 +833,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
    */
   async commitAppliedDeployment(
     input: CommitAppliedDeploymentInput,
-  ): Promise<{ readonly installation: Installation | undefined }> {
+  ): Promise<CommitAppliedDeploymentResult> {
     return await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const txDb = this.#drizzleForClient(transaction);
@@ -845,8 +851,26 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async #commitAppliedDeploymentWrites(
     db: PgRemoteDatabase<typeof pgSchema>,
     input: CommitAppliedDeploymentInput,
-  ): Promise<{ readonly installation: Installation | undefined }> {
+  ): Promise<CommitAppliedDeploymentResult> {
     const { installationPatch } = input;
+    if (
+      input.applyRunTerminal &&
+      input.applyRunLeaseToken !== undefined
+    ) {
+      const rows = await db
+        .select({ leaseToken: pgSchema.runs.leaseToken })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.id, input.applyRunTerminal.id),
+            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+          ),
+        )
+        .limit(1);
+      if (rows[0]?.leaseToken !== input.applyRunLeaseToken) {
+        return { applyRunLeaseLost: true };
+      }
+    }
     if (input.newDeployment) {
       await pgUpsertDeployment(db, input.newDeployment);
     }
