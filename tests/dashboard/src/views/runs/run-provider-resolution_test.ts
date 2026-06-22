@@ -82,6 +82,28 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).not.toContain("change.after");
   });
 
+  test("keeps run identifiers and raw audit detail nested under support details", () => {
+    expect(runViewSource).toContain("supportDetailItems");
+    expect(runViewSource).toContain("debugDetailItems");
+    expect(runViewSource).toContain('t("run.details.debug")');
+    expect(runViewSource).toContain('t("run.audit.detail")');
+    expect(runViewSource.indexOf("debugDetailItems")).toBeGreaterThan(
+      runViewSource.indexOf("supportDetailItems"),
+    );
+    expect(
+      runViewSource.indexOf('label: t("run.details.runId")'),
+    ).toBeGreaterThan(runViewSource.indexOf("debugDetailItems"));
+    expect(
+      runViewSource.indexOf('<summary>{t("run.audit.detail")}</summary>'),
+    ).toBeLessThan(
+      runViewSource.indexOf('<pre class="wa-pre">{value()}</pre>'),
+    );
+    expect(en["run.details.debug"]).toBe("Identifiers");
+    expect(ja["run.details.debug"]).toBe("識別情報");
+    expect(en["run.audit.detail"]).toBe("Record detail");
+    expect(ja["run.audit.detail"]).toBe("記録の詳細");
+  });
+
   test("does not render an empty diagnostics card on normal run reviews", () => {
     expect(runViewSource).toContain("const diagnosticRows = createMemo");
     expect(runViewSource).toContain("const showDiagnosticsPanel = createMemo");

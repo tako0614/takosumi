@@ -67,8 +67,12 @@ describe("Installation detail deployment surface", () => {
     expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
       source.indexOf("function SettingsTab"),
     );
+    expect(source).toContain('t("app.settings.supportDetails")');
+    expect(source.indexOf('t("app.source.title")')).toBeGreaterThan(
+      source.indexOf('t("app.settings.supportDetails")'),
+    );
     expect(source).toMatch(
-      /<summary>\{t\("app\.source\.title"\)\}<\/summary>[\s\S]*<Card>/,
+      /<summary>\{t\("app\.settings\.supportDetails"\)\}<\/summary>[\s\S]*<summary>\{t\("app\.source\.title"\)\}<\/summary>/,
     );
     expect(source).toMatch(
       /<summary>\{t\("app\.tab\.danger"\)\}<\/summary>[\s\S]*t\("app\.settings\.removeTitle"\)/,
@@ -81,8 +85,14 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("app.bindings.editAdvanced")');
     expect(source).not.toContain("alias（任意）");
     expect(source).not.toContain("alias (optional)");
+    expect(source).toContain('t("app.bindings.technicalTarget")');
+    expect(source).toContain('t("app.bindings.providerPlaceholder")');
+    expect(source).toContain("selected={connection.id === row.connectionId}");
+    expect(source).not.toContain(
+      'placeholder="registry.opentofu.org/cloudflare/cloudflare"',
+    );
     expect(source).toMatch(
-      /<summary>\{t\("app\.bindings\.editAdvanced"\)\}<\/summary>[\s\S]*placeholder="registry\.opentofu\.org\/cloudflare\/cloudflare"/,
+      /<summary>\{t\("app\.bindings\.editAdvanced"\)\}<\/summary>[\s\S]*<summary>\{t\("app\.bindings\.technicalTarget"\)\}<\/summary>/,
     );
     expect(source).not.toContain("conn.ownership.takosProvided");
     expect(source).not.toContain("conn.ownership.ownKey");
