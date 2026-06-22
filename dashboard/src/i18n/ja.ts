@@ -485,16 +485,9 @@ export const ja = {
   "new.providers.selectConnection": "クラウドアカウントを選択",
   "new.providers.errorConnection":
     "{provider} の利用可能なクラウドアカウントを選択してください。",
-  "new.providers.errorOperatorManaged":
-    "{provider} はこのワークスペースではまだ利用できません。",
   "new.providers.missingTitle": "クラウドアカウントの設定が必要です",
   "new.providers.missingBody": "クラウドアカウントを設定すると続けられます。",
   "new.providers.setupMissing": "必要なクラウドアカウントを設定",
-  "new.providers.operatorMissingTitle": "必要なクラウドアカウントがありません",
-  "new.providers.operatorMissingBody":
-    "このサービスを追加するにはクラウドアカウントが必要です。",
-  "new.providers.operatorMissingNext":
-    "クラウドアカウントを追加するか、管理者に追加を依頼してください。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",

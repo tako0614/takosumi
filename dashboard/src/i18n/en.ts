@@ -479,16 +479,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.selectConnection": "Select a cloud account",
   "new.providers.errorConnection":
     "Select a ready cloud account for {provider}.",
-  "new.providers.errorOperatorManaged":
-    "{provider} is not available in this workspace yet.",
   "new.providers.missingTitle": "A cloud account is required",
   "new.providers.missingBody": "Set up the cloud account to continue.",
   "new.providers.setupMissing": "Set up required cloud account",
-  "new.providers.operatorMissingTitle": "A required cloud account is missing",
-  "new.providers.operatorMissingBody":
-    "This service needs a cloud account before it can be added.",
-  "new.providers.operatorMissingNext":
-    "Add the cloud account or ask an admin to add it.",
   "new.step.technical": "Detailed progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch content",

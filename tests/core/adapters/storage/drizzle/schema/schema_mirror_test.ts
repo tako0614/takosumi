@@ -713,7 +713,7 @@ test("Worker D1 bootstrap converts legacy provider_templates to OSS-safe Provide
       1,
       JSON.stringify({
         id: "pcat_legacy_gateway",
-        ownershipOptions: ["takos_provided", "own_key"],
+        ownershipOptions: ["own_key"],
       }),
       "2026-06-08T00:00:00.000Z",
       "2026-06-08T00:00:00.000Z",

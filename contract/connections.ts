@@ -54,10 +54,7 @@ export type ConnectionStatus =
   | "expired"
   | "error";
 
-export const PROVIDER_CREDENTIAL_OWNERSHIPS = [
-  "own_key",
-  "takos_provided",
-] as const;
+export const PROVIDER_CREDENTIAL_OWNERSHIPS = ["own_key"] as const;
 
 export type ProviderCredentialOwnership =
   (typeof PROVIDER_CREDENTIAL_OWNERSHIPS)[number];

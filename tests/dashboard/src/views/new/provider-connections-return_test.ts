@@ -130,28 +130,16 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new does not send operator-managed-only requirements to custom provider setup", () => {
-    expect(newAppViewSource).toContain("rowRequiresOperatorManagedOnly");
-    expect(newAppViewSource).toContain("missingOperatorManagedProviderRows");
-    expect(newAppViewSource).toContain("missingOwnKeyProviderRows");
-    expect(newAppViewSource).toContain('"new.providers.operatorMissingTitle"');
-    expect(newAppViewSource).toContain('"new.providers.errorOperatorManaged"');
-    expect(newAppViewSource).toContain('"new.providers.operatorMissingNext"');
-    expect(en["new.providers.operatorMissingBody"]).not.toContain(
-      "Provider Connection",
+  test("/new keeps provider setup on explicit Provider Connections", () => {
+    expect(newAppViewSource).not.toContain("rowRequiresOperatorManagedOnly");
+    expect(newAppViewSource).not.toContain(
+      "missingOperatorManagedProviderRows",
     );
-    expect(en["new.providers.operatorMissingBody"]).not.toContain("operator");
-    expect(en["new.providers.operatorMissingBody"]).not.toContain(
-      "Takosumi Cloud",
-    );
-    expect(en["new.providers.operatorMissingNext"]).toContain("admin");
-    expect(ja["new.providers.operatorMissingBody"]).not.toContain(
-      "Provider Connection",
-    );
-    expect(ja["new.providers.operatorMissingBody"]).not.toContain("運営側");
-    expect(ja["new.providers.operatorMissingBody"]).not.toContain(
-      "Takosumi Cloud",
-    );
+    expect(newAppViewSource).not.toContain("missingOwnKeyProviderRows");
+    expect(newAppViewSource).not.toContain("operator" + "Missing");
+    expect(newAppViewSource).not.toContain("error" + "OperatorManaged");
+    expect(en["new.providers.missingBody"]).toContain("cloud account");
+    expect(ja["new.providers.missingBody"]).toContain("クラウドアカウント");
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {

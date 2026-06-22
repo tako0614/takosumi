@@ -305,9 +305,10 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuConnectionVault?: ConnectionVault;
   /**
-   * Cloud-only compatibility seam: allows a Space-scoped ProviderConnection to
-   * be backed by an operator-scoped Connection, surfaced publicly as
-   * `takos_provided`. OSS/self-host defaults to false.
+   * Internal extension seam for deployments that deliberately allow
+   * Space-scoped ProviderEnvs to reference operator-scoped Connections.
+   * OSS/self-host defaults to false and the stock worker does not expose an env
+   * switch for this.
    */
   readonly allowOperatorBackedProviderEnvs?: boolean;
   /**

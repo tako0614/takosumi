@@ -227,7 +227,7 @@ test("internal provider resolver binding shape uses concrete env ids", () => {
     displayName: "Cloudflare",
     recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
     helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-    ownershipOptions: ["takos_provided", "own_key"],
+    ownershipOptions: ["own_key"],
     allowedResources: ["cloudflare_workers_script"],
     allowedDataSources: [],
     policyPackId: "cloudflare-default",
@@ -240,7 +240,7 @@ test("internal provider resolver binding shape uses concrete env ids", () => {
   ];
   expect(binding.envId).toBe("penv_space_cf");
   expect(providerEnv.materialization).toBe("secret");
-  expect(catalogEntry.ownershipOptions).toEqual(["takos_provided", "own_key"]);
+  expect(catalogEntry.ownershipOptions).toEqual(["own_key"]);
   expect(bindings).toHaveLength(2);
 });
 
