@@ -19,11 +19,7 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import { TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY } from "@takosjp/takosumi-accounts-contract";
-import { TAKOSUMI_AI_GATEWAY_BASE_PATH } from "takosumi-contract/ai-gateway";
 import {
-  D1AccountsStore,
-  requireCurrentServiceGraphServiceAccessToken,
   type ControlPlaneOperations,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -41,12 +37,6 @@ import {
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
-import {
-  aiGatewayInsufficientScopeResponse,
-  aiGatewayUnauthorizedResponse,
-  createTakosumiAiGatewayConfigFromEnv,
-  handleTakosumiAiGatewayRequest,
-} from "../../core/domains/ai-gateway/openai_compatible.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
 
@@ -115,14 +105,8 @@ export default {
       );
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
-    // Operator-provided AI Gateway. Installed services receive this endpoint as
-    // Service Graph material and call it with a rotated `takosumi.ai.gateway`
-    // service token. The upstream provider API keys stay in operator env vars.
-    if (
-      url.pathname === TAKOSUMI_AI_GATEWAY_BASE_PATH ||
-      url.pathname.startsWith(`${TAKOSUMI_AI_GATEWAY_BASE_PATH}/`)
-    ) {
-      return await handlePlatformAiGatewayRequest(request, url, env);
+    if (isCloudOnlyAiGatewayPath(url.pathname)) {
+      return Response.json({ error: "not found" }, { status: 404 });
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
@@ -637,76 +621,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function handlePlatformAiGatewayRequest(
-  request: Request,
-  url: URL,
-  env: CloudflareWorkerEnv,
-): Promise<Response> {
-  let config: ReturnType<typeof createTakosumiAiGatewayConfigFromEnv>;
-  try {
-    config = createTakosumiAiGatewayConfigFromEnv(
-      env as unknown as Record<string, unknown>,
-    );
-  } catch {
-    return Response.json(
-      {
-        error: {
-          message: "AI Gateway is not configured",
-          type: "server_error",
-          code: "ai_gateway_not_configured",
-        },
-      },
-      { status: 503 },
-    );
-  }
-  if (config.profiles.length === 0) {
-    return Response.json(
-      {
-        error: {
-          message: "AI Gateway is not configured",
-          type: "server_error",
-          code: "ai_gateway_not_configured",
-        },
-      },
-      { status: 503 },
-    );
-  }
-
-  return await handleTakosumiAiGatewayRequest(request, url, {
-    config,
-    authorize: async (authorizedRequest, auth) => {
-      if (!env.TAKOSUMI_ACCOUNTS_DB) {
-        return { ok: false, response: aiGatewayUnauthorizedResponse() };
-      }
-      const result = await requireCurrentServiceGraphServiceAccessToken({
-        request: authorizedRequest,
-        store: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
-        serviceId: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
-        capability: "ai.model",
-        requiredScopes: auth.requiredScopes,
-      });
-      if (result.ok) {
-        return {
-          ok: true,
-          context: {
-            subject: result.record.subject,
-            installationId: result.record.installationId,
-            spaceId: result.record.spaceId,
-            scopes: result.record.scope.split(/\s+/).filter(Boolean),
-          },
-        };
-      }
-      return {
-        ok: false,
-        response:
-          result.response.status === 403
-            ? aiGatewayInsufficientScopeResponse(
-                auth.requiredScopes[0] ?? "ai.model",
-              )
-            : aiGatewayUnauthorizedResponse(),
-      };
-    },
-  });
+function isCloudOnlyAiGatewayPath(pathname: string): boolean {
+  return pathname === "/gateway/ai/v1" || pathname.startsWith("/gateway/ai/v1/");
 }
 
 const HARDENING_GATE_REF_PREFIX = "git+";
