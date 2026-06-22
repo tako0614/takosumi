@@ -293,14 +293,19 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     const kinds =
       input.kind === "plan"
         ? [...RUN_KINDS_PLAN, "drift_check"]
-        : [...RUN_KINDS_APPLY];
+        : input.kind === "apply"
+          ? [...RUN_KINDS_APPLY]
+          : [RUN_KIND_SOURCE_SYNC];
     // Resolve the heartbeat (input override wins over the value on `run`) and
     // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun =
+    const persisted: PlanRun | ApplyRun | SourceSyncRun =
       heartbeatAt === undefined
         ? input.run
-        : ({ ...input.run, heartbeatAt } as PlanRun | ApplyRun);
+        : ({ ...input.run, heartbeatAt } as
+            | PlanRun
+            | ApplyRun
+            | SourceSyncRun);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -330,14 +335,20 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .returning({ json: pgSchema.runs.runJson });
-    const won = parseRow(rows[0]) as PlanRun | ApplyRun | undefined;
+    const won = parseRow(rows[0]) as
+      | PlanRun
+      | ApplyRun
+      | SourceSyncRun
+      | undefined;
     if (won) return { won: true, run: won };
     // Lost the CAS race (or the row vanished): re-read the now-current row so
     // callers observe the winning transition instead of clobbering it.
     const current =
       input.kind === "plan"
         ? await this.getPlanRun(input.id)
-        : await this.getApplyRun(input.id);
+        : input.kind === "apply"
+          ? await this.getApplyRun(input.id)
+          : await this.getSourceSyncRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 

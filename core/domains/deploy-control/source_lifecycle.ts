@@ -23,7 +23,11 @@
  */
 
 import type { RunStatus } from "@takosumi/internal/deploy-control-api";
-import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
+import type {
+  MintResponse,
+  SourceSnapshot,
+  SourceSyncRun,
+} from "takosumi-contract/sources";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -44,6 +48,7 @@ export interface SourceLifecycleServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly now: () => number;
   readonly newId: (prefix: string) => string;
+  readonly runRenewalIntervalMs: number;
   readonly sourcesService?: SourcesService;
   readonly runner?: OpenTofuRunner;
   /** Resolves the wired vault, throwing `not_implemented` when none is configured. */
@@ -63,6 +68,7 @@ export class SourceLifecycleService {
   readonly #store: OpenTofuDeploymentStore;
   readonly #now: () => number;
   readonly #newId: (prefix: string) => string;
+  readonly #runRenewalIntervalMs: number;
   readonly #sourcesService?: SourcesService;
   readonly #runner?: OpenTofuRunner;
   readonly #requireVault: () => ConnectionVault;
@@ -75,6 +81,7 @@ export class SourceLifecycleService {
     this.#store = dependencies.store;
     this.#now = dependencies.now;
     this.#newId = dependencies.newId;
+    this.#runRenewalIntervalMs = dependencies.runRenewalIntervalMs;
     this.#sourcesService = dependencies.sourcesService;
     this.#runner = dependencies.runner;
     this.#requireVault = dependencies.requireVault;
@@ -102,25 +109,21 @@ export class SourceLifecycleService {
     if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) {
       return run;
     }
-    const startedAtMs = this.#now();
-    const running: SourceSyncRun = {
-      ...run,
-      status: "running",
-      startedAt: new Date(startedAtMs).toISOString(),
-      heartbeatAt: startedAtMs,
-      updatedAt: new Date(startedAtMs).toISOString(),
-    };
-    await this.#store.putSourceSyncRun(running);
+    const claim = await this.#claimSourceSyncRun(run);
+    if (!claim.won) {
+      return claim.run;
+    }
+    const { running, leaseToken } = claim;
 
     let stored;
     try {
       stored = await sources.getStoredSource(run.sourceId);
     } catch (error) {
-      await this.#failSourceSyncRun(running, error);
+      await this.#failSourceSyncRun(running, leaseToken, error);
       return await this.#store.getSourceSyncRun(runId);
     }
 
-    let credentials;
+    let credentials: MintResponse | undefined;
     try {
       if (stored.authConnectionId) {
         const bundle = await this.#requireVault().mintForPhase({
@@ -137,28 +140,74 @@ export class SourceLifecycleService {
         credentials = bundle.toMintResponse();
       }
     } catch (error) {
-      await this.#failSourceSyncRun(running, mapVaultError(error));
+      await this.#failSourceSyncRun(running, leaseToken, mapVaultError(error));
       return await this.#store.getSourceSyncRun(runId);
     }
 
     try {
-      const result = await this.#runner.sourceSync({
-        runId: run.id,
-        spaceId: run.spaceId,
-        sourceId: run.sourceId,
-        source: { url: run.url, ref: run.ref, path: run.path },
-        archiveObjectKey: run.archiveObjectKey,
-        ...(credentials ? { credentials } : {}),
-      });
-      return await this.#succeedSourceSyncRun(running, result);
+      const result = await this.#withSourceSyncRenewal(
+        running,
+        leaseToken,
+        () =>
+          this.#runner!.sourceSync!({
+            runId: run.id,
+            spaceId: run.spaceId,
+            sourceId: run.sourceId,
+            source: { url: run.url, ref: run.ref, path: run.path },
+            archiveObjectKey: run.archiveObjectKey,
+            ...(credentials ? { credentials } : {}),
+          }),
+      );
+      return await this.#succeedSourceSyncRun(running, leaseToken, result);
     } catch (error) {
-      await this.#failSourceSyncRun(running, error);
+      await this.#failSourceSyncRun(running, leaseToken, error);
       return await this.#store.getSourceSyncRun(runId);
     }
   }
 
+  async #claimSourceSyncRun(
+    run: SourceSyncRun,
+  ): Promise<
+    | {
+        readonly won: true;
+        readonly running: SourceSyncRun;
+        readonly leaseToken: string;
+      }
+    | { readonly won: false; readonly run: SourceSyncRun }
+  > {
+    const startedAtMs = this.#now();
+    const startedAtIso = new Date(startedAtMs).toISOString();
+    const leaseToken = this.#newId("lease");
+    const running: SourceSyncRun = {
+      ...run,
+      status: "running",
+      startedAt: run.startedAt ?? startedAtIso,
+      heartbeatAt: startedAtMs,
+      updatedAt: startedAtIso,
+    };
+    const claim = await this.#store.transitionRun({
+      id: run.id,
+      kind: "source_sync",
+      expectFrom: [run.status],
+      ...(run.status === "running"
+        ? { expectHeartbeatAt: run.heartbeatAt ?? null }
+        : {}),
+      run: running,
+      setLeaseToken: leaseToken,
+      heartbeatAt: startedAtMs,
+    });
+    if (!claim.won) {
+      return {
+        won: false,
+        run: (claim.run ?? run) as SourceSyncRun,
+      };
+    }
+    return { won: true, running: claim.run as SourceSyncRun, leaseToken };
+  }
+
   async #succeedSourceSyncRun(
     running: SourceSyncRun,
+    leaseToken: string,
     result: OpenTofuSourceSyncResult,
   ): Promise<SourceSyncRun> {
     const finishedAtMs = this.#now();
@@ -179,17 +228,6 @@ export class SourceLifecycleService {
       fetchedByRunId: running.id,
       fetchedAt: finishedAtIso,
     };
-    await this.#store.putSourceSnapshot(snapshot);
-    // Record lastSeenCommit on the Source so the scheduler can skip an unchanged
-    // ref. Read-modify-write through the store (internal field, never projected).
-    const stored = await this.#store.getSource(running.sourceId);
-    if (stored) {
-      await this.#store.putSource({
-        ...stored,
-        lastSeenCommit: result.resolvedCommit,
-        updatedAt: finishedAtIso,
-      });
-    }
     const succeeded: SourceSyncRun = {
       ...running,
       status: "succeeded",
@@ -201,12 +239,30 @@ export class SourceLifecycleService {
       archiveSizeBytes: result.archiveSizeBytes,
       snapshotId,
     };
-    await this.#store.putSourceSyncRun(succeeded);
+    const terminal = await this.#persistTerminalSourceSyncRun(
+      succeeded,
+      leaseToken,
+    );
+    if (!terminal.won) {
+      return terminal.run;
+    }
+    await this.#store.putSourceSnapshot(snapshot);
+    // Record lastSeenCommit on the Source so the scheduler can skip an unchanged
+    // ref. Read-modify-write through the store (internal field, never projected).
+    const stored = await this.#store.getSource(running.sourceId);
+    if (stored) {
+      await this.#store.putSource({
+        ...stored,
+        lastSeenCommit: result.resolvedCommit,
+        updatedAt: finishedAtIso,
+      });
+    }
     return succeeded;
   }
 
   async #failSourceSyncRun(
     running: SourceSyncRun,
+    leaseToken: string,
     error: unknown,
   ): Promise<void> {
     const finishedAtMs = this.#now();
@@ -219,7 +275,67 @@ export class SourceLifecycleService {
       updatedAt: finishedAtIso,
       error: errorMessage(error),
     };
-    await this.#store.putSourceSyncRun(failed);
+    await this.#persistTerminalSourceSyncRun(failed, leaseToken);
+  }
+
+  async #withSourceSyncRenewal<T>(
+    run: SourceSyncRun,
+    leaseToken: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const intervalMs = this.#runRenewalIntervalMs;
+    if (intervalMs <= 0) {
+      return await work();
+    }
+    const tick = async (): Promise<void> => {
+      try {
+        await this.#heartbeatRunningSourceSyncRun(run, leaseToken);
+      } catch {
+        // Best-effort: a stale/lost renewal is observed by a sibling worker via
+        // the lease fence; the runner result itself should not be rejected here.
+      }
+    };
+    const timer = setInterval(() => void tick(), intervalMs);
+    (timer as { unref?: () => void }).unref?.();
+    try {
+      return await work();
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
+  async #heartbeatRunningSourceSyncRun(
+    run: SourceSyncRun,
+    leaseToken: string,
+  ): Promise<void> {
+    const now = this.#now();
+    const updatedAt = new Date(now).toISOString();
+    await this.#store.transitionRun({
+      id: run.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectLeaseToken: leaseToken,
+      run: { ...run, status: "running", heartbeatAt: now, updatedAt },
+      heartbeatAt: now,
+    });
+  }
+
+  async #persistTerminalSourceSyncRun(
+    terminal: SourceSyncRun,
+    leaseToken: string,
+  ): Promise<{ readonly won: boolean; readonly run: SourceSyncRun }> {
+    const result = await this.#store.transitionRun({
+      id: terminal.id,
+      kind: "source_sync",
+      expectFrom: ["queued", "running"],
+      expectLeaseToken: leaseToken,
+      run: terminal,
+      clearLeaseToken: true,
+    });
+    return {
+      won: result.won,
+      run: (result.won ? terminal : (result.run ?? terminal)) as SourceSyncRun,
+    };
   }
 
   async #recordSourceCredentialMintEvent(input: {
