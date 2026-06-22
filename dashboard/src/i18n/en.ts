@@ -398,6 +398,15 @@ export const en: Record<keyof typeof ja, string> = {
     "{label} contains unsupported characters or is too long.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
+  "new.deeplink.aria": "Service from link",
+  "new.deeplink.kicker": "Added from link",
+  "new.deeplink.title": "Add {capsule}",
+  "new.deeplink.body":
+    "We checked the link details. Open the source if you need to change anything.",
+  "new.deeplink.source": "Source",
+  "new.deeplink.version": "Version",
+  "new.deeplink.folder": "Folder",
+  "new.deeplink.editSource": "Review or change source",
   "new.git.url": "Install link",
   "new.git.advanced": "Source details",
   "new.git.ref": "Version",

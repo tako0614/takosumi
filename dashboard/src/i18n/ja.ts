@@ -402,6 +402,15 @@ export const ja = {
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
+  "new.deeplink.aria": "リンクから追加するサービス",
+  "new.deeplink.kicker": "リンクから追加",
+  "new.deeplink.title": "{capsule} を追加します",
+  "new.deeplink.body":
+    "リンクの内容を確認しました。必要なら取得元を開いて変更できます。",
+  "new.deeplink.source": "取得元",
+  "new.deeplink.version": "バージョン",
+  "new.deeplink.folder": "フォルダ",
+  "new.deeplink.editSource": "取得元を確認・変更",
   "new.git.url": "インストールリンク",
   "new.git.advanced": "取得元の詳細",
   "new.git.ref": "バージョン",
