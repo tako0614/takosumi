@@ -39,6 +39,9 @@ test("providerForAddress resolves fully-qualified, short, and local provider for
 test("providerForConnectionKind maps each driver kind to its provider", () => {
   expect(providerForConnectionKind("cloudflare_api_token")?.id).toBe("cloudflare");
   expect(providerForConnectionKind("aws_assume_role")?.id).toBe("aws");
+  expect(providerForConnectionKind("gcp_service_account_json")?.id).toBe(
+    "gcp",
+  );
   expect(providerForConnectionKind("gcp_service_account_impersonation")?.id).toBe(
     "gcp",
   );

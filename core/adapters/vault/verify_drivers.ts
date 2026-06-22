@@ -28,8 +28,8 @@
  *                    present). No network call.
  *   - `reserved`   — no driver is wired yet. Git SSH can be structurally verified
  *                    with pinned known_hosts because the runner owns the live SSH
- *                    probe. GCP remains pending until a real OAuth /
- *                    impersonation live verifier and mint driver are wired.
+ *                    probe. GCP OAuth / impersonation remain pending until real
+ *                    live verifier and mint drivers are wired.
  */
 import type { Connection, ConnectionKind } from "takosumi-contract/connections";
 import { GIT_HTTPS_TOKEN_ENV } from "takosumi-contract/sources";
@@ -176,10 +176,56 @@ export const verifyGenericEnvProvider: VerifyDriver = async ({
 };
 
 /**
- * gcp: RESERVED. The GCP impersonation / OAuth driver wiring is reserved, so a
- * live probe is not available. Keep these Connections pending instead of
- * marking them verified; a reserved helper must never become runnable until a
- * real verify + mint driver exists.
+ * gcp_service_account_json: STRUCTURAL. Service account JSON is a static
+ * provider credential recipe, not a live OAuth / impersonation helper. We avoid
+ * a network probe here because the OpenTofu provider will use the JSON during
+ * plan/apply; the vault only verifies that the opened value is a plausible
+ * service-account credential and that a project is known.
+ */
+export const verifyGcpServiceAccountJson: VerifyDriver = async ({
+  values,
+}) => {
+  const raw = values.GOOGLE_CREDENTIALS;
+  if (!raw) {
+    return { ok: false, detail: "gcp service account JSON is missing" };
+  }
+  const parsed = parseJsonObject(raw);
+  if (!parsed) {
+    return { ok: false, detail: "gcp service account JSON is invalid JSON" };
+  }
+  if (parsed.type !== "service_account") {
+    return {
+      ok: false,
+      detail: "gcp credential JSON must have type service_account",
+    };
+  }
+  for (const field of ["client_email", "private_key"] as const) {
+    if (typeof parsed[field] !== "string" || parsed[field].length === 0) {
+      return {
+        ok: false,
+        detail: `gcp service account JSON is missing ${field}`,
+      };
+    }
+  }
+  const project =
+    stringValue(values.GOOGLE_CLOUD_PROJECT) ??
+    stringValue(values.GOOGLE_PROJECT) ??
+    stringValue(parsed.project_id);
+  if (!project) {
+    return {
+      ok: false,
+      detail:
+        "gcp service account JSON requires GOOGLE_CLOUD_PROJECT or project_id",
+    };
+  }
+  return { ok: true };
+};
+
+/**
+ * gcp reserved helpers. The GCP impersonation / OAuth driver wiring is
+ * reserved, so a live probe is not available. Keep these Connections pending
+ * instead of marking them verified; a reserved helper must never become
+ * runnable until a real verify + mint driver exists.
  */
 export const verifyGcpReserved: VerifyDriver = async () => ({
   ok: false,
@@ -198,6 +244,7 @@ const VERIFY_DRIVERS: Partial<Record<ConnectionKind, VerifyDriver>> = {
   source_git_https_token: verifyGitHttps,
   source_git_ssh_key: verifyGitSsh,
   generic_env_provider: verifyGenericEnvProvider,
+  gcp_service_account_json: verifyGcpServiceAccountJson,
   gcp_oauth_bootstrap: verifyGcpReserved,
   gcp_service_account_impersonation: verifyGcpReserved,
 };
@@ -211,16 +258,29 @@ export function verifyDriverForKind(
 }
 
 function isReservedGcpConnection(connection: Connection): boolean {
-  const providerTail = connection.provider.toLowerCase().split("/").pop();
   return (
     connection.kind === "gcp_oauth_bootstrap" ||
     connection.kind === "gcp_service_account_impersonation" ||
     connection.credentialDriver === "gcp_oauth_bootstrap" ||
-    connection.credentialDriver === "gcp_service_account_impersonation" ||
-    providerTail === "google" ||
-    providerTail === "google-beta" ||
-    providerTail === "gcp"
+    connection.credentialDriver === "gcp_service_account_impersonation"
   );
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 /**

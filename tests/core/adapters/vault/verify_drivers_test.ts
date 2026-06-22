@@ -4,6 +4,7 @@ import type { Connection } from "takosumi-contract/connections";
 import {
   verifyDriverForKind,
   verifyGcpReserved,
+  verifyGcpServiceAccountJson,
   verifyGitHttps,
   verifyGitSsh,
   verifyGenericEnvProvider,
@@ -170,7 +171,45 @@ test("generic_env_provider: no declared envNames ⇒ pending", async () => {
   expect(result.ok).toBe(false);
 });
 
-// --- gcp (reserved) -------------------------------------------------------
+// --- gcp ------------------------------------------------------------------
+
+test("gcp_service_account_json: structural service account JSON ⇒ verified", async () => {
+  const result = await verifyGcpServiceAccountJson({
+    connection: connection({
+      kind: "gcp_service_account_json",
+      provider: "google",
+    }),
+    values: {
+      GOOGLE_CREDENTIALS: JSON.stringify({
+        type: "service_account",
+        project_id: "project-1",
+        client_email: "svc@project-1.iam.gserviceaccount.com",
+        private_key: "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+      }),
+    },
+    fetch: noFetch,
+  });
+  expect(result.ok).toBe(true);
+});
+
+test("gcp_service_account_json: missing project ⇒ pending", async () => {
+  const result = await verifyGcpServiceAccountJson({
+    connection: connection({
+      kind: "gcp_service_account_json",
+      provider: "google",
+    }),
+    values: {
+      GOOGLE_CREDENTIALS: JSON.stringify({
+        type: "service_account",
+        client_email: "svc@project-1.iam.gserviceaccount.com",
+        private_key: "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+      }),
+    },
+    fetch: noFetch,
+  });
+  expect(result.ok).toBe(false);
+  expect(result.detail).toContain("GOOGLE_CLOUD_PROJECT");
+});
 
 test("gcp: reserved ⇒ pending, no fetch", async () => {
   const result = await verifyGcpReserved({
@@ -192,6 +231,9 @@ test("verifyDriverForKind routes each verifiable kind and is undefined otherwise
   expect(verifyDriverForKind("source_git_ssh_key")).toBe(verifyGitSsh);
   expect(verifyDriverForKind("generic_env_provider")).toBe(
     verifyGenericEnvProvider,
+  );
+  expect(verifyDriverForKind("gcp_service_account_json")).toBe(
+    verifyGcpServiceAccountJson,
   );
   expect(verifyDriverForKind("gcp_oauth_bootstrap")).toBe(verifyGcpReserved);
   expect(verifyDriverForKind("gcp_service_account_impersonation")).toBe(

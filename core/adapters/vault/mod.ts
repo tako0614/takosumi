@@ -376,7 +376,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `generic-env provider ${input.provider} has no explicit env allowlist`,
       );
     }
-    const values = genericEnvRegistration?.values ?? input.values;
+    let values = genericEnvRegistration?.values ?? input.values;
     if (
       values === null ||
       typeof values !== "object" ||
@@ -386,6 +386,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "invalid_argument",
         "values must be an object of { envName: value }",
       );
+    }
+    if (isGcpServiceAccountJsonRegistration(input)) {
+      values = normalizeGcpServiceAccountJsonValues(input, values);
     }
     const allowed = new Set(allowedEnvNamesForProvider(input.provider));
     const envNames = genericEnvRegistration?.envNames ?? Object.keys(values);
@@ -1176,6 +1179,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
  * this is usually identity; the split handles a registry-path provider too.
  */
 function providerLocalName(provider: string): string {
+  const rule = providerEnvRule(provider);
+  if (rule) return rule.shortName;
   const parts = provider.split("/");
   return parts[parts.length - 1] ?? provider;
 }
@@ -1221,15 +1226,11 @@ function assertProviderMintDriverAvailable(connection: Connection): void {
 }
 
 function isReservedGcpConnection(connection: Connection): boolean {
-  const providerTail = connection.provider.toLowerCase().split("/").pop();
   return (
     connection.kind === "gcp_oauth_bootstrap" ||
     connection.kind === "gcp_service_account_impersonation" ||
     connection.credentialDriver === "gcp_oauth_bootstrap" ||
-    connection.credentialDriver === "gcp_service_account_impersonation" ||
-    providerTail === "google" ||
-    providerTail === "google-beta" ||
-    providerTail === "gcp"
+    connection.credentialDriver === "gcp_service_account_impersonation"
   );
 }
 
@@ -1497,6 +1498,90 @@ function validateGenericEnvProviderInput(
   }
 }
 
+function isGcpServiceAccountJsonRegistration(
+  input: RegisterConnectionInput,
+): boolean {
+  return (
+    input.kind === "gcp_service_account_json" ||
+    input.credentialDriver === "gcp_service_account_json"
+  );
+}
+
+function normalizeGcpServiceAccountJsonValues(
+  input: RegisterConnectionInput,
+  values: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  if (!sameProviderFamily(input.provider, "google")) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json requires provider google",
+    );
+  }
+  const raw = values.GOOGLE_CREDENTIALS;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json requires GOOGLE_CREDENTIALS",
+    );
+  }
+  const parsed = parseGcpServiceAccountJson(raw);
+  if (parsed.type !== "service_account") {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json requires a service_account credential JSON",
+    );
+  }
+  for (const field of ["client_email", "private_key"] as const) {
+    if (typeof parsed[field] !== "string" || parsed[field].length === 0) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `gcp_service_account_json credential JSON is missing ${field}`,
+      );
+    }
+  }
+  const project =
+    nonEmpty(values.GOOGLE_CLOUD_PROJECT) ??
+    nonEmpty(values.GOOGLE_PROJECT) ??
+    nonEmpty(parsed.project_id);
+  if (!project) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json requires GOOGLE_CLOUD_PROJECT or credential JSON project_id",
+    );
+  }
+  return {
+    ...values,
+    GOOGLE_CLOUD_PROJECT: project,
+  };
+}
+
+function parseGcpServiceAccountJson(
+  value: string,
+): Readonly<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json GOOGLE_CREDENTIALS must be valid JSON",
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "gcp_service_account_json GOOGLE_CREDENTIALS must be a JSON object",
+    );
+  }
+  return parsed as Readonly<Record<string, unknown>>;
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
 /**
  * Re-wraps a per-provider credential driver error into the vault's own
  * {@link ConnectionVaultError} surface. Each driver
@@ -1627,7 +1712,7 @@ function providerConnectionKindFor(provider: string): ConnectionKind {
   if (provider === "cloudflare") return "cloudflare_api_token";
   if (provider === "aws") return "aws_assume_role";
   if (provider === "gcp" || provider === "google") {
-    return "gcp_service_account_impersonation";
+    return "gcp_service_account_json";
   }
   return "static_secret";
 }

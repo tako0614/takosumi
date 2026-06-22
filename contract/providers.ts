@@ -10,6 +10,7 @@ export type ProviderCredentialHelper =
   | "cloudflare_oauth"
   | "aws_assume_role"
   | "gcp_oauth_bootstrap"
+  | "gcp_service_account_json"
   | "gcp_service_account_impersonation"
   | "generic_env";
 

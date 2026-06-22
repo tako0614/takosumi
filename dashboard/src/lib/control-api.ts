@@ -744,6 +744,8 @@ export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
   readonly awsRegion?: string;
+  readonly gcpProjectId?: string;
+  readonly gcpServiceAccountEmail?: string;
   readonly repoUrl?: string;
   readonly username?: string;
   readonly knownHostsEntry?: string;

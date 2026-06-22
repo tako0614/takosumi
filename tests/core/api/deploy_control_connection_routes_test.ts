@@ -81,6 +81,8 @@ const HTTPS_PATH = "/internal/v1/connections/source/https-token";
 const SSH_PATH = "/internal/v1/connections/source/ssh-key";
 const AWS_PATH = "/internal/v1/connections/aws/assume-role";
 const GCP_IMPERSONATION_PATH = "/internal/v1/connections/gcp/impersonation";
+const GCP_SERVICE_ACCOUNT_JSON_PATH =
+  "/internal/v1/connections/gcp/service-account-json";
 const GENERIC_ENV_PROVIDER_PATH =
   "/internal/v1/connections/generic-env-provider";
 const RESERVED_DRIVER_PATHS = [
@@ -517,6 +519,42 @@ test("POST /internal/v1/connections/gcp/impersonation registers a Google Provide
     gcpServiceAccountEmail: "takosumi-runner@project-1.iam.gserviceaccount.com",
     gcpProjectId: "project-1",
   });
+});
+
+test("POST /internal/v1/connections/gcp/service-account-json registers a runnable Google Provider Connection", async () => {
+  const app = await makeApp();
+  const serviceAccountJson = JSON.stringify({
+    type: "service_account",
+    project_id: "project-1",
+    client_email: "takosumi-runner@project-1.iam.gserviceaccount.com",
+    private_key:
+      "-----BEGIN PRIVATE KEY-----\\nsecret\\n-----END PRIVATE KEY-----\\n",
+  });
+  const response = await app.request(GCP_SERVICE_ACCOUNT_JSON_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: SPACE_ID,
+      displayName: "gcp service account",
+      values: {
+        GOOGLE_CREDENTIALS: serviceAccountJson,
+      },
+    }),
+  });
+
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("private_key");
+  expect(text).not.toContain("BEGIN PRIVATE KEY");
+  const payload = JSON.parse(text);
+  expect(payload.connection.provider).toBe("google");
+  expect(payload.connection.kind).toBe("gcp_service_account_json");
+  expect(payload.connection.credentialDriver).toBe("gcp_service_account_json");
+  expect(payload.connection.envNames).toEqual([
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CREDENTIALS",
+  ]);
+  expect(payload.connection.scopeHints).toBeUndefined();
 });
 
 test("POST /internal/v1/connections/gcp/impersonation requires service account and project hints", async () => {

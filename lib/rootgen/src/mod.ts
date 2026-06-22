@@ -36,7 +36,10 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { JsonValue } from "takosumi-contract";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
-import { providerCredentialArgs } from "takosumi-contract/provider-env-rules";
+import {
+  providerCredentialArgs,
+  providerEnvRule,
+} from "takosumi-contract/provider-env-rules";
 import type { TemplateInputValue } from "../../../core/domains/templates/mod.ts";
 import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
@@ -532,6 +535,8 @@ function assertOutputPath(value: string): void {
  * trailing type segment of the rule (e.g. `cloudflare/cloudflare` -> `cloudflare`).
  */
 function providerLocalName(rule: string): string {
+  const providerRule = providerEnvRule(rule);
+  if (providerRule) return providerRule.shortName;
   const parts = rule.split("/");
   const type = parts[parts.length - 1] ?? rule;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(type)) {
