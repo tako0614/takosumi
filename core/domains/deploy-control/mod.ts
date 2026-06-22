@@ -161,8 +161,12 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunServiceDataRestoreResult,
 } from "takosumi-contract/runs";
-import type { CreateRestoreRequest } from "takosumi-contract/backups";
+import type {
+  CreateRestoreRequest,
+  ServiceDataBackupPointer,
+} from "takosumi-contract/backups";
 import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
@@ -472,6 +476,16 @@ export interface OpenTofuRestoreJob {
   };
 }
 
+export interface OpenTofuServiceDataRestoreJob {
+  readonly runId: string;
+  readonly stateScope: DispatchStateScope;
+  readonly sourceState: {
+    readonly objectKey: string;
+    readonly digest: string;
+  };
+  readonly serviceData: ServiceDataBackupPointer;
+}
+
 export interface OpenTofuRestoreResult {
   readonly state: {
     readonly generation: number;
@@ -486,6 +500,9 @@ export interface OpenTofuRunner {
   apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult>;
   destroy?(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult>;
   restore?(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult>;
+  restoreServiceData?(
+    job: OpenTofuServiceDataRestoreJob,
+  ): Promise<RunServiceDataRestoreResult>;
   /**
    * Resolves a Source to an immutable archive snapshot (Core Specification §6).
    * The runner runs `git ls-remote` + a shallow fetch in the untrusted container
@@ -2594,6 +2611,19 @@ export class OpenTofuDeploymentController {
       environment,
       generation: nextGeneration,
     };
+    const restoreServiceData = run.restoreServiceData === true;
+    if (restoreServiceData && !backup.serviceData) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "backup service-data artifact disappeared before restore dispatch",
+      );
+    }
+    if (restoreServiceData && !this.#runner?.restoreServiceData) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "service-data restore requires a service-data restore-capable runner",
+      );
+    }
     const restoreResult = this.#runner?.restore
       ? await this.#runner.restore({
           runId: run.id,
@@ -2604,6 +2634,23 @@ export class OpenTofuDeploymentController {
           },
         })
       : undefined;
+    const restoredServiceData = restoreServiceData
+      ? await this.#runner!.restoreServiceData!({
+          runId: run.id,
+          stateScope,
+          sourceState: {
+            objectKey: source.objectKey,
+            digest: source.digest,
+          },
+          serviceData: backup.serviceData!,
+        })
+      : undefined;
+    if (restoreServiceData && restoredServiceData?.status !== "restored") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner did not confirm service-data restore",
+      );
+    }
     const restoredState: StateSnapshot = {
       id: this.#newId("state"),
       spaceId: installation.spaceId,
@@ -2652,12 +2699,20 @@ export class OpenTofuDeploymentController {
         restoredFromStateSnapshotId: source.id,
         restoredFromGeneration: source.generation,
         currentStateGeneration: nextGeneration,
+        ...(restoredServiceData
+          ? {
+              restoredServiceDataObjectKey: restoredServiceData.objectKey,
+              restoredServiceDataDigest: restoredServiceData.digest,
+              restoredServiceDataCount: restoredServiceData.restoredCount ?? 0,
+            }
+          : {}),
       },
     });
     return {
       ...run,
       status: "succeeded",
       restoredStateSnapshotId: restoredState.id,
+      ...(restoredServiceData ? { restoredServiceData } : {}),
       finishedAt: now,
     };
   }
@@ -3449,17 +3504,24 @@ export class OpenTofuDeploymentController {
         "stateGeneration must be a non-negative integer",
       );
     }
-    if (request.restoreServiceData === true) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "service-data restore is not implemented; omit restoreServiceData or set it false for control/state restore",
-      );
-    }
     const backup = await this.#store.getBackupRecord(backupId);
     if (!backup || backup.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "not_found",
         `backup ${backupId} not found in space ${spaceId}`,
+      );
+    }
+    const restoreServiceData = request.restoreServiceData === true;
+    if (restoreServiceData && !backup.serviceData) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "backup has no service-data artifact to restore",
+      );
+    }
+    if (restoreServiceData && !this.#runner?.restoreServiceData) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "service-data restore requires a service-data restore-capable runner",
       );
     }
     if (
@@ -3506,6 +3568,7 @@ export class OpenTofuDeploymentController {
       status: "waiting_approval",
       backupId: backup.id,
       restoreStateGeneration: source.generation,
+      ...(restoreServiceData ? { restoreServiceData: true } : {}),
       restoredFromStateSnapshotId: source.id,
       planDigest: backup.digest,
       createdBy: context.actor ?? "system",
@@ -3524,6 +3587,13 @@ export class OpenTofuDeploymentController {
         installationId: installation.id,
         environment,
         stateGeneration: source.generation,
+        ...(restoreServiceData
+          ? {
+              restoreServiceData: true,
+              serviceDataObjectKey: backup.serviceData!.objectKey,
+              serviceDataDigest: backup.serviceData!.digest,
+            }
+          : {}),
       },
     });
     return run;

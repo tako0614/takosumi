@@ -160,8 +160,9 @@ export interface CreateRestoreRequest {
   /** Optional client-side guard over BackupRecord.digest. */
   readonly expectedBackupDigest?: string;
   /**
-   * Service-data restore is intentionally explicit. `true` currently returns
-   * not_implemented; omitted/false performs control/state restore only.
+   * Service-data restore is intentionally explicit. `true` requires the
+   * selected BackupRecord to carry a service-data artifact and the restore
+   * runner to acknowledge that artifact as restored.
    */
   readonly restoreServiceData?: boolean;
 }
