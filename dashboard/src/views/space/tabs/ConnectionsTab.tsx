@@ -259,6 +259,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       values: submitValues,
     });
     await afterConnectionCreated(connection);
+    await runTest(connection.id);
   });
 
   // Advanced raw-field submit.
@@ -281,6 +282,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       values: submitValues,
     });
     await afterConnectionCreated(connection);
+    await runTest(connection.id);
   });
 
   // Custom Provider Connection submit.
@@ -310,6 +312,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       values: submitValues,
     });
     await afterConnectionCreated(connection);
+    await runTest(connection.id);
   });
 
   // ----- optional Cloudflare OAuth (probed; no dead button) ------------------
