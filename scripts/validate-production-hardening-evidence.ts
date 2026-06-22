@@ -33,7 +33,10 @@ const REQUIRED_LAYER2_STEPS = [
   "plan",
   "apply",
   "deploymentVerified",
+  "publicUrlVerified",
+  "deploymentLedgerVerified",
   "destroy",
+  "connectionRevoked",
 ] as const;
 const REQUIRED_RESTORE_SCOPES = [
   "controlLedger",
@@ -85,7 +88,10 @@ export interface PlatformControlPlaneSmokeEvidence extends BaseEvidence {
   readonly capsuleGateStatus: "passed";
   readonly policyStatus: "passed";
   readonly deploymentVerified: true;
+  readonly publicUrlVerified: true;
+  readonly deploymentLedgerVerified: true;
   readonly destroyVerified: true;
+  readonly connectionRevoked: true;
 }
 
 export interface EgressEnforcementEvidence extends BaseEvidence {
@@ -203,12 +209,18 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
           "plan",
           "apply",
           "deploymentVerified",
+          "publicUrlVerified",
+          "deploymentLedgerVerified",
           "destroy",
+          "connectionRevoked",
         ],
         capsuleGateStatus: "passed",
         policyStatus: "passed",
         deploymentVerified: true,
+        publicUrlVerified: true,
+        deploymentLedgerVerified: true,
         destroyVerified: true,
+        connectionRevoked: true,
       },
       egressEnforcement: {
         evidenceRef: `${evidenceRefBase}#evidence/egress.md`,
@@ -593,8 +605,21 @@ function readPlatformControlPlaneSmoke(
       "platformControlPlaneSmoke.deploymentVerified must be true",
     );
   }
+  if (row.publicUrlVerified !== true) {
+    throw new Error(
+      "platformControlPlaneSmoke.publicUrlVerified must be true",
+    );
+  }
+  if (row.deploymentLedgerVerified !== true) {
+    throw new Error(
+      "platformControlPlaneSmoke.deploymentLedgerVerified must be true",
+    );
+  }
   if (row.destroyVerified !== true) {
     throw new Error("platformControlPlaneSmoke.destroyVerified must be true");
+  }
+  if (row.connectionRevoked !== true) {
+    throw new Error("platformControlPlaneSmoke.connectionRevoked must be true");
   }
   return {
     ...base,
@@ -606,7 +631,10 @@ function readPlatformControlPlaneSmoke(
     capsuleGateStatus: "passed",
     policyStatus: "passed",
     deploymentVerified: true,
+    publicUrlVerified: true,
+    deploymentLedgerVerified: true,
     destroyVerified: true,
+    connectionRevoked: true,
   };
 }
 

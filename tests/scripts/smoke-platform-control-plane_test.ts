@@ -40,13 +40,25 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     "apply",
     "deploymentVerified",
     "publicUrlVerified",
+    "deploymentLedgerVerified",
     "destroy",
+    "connectionRevoked",
   ]);
   expect(result.workerUrl).toBe(
     "https://takosumi-smoke-test.<redacted>.workers.dev",
   );
   expect(result.publicUrlVerified).toBe(true);
+  expect(result.deploymentLedgerVerified).toBe(true);
   expect(result.destroyVerified).toBe(true);
+  expect(result.connectionRevoked).toBe(true);
+  expect(result.deploymentLedger).toEqual({
+    installationStatus: "active",
+    deploymentId: "dep_dry_run",
+    stateGeneration: 1,
+    applyRunId: "apply_dry_run",
+    publicOutputNames: ["url", "worker_name"],
+    publicOutputDigest: `sha256:${"0".repeat(64)}`,
+  });
   expect(result.inputs.accountSessionTokenSource).toBe("file");
   expect(result.inputs.cloudflareApiTokenSource).toBe("file");
   expect(result.inputs.cloudflareAccountIdSource).toBe("file");
@@ -105,8 +117,10 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
     "apply",
     "deploymentVerified",
     "publicUrlVerified",
+    "deploymentLedgerVerified",
     "backupRestoreRehearsal",
     "destroy",
+    "connectionRevoked",
   ]);
   expect(result.backupRestoreRehearsal).toMatchObject({
     backupId: "bkp_dry_run",
