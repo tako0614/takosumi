@@ -31,7 +31,7 @@ const ROWS = [
   },
   {
     axis: "拡張 / 自作",
-    us: "OpenTofu / Terraform で追加",
+    us: "スターターや Git リンクで追加",
     saas: "ベンダーが出した連携だけ",
     paas: "ベンダーの SDK の範囲内",
   },

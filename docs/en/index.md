@@ -1,12 +1,23 @@
 # Takosumi
 
-Takosumi is an open-source OpenTofu/Terraform control plane. It runs existing
-providers and modules as-is, with ProviderConnections, credential/env injection,
-state, secrets, outputs, run history, and audit.
+Takosumi is an OpenTofu/Terraform control plane. In Takosumi Cloud, you add a
+service from the browser, connect the cloud account it needs, review the planned
+changes, and deploy to your own cloud. The OSS edition uses the same model for
+self-hosting.
 
-The canonical product direction is [Takosumi Final Plan](../final-plan.md).
+## What You Do First
 
-## Definition
+```text
+1. Choose a service or paste a Git URL
+2. Connect the required cloud account
+3. Review the resources that will be created or updated
+4. Approve the deploy
+5. Inspect the URL, history, state, outputs, and activity
+```
+
+Start with the [Quickstart](./getting-started/quickstart.md).
+
+## Cloud and OSS
 
 ```text
 Takosumi OSS:
@@ -25,27 +36,29 @@ OSS runs existing providers.
 Only Cloud has compatibility gateways and managed resources.
 ```
 
-## Product Shape
+## Product Words
 
-| Product | License / operation | Role |
-| --- | --- | --- |
-| Takosumi Core | OSS | Shared OpenTofu/Terraform execution, ProviderConnection, CredentialRecipe, state, secret, run, audit, output foundation |
-| Takosumi | OSS self-host | Personal / small-team self-host product |
-| Takosumi for Operators | OSS self-host | Operator edition for organizations and vendors |
-| Takosumi Cloud | Closed official hosting | Official hosted Operators + Cloud-only compat / managed resources |
+The normal Takosumi Cloud UI does not lead with internal control-plane nouns.
 
-## What OSS Does
+| UI word | Meaning |
+| --- | --- |
+| Service | The app, worker, API, site, or storage you host |
+| Connection | The Cloudflare / AWS / GCP account Takosumi can use |
+| Changes | The plan / resource summary you review before deploy |
+| History | Who changed what and when |
+| Restore point | A state version you can recover from |
+
+Technical details are still available in the [Model reference](./reference/model.md).
+
+## What Takosumi Manages
 
 ```text
-clone Git repos
-run OpenTofu/Terraform
-install existing providers
-inject provider credentials from ProviderConnections
-store state
-store run history
-store encrypted secrets
-store outputs
-handle plan/apply/destroy through UI/API/CLI
+add a service or Git repo
+check required connections
+inject env/files only for the Run
+run OpenTofu/Terraform against existing providers
+review and approve apply
+store state, outputs, run history, and audit
 ```
 
 The core value is:
@@ -67,4 +80,8 @@ official billing/quota/usage
 official cloud backend
 ```
 
-Start with the [Quickstart](./getting-started/quickstart.md).
+## Next Documents
+
+- [Quickstart](./getting-started/quickstart.md)
+- [Model reference](./reference/model.md)
+- [CLI reference](./reference/cli.md)

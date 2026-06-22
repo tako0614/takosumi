@@ -2,20 +2,15 @@ import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
-  { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/getting-started/quickstart" },
-  { text: "Model", link: "/reference/model" },
-  { text: "API", link: "/reference/deploy-control-api" },
-  { text: "Operator", link: "/reference/operator" },
+  { text: "仕組み", link: "/reference/model" },
+  { text: "Legal", link: "/legal/terms-of-service" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
   { text: "Overview", link: "/en/" },
-  { text: "Final Plan", link: "/final-plan" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Model", link: "/en/reference/model" },
-  { text: "API", link: "/en/reference/deploy-control-api" },
-  { text: "Operator", link: "/en/reference/operator" },
+  { text: "How it works", link: "/en/reference/model" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
@@ -24,15 +19,12 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "概要", link: "/" },
-        { text: "Final Plan", link: "/final-plan" },
         { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
     {
       text: "Reference",
       items: [
-        { text: "Core specification", link: "/core-spec" },
-        { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/reference/model" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
@@ -46,19 +38,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
-    {
-      text: "Operations",
-      items: [
-        {
-          text: "Cloud customer operations",
-          link: "/operations/cloud-customer-operations",
-        },
-        {
-          text: "Cloud launch brief",
-          link: "/operations/cloud-launch-brief",
-        },
-      ],
-    },
   ],
 };
 
@@ -68,15 +47,12 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "Overview", link: "/en/" },
-        { text: "Final Plan", link: "/final-plan" },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
       ],
     },
     {
       text: "Reference",
       items: [
-        { text: "Core specification", link: "/core-spec" },
-        { text: "Conformance", link: "/core-conformance" },
         { text: "Model", link: "/en/reference/model" },
         {
           text: "Deploy Control API",
@@ -98,6 +74,15 @@ export default defineConfig({
   description: "OpenTofu-native deploy control plane, UI, and audit ledger",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
+  srcExclude: [
+    "final-plan.md",
+    "core-spec.md",
+    "core-conformance.md",
+    "service-graph-spec.md",
+    "operations/**/*.md",
+    "reference/ai-gateway.md",
+    "reference/gateway-opentofu-architecture.md",
+  ],
   cleanUrls: true,
   lastUpdated: true,
   vite: {
