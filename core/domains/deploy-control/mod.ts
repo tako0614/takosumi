@@ -1052,6 +1052,7 @@ export class OpenTofuDeploymentController {
       store: this.#store,
       now: this.#now,
       newId: this.#newId,
+      runRenewalIntervalMs: this.#runRenewalIntervalMs,
       ...(dependencies.sourcesService
         ? { sourcesService: dependencies.sourcesService }
         : {}),

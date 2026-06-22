@@ -11,6 +11,7 @@ import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import type { SourceSyncRun } from "takosumi-contract/sources";
 
 class StubRunner {
   readonly calls: OpenTofuSourceSyncJob[] = [];
@@ -20,6 +21,7 @@ class StubRunner {
     archiveSizeBytes: 4096,
   };
   fail = false;
+  onSourceSync?: (job: OpenTofuSourceSyncJob) => Promise<void>;
 
   plan(_job: OpenTofuPlanJob): Promise<never> {
     return Promise.reject(new Error("not used"));
@@ -27,14 +29,22 @@ class StubRunner {
   apply(_job: OpenTofuApplyJob): Promise<never> {
     return Promise.reject(new Error("not used"));
   }
-  sourceSync(job: OpenTofuSourceSyncJob): Promise<OpenTofuSourceSyncResult> {
+  async sourceSync(
+    job: OpenTofuSourceSyncJob,
+  ): Promise<OpenTofuSourceSyncResult> {
     this.calls.push(job);
-    if (this.fail) return Promise.reject(new Error("runner exploded"));
-    return Promise.resolve(this.result);
+    await this.onSourceSync?.(job);
+    if (this.fail) throw new Error("runner exploded");
+    return this.result;
   }
 }
 
-function build() {
+function build(
+  options: {
+    readonly now?: () => number;
+    readonly runRenewalIntervalMs?: number;
+  } = {},
+) {
   const store = new InMemoryOpenTofuDeploymentStore();
   let counter = 0;
   const newId = (prefix: string) =>
@@ -59,7 +69,10 @@ function build() {
     vault,
     sourcesService,
     runner: runner as never,
-    now: () => 1_000,
+    now: options.now ?? (() => 1_000),
+    ...(options.runRenewalIntervalMs !== undefined
+      ? { runRenewalIntervalMs: options.runRenewalIntervalMs }
+      : {}),
   });
   return { store, vault, sourcesService, runner, controller };
 }
@@ -183,4 +196,76 @@ test("source_sync consumer is idempotent on an already-succeeded run", async () 
   // The runner ran exactly once; the second pass no-ops on the terminal run.
   expect(runner.calls).toHaveLength(1);
   expect((await store.listSourceSnapshots(source.id)).length).toBe(1);
+});
+
+test("source_sync consumer renews the run heartbeat while the runner blocks", async () => {
+  let clock = 10_000;
+  const now = () => (clock += 1);
+  const { store, sourcesService, runner, controller } = build({
+    now,
+    runRenewalIntervalMs: 5,
+  });
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  let claimHeartbeat = 0;
+  let midFlightHeartbeat = 0;
+  runner.onSourceSync = async () => {
+    claimHeartbeat = (await store.getSourceSyncRun(run.id))?.heartbeatAt ?? 0;
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      const current = (await store.getSourceSyncRun(run.id))?.heartbeatAt ?? 0;
+      if (current > claimHeartbeat) {
+        midFlightHeartbeat = current;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  await controller.runQueuedSourceSync(run.id);
+
+  expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+});
+
+test("source_sync consumer does not terminalize or publish a snapshot after losing its lease", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  runner.onSourceSync = async () => {
+    const current = await store.getSourceSyncRun(run.id);
+    expect(current?.status).toBe("running");
+    const stolen: SourceSyncRun = {
+      ...(current as SourceSyncRun),
+      status: "running",
+      heartbeatAt: 50_000,
+      updatedAt: "2026-06-06T00:00:50.000Z",
+    };
+    const takeover = await store.transitionRun({
+      id: run.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectHeartbeatAt: current?.heartbeatAt ?? null,
+      run: stolen,
+      setLeaseToken: "lease_other_worker",
+      heartbeatAt: 50_000,
+    });
+    expect(takeover.won).toBe(true);
+  };
+
+  await controller.runQueuedSourceSync(run.id);
+
+  const current = await store.getSourceSyncRun(run.id);
+  expect(current?.status).toBe("running");
+  expect(current?.heartbeatAt).toBe(50_000);
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
 });
