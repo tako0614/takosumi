@@ -69,6 +69,21 @@ export interface RunPlanResource {
   };
 }
 
+export interface RunApplyExpectedGuard {
+  readonly planRunId: string;
+  readonly installationId?: string;
+  readonly currentDeploymentId?: string | null;
+  readonly runnerProfileId: string;
+  readonly sourceDigest: string;
+  readonly variablesDigest: string;
+  readonly policyDecisionDigest: string;
+  readonly planDigest: string;
+  readonly planArtifactDigest: string;
+  readonly sourceCommit?: string;
+  readonly providerLockDigest?: string;
+  readonly resolvedProviderEnvBindingsDigest?: string;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -86,6 +101,11 @@ export interface Run {
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
+  /**
+   * Non-secret guard the client must echo when applying a reviewed plan.
+   * Present only on plan/destroy_plan rows that have a saved immutable plan.
+   */
+  readonly applyExpected?: RunApplyExpectedGuard;
   /** Non-secret OpenTofu plan counts. Raw resource values stay in artifacts. */
   readonly summary?: RunChangeSummary;
   /** Non-secret resource/action review lines. No raw resource values. */

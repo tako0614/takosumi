@@ -46,10 +46,11 @@ services:
       - /bin/sh
       - -c
       - |
-        for db in takosumi takosumi_accounts; do
-          psql -h postgres -U takos -d takosumi_app -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" \
+        until pg_isready -h postgres -U takos -d postgres; do sleep 1; done
+        for db in takosumi_app takosumi takosumi_accounts; do
+          psql -h postgres -U takos -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='$$db'" \
             | grep -q 1 \
-            || psql -h postgres -U takos -d takosumi_app -c "CREATE DATABASE $$db"
+            || psql -h postgres -U takos -d postgres -c "CREATE DATABASE $$db"
         done
     networks:
       - takos-local-internal
@@ -120,8 +121,12 @@ services:
       - sh
       - -c
       - |
+        set -e
+        DATABASE_URL="$$TAKOSUMI_ACCOUNTS_DATABASE_URL" \
+        bun core/scripts/db-migrate.ts --env=production
         bun accounts/cli/src/main.ts accounts migrate \
           --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+        bun deploy/local-substrate/scripts/seed-dev-session.ts
     env_file:
       - env/cloud.env
     volumes:
@@ -186,7 +191,9 @@ services:
   # target), run under the takosumi config.
   cloud:
     profiles: ["postgres"]
-    image: oven/bun:1
+    build:
+      context: .
+      dockerfile: wrappers/Dockerfile.service
     restart: unless-stopped
     depends_on:
       cloud-migrate:
@@ -238,6 +245,8 @@ services:
         mkdir -p deploy/cloudflare/.wrangler/dist
         bun build \
           --target browser \
+          --format esm \
+          --external cloudflare:workers \
           worker/src/index.ts \
           --outfile deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
     volumes:
@@ -254,6 +263,8 @@ services:
         condition: service_completed_successfully
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
+    ports:
+      - "18788:8788"
     env_file:
       - ./env/takosumi-service-worker.env
     volumes:
@@ -332,6 +343,9 @@ services:
     profiles: ["postgres"]
     image: jaegertracing/jaeger:2.4.0
     restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "14317:4317"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     networks:
@@ -344,11 +358,15 @@ services:
     image: otel/opentelemetry-collector-contrib:0.118.0
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "127.0.0.1:14318:4318"
     depends_on:
       jaeger:
         condition: service_started
     volumes:
       - ./otel/config.yaml:/etc/otelcol/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       takos-local-internal:
         aliases:
@@ -392,7 +410,7 @@ services:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
     restart: "no"
-    working_dir: /dashboard
+    working_dir: /work/dashboard
     command:
       - sh
       - -c
@@ -407,7 +425,7 @@ services:
         export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
         bun run build
     volumes:
-      - ../../../takosumi/dashboard:/dashboard
+      - ../../../takosumi:/work
 
   # ---- takosumi Worker (mirrors app.takosumi.com on Cloudflare Workers) ----
   takosumi-worker-build:
@@ -422,6 +440,8 @@ services:
         mkdir -p deploy/cloudflare/.wrangler/dist
         bun build \
           --target browser \
+          --format esm \
+          --external cloudflare:workers \
           worker/src/index.ts \
           --outfile deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
     volumes:

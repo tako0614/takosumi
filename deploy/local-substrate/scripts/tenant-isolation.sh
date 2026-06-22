@@ -42,10 +42,16 @@ mint_google_cookie_session() {
 		echo "FAIL: mock authorize did not return code" >&2
 		exit 1
 	}
+	local callback_state
+	callback_state=$(echo "$loc2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
+	[[ -n "$callback_state" ]] || {
+		echo "FAIL: mock authorize did not return state" >&2
+		exit 1
+	}
 	local resp
 	resp=$(curl -sk --cacert "$CA" \
 		-c "$jar" -b "$jar" \
-		"$BASE/v1/auth/upstream/callback?provider=google&code=$code&state=$state")
+		"$BASE/v1/auth/upstream/callback?provider=google&code=$code&state=$callback_state")
 	local subject
 	subject=$(echo "$resp" | python3 -c "
 import json, sys

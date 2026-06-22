@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
 PROFILE=""
 while [[ $# -gt 0 ]]; do
@@ -44,7 +45,7 @@ docker compose version >/dev/null 2>&1 || {
 wait_for_completed_service() {
 	local service=$1
 	local id=""
-	id=$(docker compose -f compose.substrate.yml --profile "$PROFILE" ps -q "$service" 2>/dev/null || true)
+	id=$(compose_substrate --profile "$PROFILE" ps -q "$service" 2>/dev/null || true)
 	if [[ -z "$id" ]]; then
 		return 0
 	fi
@@ -71,6 +72,61 @@ wait_for_completed_service() {
 	return 1
 }
 
+prepare_app_armor_substrate_prereqs() {
+	if ! local_substrate_disable_apparmor || [[ -z "$PROFILE" ]]; then
+		return 0
+	fi
+
+	echo "==> Preparing substrate storage outside compose healthchecks (AppArmor override)"
+	compose_substrate --profile "$PROFILE" up -d substrate-postgres substrate-minio
+
+	docker run --rm \
+		--security-opt apparmor=unconfined \
+		--network local-substrate_takos-local-internal \
+		-e PGPASSWORD=takos \
+		postgres:16-alpine \
+		sh -c '
+			until pg_isready -h postgres -U takos -d postgres; do sleep 1; done
+			for db in takosumi_app takosumi takosumi_accounts; do
+				psql -h postgres -U takos -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='\''$db'\''" \
+					| grep -q 1 \
+					|| psql -h postgres -U takos -d postgres -c "CREATE DATABASE $db"
+			done
+		'
+
+	docker run --rm \
+		--security-opt apparmor=unconfined \
+		--network local-substrate_takos-local-internal \
+		-e MINIO_ROOT_USER="${MINIO_ROOT_USER:-takos}" \
+		-e MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-takos-minio-pw}" \
+		--entrypoint /bin/sh \
+		minio/mc:latest \
+		-c '
+			until mc alias set takos http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 1; done
+			mc mb --ignore-existing takos/takosumi
+		'
+
+	local repo_root
+	repo_root="$(cd "$SUBSTRATE_DIR/../../.." && pwd)"
+	local accounts_database_url="postgres://takos:takos@postgres:5432/takosumi_accounts"
+	docker run --rm \
+		--security-opt apparmor=unconfined \
+		--network local-substrate_takos-local-internal \
+		--env-file env/cloud.env \
+		-v "$repo_root/takosumi:/workspace" \
+		-w /workspace \
+		-e DATABASE_URL="$accounts_database_url" \
+		-e TAKOSUMI_ACCOUNTS_DATABASE_URL="$accounts_database_url" \
+		oven/bun:1 \
+		sh -c '
+			set -e
+			bun core/scripts/db-migrate.ts --env=production
+			bun accounts/cli/src/main.ts accounts migrate \
+				--database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+			bun deploy/local-substrate/scripts/seed-dev-session.ts
+		'
+}
+
 mkdir -p caddy/runtime
 
 # LAN mode 起動: TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP / DNS_HOST_BIND を export
@@ -85,7 +141,7 @@ echo "==> Rendering CoreDNS zone files (INGRESS_IP=$INGRESS_IP)"
 bash "$SCRIPT_DIR/dns-zone-render.sh"
 
 echo "==> Starting Pebble and CoreDNS (DNS host bind=$DNS_HOST_BIND:53)"
-docker compose -f compose.ingress.yml up -d pebble coredns
+compose_ingress up -d pebble coredns
 
 echo "==> Waiting for Pebble management API to respond"
 for _ in $(seq 1 60); do
@@ -97,12 +153,12 @@ done
 
 if ! curl -sk https://127.0.0.1:15000/roots/0 >/dev/null 2>&1; then
 	echo "Pebble did not become ready within 60s" >&2
-	docker compose -f compose.ingress.yml logs pebble | tail -50 >&2
+	compose_ingress logs pebble | tail -50 >&2
 	exit 1
 fi
 
 echo "==> Extracting Pebble minica (Caddy will use to verify Pebble's ACME directory)"
-docker compose -f compose.ingress.yml cp \
+compose_ingress cp \
 	pebble:/test/certs/pebble.minica.pem \
 	caddy/runtime/pebble.minica.pem
 
@@ -116,17 +172,18 @@ new_issuance_root_hash="$(sha256sum caddy/runtime/pebble-issuance-root.pem | awk
 if [[ "${TAKOSUMI_LOCAL_SUBSTRATE_REFRESH_CADDY_ACME_CACHE:-1}" == "1" ||
 	( -n "$old_issuance_root_hash" && "$old_issuance_root_hash" != "$new_issuance_root_hash" ) ]]; then
 	echo "==> Refreshing Caddy ACME cache"
-	docker compose -f compose.ingress.yml stop caddy >/dev/null 2>&1 || true
-	docker compose -f compose.ingress.yml rm -f -s caddy >/dev/null 2>&1 || true
+	compose_ingress stop caddy >/dev/null 2>&1 || true
+	compose_ingress rm -f -s caddy >/dev/null 2>&1 || true
 	docker volume rm local-substrate_caddy-data local-substrate_caddy-config >/dev/null 2>&1 || true
 fi
 
 echo "==> Starting Caddy"
-docker compose -f compose.ingress.yml up -d caddy
+compose_ingress up -d caddy
 
 if [[ -n "$PROFILE" ]]; then
 	echo "==> Starting substrate stack (profile: $PROFILE)"
-	docker compose -f compose.substrate.yml --profile "$PROFILE" up -d
+	prepare_app_armor_substrate_prereqs
+	compose_substrate --profile "$PROFILE" up -d --build
 
 	echo "==> Waiting for static build outputs"
 	wait_for_completed_service takosumi-website-build
@@ -136,7 +193,7 @@ if [[ -n "$PROFILE" ]]; then
 	# The static builders can replace .output/public after Caddy has already
 	# bind-mounted it. Recreate Caddy so it sees the final directories.
 	echo "==> Recreating Caddy after static builds"
-	docker compose -f compose.ingress.yml up -d --force-recreate caddy
+	compose_ingress up -d --force-recreate caddy
 
 	echo "==> Waiting for substrate services to become healthy"
 	for _ in $(seq 1 120); do

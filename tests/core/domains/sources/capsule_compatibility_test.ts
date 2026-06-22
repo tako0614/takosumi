@@ -68,6 +68,38 @@ output "attachments_bucket" {
   expect(result.findings).toEqual([]);
 });
 
+test("treats provider-free output modules as runnable", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "base_domain" {
+  type = string
+}
+
+locals {
+  public_origin = "https://\${var.base_domain}"
+}
+
+output "public_origin" {
+  value = local.public_origin
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([]);
+  expect(result.resources).toEqual([]);
+  expect(result.dataSources).toEqual([]);
+  expect(result.provisioners).toEqual([]);
+  expect(result.findings).toEqual([]);
+});
+
 test("flags auto-capsulize candidates for provider and backend lifting", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
@@ -602,7 +634,9 @@ output "url" {
     "cloudflare_workers_script_subdomain",
   ]);
   expect(
-    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+    result.findings.some(
+      (finding) => finding.code === "resource_type_not_allowed",
+    ),
   ).toBe(false);
 });
 
@@ -654,7 +688,9 @@ output "url" {
     "cloudflare_workers_route",
   ]);
   expect(
-    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+    result.findings.some(
+      (finding) => finding.code === "resource_type_not_allowed",
+    ),
   ).toBe(true);
 });
 
@@ -698,7 +734,9 @@ output "id" {
   expect(result.level).toBe("unsupported");
   expect(result.resources.every((resource) => resource.allowed)).toBe(false);
   expect(
-    result.findings.some((finding) => finding.code === "resource_type_not_allowed"),
+    result.findings.some(
+      (finding) => finding.code === "resource_type_not_allowed",
+    ),
   ).toBe(true);
 });
 
@@ -817,9 +855,7 @@ output "value" {
 
   // The real provisioner (split across a block comment) is detected, and none
   // of the commented-out decoys (remote-exec / file / chef) are counted.
-  expect(result.provisioners).toEqual([
-    { type: "local-exec", allowed: false },
-  ]);
+  expect(result.provisioners).toEqual([{ type: "local-exec", allowed: false }]);
   expect(result.level).toBe("unsupported");
 });
 

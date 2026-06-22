@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
 CA="caddy/runtime/pebble-issuance-root.pem"
 LOCAL_CLOUD_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
@@ -54,12 +55,12 @@ bundle_freshness_gate() {
 		if [[ -n "$newer" ]]; then
 			echo "==> [bundle-gate] worker source newer than bundle, auto-rebuilding..."
 			echo "$newer" | sed 's/^/                   /'
-			docker compose -f compose.substrate.yml --profile postgres \
+			compose_substrate --profile postgres \
 				run --rm takosumi-worker-build >"$SMOKE_LOG_DIR/bundle-gate-worker.log" 2>&1 || {
 				echo "==> [bundle-gate] worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-worker.log" >&2
 				exit 1
 			}
-			docker compose -f compose.substrate.yml --profile postgres \
+			compose_substrate --profile postgres \
 				up -d --force-recreate takosumi-worker >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] worker rebuilt + restarted"
@@ -79,12 +80,12 @@ bundle_freshness_gate() {
 		if [[ -n "$service_newer" ]]; then
 			echo "==> [bundle-gate] service worker source newer than bundle, auto-rebuilding..."
 			echo "$service_newer" | sed 's/^/                   /'
-			docker compose -f compose.substrate.yml --profile postgres \
+			compose_substrate --profile postgres \
 				run --rm takosumi-service-worker-build >"$SMOKE_LOG_DIR/bundle-gate-service-worker.log" 2>&1 || {
 				echo "==> [bundle-gate] service worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
 				exit 1
 			}
-			docker compose -f compose.substrate.yml --profile postgres \
+			compose_substrate --profile postgres \
 				up -d --force-recreate takosumi-service-worker >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] service worker rebuilt + restarted"
@@ -100,13 +101,13 @@ bundle_freshness_gate() {
 		if [[ -n "$newer" ]]; then
 			echo "==> [bundle-gate] SPA source newer than bundle, auto-rebuilding..."
 			echo "$newer" | sed 's/^/                   /'
-			docker compose -f compose.substrate.yml --profile postgres \
+			compose_substrate --profile postgres \
 				run --rm takosumi-dashboard-build >"$SMOKE_LOG_DIR/bundle-gate-spa.log" 2>&1 || {
 				echo "==> [bundle-gate] SPA rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-spa.log" >&2
 				exit 1
 			}
 			# Caddy bind-mount needs recreate (not restart) to pick up new files
-			docker compose -f compose.ingress.yml up -d --force-recreate caddy >/dev/null 2>&1
+			compose_ingress up -d --force-recreate caddy >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] SPA rebuilt + Caddy recreated"
 		fi

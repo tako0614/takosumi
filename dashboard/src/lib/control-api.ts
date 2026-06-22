@@ -514,6 +514,21 @@ export interface RunPlanResource {
   };
 }
 
+export interface RunApplyExpectedGuard {
+  readonly planRunId: string;
+  readonly installationId?: string;
+  readonly currentDeploymentId?: string | null;
+  readonly runnerProfileId: string;
+  readonly sourceDigest: string;
+  readonly variablesDigest: string;
+  readonly policyDecisionDigest: string;
+  readonly planDigest: string;
+  readonly planArtifactDigest: string;
+  readonly sourceCommit?: string;
+  readonly providerLockDigest?: string;
+  readonly resolvedProviderEnvBindingsDigest?: string;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -529,6 +544,7 @@ export interface Run {
   readonly baseStateGeneration?: number;
   readonly planDigest?: string;
   readonly planArtifactKey?: string;
+  readonly applyExpected?: RunApplyExpectedGuard;
   readonly summary?: RunChangeSummary;
   readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
