@@ -93,7 +93,7 @@ test("OpenTofu runner image stays isolated from the Worker browser bundle", asyn
   assert.match(dockerfile, /apt-get install[\s\S]*\bgit\b/);
   assert.match(dockerfile, /tofu version/);
   assert.match(server, /Bun\.serve/);
-  assert.match(server, /Bun\.spawn\(command/);
+  assert.match(server, /Bun\.spawn\(\[\.\.\.command\]/);
   assert.match(server, /prepareGeneratedRootWorkspace/);
   assert.match(server, /restoreGeneratedRootApplyWorkspace/);
   assert.match(server, /materializeSource/);

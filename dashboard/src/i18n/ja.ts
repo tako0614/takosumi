@@ -38,6 +38,7 @@ export const ja = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "サービス",
   "nav.add": "追加",
+  "nav.runs": "更新履歴",
   "nav.connections": "クラウドアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
@@ -167,6 +168,7 @@ export const ja = {
   "apps.openApp": "サービスを開く",
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",
+  "apps.updated": "更新: {date}",
   "apps.reviewChanges": "更新を確認",
   "apps.start.aria": "最初のサービス",
   "apps.start.kicker": "まだサービスがありません",
@@ -354,12 +356,25 @@ export const ja = {
   "run.audit.empty": "活動記録はありません。",
   "run.audit.detail": "記録の詳細",
 
+  // --- run history --------------------------------------------------------------
+  "runList.title": "更新履歴",
+  "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
+  "runList.open": "確認",
+  "runList.empty.title": "まだ更新履歴はありません",
+  "runList.empty.message":
+    "サービスを追加して変更を確認すると、ここに履歴が並びます。",
+  "runList.applied": "デプロイ",
+  "runList.destroyed": "削除",
+  "runList.failedWithCode": "{operation}に失敗しました（{code}）",
+
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
   "new.subtitle": "おすすめから選ぶか、リンクを貼って追加します。",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "追加できるサービス",
   "new.store.blocksTitle": "保存先と部品",
+  "new.store.empty.title": "追加できるサービスがありません",
+  "new.store.empty.message": "リンクから追加できます。",
   "new.catalog.select": "これを追加",
   "new.advancedImport.open": "リンクから追加",
   "new.advancedImport.close": "一覧に戻る",

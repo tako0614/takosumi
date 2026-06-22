@@ -200,6 +200,11 @@
   font-size: var(--tg-fs-md);
   overflow-wrap: anywhere;
 }
+.av-service-updated {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.4;
+}
 .av-service-meta {
   display: flex;
   min-height: 20px;
@@ -224,10 +229,14 @@
 .av-service-actions .tg-btn-primary {
   flex: 1 1 auto;
 }
+.av-service-actions .tg-btn-secondary {
+  flex: 0 1 auto;
+}
 .av-service-link-state {
   margin-right: auto;
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
+  line-height: 1.4;
 }
 
 /* ===== recent runs strip (Installation detail / deploys) ===== */
@@ -253,6 +262,41 @@
 }
 .av-run-action {
   font-weight: 600;
+}
+
+/* ===== run history (/runs) ===== */
+.av-run-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.av-run-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: var(--tg-s-3);
+  align-items: center;
+  padding: var(--tg-s-3) 0;
+  border-bottom: 1px solid var(--tg-line);
+}
+.av-run-history-row:last-child {
+  border-bottom: 0;
+}
+.av-run-history-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.av-run-history-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.av-run-history-time {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  white-space: nowrap;
 }
 
 /* ===== run summary layer ===== */
@@ -375,6 +419,8 @@
 .av-catalog-desc {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .av-catalog-src {
   font-size: var(--tg-fs-xs);
@@ -493,10 +539,7 @@ button.tg-tab {
   }
 
   .av-catalog-desc {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    display: block;
   }
 
   .av-catalog-card .tg-btn {
@@ -509,6 +552,15 @@ button.tg-tab {
 
   .av-service-setup-grid {
     grid-template-columns: 1fr;
+  }
+
+  .av-run-history-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .av-run-history-row .tg-btn {
+    width: 100%;
   }
 }
 

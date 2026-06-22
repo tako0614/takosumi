@@ -4,7 +4,7 @@
  * the service-hosting tasks ordinary users need every day.
  */
 import { A, useLocation } from "@solidjs/router";
-import { ArrowLeft, Home, Plus, UserCircle2 } from "lucide-solid";
+import { ArrowLeft, Clock3, Home, Plus, UserCircle2 } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";
@@ -31,6 +31,7 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
+  { href: "/runs", labelKey: "nav.runs", icon: Clock3 },
 ];
 
 const ACCOUNT: NavItem[] = [

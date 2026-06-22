@@ -35,6 +35,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Services",
   "nav.add": "Add",
+  "nav.runs": "Updates",
   "nav.connections": "Cloud accounts",
   "nav.billing": "Billing",
   "nav.activity": "Activity",
@@ -163,6 +164,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.openApp": "Open service",
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
+  "apps.updated": "Updated: {date}",
   "apps.reviewChanges": "Review update",
   "apps.start.aria": "First service",
   "apps.start.kicker": "No services yet",
@@ -350,12 +352,25 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.empty": "No activity records.",
   "run.audit.detail": "Record detail",
 
+  // --- run history --------------------------------------------------------------
+  "runList.title": "Updates",
+  "runList.subtitle": "Recent reviews, approvals, and deploys, newest first.",
+  "runList.open": "Review",
+  "runList.empty.title": "No updates yet",
+  "runList.empty.message":
+    "After you add a service and review a change, update history appears here.",
+  "runList.applied": "Deploy",
+  "runList.destroyed": "Delete",
+  "runList.failedWithCode": "{operation} failed ({code})",
+
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
   "new.subtitle": "Choose a starter or paste an install link.",
   "new.store.aria": "Available services",
   "new.store.title": "Available services",
   "new.store.blocksTitle": "Storage and building blocks",
+  "new.store.empty.title": "No services are available",
+  "new.store.empty.message": "You can add one from a link.",
   "new.catalog.select": "Add this",
   "new.advancedImport.open": "Add from link",
   "new.advancedImport.close": "Back to list",
