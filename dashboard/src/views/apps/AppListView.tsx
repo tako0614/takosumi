@@ -7,14 +7,16 @@
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Boxes, ExternalLink, LayoutGrid, Plus, Sparkles } from "lucide-solid";
+import { ExternalLink, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
 import {
   type ControlApiError,
+  createSpace,
   getDeployment,
   type Installation,
+  type Space,
   listInstallations,
 } from "../../lib/control-api.ts";
 import {
@@ -26,12 +28,12 @@ import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
 import {
   Button,
-  EmptyState,
   PageHeader,
   Skeleton,
   StatusBadge,
   Toast,
 } from "../../components/ui/index.ts";
+import { createAction } from "../account/lib/action.tsx";
 
 export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
@@ -70,6 +72,17 @@ function Inner() {
   const attentionCount = createMemo(
     () => (installations() ?? []).filter(needsAttention).length,
   );
+  const createFirstWorkspace = createAction(async (): Promise<Space> => {
+    const space = await createSpace({
+      handle: defaultWorkspaceHandle(),
+      displayName: t("space.defaultName"),
+      type: "personal",
+    });
+    setCurrentSpaceId(space.id);
+    window.dispatchEvent(new Event("takosumi:spaces-changed"));
+    navigate("/new");
+    return space;
+  });
 
   const showAddServiceAction = createMemo(() => {
     const list = installations();
@@ -98,10 +111,10 @@ function Inner() {
       <Show
         when={spaceId()}
         fallback={
-          <EmptyState
-            icon={<Boxes size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+          <NoWorkspaceStartPanel
+            busy={createFirstWorkspace.busy()}
+            error={createFirstWorkspace.error()}
+            onCreate={() => void createFirstWorkspace.run()}
           />
         }
       >
@@ -148,6 +161,34 @@ function Inner() {
         </Switch>
       </Show>
     </AppShell>
+  );
+}
+
+function NoWorkspaceStartPanel(props: {
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly onCreate: () => void;
+}) {
+  return (
+    <section class="av-start" aria-label={t("space.start.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("space.start.kicker")}</span>
+        <h2 class="av-start-title">{t("space.start.title")}</h2>
+        <p class="av-start-sub">{t("space.start.body")}</p>
+      </div>
+      <Button
+        variant="primary"
+        type="button"
+        busy={props.busy}
+        icon={<Plus size={18} />}
+        onClick={props.onCreate}
+      >
+        {props.busy ? t("space.start.creating") : t("space.start.create")}
+      </Button>
+      <Show when={props.error}>
+        {(message) => <Toast tone="error">{message()}</Toast>}
+      </Show>
+    </section>
   );
 }
 
@@ -229,6 +270,12 @@ function ServiceList(props: {
       </For>
     </ul>
   );
+}
+
+function defaultWorkspaceHandle(): string {
+  const time = Date.now().toString(36).slice(-6);
+  const random = Math.random().toString(36).slice(2, 8) || "new";
+  return `workspace-${time}-${random}`.slice(0, 39);
 }
 
 function WorkspaceStartPanel() {

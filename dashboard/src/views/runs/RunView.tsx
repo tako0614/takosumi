@@ -643,7 +643,7 @@ function Inner() {
   const summary = createMemo((): Summary | null => {
     const r = run.latest;
     if (!r) return null;
-    const name = appName() ?? r.installationId ?? "";
+    const name = appName();
     if (r.type === "apply" || r.type === "destroy_apply") {
       if (r.status === "queued" || r.status === "running") {
         return { kind: "progress", text: t("run.summary.applying") };
@@ -687,10 +687,18 @@ function Inner() {
           return r.type === "destroy_plan"
             ? {
                 kind: "danger",
-                text: t("run.summary.destroyReady", { name }),
+                text: name
+                  ? t("run.summary.destroyReady", { name })
+                  : t("run.summary.destroyReadyGeneric"),
                 sub,
               }
-            : { kind: "action", text: t("run.summary.ready", { name }), sub };
+            : {
+                kind: "action",
+                text: name
+                  ? t("run.summary.ready", { name })
+                  : t("run.summary.readyGeneric"),
+                sub,
+              };
         }
         case "failed":
           return {

@@ -64,6 +64,14 @@ export const en: Record<keyof typeof ja, string> = {
   "space.none": "No workspaces",
   "space.select": "Select a workspace",
   "space.selectMessage": "Pick a workspace from the switcher in the top bar.",
+  "space.defaultName": "My workspace",
+  "space.start.aria": "Start workspace",
+  "space.start.kicker": "No workspace yet",
+  "space.start.title": "Create your workspace to start",
+  "space.start.body":
+    "Takosumi keeps your services, deploy history, and settings inside a workspace.",
+  "space.start.create": "Create workspace",
+  "space.start.creating": "Creating workspace...",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -265,10 +273,13 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.waitingApproval":
     "This change needs approval before it can run. Review it and approve.",
   "run.summary.ready": "“{name}” is ready to deploy.",
+  "run.summary.readyGeneric": "This service is ready to deploy.",
   "run.summary.readyChanges":
     "Create {create} / Update {update} / Delete {delete}",
   "run.summary.destroyReady":
     "“{name}” is ready to be deleted. This cannot be undone once run.",
+  "run.summary.destroyReadyGeneric":
+    "This service is ready to be deleted. This cannot be undone once run.",
   "run.summary.applied": "Deploy started. It will take a moment to settle.",
   "run.summary.applying": "Deploying…",
   "run.summary.applySucceeded": "Deploy complete.",
