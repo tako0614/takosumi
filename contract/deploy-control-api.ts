@@ -68,6 +68,13 @@ export type {
 } from "./deployments.ts";
 export type {
   BackupConfig,
+  InstallConfigCatalogDefault,
+  InstallConfigCatalogInput,
+  InstallConfigCatalogKind,
+  InstallConfigCatalogMetadata,
+  InstallConfigCatalogSource,
+  InstallConfigCatalogSurface,
+  InstallConfigCatalogText,
   InstallConfigSourceKind,
   InstallBuildConfig,
   InstallationStatus,

@@ -537,6 +537,15 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     additionalProperties: false,
   };
   return {
+    LocalizedText: {
+      type: "object",
+      required: ["ja", "en"],
+      properties: {
+        ja: { type: "string" },
+        en: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     CoreConditionReason: {
       enum: [...CORE_CONDITION_REASONS],
       description:
@@ -921,6 +930,67 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
           },
         },
         policy: { type: "object", additionalProperties: true },
+        catalog: {
+          type: "object",
+          required: [
+            "order",
+            "surface",
+            "kind",
+            "provider",
+            "suggestedName",
+            "badge",
+            "name",
+            "description",
+            "inputs",
+          ],
+          properties: {
+            templateId: { type: "string" },
+            templateVersion: { type: "string" },
+            source: {
+              type: "object",
+              required: ["git", "ref", "path"],
+              properties: {
+                git: { type: "string" },
+                ref: { type: "string" },
+                path: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+            order: { type: "integer", minimum: 0 },
+            surface: { enum: ["service", "building_block"] },
+            kind: { enum: ["worker", "storage", "site"] },
+            provider: { type: "string" },
+            suggestedName: { type: "string" },
+            badge: { $ref: "#/components/schemas/LocalizedText" },
+            name: { $ref: "#/components/schemas/LocalizedText" },
+            description: { $ref: "#/components/schemas/LocalizedText" },
+            inputs: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["name", "label"],
+                properties: {
+                  name: { type: "string" },
+                  type: { enum: ["string", "number", "boolean"] },
+                  required: { type: "boolean" },
+                  defaultValue: {
+                    enum: [
+                      "service-name",
+                      "service-name-with-space",
+                      "main",
+                      "us-east-1",
+                    ],
+                  },
+                  label: { $ref: "#/components/schemas/LocalizedText" },
+                  helper: { $ref: "#/components/schemas/LocalizedText" },
+                  placeholder: { type: "string" },
+                },
+                additionalProperties: false,
+              },
+            },
+          },
+          additionalProperties: false,
+        },
         backup: {
           type: "object",
           required: ["enabled", "mode"],
