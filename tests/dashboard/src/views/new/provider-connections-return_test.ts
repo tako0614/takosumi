@@ -130,7 +130,7 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new does not send operator-managed-only requirements to own-key setup", () => {
+  test("/new does not send operator-managed-only requirements to custom provider setup", () => {
     expect(newAppViewSource).toContain("rowRequiresOperatorManagedOnly");
     expect(newAppViewSource).toContain("missingOperatorManagedProviderRows");
     expect(newAppViewSource).toContain("missingOwnKeyProviderRows");

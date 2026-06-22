@@ -1148,7 +1148,7 @@ account signup/login
 hosted runner pool
 official state backend
 official secret backend
-billing placeholder
+billing foundation
 usage metering foundation
 support/admin
 cloud config
@@ -1331,7 +1331,7 @@ hosted runners
 official state backend
 official secret backend
 account system
-billing placeholder
+billing foundation
 usage metering foundation
 admin/support
 ```

@@ -23,9 +23,11 @@ describe("RunGroupView", () => {
     expect(source).not.toContain('header: "Run"');
     expect(source).not.toContain("<DataTable");
     expect(source).not.toContain("<KVList items={items()} />");
-    expect(en["runGroup.title"]).toBe("Batch update");
+    expect(en["runGroup.title"]).toBe("Workspace update");
     expect(en["runGroup.openRun"]).toBe("Review change");
     expect(ja["runGroup.openRun"]).toBe("変更内容を開く");
+    expect(en["runGroup.groupId"]).toBe("Update ID");
+    expect(ja["runGroup.groupId"]).toBe("更新 ID");
     expect(en["runGroup.approveAll"]).not.toContain("executions");
     expect(en["runGroup.members"]).not.toContain("executions");
     expect(ja["runGroup.approveAll"]).not.toContain("実行");
