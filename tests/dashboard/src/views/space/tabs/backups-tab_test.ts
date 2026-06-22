@@ -13,14 +13,15 @@ test("BackupsTab keeps storage object details out of the user-facing table", () 
   const source = readFileSync(sourcePath, "utf8");
 
   expect(source).toContain('"backups.col.contents"');
-  expect(source).toContain('"backups.col.source"');
+  expect(source).not.toContain('t("backups.col.source")');
   expect(source).not.toContain('<summary>{t("common.details")}</summary>');
   expect(source).not.toContain("shortDigest");
   expect(source).not.toContain("backup.digest");
   expect(source).not.toContain("backup.objectKey");
   expect(source).not.toContain("data().objectKey");
   expect(source).not.toContain('"backups.detail.id"');
-  expect(source).toContain("backup.createdByRunId");
+  expect(source).not.toContain("backup.createdByRunId");
+  expect(source).not.toContain("backup.serviceData");
   expect(source).not.toContain('header: t("backups.col.artifact")');
   expect(source).not.toContain('header: t("backups.col.serviceData")');
   expect(source).not.toContain('header: t("backups.col.run")');

@@ -71,6 +71,9 @@ describe("dashboard shell navigation layout", () => {
     expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
     expect(spaceSwitcherSource).not.toContain("topbar-create-space");
     expect(spaceSwitcherSource).not.toContain("createSpace");
+    expect(spaceSwitcherSource).toContain("loadedSpaces().length > 1");
+    expect(spaceSwitcherSource).toContain("createEffect");
+    expect(spaceSwitcherSource).not.toContain("@{s.handle}");
     expect(shellCssSource).not.toContain(".topbar-create-space");
   });
 
@@ -78,6 +81,6 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).toContain("isTakosumiCloudRuntime");
     expect(userMenuSource).toContain('href="/billing"');
     expect(userMenuSource).toContain('t("nav.billing")');
-    expect(userMenuSource).toContain("takosumi.com/docs");
+    expect(userMenuSource).toContain("dashboardDocsHref");
   });
 });

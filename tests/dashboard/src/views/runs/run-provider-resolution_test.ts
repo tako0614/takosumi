@@ -43,8 +43,12 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("providerConnectionsForRun");
     expect(en["run.details.title"]).toBe("Support details");
     expect(ja["run.details.title"]).toBe("サポート詳細");
-    expect(en["run.connections.reviewTitle"]).toBe("Connection review needed");
-    expect(ja["run.connections.reviewTitle"]).toBe("接続の確認が必要です");
+    expect(en["run.connections.reviewTitle"]).toBe(
+      "Cloud account review needed",
+    );
+    expect(ja["run.connections.reviewTitle"]).toBe(
+      "クラウドアカウントの確認が必要です",
+    );
     expect(en).not.toHaveProperty("run.connections.ownership");
     expect(ja).not.toHaveProperty("run.connections.ownership");
     expect(runViewSource).not.toContain('t("run.connections.ownership")');
@@ -80,15 +84,15 @@ describe("Run review ProviderConnection evidence", () => {
     );
   });
 
-  test("keeps the copy explicit that credentials are not displayed", () => {
+  test("keeps the copy explicit that private values are not displayed", () => {
     expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
-      "credential values are not shown",
+      "private values are not shown",
     );
     expect(en["run.connections.reviewBody"]).not.toContain(
-      "will use these external service connections",
+      "will use these provider connections",
     );
     expect(ja["run.connections.reviewBody"]).toContain(
-      "認証情報の値は表示しません",
+      "非公開の値は表示しません",
     );
   });
 

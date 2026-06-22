@@ -150,6 +150,10 @@
   font-family: var(--tg-font-body);
   font-size: var(--tg-fs-sm);
 }
+.topbar-space-empty {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+}
 .topbar-space-error {
   color: var(--tg-danger);
   font-size: var(--tg-fs-xs);

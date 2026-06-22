@@ -69,8 +69,8 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).toContain('t("conn.add.open")');
     expect(connectionsTabSource).toContain('t("conn.add.close")');
     expect(connectionsTabSource).toContain("!shouldShowCreateForm()");
-    expect(en["conn.add.open"]).toBe("Add connection");
-    expect(ja["conn.add.open"]).toBe("接続を追加");
+    expect(en["conn.add.open"]).toBe("Add cloud account");
+    expect(ja["conn.add.open"]).toBe("クラウドアカウントを追加");
   });
 
   test("keeps raw account subjects out of the always-visible user menu", () => {

@@ -140,9 +140,7 @@ describe("/new Provider Connections return context", () => {
     expect(en["new.providers.operatorMissingBody"]).not.toContain(
       "Takosumi Cloud",
     );
-    expect(en["new.providers.operatorMissingNext"]).toContain(
-      "workspace admin",
-    );
+    expect(en["new.providers.operatorMissingNext"]).toContain("admin");
     expect(ja["new.providers.operatorMissingBody"]).not.toContain(
       "Provider Connection",
     );
@@ -158,9 +156,13 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"new.deeplink.invalidTitle"');
     expect(newAppViewSource).toContain('"new.deeplink.invalidBody"');
     expect(en["new.deeplink.invalidBody"].toLowerCase()).toContain(
-      "paste the repository url manually",
+      "paste another link",
     );
-    expect(ja["new.deeplink.invalidBody"]).toContain("手動で貼り付け");
+    expect(en["new.deeplink.invalidBody"].toLowerCase()).not.toContain(
+      "repository",
+    );
+    expect(ja["new.deeplink.invalidBody"]).toContain("別のリンク");
+    expect(ja["new.deeplink.invalidBody"]).not.toContain("リポジトリ");
   });
 
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {

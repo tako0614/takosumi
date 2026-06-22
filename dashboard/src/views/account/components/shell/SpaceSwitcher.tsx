@@ -7,7 +7,7 @@
  * via `GET /api/v1/spaces` and defaults to the first Space when none is
  * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
  */
-import { createResource, For, Show } from "solid-js";
+import { createEffect, createMemo, createResource, For, Show } from "solid-js";
 import {
   type ControlApiError,
   listSpaces,
@@ -23,6 +23,7 @@ import { Select } from "../../../../components/ui/Form.tsx";
 
 export default function SpaceSwitcher() {
   const [spaces] = createResource(listSpaces);
+  const loadedSpaces = createMemo(() => spaces() ?? []);
 
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
   // the previous user's localStorage value, so never keep an id that is absent
@@ -35,22 +36,19 @@ export default function SpaceSwitcher() {
     return list;
   };
 
+  createEffect(() => {
+    if (spaces.loading) return;
+    onLoaded(loadedSpaces());
+  });
+
   return (
     <div class="topbar-space">
       <Show
-        when={!spaces.loading && (spaces() ?? []).length > 0}
+        when={!spaces.loading && loadedSpaces().length > 1}
         fallback={
-          <Select
-            id="workspace-switcher"
-            name="workspaceId"
-            class="topbar-space-select"
-            disabled
-            aria-label={t("space.label")}
-          >
-            <option>
-              {spaces.loading ? t("common.loading") : t("space.none")}
-            </option>
-          </Select>
+          <Show when={!spaces.loading && loadedSpaces().length === 0}>
+            <span class="topbar-space-empty">{t("space.none")}</span>
+          </Show>
         }
       >
         <Select
@@ -61,8 +59,10 @@ export default function SpaceSwitcher() {
           value={currentSpaceId()}
           onChange={(e) => setCurrentSpaceId(e.currentTarget.value)}
         >
-          <For each={onLoaded(spaces() ?? [])}>
-            {(s) => <option value={s.id}>@{s.handle}</option>}
+          <For each={loadedSpaces()}>
+            {(s) => (
+              <option value={s.id}>{s.displayName || s.handle}</option>
+            )}
           </For>
         </Select>
       </Show>
