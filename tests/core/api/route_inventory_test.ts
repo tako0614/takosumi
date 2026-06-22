@@ -7,6 +7,7 @@ import {
   createTakosumiOpenApiDocument,
   TAKOSUMI_OPENAPI_VERSION,
 } from "../../../core/api/openapi.ts";
+import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -306,6 +307,13 @@ test("openapi request and response components are not generic placeholders", () 
     [],
     "request/response schemas must be concrete enough for generated clients",
   );
+});
+
+test("restore endpoint descriptor carries a concrete restore request schema", () => {
+  const endpoint = DEPLOY_CONTROL_ACTIVITY_ENDPOINTS.find(
+    (item) => item.operationId === "createBackupRestore",
+  );
+  assert.equal(endpoint?.openapi.requestSchema, "CreateRestoreRequest");
 });
 
 test("mountedEndpoints gates families and always includes process endpoints", () => {

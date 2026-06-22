@@ -1651,6 +1651,208 @@ test("restore marks the Installation stale because it restores state, not live r
   expect(restored?.status).toBe("stale");
 });
 
+test("restore dispatches service-data artifacts only when requested and acknowledged", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const serviceData = {
+    objectKey: "spaces/space_test/backups/bkp_restore/service-data.tar.zst.enc",
+    digest: "sha256:service-data",
+    sizeBytes: 42,
+    exportedCount: 3,
+    unsupportedCount: 0,
+    missingCount: 0,
+  };
+  const restoreJobs: Array<{
+    readonly serviceData?: typeof serviceData;
+  }> = [];
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(75),
+    newId: deterministicIds(),
+    runner: {
+      restore: (job) => {
+        return Promise.resolve({
+          state: {
+            generation: job.stateScope.generation,
+            objectKey: `states/${job.stateScope.generation}.tfstate.enc`,
+            digest: PLAN_DIGEST,
+          },
+        });
+      },
+      restoreServiceData: (job) => {
+        restoreJobs.push({ serviceData: job.serviceData });
+        return Promise.resolve({
+          status: "restored",
+          objectKey: job.serviceData.objectKey,
+          digest: job.serviceData.digest,
+          sizeBytes: job.serviceData.sizeBytes,
+          restoredCount: job.serviceData.exportedCount,
+        });
+      },
+    },
+  });
+  const installation = await store.getInstallation(installationId);
+  expect(installation).toBeDefined();
+  await store.putStateSnapshot({
+    id: "state_restore_service_data_source",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    generation: 1,
+    objectKey: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: "bkp_restore_service_data",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    objectKey:
+      "spaces/space_test/backups/bkp_restore_service_data/control.json.zst.enc",
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    serviceData,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const restore = await controller.createRestoreRun(
+    installation!.spaceId,
+    "bkp_restore_service_data",
+    {
+      installationId,
+      environment: installation!.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+      restoreServiceData: true,
+    },
+  );
+  expect(restore.restoreServiceData).toBe(true);
+
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  await controller.runQueuedRestore(restore.id);
+
+  const restoreRun = await store.getBackupRun(restore.id);
+  expect(restoreJobs).toHaveLength(1);
+  expect(restoreJobs[0]?.serviceData).toEqual(serviceData);
+  expect(restoreRun?.status).toBe("succeeded");
+  expect(restoreRun?.restoredServiceData).toEqual({
+    status: "restored",
+    objectKey: serviceData.objectKey,
+    digest: serviceData.digest,
+    sizeBytes: serviceData.sizeBytes,
+    restoredCount: serviceData.exportedCount,
+  });
+});
+
+test("restoreServiceData fails closed when the backup has no service-data artifact", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(80),
+    newId: deterministicIds(),
+    runner: fakeRunner(),
+  });
+  const installation = await store.getInstallation(installationId);
+  expect(installation).toBeDefined();
+  await store.putStateSnapshot({
+    id: "state_restore_without_service_data_source",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    generation: 1,
+    objectKey: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: "bkp_restore_without_service_data",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    objectKey:
+      "spaces/space_test/backups/bkp_restore_without_service_data/control.json.zst.enc",
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.createRestoreRun(
+      installation!.spaceId,
+      "bkp_restore_without_service_data",
+      {
+        installationId,
+        environment: installation!.environment,
+        stateGeneration: 1,
+        expectedBackupDigest: PLAN_DIGEST,
+        restoreServiceData: true,
+      },
+    ),
+  ).rejects.toThrow(/no service-data artifact/);
+});
+
+test("restoreServiceData fails closed when the runner lacks service-data restore capability", async () => {
+  const { store, installationId } = await seedUpdatableInstallation();
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(85),
+    newId: deterministicIds(),
+    runner: fakeRunner(),
+  });
+  const installation = await store.getInstallation(installationId);
+  expect(installation).toBeDefined();
+  await store.putStateSnapshot({
+    id: "state_restore_service_data_unwired_source",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    generation: 1,
+    objectKey: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putBackupRecord({
+    id: "bkp_restore_service_data_unwired",
+    spaceId: installation!.spaceId,
+    installationId,
+    environment: installation!.environment,
+    objectKey:
+      "spaces/space_test/backups/bkp_restore_service_data_unwired/control.json.zst.enc",
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    serviceData: {
+      objectKey:
+        "spaces/space_test/backups/bkp_restore_service_data_unwired/service-data.tar.zst.enc",
+      digest: "sha256:service-data",
+      sizeBytes: 42,
+      exportedCount: 3,
+      unsupportedCount: 0,
+      missingCount: 0,
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.createRestoreRun(
+      installation!.spaceId,
+      "bkp_restore_service_data_unwired",
+      {
+        installationId,
+        environment: installation!.environment,
+        stateGeneration: 1,
+        expectedBackupDigest: PLAN_DIGEST,
+        restoreServiceData: true,
+      },
+    ),
+  ).rejects.toThrow(/service-data restore-capable runner/);
+});
+
 test("not found surfaces the closed controller error code", async () => {
   const controller = new OpenTofuDeploymentController({
     vault: fakeProviderVault() as never,
