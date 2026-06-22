@@ -3076,6 +3076,22 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    BackupRestoreTarget: {
+      type: "object",
+      required: [
+        "installationId",
+        "environment",
+        "stateGeneration",
+        "stateSnapshotId",
+      ],
+      properties: {
+        installationId: { type: "string" },
+        environment: { type: "string" },
+        stateGeneration: { type: "integer" },
+        stateSnapshotId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     BackupRecord: {
       type: "object",
       required: [
@@ -3091,6 +3107,7 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
         spaceId: { type: "string" },
         installationId: { type: "string" },
         environment: { type: "string" },
+        restoreTarget: ref("BackupRestoreTarget"),
         objectKey: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },

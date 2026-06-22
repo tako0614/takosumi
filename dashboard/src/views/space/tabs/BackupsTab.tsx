@@ -3,10 +3,12 @@
  * (current compatibility store: workspace-scoped control backup ledger).
  */
 import "../../../styles/wave-b.css";
+import { useNavigate } from "@solidjs/router";
 import { createResource, Match, Show, Switch } from "solid-js";
-import { Archive } from "lucide-solid";
+import { Archive, RotateCcw } from "lucide-solid";
 import {
   type BackupRecord,
+  createBackupRestore,
   type ControlApiError,
   createSpaceBackup,
   listSpaceBackups,
@@ -24,6 +26,7 @@ import {
 } from "../../../components/ui/index.ts";
 
 export default function BackupsTab(props: { readonly spaceId: string }) {
+  const navigate = useNavigate();
   const [backups, { refetch }] = createResource(
     () => props.spaceId,
     listSpaceBackups,
@@ -32,6 +35,19 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
   const create = createAction(async () => {
     await createSpaceBackup(props.spaceId);
     await refetch();
+  });
+  const restore = createAction(async (record: BackupRecord) => {
+    const target = record.restoreTarget;
+    if (!target) {
+      throw new Error(t("backups.restoreUnavailable"));
+    }
+    const run = await createBackupRestore(props.spaceId, record.id, {
+      installationId: target.installationId,
+      environment: target.environment,
+      stateGeneration: target.stateGeneration,
+      expectedBackupDigest: record.digest,
+    });
+    navigate(`/runs/${run.id}`);
   });
 
   const columns: readonly Column<BackupRecord>[] = [
@@ -51,7 +67,35 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
         <div>
           <strong>{t("backups.restorePoint")}</strong>
           <div class="wb-subline">{formatBytes(backup.sizeBytes)}</div>
+          <Show when={backup.restoreTarget}>
+            {(target) => (
+              <div class="wb-subline">
+                {t("backups.restoreGeneration", {
+                  generation: String(target().stateGeneration),
+                })}
+              </div>
+            )}
+          </Show>
         </div>
+      ),
+    },
+    {
+      header: t("backups.col.actions"),
+      align: "right",
+      cell: (backup) => (
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={<RotateCcw size={14} />}
+          busy={restore.busy()}
+          disabled={restore.busy() || !backup.restoreTarget}
+          onClick={() => void restore.run(backup)}
+          title={
+            backup.restoreTarget ? undefined : t("backups.restoreUnavailable")
+          }
+        >
+          {t("backups.restore")}
+        </Button>
       ),
     },
   ];
@@ -75,6 +119,13 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
           }
         />
         <Show when={create.error()}>
+          {(m) => (
+            <p class="wb-error" role="alert">
+              {m()}
+            </p>
+          )}
+        </Show>
+        <Show when={restore.error()}>
           {(m) => (
             <p class="wb-error" role="alert">
               {m()}
