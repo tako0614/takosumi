@@ -135,6 +135,36 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
+const PRIMARY_CATALOG = CATALOG.filter((entry) => entry.surface === "service");
+const BUILDING_BLOCK_CATALOG = CATALOG.filter(
+  (entry) => entry.surface === "building_block",
+);
+
+function CatalogCard(props: {
+  readonly entry: CatalogEntry;
+  readonly onSelect: (entry: CatalogEntry) => void;
+}) {
+  return (
+    <li class="av-catalog-card">
+      <div class="av-catalog-icon" aria-hidden="true">
+        <CatalogIcon entry={props.entry} />
+      </div>
+      <div class="av-catalog-text">
+        <span class="av-catalog-src">{props.entry.badge[locale()]}</span>
+        <span class="av-catalog-name">{props.entry.name[locale()]}</span>
+        <span class="av-catalog-desc">{props.entry.description[locale()]}</span>
+      </div>
+      <Button
+        variant="primary"
+        size="sm"
+        type="button"
+        onClick={() => props.onSelect(props.entry)}
+      >
+        {t("new.catalog.select")}
+      </Button>
+    </li>
+  );
+}
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -1615,35 +1645,24 @@ function Inner() {
               </div>
             </div>
             <ul class="av-catalog-grid">
-              <For each={CATALOG}>
+              <For each={PRIMARY_CATALOG}>
                 {(entry) => (
-                  <li class="av-catalog-card">
-                    <div class="av-catalog-icon" aria-hidden="true">
-                      <CatalogIcon entry={entry} />
-                    </div>
-                    <div class="av-catalog-text">
-                      <span class="av-catalog-src">
-                        {entry.badge[locale()]}
-                      </span>
-                      <span class="av-catalog-name">
-                        {entry.name[locale()]}
-                      </span>
-                      <span class="av-catalog-desc">
-                        {entry.description[locale()]}
-                      </span>
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      type="button"
-                      onClick={() => pickCatalogEntry(entry)}
-                    >
-                      {t("new.catalog.select")}
-                    </Button>
-                  </li>
+                  <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
                 )}
               </For>
             </ul>
+            <Show when={BUILDING_BLOCK_CATALOG.length > 0}>
+              <details class="wb-disclosure av-catalog-more">
+                <summary>{t("new.store.blocksTitle")}</summary>
+                <ul class="av-catalog-grid av-catalog-grid-secondary">
+                  <For each={BUILDING_BLOCK_CATALOG}>
+                    {(entry) => (
+                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
             <div class="av-manual-import">
               <Button
                 variant="ghost"

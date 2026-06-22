@@ -104,11 +104,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     Boolean(installReturn),
   );
   const hasProviderConnections = () => (providerConnections() ?? []).length > 0;
-  const shouldShowCreateForm = () =>
-    createFormOpen() ||
-    (!providerConnections.loading &&
-      !providerConnections.error &&
-      !hasProviderConnections());
+  const shouldShowCreateForm = () => createFormOpen();
 
   const refreshConnections = async () => {
     await refetchProviderConnections();
@@ -592,6 +588,30 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
           {providerConnectionList()}
         </div>
       </Show>
+      <Show
+        when={
+          !providerConnections.loading &&
+          !providerConnections.error &&
+          !hasProviderConnections() &&
+          !createFormOpen()
+        }
+      >
+        <EmptyState
+          icon={<Plug size={28} />}
+          title={t("conn.empty.title")}
+          message={t("conn.empty.message")}
+          action={
+            <Button
+              variant="primary"
+              type="button"
+              icon={<Plus size={16} />}
+              onClick={() => setCreateFormOpen(true)}
+            >
+              {t("conn.add.open")}
+            </Button>
+          }
+        />
+      </Show>
       <Show when={providerConnections.error}>
         <Toast tone="error">
           {t("common.fetchFailed", {
@@ -947,20 +967,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       <Show when={providerConnections.loading}>
         <Skeleton variant="card" count={2} />
-      </Show>
-      <Show
-        when={
-          !providerConnections.loading &&
-          !providerConnections.error &&
-          (providerConnections() ?? []).length === 0 &&
-          !shouldShowCreateForm()
-        }
-      >
-        <EmptyState
-          icon={<Plug size={26} />}
-          title={t("spaceSettings.tab.connections")}
-          message={t("conn.list.empty")}
-        />
       </Show>
     </div>
   );
