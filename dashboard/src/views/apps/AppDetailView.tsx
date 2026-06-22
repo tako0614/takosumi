@@ -857,6 +857,13 @@ function boundConnectionLabel(
   return match ? providerConnectionLabel(match) : t("common.none");
 }
 
+function boundProviderLabel(row: InstallationProviderConnectionRow): string {
+  if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
+  return row.alias
+    ? `${providerDisplayName(row.provider)} (${row.alias})`
+    : providerDisplayName(row.provider);
+}
+
 function buildProviderConnections(
   rows: readonly InstallationProviderConnectionRow[],
   options: {
@@ -949,39 +956,6 @@ function SettingsTab(props: {
   return (
     <>
       <details class="wb-disclosure">
-        <summary>{t("app.source.title")}</summary>
-        <Card>
-          <CardHeader title={t("app.source.title")} />
-          <Show
-            when={props.source}
-            fallback={<p class="muted">{t("app.source.loading")}</p>}
-          >
-            {(src) => (
-              <KVList
-                items={[
-                  { label: t("app.source.name"), value: src().name },
-                  {
-                    label: t("app.source.url"),
-                    value: <code>{src().url}</code>,
-                  },
-                  {
-                    label: t("app.source.refPath"),
-                    value: (
-                      <>
-                        <code>{src().defaultRef}</code>
-                        <span class="muted"> / </span>
-                        <code>{src().defaultPath}</code>
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            )}
-          </Show>
-        </Card>
-      </details>
-
-      <details class="wb-disclosure">
         <summary>{t("app.bindings.title")}</summary>
         <Card>
           <CardHeader
@@ -994,9 +968,7 @@ function SettingsTab(props: {
           >
             <KVList
               items={rows().map((row) => ({
-                label: row.alias
-                  ? `${providerDisplayName(row.provider)} (${row.alias})`
-                  : providerDisplayName(row.provider),
+                label: boundProviderLabel(row),
                 value: boundConnectionLabel(
                   row,
                   props.availableProviderConnections,
@@ -1023,23 +995,7 @@ function SettingsTab(props: {
                     return (
                       <div class="wa-binding-row">
                         <div class="wa-binding-head">
-                          <Input
-                            value={row.provider}
-                            onInput={(e) =>
-                              update(index(), {
-                                provider: e.currentTarget.value,
-                                connectionId: "",
-                              })
-                            }
-                            placeholder="registry.opentofu.org/cloudflare/cloudflare"
-                          />
-                          <Input
-                            value={row.alias}
-                            onInput={(e) =>
-                              update(index(), { alias: e.currentTarget.value })
-                            }
-                            placeholder={t("app.bindings.aliasPlaceholder")}
-                          />
+                          <strong>{boundProviderLabel(row)}</strong>
                         </div>
                         <div class="wa-binding-controls">
                           <Select
@@ -1050,12 +1006,15 @@ function SettingsTab(props: {
                               })
                             }
                           >
-                            <option value="">
+                            <option value="" selected={row.connectionId === ""}>
                               {t("app.bindings.selectConnection")}
                             </option>
                             <For each={readyConnections()}>
                               {(connection) => (
-                                <option value={connection.id}>
+                                <option
+                                  value={connection.id}
+                                  selected={connection.id === row.connectionId}
+                                >
                                   {providerConnectionLabel(connection)}
                                 </option>
                               )}
@@ -1074,6 +1033,32 @@ function SettingsTab(props: {
                             {t("app.bindings.remove")}
                           </Button>
                         </div>
+                        <details class="wb-inline-details">
+                          <summary>{t("app.bindings.technicalTarget")}</summary>
+                          <div class="wa-binding-head">
+                            <Input
+                              value={row.provider}
+                              onInput={(e) =>
+                                update(index(), {
+                                  provider: e.currentTarget.value,
+                                  connectionId: "",
+                                })
+                              }
+                              placeholder={t(
+                                "app.bindings.providerPlaceholder",
+                              )}
+                            />
+                            <Input
+                              value={row.alias}
+                              onInput={(e) =>
+                                update(index(), {
+                                  alias: e.currentTarget.value,
+                                })
+                              }
+                              placeholder={t("app.bindings.aliasPlaceholder")}
+                            />
+                          </div>
+                        </details>
                       </div>
                     );
                   }}
@@ -1120,6 +1105,45 @@ function SettingsTab(props: {
                 )}
               </Show>
             </form>
+          </details>
+        </Card>
+      </details>
+
+      <details class="wb-disclosure">
+        <summary>{t("app.settings.supportDetails")}</summary>
+        <Card>
+          <CardHeader
+            title={t("app.settings.supportDetails")}
+            subtitle={t("app.source.supportBody")}
+          />
+          <details class="wb-inline-details">
+            <summary>{t("app.source.title")}</summary>
+            <Show
+              when={props.source}
+              fallback={<p class="muted">{t("app.source.loading")}</p>}
+            >
+              {(src) => (
+                <KVList
+                  items={[
+                    { label: t("app.source.name"), value: src().name },
+                    {
+                      label: t("app.source.url"),
+                      value: <code>{src().url}</code>,
+                    },
+                    {
+                      label: t("app.source.refPath"),
+                      value: (
+                        <>
+                          <code>{src().defaultRef}</code>
+                          <span class="muted"> / </span>
+                          <code>{src().defaultPath}</code>
+                        </>
+                      ),
+                    },
+                  ]}
+                />
+              )}
+            </Show>
           </details>
         </Card>
       </details>

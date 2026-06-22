@@ -209,7 +209,12 @@ function AuditEventRow(props: { event: RunAuditEvent }) {
         </Show>
       </div>
       <Show when={detail()}>
-        {(value) => <pre class="wa-pre">{value()}</pre>}
+        {(value) => (
+          <details class="wb-inline-details">
+            <summary>{t("run.audit.detail")}</summary>
+            <pre class="wa-pre">{value()}</pre>
+          </details>
+        )}
       </Show>
     </li>
   );
@@ -711,10 +716,9 @@ function Inner() {
     };
   });
 
-  const detailItems = (r: Run): readonly KVItem[] => {
+  const supportDetailItems = (r: Run): readonly KVItem[] => {
     const out: KVItem[] = [
-      { label: t("run.details.runId"), value: <code>{r.id}</code> },
-      { label: t("run.details.type"), value: <code>{r.type}</code> },
+      { label: t("run.details.type"), value: operationLabel(r.type) },
       {
         label: t("run.details.policy"),
         value: r.policyStatus ? (
@@ -727,6 +731,31 @@ function Inner() {
           <span class="muted">—</span>
         ),
       },
+    ];
+    out.push({
+      label: t("run.details.created"),
+      value: formatDateTime(r.createdAt),
+    });
+    out.push({
+      label: t("run.details.started"),
+      value: formatDateTime(r.startedAt),
+    });
+    out.push({
+      label: t("run.details.finished"),
+      value: formatDateTime(r.finishedAt),
+    });
+    if (r.errorCode) {
+      out.push({
+        label: t("run.details.error"),
+        value: <code>{r.errorCode}</code>,
+      });
+    }
+    return out;
+  };
+
+  const debugDetailItems = (r: Run): readonly KVItem[] => {
+    const out: KVItem[] = [
+      { label: t("run.details.runId"), value: <code>{r.id}</code> },
     ];
     if (r.installationId) {
       out.push({
@@ -756,24 +785,6 @@ function Inner() {
       out.push({
         label: t("run.details.planDigest"),
         value: <code>{r.planDigest}</code>,
-      });
-    }
-    out.push({
-      label: t("run.details.created"),
-      value: formatDateTime(r.createdAt),
-    });
-    out.push({
-      label: t("run.details.started"),
-      value: formatDateTime(r.startedAt),
-    });
-    out.push({
-      label: t("run.details.finished"),
-      value: formatDateTime(r.finishedAt),
-    });
-    if (r.errorCode) {
-      out.push({
-        label: t("run.details.error"),
-        value: <code>{r.errorCode}</code>,
       });
     }
     return out;
@@ -1118,8 +1129,14 @@ function Inner() {
                 <summary>{t("run.details.title")}</summary>
                 <div class="wa-stack">
                   <Card>
-                    <KVList items={detailItems(r())} />
+                    <KVList items={supportDetailItems(r())} />
                   </Card>
+                  <details class="wb-disclosure">
+                    <summary>{t("run.details.debug")}</summary>
+                    <Card>
+                      <KVList items={debugDetailItems(r())} />
+                    </Card>
+                  </details>
                   <Show when={planResources().some(isActionablePlanResource)}>
                     <Card>
                       <PlanResourceReview resources={planResources()} />
@@ -1152,28 +1169,26 @@ function Inner() {
                       </Show>
                     </Show>
                   </Card>
-                  <Card>
-                    <CardHeader
-                      title={
-                        <span class="wa-title-row">
-                          {t("run.audit.title")}
-                          <Badge tone="muted">
-                            {(logs()?.auditEvents ?? []).length}
-                          </Badge>
-                        </span>
-                      }
-                    />
-                    <Show
-                      when={(logs()?.auditEvents ?? []).length > 0}
-                      fallback={<p class="muted">{t("run.audit.empty")}</p>}
-                    >
-                      <ul class="wa-audit">
-                        <For each={logs()?.auditEvents ?? []}>
-                          {(event) => <AuditEventRow event={event} />}
-                        </For>
-                      </ul>
-                    </Show>
-                  </Card>
+                  <details class="wb-disclosure">
+                    <summary>
+                      {t("run.audit.title")}{" "}
+                      <Badge tone="muted">
+                        {(logs()?.auditEvents ?? []).length}
+                      </Badge>
+                    </summary>
+                    <Card>
+                      <Show
+                        when={(logs()?.auditEvents ?? []).length > 0}
+                        fallback={<p class="muted">{t("run.audit.empty")}</p>}
+                      >
+                        <ul class="wa-audit">
+                          <For each={logs()?.auditEvents ?? []}>
+                            {(event) => <AuditEventRow event={event} />}
+                          </For>
+                        </ul>
+                      </Show>
+                    </Card>
+                  </details>
                 </div>
               </details>
             </div>

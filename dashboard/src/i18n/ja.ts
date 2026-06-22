@@ -203,6 +203,8 @@ export const ja = {
   "app.source.refPath": "バージョン / フォルダ",
   "app.source.status": "取得状態",
   "app.source.loading": "取得元情報を読み込み中です。",
+  "app.source.supportBody":
+    "サポートが必要な場合に使う取得元と技術情報です。通常は変更しません。",
   "app.info.title": "サポート情報",
   "app.info.id": "ID",
   "app.info.generation": "復元ポイント",
@@ -236,8 +238,10 @@ export const ja = {
   "app.bindings.none": "クラウドアカウントは紐づいていません。",
   "app.bindings.editAdvanced": "クラウドアカウントの割り当てを変更",
   "app.bindings.add": "クラウドアカウントを追加",
+  "app.bindings.providerPlaceholder": "クラウドサービス",
   "app.bindings.aliasPlaceholder": "対象名（任意）",
   "app.bindings.selectConnection": "クラウドアカウントを選択",
+  "app.bindings.technicalTarget": "技術的な対象",
   "app.bindings.remove": "削除",
   "app.bindings.errorProvider":
     "{index} 行目のクラウドサービスを入力してください。",
@@ -248,6 +252,7 @@ export const ja = {
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
   "app.settings.removeCta": "削除オプションを開く",
   "app.settings.openCta": "サービスの管理を開く",
+  "app.settings.supportDetails": "サポート情報",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
     "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
@@ -328,6 +333,7 @@ export const ja = {
   "run.details.started": "開始",
   "run.details.finished": "終了",
   "run.details.error": "エラー",
+  "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
   "run.connections.title": "クラウドアカウント",
@@ -347,6 +353,7 @@ export const ja = {
     "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
   "run.audit.title": "活動記録",
   "run.audit.empty": "活動記録はありません。",
+  "run.audit.detail": "記録の詳細",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
@@ -785,6 +792,7 @@ export const ja = {
   "account.session.id": "ブラウザセッション ID",
   "account.session.userAgent": "ブラウザ",
   "account.session.details": "サポート情報",
+  "account.session.debug": "セッション識別情報",
   "account.session.signOut": "このブラウザからサインアウト",
   "account.session.signOutConfirm": "このブラウザからサインアウトしますか？",
   "account.session.otherNote":
