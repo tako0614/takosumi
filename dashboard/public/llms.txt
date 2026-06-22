@@ -1,6 +1,6 @@
 # Takosumi Dashboard
 
-Takosumi Dashboard is the signed-in application for managing OpenTofu Capsules, provider connections, runs, state, and audit history.
+Takosumi Dashboard is the signed-in application for hosting services with connected cloud accounts.
 
 This app is not a public documentation surface.
 

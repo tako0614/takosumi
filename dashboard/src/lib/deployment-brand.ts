@@ -1,8 +1,5 @@
 export function isTakosEmbeddedRuntime(): boolean {
-  return (
-    (import.meta.env as Record<string, string | undefined>)
-      .VITE_TAKOS_EMBEDDED === "1"
-  );
+  return import.meta.env.VITE_TAKOS_EMBEDDED === "1";
 }
 
 export function isTakosumiCloudRuntime(): boolean {

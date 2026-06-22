@@ -42,9 +42,8 @@ export interface ProviderDescriptor {
   readonly fields: readonly ProviderCredentialField[];
   /**
    * Optional guided-token helper. When present, the connections screen leads
-   * with provider-specific setup copy, deep-link, paste, and demotes the raw
-   * field form to an advanced fallback. Absent providers keep the plain field
-   * form as the only path.
+   * with provider-specific setup copy, deep-link, and paste. Absent providers
+   * keep the plain field form as the only path.
    */
   readonly tokenHelper?: ProviderTokenHelper;
   /**
