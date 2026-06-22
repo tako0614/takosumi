@@ -26,9 +26,10 @@ test("missing bindings are named in declaration order", () => {
   const env = fullEnv();
   delete env.R2_STATE;
   delete env.RUNNER;
+  delete env.RUN_OWNER;
   const result = checkPlatformBindings(env);
   expect(result.ok).toBe(false);
-  expect(result.missing).toEqual(["R2_STATE", "RUNNER"]);
+  expect(result.missing).toEqual(["R2_STATE", "RUN_OWNER", "RUNNER"]);
 });
 
 test("null / undefined bindings count as missing", () => {

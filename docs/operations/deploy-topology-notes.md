@@ -18,6 +18,7 @@ platform worker が in-process で束ねる surface:
 - dashboard SPA: `ASSETS`
 - queue consumer / scheduled handlers
 - `CoordinationObject`
+- `OpenTofuRunOwnerObject`
 - `OpenTofuRunnerObject` + Runner Container
 
 `/internal/*` HTTP routes are reserved for opentofu-runner / executor container callbacks, host-internal control seams,

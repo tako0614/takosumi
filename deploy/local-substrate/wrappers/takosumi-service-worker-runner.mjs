@@ -65,6 +65,10 @@ const mf = new Miniflare({
       className: "CoordinationObject",
       useSQLite: true,
     },
+    RUN_OWNER: {
+      className: "OpenTofuRunOwnerObject",
+      useSQLite: true,
+    },
   },
   durableObjectsPersist: "/data/do",
   queueProducers: {

@@ -32,11 +32,12 @@ canonical bindings:
 - `R2_BACKUPS`
 - `RUN_QUEUE`
 - `COORDINATION`
+- `RUN_OWNER`
 - `RUNNER`
 
 canonical Durable Object classes are `CoordinationObject` and
-`OpenTofuRunnerObject`. Future class renames require a production-safe DO
-migration plan; do not rely on state discard.
+`OpenTofuRunOwnerObject` and `OpenTofuRunnerObject`. Future class renames
+require a production-safe DO migration plan; do not rely on state discard.
 
 ## デプロイ
 

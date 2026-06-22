@@ -81,6 +81,12 @@ bucket_name = "takosumi-backups"
 name = "COORDINATION"
 class_name = "CoordinationObject"
 
+# Per-run execution owner. Queue deliveries schedule this DO and ack quickly;
+# the DO alarm owns long controller dispatch and retry/final-failure handling.
+[[durable_objects.bindings]]
+name = "RUN_OWNER"
+class_name = "OpenTofuRunOwnerObject"
+
 # OpenTofu run executor (container-backed DO security sandbox).
 [[durable_objects.bindings]]
 name = "RUNNER"
@@ -89,6 +95,10 @@ class_name = "OpenTofuRunnerObject"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["CoordinationObject", "OpenTofuRunnerObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["OpenTofuRunOwnerObject"]
 
 # OpenTofu run executor container. The embedded deploy-control service reaches
 # this through its OpenTofu runner adapter (idFromName(runId) -> .fetch). Build
@@ -111,11 +121,11 @@ max_instances = 10
 binding = "RUN_QUEUE"
 queue = "takosumi-runs"
 
-# Consumer: the platform worker runs the OpenTofu run-queue consumer in-process
-# (see deploy/platform/worker.ts `queue`). It loads the run, mints credentials,
-# and drives the container DO. One run per delivery so a failure only retries its
-# own run. NOTE: the queue consumer invocation budget (~15 min) bounds a single
-# run; detaching long runs from the consumer invocation is future work.
+# Consumer: the platform worker validates an identity-only run message, stores
+# it in the per-run RUN_OWNER Durable Object, and acks quickly. RUN_OWNER then
+# mints credentials through the controller path, drives the container DO, and
+# owns retry/final-failure handling outside the queue delivery lifetime. One run
+# per delivery keeps scheduling failures isolated.
 [[queues.consumers]]
 queue = "takosumi-runs"
 max_batch_size = 1
