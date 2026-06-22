@@ -31,23 +31,23 @@ probe host 経由の run ledger surface を検証する。
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
 
-| 範疇               | 件数 | 代表 check                                                                                          |
-| ------------------ | ---: | --------------------------------------------------------------------------------------------------- |
-| ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                         |
-| prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                  |
-| OAuth              |    3 | `oauth.e2e.google`, `oauth.tls-negative`, `oauth.csrf-replay`                                       |
-| tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
-| docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
-| passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
-| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                           |
-| workers            |    1 | `workers.cli-smoke` (`worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal)`) |
-| route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
-| object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |
-| migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                |
-| otel               |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                              |
-| k6 perf            |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO) |
-| mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                          |
-| stripe             |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                        |
+| 範疇               | 件数 | 代表 check                                                                                                                                                          |
+| ------------------ | ---: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ingress            |    3 | `phase0.hello`, `accounts.oidc-discovery`, `service.health`                                                                                                         |
+| prod-mirror        |    9 | `prod-mirror.landing.*` (4) + `prod-mirror.docs.index` + `prod-mirror.cloud.*` (4)                                                                                  |
+| OAuth              |    3 | `oauth.e2e.google`, `oauth.tls-negative`, `oauth.csrf-replay`                                                                                                       |
+| tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                                                                                      |
+| docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                                                                                         |
+| passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                                                                                          |
+| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                                                                                           |
+| workers            |    1 | `workers.cli-smoke` (service Worker health + capabilities + D1 semantics; Accounts Worker signed-export route is required only when the workers profile is primary) |
+| route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                                                                                 |
+| object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                                                                                              |
+| migrations         |    1 | `migration.idempotency` (Accounts Worker D1 restart preserves schema byte-identical)                                                                                |
+| otel               |    1 | `otel.pipeline` (synthetic OTLP trace lands in Jaeger)                                                                                                              |
+| k6 perf            |    1 | `k6.baseline` (20 RPS × 20s with deploy control plan + OIDC thresholds — regression watch, NOT SLO)                                                                 |
+| mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                                                                                          |
+| stripe             |    1 | `stripe.webhook.e2e` (HMAC verify + idempotency + tolerance)                                                                                                        |
 
 加えて repo 側の unit / worker / browser-evidence self-test は root の quality gate で実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
 
@@ -86,6 +86,11 @@ bash scripts/up.sh
 # Phase 1+: substrate (service + accounts + cloud worker + dashboard +
 # route-registrar) on top of Phase 0 ingress
 bash scripts/up.sh --profile postgres
+
+# Some nested/containerized Linux hosts let Docker run containers only when
+# the default AppArmor profile is bypassed. Keep this opt-in and use it only
+# after plain docker run fails with a docker-default AppArmor profile check.
+TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 bash scripts/up.sh --profile postgres
 
 # Worker-first substrate probe: Accounts Worker on D1/R2 plus Takosumi
 # service Worker on D1/R2/Queue/DO. app.takosumi.test remains the canonical
@@ -186,8 +191,8 @@ sudo bash deploy/local-substrate/scripts/ca-install.sh
 
 最後に手動 verification した日付を以下に記録:
 
-| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                                                   |
-| -------- | ------ | -------------- | ------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 日付     | Chrome | Firefox (snap) | 確認者 | 環境 | メモ                                                                                                              |
+| -------- | ------ | -------------- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------- |
 | _未確認_ | _-_    | _-_            | _-_    | _-_  | _CI (.github/workflows/local-substrate-smoke.yml) は smoke job まで。ローカル目視 / browser UX evidence は別途要_ |
 
 CI で自動検証されるパス:

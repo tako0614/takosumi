@@ -31,12 +31,14 @@ LOC1=$(curl -sk --cacert "$CA" -c "$JAR" -b "$JAR" -o /dev/null -w "%{redirect_u
 # 2. Follow mock /tls-fail/authorize → 302 with code (this part still works)
 LOC2=$(curl -sk --cacert "$CA" -c "$JAR" -b "$JAR" -o /dev/null -w "%{redirect_url}" "$LOC1")
 CODE=$(echo "$LOC2" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
+CALLBACK_STATE=$(echo "$LOC2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
 [[ -n "$CODE" ]] || { echo "FAIL: tls-fail authorize did not return a code" >&2; exit 1; }
+[[ -n "$CALLBACK_STATE" ]] || { echo "FAIL: tls-fail authorize did not return state" >&2; exit 1; }
 
 # 3. Worker /callback hits /tls-fail/token → 503 → worker should return 502
 #    upstream_oauth_failed. State cookie matches because we reused the jar.
 RESP=$(curl -sk --cacert "$CA" -c "$JAR" -b "$JAR" -w "\n%{http_code}" \
-	"https://app.takosumi.test/v1/auth/upstream/callback?provider=tls-fail&code=$CODE&state=$STATE")
+	"https://app.takosumi.test/v1/auth/upstream/callback?provider=tls-fail&code=$CODE&state=$CALLBACK_STATE")
 STATUS=$(echo "$RESP" | tail -n1)
 BODY=$(echo "$RESP" | head -n -1)
 

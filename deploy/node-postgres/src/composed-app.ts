@@ -44,10 +44,12 @@ export interface ComposedAppInput {
    * Preferred production wiring: build the accounts handler after the embedded
    * Takosumi service exists so the account-plane DeployControl facade can use
    * the in-process typed operations facade instead of falling back to direct
-   * ledger mutations.
+   * ledger mutations, and so the dashboard `/api/v1/*` control surface can use
+   * the full typed operations facade.
    */
   readonly createAccountsHandler?: (
     deployControl: DeployControlFacadeOptions,
+    controlPlaneOperations: CreatedTakosumiService["operations"],
   ) => AccountsHandler | Promise<AccountsHandler>;
   /**
    * Optional runtime env forwarded into the embedded Takosumi service. The composer
@@ -62,6 +64,15 @@ export interface ComposedAppInput {
    * service falls back to its in-memory ledger (fine for dev / local-substrate).
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
+  /**
+   * Optional OpenTofu runner injected by an operator composition. The generic
+   * reference server leaves this absent; local-substrate wires a local runner
+   * so the browser/CLI smoke can exercise real upload -> plan -> apply.
+   */
+  readonly opentofuRunner?: CreateTakosumiServiceArg["opentofuRunner"];
+  readonly writeSourceArchive?: CreateTakosumiServiceArg["writeSourceArchive"];
+  readonly runnerProfiles?: CreateTakosumiServiceArg["runnerProfiles"];
+  readonly defaultRunnerProfileId?: CreateTakosumiServiceArg["defaultRunnerProfileId"];
   /**
    * Native adapter implementation bindings (Docker Compose / systemd / etc.) attached to the
    * embedded Takosumi service. The reference Bun profile ships none by default; the
@@ -108,6 +119,14 @@ export async function buildComposedApp(
     runtimeEnv,
     mountInternalLedgerRoutes: true,
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
+    ...(input.opentofuRunner ? { opentofuRunner: input.opentofuRunner } : {}),
+    ...(input.writeSourceArchive
+      ? { writeSourceArchive: input.writeSourceArchive }
+      : {}),
+    ...(input.runnerProfiles ? { runnerProfiles: input.runnerProfiles } : {}),
+    ...(input.defaultRunnerProfileId
+      ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
+      : {}),
   });
 
   const serviceApp = created.app;
@@ -129,7 +148,7 @@ export async function buildComposedApp(
 
   const deployControl = inProcessDeployControlFacade(created.operations);
   accountsHandler ??= input.createAccountsHandler
-    ? await input.createAccountsHandler(deployControl)
+    ? await input.createAccountsHandler(deployControl, created.operations)
     : undefined;
   if (!accountsHandler) {
     throw new TypeError(

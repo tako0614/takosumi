@@ -783,14 +783,20 @@ export async function createTakosumiService(
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
   // never fails the action it records).
   const activityService = new ActivityService({ store: sharedOpenTofuStore });
+  let opentofuController: OpenTofuDeploymentController;
+  const enqueueSourceSync: EnqueueSourceSync =
+    options.enqueueSourceSync ??
+    (async (dispatch) => {
+      await opentofuController.dispatchQueuedRun(dispatch);
+    });
   // Source domain service (Core Specification §6). The source REST API, webhook,
   // and scheduler all reach it through the controller. The source_sync producer
-  // (when bound) enqueues onto the run queue with `action: "source_sync"`.
+  // enqueues onto the run queue with `action: "source_sync"`; node/local
+  // compositions fall back to the controller's inline dispatcher once the
+  // controller is constructed.
   const sourcesService = new SourcesService({
     store: sharedOpenTofuStore,
-    ...(options.enqueueSourceSync
-      ? { enqueueSourceSync: options.enqueueSourceSync }
-      : {}),
+    enqueueSourceSync,
     ...(options.opentofuRunner?.readCapsuleSourceFiles
       ? {
           readCapsuleSourceFiles: (snapshot) =>
@@ -842,7 +848,7 @@ export async function createTakosumiService(
   // generic Capsule default powers the standard Git URL install flow, so a seed
   // failure is a boot/readiness failure rather than a deferred dashboard error.
   await seedOfficialInstallConfigs(sharedOpenTofuStore);
-  const opentofuController = new OpenTofuDeploymentController({
+  opentofuController = new OpenTofuDeploymentController({
     store: sharedOpenTofuStore,
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),

@@ -86,7 +86,8 @@ function accountsHandlerSpy(): AccountsHandlerSpy {
 
 async function buildTestApp() {
   const spy = accountsHandlerSpy();
-  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),
@@ -121,22 +122,32 @@ test("composed app routes POST /v1/installation-projections to the account plane
 test("composed app builds accounts handler with an in-process service deploy control facade", async () => {
   const spy = accountsHandlerSpy();
   let operationsWired = false;
-  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  let controlPlaneOperationsWired = false;
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),
-    createAccountsHandler: async (deployControl) => {
+    createAccountsHandler: async (deployControl, controlPlaneOperations) => {
       // The account-plane deploy-control facade is in-process only: it dispatches
       // through the injected typed `operations` facade (no HTTP `fetch` seam, no
       // Bearer handshake). Assert the embedded service's facade is wired in.
       operationsWired =
         typeof deployControl.operations.createPlanRun === "function" &&
         typeof deployControl.operations.getInstallation === "function";
+      // The session-authed dashboard API needs the full control-plane facade
+      // (`/api/v1/spaces`, connections, run groups, etc.), not just the narrow
+      // plan/apply deploy-control facade above.
+      controlPlaneOperationsWired =
+        typeof controlPlaneOperations.spaces.listSpacesByOwner === "function" &&
+        typeof controlPlaneOperations.connections.listProviderEnvs ===
+          "function";
       return spy.handler;
     },
   });
 
   assert.equal(operationsWired, true);
+  assert.equal(controlPlaneOperationsWired, true);
   const res = await created.app.fetch(
     new Request("http://localhost/dashboard"),
   );
@@ -213,7 +224,8 @@ test("composed app delegates non-installation paths to the account-plane fallbac
 
 test("composed app runs preHandle ahead of installation routing", async () => {
   const spy = accountsHandlerSpy();
-  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
   const created = await buildComposedApp({
     config: testConfig(),
     store: new PostgresAccountsStore(stubQueryClient()),

@@ -24,6 +24,12 @@
  * resolves.
  */
 import { buildComposedServer } from "/workspace/deploy/node-postgres/src/server.ts";
+import {
+  createFileSourceArchiveStore,
+  createLocalOpenTofuRunner,
+  createLocalOpenTofuRunnerProfile,
+  LOCAL_OPENTOFU_RUNNER_PROFILE_ID,
+} from "/workspace/deploy/node-postgres/src/local-opentofu-runner.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 
 interface GatewayProjectionRecord {
@@ -36,7 +42,8 @@ interface GatewayProjectionRecord {
 
 const env = { ...process.env };
 
-const routeProjectionFile = env.TAKOSUMI_LOCAL_SUBSTRATE_GATEWAY_ROUTES_FILE ??
+const routeProjectionFile =
+  env.TAKOSUMI_LOCAL_SUBSTRATE_GATEWAY_ROUTES_FILE ??
   "/local-substrate-runtime/gateway-routes.json";
 await writeGatewayProjection(routeProjectionFile, []);
 
@@ -52,10 +59,21 @@ console.log(
     `${env.TAKOSUMI_AGENT_URL ?? "(no agent)"}`,
 );
 
+const sourceArchiveStore = createFileSourceArchiveStore(
+  env.TAKOSUMI_LOCAL_SOURCE_ARCHIVE_DIR ??
+    "/local-substrate-runtime/source-archives",
+);
+
 // Blocks on serveOnAnyRuntime (port 8787 from config). The service's bootstrap
 // agent detection reads TAKOSUMI_AGENT_URL/TOKEN from this process env.
 await buildComposedServer({
   implementations: [],
+  opentofuRunner: createLocalOpenTofuRunner({
+    archiveStore: sourceArchiveStore,
+  }),
+  writeSourceArchive: sourceArchiveStore.write,
+  runnerProfiles: [createLocalOpenTofuRunnerProfile()],
+  defaultRunnerProfileId: LOCAL_OPENTOFU_RUNNER_PROFILE_ID,
 });
 
 async function writeGatewayProjection(

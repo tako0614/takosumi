@@ -188,7 +188,8 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
   ): Promise<SqlQueryResult<Row>> {
     const normalized = sql.trim().replace(/\s+/g, " ").toLowerCase();
     if (
-      normalized === "begin" || normalized === "commit" ||
+      normalized === "begin" ||
+      normalized === "commit" ||
       normalized === "rollback"
     ) {
       return { rows: [], rowCount: 0 };
@@ -205,7 +206,7 @@ class InMemorySqlClient implements SqlClient, SqlTransaction {
       const rows = [...this.#applied.values()].sort((left, right) =>
         left.version === right.version
           ? left.id.localeCompare(right.id)
-          : left.version - right.version
+          : left.version - right.version,
       );
       return ledgerRowsAs<Row>(rows);
     }
@@ -260,11 +261,12 @@ function asRecord(
 function rowsSatisfyCallerRowType<Row extends Record<string, unknown>>(
   rows: readonly AppliedRow[],
 ): rows is readonly AppliedRow[] & readonly Row[] {
-  return rows.every((row) =>
-    typeof row.id === "string" &&
-    typeof row.version === "number" &&
-    typeof row.checksum === "string" &&
-    typeof row.applied_at === "string"
+  return rows.every(
+    (row) =>
+      typeof row.id === "string" &&
+      typeof row.version === "number" &&
+      typeof row.checksum === "string" &&
+      typeof row.applied_at === "string",
   );
 }
 
@@ -278,7 +280,7 @@ function ledgerRowsAs<Row extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
-// Postgres SqlClient — staging/production. Lazily imports npm:pg.
+// Postgres SqlClient — staging/production. Lazily imports pg.
 // ---------------------------------------------------------------------------
 
 interface PgPoolLike {
@@ -295,18 +297,25 @@ async function createPostgresClient(
 ): Promise<{ client: SqlClient; close: () => Promise<void> }> {
   let pgModule: {
     default?: { Pool: new (cfg: { connectionString: string }) => PgPoolLike };
+    Pool?: new (cfg: { connectionString: string }) => PgPoolLike;
   };
+  const loadErrors: string[] = [];
   try {
     pgModule = await import("npm:pg@^8.11.0");
   } catch (error) {
-    throw new Error(
-      `failed to load npm:pg for --env=staging|production rollback: ${
-        (error as Error).message
-      }`,
-    );
+    loadErrors.push(`npm:pg@^8.11.0: ${(error as Error).message}`);
+    try {
+      pgModule = await import("pg");
+    } catch (fallbackError) {
+      loadErrors.push(`pg: ${(fallbackError as Error).message}`);
+      throw new Error(
+        "failed to load pg for --env=staging|production rollback: " +
+          loadErrors.join("; "),
+      );
+    }
   }
-  const Pool = pgModule.default?.Pool;
-  if (!Pool) throw new Error("npm:pg loaded but Pool export is missing");
+  const Pool = pgModule.default?.Pool ?? pgModule.Pool;
+  if (!Pool) throw new Error("pg loaded but Pool export is missing");
   const pool = new Pool({ connectionString: databaseUrl });
 
   const renderNamedParams = (
@@ -386,9 +395,10 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
       description: "in-memory SqlClient (env=local)",
     };
   }
-  const candidates = env === "production"
-    ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
-    : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
+  const candidates =
+    env === "production"
+      ? ["TAKOSUMI_PRODUCTION_DATABASE_URL", "DATABASE_URL"]
+      : ["TAKOSUMI_STAGING_DATABASE_URL", "DATABASE_URL"];
   let url: string | undefined;
   for (const key of candidates) {
     const value = process.env[key];
@@ -448,8 +458,7 @@ export async function evaluateProductionGuard(
     if (options.confirm === requiredPhrase) return { allowed: true };
     return {
       allowed: false,
-      reason:
-        `--confirm value must be '${requiredPhrase}' for production rollback`,
+      reason: `--confirm value must be '${requiredPhrase}' for production rollback`,
     };
   }
   if (options.isInteractive && options.prompt) {
@@ -457,14 +466,12 @@ export async function evaluateProductionGuard(
     if (answer.trim() === requiredPhrase) return { allowed: true };
     return {
       allowed: false,
-      reason:
-        `production rollback prompt: expected '${requiredPhrase}', got '${answer}'`,
+      reason: `production rollback prompt: expected '${requiredPhrase}', got '${answer}'`,
     };
   }
   return {
     allowed: false,
-    reason:
-      `production rollback requires either an interactive prompt confirming '${requiredPhrase}' or --confirm=${requiredPhrase}`,
+    reason: `production rollback requires either an interactive prompt confirming '${requiredPhrase}' or --confirm=${requiredPhrase}`,
   };
 }
 
@@ -569,9 +576,7 @@ async function main(): Promise<number> {
           `Add a 'down' clause to the migration or pick an earlier --target.`,
       );
     } else {
-      console.error(
-        `[db-migrate-down] failed: ${(error as Error).message}`,
-      );
+      console.error(`[db-migrate-down] failed: ${(error as Error).message}`);
       if (error instanceof Error && error.stack) console.error(error.stack);
     }
     exitCode = 1;

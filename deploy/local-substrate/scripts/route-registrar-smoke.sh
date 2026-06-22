@@ -15,6 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/compose-helpers.sh"
 
 # 1. Container running
 state=$(docker inspect -f '{{.State.Status}}' local-substrate-route-registrar-1 2>/dev/null || echo "missing")
@@ -35,10 +36,12 @@ fi
 # Static routes are owned by the Caddyfile; the registrar must never drop
 # them. We count routes with at least one host whose suffix is NOT
 # '.app.takosumi.test' as dynamic app routes.
-# The Caddy admin API is intentionally NOT exposed to the host (δ23) — exec
-# into the caddy container to talk to it via the docker network instead.
-STATIC_COUNT=$(docker exec local-substrate-caddy-1 \
-	wget -qO- http://localhost:2019/config/apps/http/servers/srv0/routes 2>/dev/null \
+# The Caddy admin API is intentionally NOT exposed to the host (δ23). Probe it
+# from a one-shot container on the internal network; AppArmor-constrained hosts
+# cannot reliably use docker exec.
+STATIC_COUNT=$(local_substrate_docker_run --rm --network local-substrate_takos-local-internal \
+	curlimages/curl:8.10.1 \
+	-sS http://caddy:2019/config/apps/http/servers/srv0/routes 2>/dev/null \
 	| python3 -c '
 import json, sys
 routes = json.load(sys.stdin) or []

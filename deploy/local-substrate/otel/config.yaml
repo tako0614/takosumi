@@ -16,7 +16,7 @@ processors:
 
 exporters:
   otlp/jaeger:
-    endpoint: jaeger:4317
+    endpoint: host.docker.internal:14317
     tls:
       insecure: true
   debug:

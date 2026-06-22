@@ -47,7 +47,10 @@ new_code() {
 	local code
 	code=$(echo "${loc2}" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
 	[[ -n "${code}" ]] || { echo "FAIL: new_code did not yield a code" >&2; exit 1; }
-	echo "${state} ${code} ${jar}"
+	local callback_state
+	callback_state=$(echo "${loc2}" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
+	[[ -n "${callback_state}" ]] || { echo "FAIL: new_code did not yield a callback state" >&2; exit 1; }
+	echo "${callback_state} ${code} ${jar}"
 }
 
 assert_non_2xx() {
