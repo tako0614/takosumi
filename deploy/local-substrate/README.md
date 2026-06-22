@@ -30,6 +30,7 @@ probe host 経由の run ledger surface を検証する。
 ## Current smoke coverage (30 smoke-script checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
+Accounts Worker unit sentinel: worker_test.ts 30 case (issuer policy + IPv6/CGNAT + fail-closed + R2 route-level signed export / malformed URL / data-bearing refusal).
 
 | 範疇               | 件数 | 代表 check                                                                                                                                                          |
 | ------------------ | ---: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

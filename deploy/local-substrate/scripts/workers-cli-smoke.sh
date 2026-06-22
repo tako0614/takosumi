@@ -3,6 +3,9 @@
 #
 # What this script verifies:
 #   1. takosumi Accounts Worker runs on workerd with D1/R2.
+#      The expected persistence=d1+r2 profile must route signed downloads
+#      through /__takosumi/exports and reject bad signatures as
+#      invalid_export_download_signature.
 #   2. takosumi service Worker runs on workerd with Queue and DO
 #      through local-only worker probe ingress. app.takosumi.test remains the
 #      canonical platform host for user-facing flows.

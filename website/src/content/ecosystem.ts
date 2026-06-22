@@ -12,16 +12,16 @@ export const APPS: readonly Chip[] = [
   { label: "worker / cron", hint: "jobs" },
   { label: "静的サイト", hint: "docs" },
   { label: "takos", hint: "chat (例)" },
-  { label: "takos-docs", hint: "wiki (例)" },
+  { label: "takos-office", hint: "docs / slide / sheet" },
   { label: "yurucommu", hint: "social (例)" },
   { label: "road-to-me", hint: "coach (例)" },
 ];
 
 export const PROVIDERS: readonly Chip[] = [
-  { label: "Cloudflare", hint: "ProviderConnection" },
-  { label: "AWS", hint: "ProviderConnection" },
-  { label: "GCP", hint: "CredentialRecipe" },
-  { label: "Kubernetes", hint: "ProviderBinding" },
+  { label: "Cloudflare", hint: "接続して使う" },
+  { label: "AWS", hint: "接続して使う" },
+  { label: "GCP", hint: "鍵を預けず実行時だけ注入" },
+  { label: "Kubernetes", hint: "既存 provider" },
   { label: "Custom Provider", hint: "generic env" },
 ];
 
