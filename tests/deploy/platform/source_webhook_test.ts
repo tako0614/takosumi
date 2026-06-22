@@ -542,7 +542,7 @@ test("operator billing route validates settings before mutation", async () => {
   expect(subscriptionCalls).toHaveLength(0);
 });
 
-test("AI Gateway route is fixed-path and requires a current service token", async () => {
+test("AI Gateway route is not mounted by the OSS platform worker", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const env = {
     TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
@@ -568,20 +568,8 @@ test("AI Gateway route is fixed-path and requires a current service token", asyn
     new Request("https://app.takosumi.com/gateway/ai/v1/models"),
     env,
   );
-  expect(response.status).toBe(401);
-  expect(response.headers.get("www-authenticate")).toContain("invalid_token");
-
-  const invalidPathConfig = await worker.fetch(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    {
-      ...env,
-      TAKOSUMI_AI_GATEWAY_BASE_PATH: "/custom/ai/v1",
-    } as never,
-  );
-  expect(invalidPathConfig.status).toBe(503);
-  expect((await invalidPathConfig.json()).error.code).toBe(
-    "ai_gateway_not_configured",
-  );
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: "not found" });
 });
 
 test("scheduled poll continues past a failing source", async () => {

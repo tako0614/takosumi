@@ -62,7 +62,7 @@ jaeger.takosumi.test {
 # is served from static build output, exactly like the worker mirror below.
 app.takosumi.test {
 	route {
-		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1 /gateway/ai/v1/* /internal/* /healthz /readyz /__takosumi/exports/*
+		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /internal/* /healthz /readyz /__takosumi/exports/*
 		handle @api {
 			reverse_proxy cloud:8787
 		}
