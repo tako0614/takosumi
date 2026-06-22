@@ -199,7 +199,7 @@ describe("/new flow guidance", () => {
     expect(hintSource).not.toContain("knownHostsEntry");
   });
 
-  test("keeps arbitrary visible OpenTofu inputs in the add flow", () => {
+  test("keeps arbitrary visible service inputs in the add flow", () => {
     expect(newAppViewSource).toContain("const shouldOpenServiceAdvanced = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
