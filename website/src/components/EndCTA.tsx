@@ -4,18 +4,22 @@ export default function EndCTA() {
       <div class="container">
         <h2>始めよう。</h2>
         <p class="lede" style="margin-left: auto; margin-right: auto;">
-          セルフホストは今すぐ。Takosumi Cloud はローンチ時に案内します。
+          Cloud ならブラウザから。セルフホストなら自分のインフラに。
         </p>
         <div class="cta-row" style="justify-content: center;">
           <a
             class="btn btn-primary"
+            href="https://app.takosumi.com/"
+            rel="noopener"
+          >
+            Takosumi Cloud を開く
+          </a>
+          <a
+            class="btn btn-secondary"
             href="/docs/getting-started/quickstart"
             rel="external"
           >
             セルフホストする
-          </a>
-          <a class="btn btn-secondary" href="#pricing">
-            Cloud の案内を見る
           </a>
           <a class="btn btn-secondary" href="/docs/" rel="external">
             ドキュメント

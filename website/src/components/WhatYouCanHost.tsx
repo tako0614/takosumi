@@ -20,12 +20,11 @@ export default function WhatYouCanHost() {
   return (
     <section id="what" class="product-belt-section">
       <div class="container">
-        <h2>何でも deploy できる。</h2>
+        <h2>スターターから、自分のサービスまで。</h2>
         <p class="lede">
-          これらはすべて Takosumi で
-          <em class="em">実際に deploy されているプロダクト</em>
-          です。どれもただの OpenTofu / Terraform——同じ手順で、あなたのアプリも
-          deploy できます。
+          公式スターターも、自分で持っている Git repo も、同じ
+          <em class="em">サービス</em>
+          として扱います。Takosumi は必要な接続と変更内容を先に見せてから公開します。
         </p>
       </div>
       <div class="product-belt" aria-label="プロダクト一覧">

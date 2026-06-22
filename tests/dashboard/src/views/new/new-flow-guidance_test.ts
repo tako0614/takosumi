@@ -66,6 +66,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('entry.surface === "service"');
     expect(newAppViewSource).toContain('entry.surface === "building_block"');
     expect(newAppViewSource).toContain('t("new.store.title")');
+    expect(newAppViewSource).toContain('t("new.store.subtitle")');
     expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
     expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
     expect(newAppViewSource).toContain('t("new.advancedImport.open")');
@@ -105,17 +106,21 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
-    expect(en["new.store.title"]).toBe("Available services");
+    expect(en["new.store.title"]).toBe("What do you want to host?");
+    expect(en["new.store.subtitle"]).toContain("Pick a starter");
     expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
-    expect(en["new.advancedImport.open"].toLowerCase()).toBe("add from link");
+    expect(en["new.advancedImport.open"].toLowerCase()).toBe(
+      "add another link",
+    );
     expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
       "manually",
     );
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
-    expect(ja["new.store.title"]).toBe("追加できるサービス");
+    expect(ja["new.store.title"]).toBe("何をホストしますか？");
+    expect(ja["new.store.subtitle"]).toContain("おすすめを選ぶ");
     expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
-    expect(ja["new.advancedImport.open"]).toBe("リンクから追加");
+    expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");
@@ -154,14 +159,18 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain('class="av-service-setup"');
     expect(newAppViewSource).toContain('t("new.catalogInput.title")');
+    expect(newAppViewSource).toContain('t("new.catalogInput.subtitle")');
     expect(newAppViewSource).not.toContain('t("new.catalogInput.body")');
     expect(newAppViewSource).toContain('<FormField label={t("new.name")}>');
     expect(newAppViewSource).toContain("name={`catalogInput:${field.name}`}");
     expect(newAppViewSource).toContain("clearSelectedCatalog");
     expect(newAppViewSource).toContain("defaultGitInstallConfig()?.id");
     expect(appViewsCssSource).toContain(".av-service-setup-grid");
+    expect(appViewsCssSource).toContain(".av-service-setup-head p");
     expect(en).not.toHaveProperty("new.catalogInput.body");
+    expect(en["new.catalogInput.subtitle"]).toContain("minimum fields");
     expect(ja).not.toHaveProperty("new.catalogInput.body");
+    expect(ja["new.catalogInput.subtitle"]).toContain("最小限");
   });
 
   test("selected catalog services can use safe cloud-account hints instead of duplicate setup input", () => {

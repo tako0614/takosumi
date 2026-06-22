@@ -5,14 +5,14 @@ import { createHandler, StartServer } from "@solidjs/start/server";
 // control plane / substrate — NOT the chat/docs product (that is Takos).
 const SITE_TITLE = "Takosumi — your service, your server.";
 const SITE_DESC =
-  "Git のインフラコードを好きなクラウドに deploy。鍵も状態も履歴も、あなたの手元で管理する、オープンソースの deploy 基盤。";
+  "ブラウザから自分のクラウドへサービスを追加・更新・デプロイ。鍵、状態、履歴、監査を管理する OpenTofu-native control plane。";
 
 const JSON_LD = JSON.stringify({
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   name: "Takosumi",
   url: "https://takosumi.com/",
-  applicationCategory: "DeveloperApplication",
+  applicationCategory: "BusinessApplication",
   operatingSystem: "Cross-platform",
   description: SITE_DESC,
   license: "https://www.gnu.org/licenses/agpl-3.0.html",
