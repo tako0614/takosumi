@@ -300,7 +300,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This workspace is short by about {n} capacity units, so this cannot run.",
   "run.cost.capacityBlocked": "This workspace cannot run this action.",
   "run.cost.billingCta": "Open billing",
-  "run.cost.operatorHelp": "Ask an admin if you need this action enabled.",
+  "run.cost.operatorHelp": "This workspace is not ready for this action yet.",
   "run.changes.title": "What will change",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
@@ -417,7 +417,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.sshConnection": "SSH source access",
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Service name",
-  "new.vars.projectName": "Management name",
+  "new.vars.projectName": "Service ID",
   "new.serviceAdvanced.title": "More service settings",
   "new.vars.inputsTitle": "Other settings",
   "new.vars.inputsBody":
@@ -433,7 +433,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.vars.errorUnsafeValue":
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.vars.errorProjectNameReserved":
-    "Use the internal name prefix field for project_name.",
+    "Use the Service ID field for project_name.",
   "new.vars.errorCatalogReserved": "Use the Service setup field for “{name}”.",
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.deeplink.invalidTitle": "This install link cannot be used",

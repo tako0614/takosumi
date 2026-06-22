@@ -1483,7 +1483,7 @@ function Inner() {
             setGitUrl(e.currentTarget.value);
             resetCompatibility();
           }}
-          placeholder="https://github.com/owner/repo.git"
+          placeholder="https://github.com/your-name/service.git"
           autocomplete="off"
           spellcheck={false}
         />
@@ -1555,7 +1555,7 @@ function Inner() {
                 type="text"
                 value={sourceTokenUsername()}
                 onInput={(e) => setSourceTokenUsername(e.currentTarget.value)}
-                placeholder="git"
+                placeholder="your-username"
                 autocomplete="username"
                 spellcheck={false}
               />
@@ -1804,7 +1804,7 @@ function Inner() {
                               setName(e.currentTarget.value);
                               resetCompatibility();
                             }}
-                            placeholder="my-app"
+                            placeholder="photo-blog"
                             autocomplete="off"
                             spellcheck={false}
                           />
@@ -1851,7 +1851,7 @@ function Inner() {
                         setName(e.currentTarget.value);
                         resetCompatibility();
                       }}
-                      placeholder="my-app"
+                      placeholder="photo-blog"
                       autocomplete="off"
                       spellcheck={false}
                     />
@@ -1909,7 +1909,7 @@ function Inner() {
                           setResourcePrefix(e.currentTarget.value);
                           resetCompatibility();
                         }}
-                        placeholder="takos-production"
+                        placeholder="photo-blog"
                         autocomplete="off"
                         spellcheck={false}
                       />
@@ -1932,7 +1932,7 @@ function Inner() {
                                     name: e.currentTarget.value,
                                   })
                                 }
-                                placeholder="region"
+                                placeholder="setting"
                                 autocomplete="off"
                                 spellcheck={false}
                               />
@@ -1947,7 +1947,7 @@ function Inner() {
                                     value: e.currentTarget.value,
                                   })
                                 }
-                                placeholder="ap-northeast-1"
+                                placeholder="value"
                                 autocomplete="off"
                                 spellcheck={false}
                               />
