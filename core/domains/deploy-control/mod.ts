@@ -968,6 +968,15 @@ interface PlanCompletionVerdict {
   readonly requiresApproval: boolean;
 }
 
+type RunClaimResult<R extends PlanRun | ApplyRun> =
+  | { readonly won: true; readonly run: R; readonly leaseToken: string }
+  | { readonly won: false; readonly run: R };
+
+interface TerminalRunPersistResult<R extends PlanRun | ApplyRun> {
+  readonly won: boolean;
+  readonly run: R;
+}
+
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
@@ -2744,7 +2753,7 @@ export class OpenTofuDeploymentController {
     if (action === "plan") {
       const planRun = await this.#store.getPlanRun(runId);
       if (!planRun || isTerminalStatus(planRun.status)) return false;
-      await this.#failPlanRun(planRun, new Error(reason));
+      await this.#failPlanRun(planRun, undefined, new Error(reason));
       await this.#store.deletePlanRunInputs(runId);
       return true;
     }
@@ -2766,6 +2775,7 @@ export class OpenTofuDeploymentController {
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
     await this.#failApplyRun(
       applyRun,
+      undefined,
       profile,
       applyRun.startedAt ?? applyRun.createdAt,
       "apply.failed",
@@ -2807,7 +2817,7 @@ export class OpenTofuDeploymentController {
       assertGeneratedRootDispatchPresent(planRun, dispatch);
     } catch (error) {
       await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, error);
+      return await this.#failPlanRun(planRun, undefined, error);
     }
     const claim = await this.#markPlanRunning(planRun);
     if (!claim.won) {
@@ -2829,6 +2839,7 @@ export class OpenTofuDeploymentController {
       );
       result = await this.#executePlan(
         runningWithEnv,
+        claim.leaseToken,
         profile,
         variables,
         runEnvironment.credentials,
@@ -2837,7 +2848,7 @@ export class OpenTofuDeploymentController {
     } catch (error) {
       await this.#store.deletePlanRunInputs(runId);
       const failedRun = runEnvironmentFailedRun(running, error);
-      return await this.#failPlanRun(failedRun, error);
+      return await this.#failPlanRun(failedRun, claim.leaseToken, error);
     }
     // Retain the inputs sidecar for an APPLYABLE generated-root run: the apply
     // consumer re-reads the generated root / build payload (the same generated
@@ -3895,8 +3906,9 @@ export class OpenTofuDeploymentController {
   // token + the heartbeat, so a concurrent claim/cancel cannot both win.
   async #markPlanRunning(
     planRun: PlanRun,
-  ): Promise<{ won: boolean; run: PlanRun }> {
+  ): Promise<RunClaimResult<PlanRun>> {
     const startedAt = this.#now();
+    const expectedHeartbeatAt = planRun.heartbeatAt ?? null;
     const running: PlanRun = {
       ...planRun,
       status: "running",
@@ -3913,6 +3925,7 @@ export class OpenTofuDeploymentController {
       planRun.status,
       running,
       startedAt,
+      expectedHeartbeatAt,
     );
   }
 
@@ -3920,7 +3933,8 @@ export class OpenTofuDeploymentController {
     applyRun: ApplyRun,
     profile: RunnerProfile,
     startedAt: number,
-  ): Promise<{ won: boolean; run: ApplyRun }> {
+  ): Promise<RunClaimResult<ApplyRun>> {
+    const expectedHeartbeatAt = applyRun.heartbeatAt ?? null;
     const running: ApplyRun = {
       ...applyRun,
       status: "running",
@@ -3943,6 +3957,7 @@ export class OpenTofuDeploymentController {
       applyRun.status,
       running,
       startedAt,
+      expectedHeartbeatAt,
     );
   }
 
@@ -3960,19 +3975,22 @@ export class OpenTofuDeploymentController {
     fromStatus: RunStatus,
     running: R,
     heartbeatAt: number,
-  ): Promise<{ won: boolean; run: R }> {
+    expectedHeartbeatAt: number | null,
+  ): Promise<RunClaimResult<R>> {
     const expectFrom: RunStatus[] =
       fromStatus === "running" ? ["running"] : ["queued"];
+    const leaseToken = this.#newId("runlease");
     const result = await this.#store.transitionRun({
       id: running.id,
       kind,
       expectFrom,
       run: running,
-      setLeaseToken: running.id,
+      setLeaseToken: leaseToken,
+      ...(fromStatus === "running" ? { expectHeartbeatAt: expectedHeartbeatAt } : {}),
       heartbeatAt,
     });
     const run = (result.run ?? running) as R;
-    return { won: result.won, run };
+    return result.won ? { won: true, run, leaseToken } : { won: false, run };
   }
 
   /**
@@ -3984,13 +4002,14 @@ export class OpenTofuDeploymentController {
   async #heartbeatRunningRun(
     kind: "plan" | "apply",
     run: PlanRun | ApplyRun,
+    leaseToken: string,
   ): Promise<void> {
     const now = this.#now();
     await this.#store.transitionRun({
       id: run.id,
       kind,
       expectFrom: ["running"],
-      expectLeaseToken: run.id,
+      expectLeaseToken: leaseToken,
       run: { ...run, heartbeatAt: now, updatedAt: now },
       heartbeatAt: now,
     });
@@ -4007,12 +4026,13 @@ export class OpenTofuDeploymentController {
   async #withRunRenewal<T>(
     kind: "plan" | "apply",
     run: PlanRun | ApplyRun,
+    leaseToken: string,
     lease: LeaseHandle | undefined,
     work: () => Promise<T>,
   ): Promise<T> {
     const tick = async (): Promise<void> => {
       try {
-        await this.#heartbeatRunningRun(kind, run);
+        await this.#heartbeatRunningRun(kind, run, leaseToken);
         if (lease) {
           await lease.renew(DEFAULT_INSTALLATION_LEASE_TTL_MS);
         }
@@ -4051,21 +4071,30 @@ export class OpenTofuDeploymentController {
   async #persistTerminalRun<R extends PlanRun | ApplyRun>(
     kind: "plan" | "apply",
     terminal: R,
-  ): Promise<R> {
+    leaseToken?: string,
+  ): Promise<TerminalRunPersistResult<R>> {
     const result = await this.#store.transitionRun({
       id: terminal.id,
       kind,
       expectFrom: NON_TERMINAL_RUN_STATUSES,
+      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
       run: terminal,
       clearLeaseToken: true,
     });
-    return (result.won ? terminal : (result.run ?? terminal)) as R;
+    return {
+      won: result.won,
+      run: (result.won ? terminal : (result.run ?? terminal)) as R,
+    };
   }
 
   // Failure ceremony shared by the three catch bodies: clone the running run
   // into `failed`, attach the redacted error diagnostic and the phase `failed`
   // audit event, persist, and return the failed run.
-  async #failPlanRun(running: PlanRun, error: unknown): Promise<PlanRun> {
+  async #failPlanRun(
+    running: PlanRun,
+    leaseToken: string | undefined,
+    error: unknown,
+  ): Promise<PlanRun> {
     const now = this.#now();
     const failed: PlanRun = {
       ...running,
@@ -4080,7 +4109,12 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
       finishedAt: now,
     };
-    await this.#persistTerminalRun("plan", failed);
+    const persisted = await this.#persistTerminalRun(
+      "plan",
+      failed,
+      leaseToken,
+    );
+    if (!persisted.won) return persisted.run;
     await this.#recordDeployOperationMetric({
       run: failed,
       operationKind: "plan",
@@ -4109,6 +4143,7 @@ export class OpenTofuDeploymentController {
 
   async #failApplyRun(
     running: ApplyRun,
+    leaseToken: string | undefined,
     profile: RunnerProfile,
     startedAt: number,
     eventType: "apply.failed" | "destroy.failed",
@@ -4134,7 +4169,12 @@ export class OpenTofuDeploymentController {
       updatedAt: now,
       finishedAt: now,
     };
-    await this.#persistTerminalRun("apply", failed);
+    const persisted = await this.#persistTerminalRun(
+      "apply",
+      failed,
+      leaseToken,
+    );
+    if (!persisted.won) return persisted.run;
     await this.#recordDeployOperationMetric({
       run: failed,
       operationKind: eventType === "destroy.failed" ? "destroy_apply" : "apply",
@@ -4166,6 +4206,7 @@ export class OpenTofuDeploymentController {
 
   async #executePlan(
     running: PlanRun,
+    leaseToken: string,
     profile: RunnerProfile,
     variables: Readonly<Record<string, JsonValue>>,
     credentials: RunCredentials | undefined,
@@ -4229,7 +4270,12 @@ export class OpenTofuDeploymentController {
       // failed): route through the fenced transition so the lease fence column is
       // cleared on the same write (a raw put* would leave a stale lease_token on
       // the terminal row).
-      await this.#persistTerminalRun("plan", updated);
+      const persisted = await this.#persistTerminalRun(
+        "plan",
+        updated,
+        leaseToken,
+      );
+      if (!persisted.won) return persisted.run;
       await this.#recordRunnerMinuteUsage({
         spaceId: updated.spaceId,
         runId: updated.id,
@@ -4254,7 +4300,7 @@ export class OpenTofuDeploymentController {
       }
       return updated;
     } catch (error) {
-      return await this.#failPlanRun(running, error);
+      return await this.#failPlanRun(running, leaseToken, error);
     }
   }
 
@@ -4766,6 +4812,7 @@ export class OpenTofuDeploymentController {
       return { applyRun: claim.run };
     }
     const running = claim.run;
+    const leaseToken = claim.leaseToken;
     let runningForFailure = running;
     let runnerDispatched = false;
 
@@ -4796,6 +4843,7 @@ export class OpenTofuDeploymentController {
           plannedInstallation,
           runEnvironment.credentials,
           dispatch,
+          leaseToken,
           lease,
         );
       }
@@ -4809,7 +4857,7 @@ export class OpenTofuDeploymentController {
         envDispatch,
         persistGeneration,
         providerInstallationPolicy,
-      } = await this.#withRunRenewal("apply", runningWithEnv, lease, () =>
+      } = await this.#withRunRenewal("apply", runningWithEnv, leaseToken, lease, () =>
         this.#dispatchApply({
           running: runningWithEnv,
           planRun,
@@ -4881,8 +4929,12 @@ export class OpenTofuDeploymentController {
         runId: applyRun.id,
         applyRunTerminal: completed,
         planRunApplied: appliedPlan,
+        applyRunLeaseToken: leaseToken,
         now,
       });
+      if (patched === "lease_lost") {
+        return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
+      }
       if (patched) {
         await this.#projectServiceExportsFromApply({
           installation: patched,
@@ -4925,6 +4977,7 @@ export class OpenTofuDeploymentController {
       await this.#billing.releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
         runEnvironmentFailedRun(runningForFailure, error),
+        leaseToken,
         profile,
         startedAt,
         "apply.failed",
@@ -5251,8 +5304,9 @@ export class OpenTofuDeploymentController {
      */
     readonly applyRunTerminal: ApplyRun;
     readonly planRunApplied: PlanRun;
+    readonly applyRunLeaseToken: string;
     readonly now: number;
-  }): Promise<Installation | undefined> {
+  }): Promise<Installation | "lease_lost" | undefined> {
     const { planRun, installation, deployment, outputSnapshot, now } = input;
     // StateSnapshot metadata aligned to the SAME generation written to R2_STATE
     // (persistGeneration); the DO wrote the encrypted object + current.json at
@@ -5295,7 +5349,12 @@ export class OpenTofuDeploymentController {
       // Fallback path (no env context, no atomic unit): write the commit-tail
       // runs the way the tail did before the fold — the terminal ApplyRun via
       // the lease-clearing transition, then the apply-once PlanRun marker.
-      await this.#persistTerminalRun("apply", input.applyRunTerminal);
+      const persisted = await this.#persistTerminalRun(
+        "apply",
+        input.applyRunTerminal,
+        input.applyRunLeaseToken,
+      );
+      if (!persisted.won) return "lease_lost";
       await this.#store.putPlanRun(input.planRunApplied);
       return patched;
     }
@@ -5324,7 +5383,9 @@ export class OpenTofuDeploymentController {
       // Commit-tail fold (S2): terminal ApplyRun + applied PlanRun in the unit.
       applyRunTerminal: input.applyRunTerminal,
       planRunApplied: input.planRunApplied,
+      applyRunLeaseToken: input.applyRunLeaseToken,
     });
+    if (committed.applyRunLeaseLost) return "lease_lost";
     return committed.installation;
   }
 
@@ -5584,6 +5645,7 @@ export class OpenTofuDeploymentController {
     plannedInstallation: Installation | undefined,
     credentials: RunCredentials | undefined,
     dispatch: RunTemplateDispatch,
+    leaseToken: string,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
@@ -5630,7 +5692,7 @@ export class OpenTofuDeploymentController {
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
       // tofu teardown; re-stamp the heartbeat + renew the lease around it so a
       // long destroy is not taken over by a sibling. clearInterval on every exit.
-      const result = await this.#withRunRenewal("apply", running, lease, () =>
+      const result = await this.#withRunRenewal("apply", running, leaseToken, lease, () =>
         destroyFn.call(runner, {
           applyRun: running,
           planRun,
@@ -5747,7 +5809,11 @@ export class OpenTofuDeploymentController {
           // Commit-tail fold (S2): terminal destroy-apply + applied PlanRun.
           applyRunTerminal: completed,
           planRunApplied: appliedPlan,
+          applyRunLeaseToken: leaseToken,
         });
+        if (committed.applyRunLeaseLost) {
+          return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+        }
         patched = committed.installation;
       } else {
         // No environment context => no StateSnapshot, no atomic unit. Preserve
@@ -5761,7 +5827,14 @@ export class OpenTofuDeploymentController {
           destroyPatch.patch,
           destroyPatch.guard,
         );
-        await this.#persistTerminalRun("apply", completed);
+        const persisted = await this.#persistTerminalRun(
+          "apply",
+          completed,
+          leaseToken,
+        );
+        if (!persisted.won) {
+          return { applyRun: persisted.run };
+        }
         await this.#store.putPlanRun(appliedPlan);
       }
       await this.#recordRunnerMinuteUsage({
@@ -5810,6 +5883,7 @@ export class OpenTofuDeploymentController {
       }
       const failed = await this.#failApplyRun(
         running,
+        leaseToken,
         profile,
         startedAt,
         "destroy.failed",

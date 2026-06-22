@@ -1346,6 +1346,7 @@ test("commitAppliedDeployment: commit-tail fold writes the terminal ApplyRun + a
         guard: { currentDeploymentId: undefined, status: "pending" },
       },
       applyRunTerminal: terminalApply,
+      applyRunLeaseToken: "apply_fold",
       planRunApplied: appliedPlan,
     });
     expect(committed.installation?.currentDeploymentId, label).toBe("dep_fold");
@@ -1372,6 +1373,85 @@ test("commitAppliedDeployment: commit-tail fold writes the terminal ApplyRun + a
     expect((await store.getApplyRun("apply_fold"))?.status, label).toBe(
       "succeeded",
     );
+  }
+});
+
+test("commitAppliedDeployment: stale apply lease loses before any ledger write", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putInstallation(
+      installation({
+        id: "inst_lease",
+        status: "pending",
+        currentStateGeneration: 0,
+      }),
+    );
+    await store.putPlanRun({
+      ...makePlanRun("plan_lease"),
+      status: "succeeded",
+    });
+    await store.putApplyRun({
+      ...makeApplyRun("apply_lease", "plan_lease"),
+      status: "queued",
+    });
+    const claim = await store.transitionRun({
+      id: "apply_lease",
+      kind: "apply",
+      expectFrom: ["queued"],
+      run: { ...makeApplyRun("apply_lease", "plan_lease"), status: "running" },
+      setLeaseToken: "lease_fresh",
+      heartbeatAt: 1,
+    });
+    expect(claim.won, label).toBe(true);
+
+    const committed = await store.commitAppliedDeployment({
+      newDeployment: deployment({
+        id: "dep_stale_lease",
+        stateGeneration: 1,
+        outputSnapshotId: "out_stale_lease",
+        status: "active",
+      }),
+      stateSnapshot: stateSnapshot({ id: "state_stale_lease", generation: 1 }),
+      outputSnapshot: outputSnapshot({
+        id: "out_stale_lease",
+        stateGeneration: 1,
+      }),
+      installationPatch: {
+        id: "inst_lease",
+        patch: {
+          currentDeploymentId: "dep_stale_lease",
+          status: "active",
+          currentStateGeneration: 1,
+          currentOutputSnapshotId: "out_stale_lease",
+          updatedAt: TS,
+        },
+        guard: { currentDeploymentId: undefined, status: "pending" },
+      },
+      applyRunTerminal: {
+        ...makeApplyRun("apply_lease", "plan_lease"),
+        status: "succeeded",
+        deploymentId: "dep_stale_lease",
+      },
+      applyRunLeaseToken: "lease_stale",
+      planRunApplied: {
+        ...makePlanRun("plan_lease"),
+        status: "succeeded",
+        appliedApplyRunId: "apply_lease",
+      },
+    });
+
+    expect(committed.applyRunLeaseLost, label).toBe(true);
+    expect(await store.getDeployment("dep_stale_lease"), label).toBeUndefined();
+    expect(await store.getOutputSnapshot("out_stale_lease"), label).toBeUndefined();
+    expect((await store.getInstallation("inst_lease"))?.status, label).toBe(
+      "pending",
+    );
+    expect((await store.getApplyRun("apply_lease"))?.status, label).toBe(
+      "running",
+    );
+    expect(
+      (await store.getPlanRun("plan_lease"))?.appliedApplyRunId,
+      label,
+    ).toBeUndefined();
   }
 });
 
@@ -1728,6 +1808,71 @@ test("transitionRun: a stale lease fence token loses, the correct token wins", a
     expect(fresh.run?.status, label).toBe("succeeded");
     expect((await store.getApplyRun("run_t_c"))?.status, label).toBe(
       "succeeded",
+    );
+  }
+});
+
+test("transitionRun: stale-running takeover is fenced on the observed heartbeat", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putApplyRun({
+      ...makeApplyRun("run_t_hb", "run_plan_hb"),
+      status: "queued",
+    });
+    const staleOwner = await store.transitionRun({
+      id: "run_t_hb",
+      kind: "apply",
+      expectFrom: ["queued"],
+      run: {
+        ...makeApplyRun("run_t_hb", "run_plan_hb"),
+        status: "running",
+      },
+      setLeaseToken: "lease_old",
+      heartbeatAt: 1,
+    });
+    expect(staleOwner.won, label).toBe(true);
+
+    const takeover = await store.transitionRun({
+      id: "run_t_hb",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectHeartbeatAt: 1,
+      run: {
+        ...makeApplyRun("run_t_hb", "run_plan_hb"),
+        status: "running",
+      },
+      setLeaseToken: "lease_new",
+      heartbeatAt: 20,
+    });
+    expect(takeover.won, label).toBe(true);
+
+    const duplicateTakeover = await store.transitionRun({
+      id: "run_t_hb",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectHeartbeatAt: 1,
+      run: {
+        ...makeApplyRun("run_t_hb", "run_plan_hb"),
+        status: "running",
+      },
+      setLeaseToken: "lease_duplicate",
+      heartbeatAt: 30,
+    });
+    expect(duplicateTakeover.won, label).toBe(false);
+    expect(duplicateTakeover.run?.heartbeatAt, label).toBe(20);
+
+    const staleTerminal = await store.transitionRun({
+      id: "run_t_hb",
+      kind: "apply",
+      expectFrom: ["running"],
+      expectLeaseToken: "lease_old",
+      run: {
+        ...makeApplyRun("run_t_hb", "run_plan_hb"),
+        status: "failed",
+      },
+    });
+    expect(staleTerminal.won, label).toBe(false);
+    expect((await store.getApplyRun("run_t_hb"))?.status, label).toBe(
+      "running",
     );
   }
 });
