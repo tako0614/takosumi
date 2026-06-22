@@ -163,6 +163,55 @@ export interface NormalizationConfig {
   readonly allowAliasInjection: boolean;
 }
 
+export type InstallConfigCatalogSurface = "service" | "building_block";
+export type InstallConfigCatalogKind = "worker" | "storage" | "site";
+export type InstallConfigCatalogDefault =
+  | "service-name"
+  | "service-name-with-space"
+  | "main"
+  | "us-east-1";
+
+export interface InstallConfigCatalogText {
+  readonly ja: string;
+  readonly en: string;
+}
+
+export interface InstallConfigCatalogSource {
+  readonly git: string;
+  readonly ref: string;
+  readonly path: string;
+}
+
+export interface InstallConfigCatalogInput {
+  readonly name: string;
+  readonly type?: "string" | "number" | "boolean";
+  readonly required?: boolean;
+  readonly defaultValue?: InstallConfigCatalogDefault;
+  readonly label: InstallConfigCatalogText;
+  readonly helper?: InstallConfigCatalogText;
+  readonly placeholder?: string;
+}
+
+/**
+ * Public-safe app-store presentation for an InstallConfig. This is deliberately
+ * catalog metadata, not execution authority: plan/apply still resolves the
+ * service-side InstallConfig and Provider Bindings.
+ */
+export interface InstallConfigCatalogMetadata {
+  readonly templateId?: string;
+  readonly templateVersion?: string;
+  readonly source?: InstallConfigCatalogSource;
+  readonly order: number;
+  readonly surface: InstallConfigCatalogSurface;
+  readonly kind: InstallConfigCatalogKind;
+  readonly provider: string;
+  readonly suggestedName: string;
+  readonly badge: InstallConfigCatalogText;
+  readonly name: InstallConfigCatalogText;
+  readonly description: InstallConfigCatalogText;
+  readonly inputs: readonly InstallConfigCatalogInput[];
+}
+
 /**
  * Service-side install configuration. `spaceId` is absent for
  * built-in first-party configs shared across Spaces.
@@ -182,6 +231,7 @@ export interface InstallConfig {
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
   readonly backup?: BackupConfig;
+  readonly catalog?: InstallConfigCatalogMetadata;
   /**
    * Internal seam: binds a built-in first-party config to its bundled module.
    * New runs normalize the bundled module into generatedRoot.moduleFiles, the

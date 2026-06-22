@@ -75,6 +75,42 @@ test("generic per-template configs keep installType opentofu_module + a template
   }
 });
 
+test("hostable official configs expose public catalog metadata for the dashboard", () => {
+  const configs = officialInstallConfigs({ now: NOW });
+  const catalogTemplateIds = configs
+    .map((config) => config.catalog?.templateId)
+    .filter(Boolean);
+  expect(catalogTemplateIds).toEqual([
+    "cloudflare-hello-worker",
+    "cloudflare-r2-storage",
+    "cloudflare-static-site",
+    "aws-s3-storage",
+  ]);
+  expect(
+    configs
+      .map((config) => config.catalog?.order)
+      .filter((order): order is number => order !== undefined),
+  ).toEqual([10, 30, 20, 40]);
+
+  const hello = configs.find(
+    (config) => config.catalog?.templateId === "cloudflare-hello-worker",
+  );
+  expect(hello?.catalog?.source?.git).toBe(
+    "https://github.com/tako0614/takosumi.git",
+  );
+  expect(hello?.catalog?.source?.ref).toMatch(/^[0-9a-f]{40}$/);
+  expect(hello?.catalog?.source?.path).toBe(
+    "providers/cloudflare/modules/cloudflare-hello-worker/module",
+  );
+  expect(hello?.catalog?.inputs.map((input) => input.name)).toContain(
+    "workersSubdomain",
+  );
+  expect(hello?.catalog?.name.ja).toContain("Webアプリ");
+
+  const hidden = configs.find((config) => config.name === "core");
+  expect(hidden?.catalog).toBeUndefined();
+});
+
 test("seeded config output allowlist mirrors the template public outputs", () => {
   const template = defaultTemplateRegistry.require(
     "cloudflare-r2-storage",
