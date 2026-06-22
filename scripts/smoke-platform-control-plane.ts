@@ -14,8 +14,16 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { access, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v1" as const;
@@ -55,6 +63,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly pollIntervalMs: number;
   readonly dryRun: boolean;
   readonly json: boolean;
+  readonly outFile?: string;
   readonly keepConnection: boolean;
   readonly ensureSpace: boolean;
   readonly backupRestoreRehearsal: boolean;
@@ -106,6 +115,7 @@ interface CliArgs {
   readonly selfTest?: boolean;
   readonly dryRun?: boolean;
   readonly json?: boolean;
+  readonly outFile?: string;
   readonly keepConnection?: boolean;
   readonly ensureWorkspace?: boolean;
   readonly ensureSpace?: boolean;
@@ -241,12 +251,12 @@ export async function main(argv: readonly string[]): Promise<number> {
   const options = await resolveOptions(args, process.env);
   if (options.dryRun) {
     const result = dryRunResult(options);
-    writeResult(result, options);
+    await writeResult(result, options);
     return 0;
   }
 
   const result = await runPlatformControlPlaneSmoke(options);
-  writeResult(result, options);
+  await writeResult(result, options);
   return result.status === "failed" ? 1 : 0;
 }
 
@@ -335,6 +345,7 @@ export async function resolveOptions(
     ),
     dryRun: args.dryRun === true,
     json: args.json === true,
+    ...(args.outFile ? { outFile: resolve(args.outFile) } : {}),
     keepConnection: args.keepConnection === true,
     ensureSpace: args.ensureWorkspace === true || args.ensureSpace === true,
     backupRestoreRehearsal: args.backupRestoreRehearsal === true,
@@ -1417,10 +1428,13 @@ function requiredSteps(
   return steps;
 }
 
-function writeResult(
+async function writeResult(
   result: PlatformControlPlaneSmokeResult,
   options: PlatformControlPlaneSmokeOptions,
-): void {
+): Promise<void> {
+  if (options.outFile) {
+    await writeResultFile(options.outFile, result);
+  }
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -1451,6 +1465,14 @@ function writeResult(
   if (result.nextAction) console.log(`next: ${result.nextAction}`);
 }
 
+async function writeResultFile(
+  outFile: string,
+  result: PlatformControlPlaneSmokeResult,
+): Promise<void> {
+  await mkdir(dirname(outFile), { recursive: true });
+  await writeFile(outFile, `${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function runSelfTest(): Promise<void> {
   const options = await resolveOptions(
     {
@@ -1468,6 +1490,24 @@ async function runSelfTest(): Promise<void> {
   );
   const result = dryRunResult(options);
   const serialized = JSON.stringify(result);
+  const tempRoot = await mkdtemp(
+    resolve(tmpdir(), "takosumi-platform-smoke-"),
+  );
+  try {
+    const outFile = resolve(tempRoot, "nested/smoke.json");
+    await writeResultFile(outFile, result);
+    const saved = JSON.parse(await readFile(outFile, "utf8"));
+    if (saved.kind !== PLATFORM_CONTROL_PLANE_SMOKE_KIND) {
+      throw new Error("self-test did not write out-file JSON result");
+    }
+    if (JSON.stringify(saved).includes("account-session-token")) {
+      throw new Error(
+        "self-test out-file leaked account session token file name",
+      );
+    }
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
   if (options.deployTimeoutSeconds !== DEFAULT_DEPLOY_TIMEOUT_SECONDS) {
     throw new Error("self-test default deploy timeout is wrong");
   }
@@ -1630,6 +1670,7 @@ Options:
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
+  --out-file <path>                               write the redacted result JSON to a private evidence file
   --backup-restore-rehearsal                      create a Capsule state backup, approve a restore Run, and verify it succeeds before cleanup
   --keep-connection                               keep the temporary Workspace ProviderConnection
   --dry-run                                       validate shape and print redacted plan
