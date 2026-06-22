@@ -36,7 +36,7 @@ function requireProvider(id: string) {
 /**
  * Resolve the operator-curated set of enabled runner profiles from a CSV env
  * value (`TAKOSUMI_ENABLED_RUNNER_PROFILES`, e.g.
- * `"cloudflare-default,aws-provider-env-candidate,gcp-reserved"`).
+ * `"cloudflare-default,aws-provider-env-candidate,gcp-provider-env-candidate"`).
  *
  * The returned list is the operator-curated provider surface: only the listed
  * profile ids appear (so `/v1/runner-profiles` and policy evaluation never see
@@ -146,14 +146,12 @@ export function createDefaultRunnerProfiles(
       networkPolicy: networkFor("aws"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "gcp-reserved",
-      name: "GCP reserved",
+      id: "gcp-provider-env-candidate",
+      name: "GCP Provider Env candidate",
       description:
-        "Reserved Cloudflare Container runner profile for Google Cloud modules until live verify/mint drivers are wired.",
+        "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources with service-account JSON Provider Connections.",
       allowedProviders: providerAddressesFor("gcp"),
-      labels: reservedRunnerProfileLabels(
-        "gcp verify/mint drivers are not wired",
-      ),
+      labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("gcp"),
     }),
     defaultProviderRunnerProfile(now, {
@@ -293,15 +291,6 @@ function defaultProviderRunnerProfile(
 function candidateRunnerProfileLabels(): Readonly<Record<string, string>> {
   return {
     "takosumi.com/profile-state": "candidate",
-  };
-}
-
-function reservedRunnerProfileLabels(
-  reason: string,
-): Readonly<Record<string, string>> {
-  return {
-    "takosumi.com/profile-state": "reserved",
-    "takosumi.com/profile-reserved-reason": reason,
   };
 }
 

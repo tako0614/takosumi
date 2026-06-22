@@ -328,6 +328,10 @@ export const PROVIDER_CREDENTIAL_ARG_MAP: Readonly<
     { envName: "AWS_SECRET_ACCESS_KEY", arg: "secret_key" },
     { envName: "AWS_SESSION_TOKEN", arg: "token" },
   ],
+  google: [
+    { envName: "GOOGLE_CREDENTIALS", arg: "credentials" },
+    { envName: "GOOGLE_CLOUD_PROJECT", arg: "project" },
+  ],
 };
 
 /**

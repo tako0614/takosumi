@@ -43,6 +43,7 @@ import {
   TAKOSUMI_CONNECTIONS_GCP_IMPERSONATION_ROUTE,
   TAKOSUMI_CONNECTIONS_GCP_OAUTH_CALLBACK_ROUTE,
   TAKOSUMI_CONNECTIONS_GCP_OAUTH_START_ROUTE,
+  TAKOSUMI_CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_ROUTE,
   TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE,
   TAKOSUMI_CONNECTIONS_ROUTE,
   TAKOSUMI_CONNECTIONS_SOURCE_HTTPS_TOKEN_ROUTE,
@@ -268,6 +269,23 @@ function buildGcpImpersonationConnectionRequest(
   };
 }
 
+function buildGcpServiceAccountJsonConnectionRequest(
+  body: ConnectionSubrouteBody,
+): CreateConnectionRequest {
+  return {
+    ...(body.spaceId ? { spaceId: body.spaceId } : {}),
+    provider: "google",
+    kind: "gcp_service_account_json",
+    ...providerCredentialFields(body, "gcp_service_account_json"),
+    authMethod: "static_secret",
+    ...(body.displayName ? { displayName: body.displayName } : {}),
+    ...(body.scope ? { scope: body.scope } : {}),
+    ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
+    ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
+    values: body.values,
+  };
+}
+
 export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
@@ -395,6 +413,20 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       operationId: "createGcpImpersonationConnection",
       openapi: {
         requestSchema: "GcpImpersonationConnectionRequest",
+        okStatus: "201",
+        okSchema: "ConnectionResponse",
+      },
+      notImplementedMessage: "connections not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_ROUTE,
+      summary:
+        "Registers a Google Cloud service-account JSON Provider Connection (JSON write-only; project filled from GOOGLE_CLOUD_PROJECT or credentials.project_id).",
+      auth: "deploy-control-token",
+      operationId: "createGcpServiceAccountJsonConnection",
+      openapi: {
+        requestSchema: "CreateConnectionSubrouteRequest",
         okStatus: "201",
         okSchema: "ConnectionResponse",
       },
@@ -606,6 +638,13 @@ export function mountDeployControlConnectionRoutes(
     deployControlBodyLimit,
     createConnectionFromSubroute((body) =>
       buildGcpImpersonationConnectionRequest(body),
+    ),
+  );
+  app.post(
+    TAKOSUMI_CONNECTIONS_GCP_SERVICE_ACCOUNT_JSON_ROUTE,
+    deployControlBodyLimit,
+    createConnectionFromSubroute((body) =>
+      buildGcpServiceAccountJsonConnectionRequest(body),
     ),
   );
 

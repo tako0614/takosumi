@@ -73,6 +73,7 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
     displayName: "Google Cloud",
     providerAddresses: [`${OPENTOFU}/hashicorp/google`],
     connectionKinds: [
+      "gcp_service_account_json",
       "gcp_oauth_bootstrap",
       "gcp_service_account_impersonation",
     ],
@@ -87,7 +88,7 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       ],
       allowedHostPatterns: ["*.googleapis.com"],
     },
-    runnerProfileId: "gcp-reserved",
+    runnerProfileId: "gcp-provider-env-candidate",
   },
   {
     id: "azure",

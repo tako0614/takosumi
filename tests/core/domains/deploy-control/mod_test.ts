@@ -1175,14 +1175,14 @@ test("default Cloudflare runner is an OSS provider runner without Cloud-only hos
   });
 });
 
-test("default runner profile seeds cover provider-env targets, reserved targets, and future/custom candidates", () => {
+test("default runner profile seeds cover provider-env targets and future/custom candidates", () => {
   const profiles = createDefaultRunnerProfiles(123);
   const byId = new Map(profiles.map((profile) => [profile.id, profile]));
 
   expect(Array.from(byId.keys())).toEqual([
     "cloudflare-default",
     "aws-provider-env-candidate",
-    "gcp-reserved",
+    "gcp-provider-env-candidate",
     "azure-provider-env-candidate",
     "kubernetes-provider-env-candidate",
     "github-provider-env-candidate",
@@ -1213,6 +1213,7 @@ test("default runner profile seeds cover provider-env targets, reserved targets,
   ).toEqual(undefined);
   for (const id of [
     "aws-provider-env-candidate",
+    "gcp-provider-env-candidate",
     "kubernetes-provider-env-candidate",
     "github-provider-env-candidate",
     "azure-provider-env-candidate",
@@ -1223,12 +1224,6 @@ test("default runner profile seeds cover provider-env targets, reserved targets,
       "candidate",
     );
   }
-  expect(
-    byId.get("gcp-reserved")?.labels?.["takosumi.com/profile-state"],
-  ).toEqual("reserved");
-  expect(
-    byId.get("gcp-reserved")?.labels?.["takosumi.com/profile-reserved-reason"],
-  ).toContain("gcp verify/mint drivers");
 });
 
 test("default runner profile seeds record provider network policy patterns", () => {
@@ -1239,7 +1234,7 @@ test("default runner profile seeds record provider network policy patterns", () 
     byId.get("aws-provider-env-candidate")?.networkPolicy?.allowedHostPatterns,
   ).toContain("*.amazonaws.com");
   expect(
-    byId.get("gcp-reserved")?.networkPolicy?.allowedHostPatterns,
+    byId.get("gcp-provider-env-candidate")?.networkPolicy?.allowedHostPatterns,
   ).toContain("*.googleapis.com");
   expect(
     byId.get("azure-provider-env-candidate")?.networkPolicy?.allowedHosts,

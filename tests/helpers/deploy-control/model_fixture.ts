@@ -304,7 +304,7 @@ function providerEnvNames(provider: string): readonly string[] {
     return ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"];
   }
   if (provider.includes("hashicorp/google")) {
-    return ["GOOGLE_CREDENTIALS"];
+    return ["GOOGLE_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"];
   }
   if (provider.includes("integrations/github")) return ["GITHUB_TOKEN"];
   if (provider.includes("hashicorp/kubernetes")) return ["KUBE_CONFIG_PATH"];
@@ -317,7 +317,7 @@ function providerConnectionKind(
   if (shortName === "cloudflare") return "cloudflare_api_token";
   if (shortName === "aws") return "aws_assume_role";
   if (shortName === "google" || shortName === "gcp") {
-    return "gcp_service_account_impersonation";
+    return "gcp_service_account_json";
   }
   return "generic_env_provider";
 }

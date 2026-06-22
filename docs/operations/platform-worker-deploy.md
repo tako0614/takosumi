@@ -441,8 +441,9 @@ commit-pinned evidence ref、証跡ファイル本体の digest 一致を fail-c
 - manifest の egress claim が outbound Worker の allow / deny 両 probe を記録していない
 - manifest の restore rehearsal claim が isolated recovery / staging restore、control ledger、StateVersion、
   Output、audit chain verification を記録していない
-- manifest の ProviderConnection policy / CredentialRecipe claim が Cloudflare / AWS / GitHub / Kubernetes ProviderConnections、
-  GCP reserved status、provider allowlist、internal resolver の egress / runner policy gate を記録していない
+- manifest の ProviderConnection policy / CredentialRecipe claim が Cloudflare / AWS / GCP service-account JSON /
+  GitHub / Kubernetes ProviderConnections、provider allowlist、internal resolver の egress / runner policy gate、
+  GCP OAuth / impersonation reserved-helper status を記録していない
 - manifest の cost attribution claim が Takosumi cost-attribution dashboard JSON、required metrics / labels、fresh sample、
   unattributed spend threshold を記録していない
 - manifest の secret-boundary claim が runner diagnostics、failure audit payload、Output、tenant Worker bindings の
@@ -498,8 +499,9 @@ provider API verify、destroy verify を通した証跡にする。
 egress 証跡は operator-internal execution boundary / policy allowlist と同じ deny/allow 判断を live request で示したものにする。
 restore rehearsal evidence は production を上書きしない isolated recovery / staging target で control ledger、
 StateVersion、Output、audit chain を検証したものにする。
-ProviderConnection policy / CredentialRecipe evidence は Cloudflare / AWS / GitHub / Kubernetes provider allowlist policy、
-GCP reserved status、ProviderConnection の egress / runner policy gate を含める。
+ProviderConnection policy / CredentialRecipe evidence は Cloudflare / AWS / GCP service-account JSON / GitHub /
+Kubernetes provider allowlist policy、GCP OAuth / impersonation reserved-helper status、ProviderConnection の egress /
+runner policy gate を含める。
 Cost attribution evidence は `takosumi/deploy/observability/grafana/takosumi-cost-attribution.json` が provision され、
 `takosumi_cloud_spend_cents_total` / `takosumi_usage_credits_total` /
 `takosumi_installation_usage_units_total` の fresh sample と required labels を示すものにする。

@@ -150,7 +150,11 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     providerId: string,
     connectionValues: Readonly<Record<string, string>>,
   ):
-    | { readonly accountId?: string; readonly awsRegion?: string }
+    | {
+        readonly accountId?: string;
+        readonly awsRegion?: string;
+        readonly gcpProjectId?: string;
+      }
     | undefined => {
     if (providerId === "cloudflare") {
       const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
@@ -159,6 +163,12 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     if (providerId === "aws") {
       const awsRegion = connectionValues.AWS_REGION?.trim();
       return awsRegion ? { awsRegion } : undefined;
+    }
+    if (providerId === "gcp" || providerId === "google") {
+      const gcpProjectId =
+        connectionValues.GOOGLE_CLOUD_PROJECT?.trim() ||
+        connectionValues.GOOGLE_PROJECT?.trim();
+      return gcpProjectId ? { gcpProjectId } : undefined;
     }
     return undefined;
   };
