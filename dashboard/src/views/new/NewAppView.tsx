@@ -43,7 +43,7 @@ import {
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
@@ -59,6 +59,7 @@ import {
   checkCapsuleCompatibility,
   ControlApiError,
   createInstallation,
+  createSpace,
   createSourceHttpsTokenConnection,
   createSource,
   extractRunId,
@@ -82,6 +83,7 @@ import {
   type ProviderConnection,
   type ProviderCredentialOwnership,
   type RunStatus,
+  type Space,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
@@ -99,6 +101,7 @@ import {
   Toast,
   type Tone,
 } from "../../components/ui/index.ts";
+import { createAction } from "../account/lib/action.tsx";
 
 type StepState = "idle" | "running" | "done" | "error";
 type FlowRun = {
@@ -415,6 +418,40 @@ export default function NewAppView() {
   return <Page title={t("new.title")}>{() => <Inner />}</Page>;
 }
 
+function NoWorkspaceStartPanel(props: {
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly onCreate: () => void;
+}) {
+  return (
+    <section class="av-start" aria-label={t("space.start.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("space.start.kicker")}</span>
+        <h2 class="av-start-title">{t("space.start.title")}</h2>
+        <p class="av-start-sub">{t("space.start.body")}</p>
+      </div>
+      <Button
+        variant="primary"
+        type="button"
+        busy={props.busy}
+        icon={<Plus size={18} />}
+        onClick={props.onCreate}
+      >
+        {props.busy ? t("space.start.creating") : t("space.start.create")}
+      </Button>
+      <Show when={props.error}>
+        {(message) => <Toast tone="error">{message()}</Toast>}
+      </Show>
+    </section>
+  );
+}
+
+function defaultWorkspaceHandle(): string {
+  const time = Date.now().toString(36).slice(-6);
+  const random = Math.random().toString(36).slice(2, 8) || "new";
+  return `workspace-${time}-${random}`.slice(0, 39);
+}
+
 function Inner() {
   const navigate = useNavigate();
 
@@ -494,6 +531,16 @@ function Inner() {
     spaceId,
     listProviderConnections,
   );
+  const createFirstWorkspace = createAction(async (): Promise<Space> => {
+    const space = await createSpace({
+      handle: defaultWorkspaceHandle(),
+      displayName: t("space.defaultName"),
+      type: "personal",
+    });
+    setCurrentSpaceId(space.id);
+    window.dispatchEvent(new Event("takosumi:spaces-changed"));
+    return space;
+  });
   const configList = createMemo<readonly InstallConfig[]>(
     () => configs() ?? [],
   );
@@ -521,6 +568,10 @@ function Inner() {
   const primaryCatalog = createMemo(() =>
     catalogEntries().filter((entry) => entry.surface === "service"),
   );
+  const featuredCatalog = createMemo(() =>
+    primaryCatalog().length > 0 ? primaryCatalog() : catalogEntries(),
+  );
+  const showSecondaryCatalog = () => primaryCatalog().length > 0;
   const buildingBlockCatalog = createMemo(() =>
     catalogEntries().filter((entry) => entry.surface === "building_block"),
   );
@@ -589,10 +640,7 @@ function Inner() {
     for (const field of entry.inputs) {
       const value = catalogInputValue(entry, field).trim();
       if (field.required && !value) {
-        if (
-          isConnectionScopedCatalogInput(entry, field) &&
-          (!compatibility() || providerConnectionError() !== null)
-        ) {
+        if (isConnectionScopedCatalogInput(entry, field)) {
           continue;
         }
         return t("new.catalogInput.errorRequired", {
@@ -854,7 +902,7 @@ function Inner() {
   const advancedCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
-        isConnectionScopedCatalogInput(entry, field) ||
+        !isConnectionScopedCatalogInput(entry, field) &&
         catalogInputHasImplicitValue(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
@@ -1676,10 +1724,10 @@ function Inner() {
       <Show
         when={spaceId()}
         fallback={
-          <EmptyState
-            icon={<Download size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+          <NoWorkspaceStartPanel
+            busy={createFirstWorkspace.busy()}
+            error={createFirstWorkspace.error()}
+            onCreate={() => void createFirstWorkspace.run()}
           />
         }
       >
@@ -1726,7 +1774,7 @@ function Inner() {
               <Match when={catalogEntries().length > 0}>
                 <>
                   <ul class="av-catalog-grid">
-                    <For each={primaryCatalog()}>
+                    <For each={featuredCatalog()}>
                       {(entry) => (
                         <CatalogCard
                           entry={entry}
@@ -1735,7 +1783,11 @@ function Inner() {
                       )}
                     </For>
                   </ul>
-                  <Show when={buildingBlockCatalog().length > 0}>
+                  <Show
+                    when={
+                      showSecondaryCatalog() && buildingBlockCatalog().length > 0
+                    }
+                  >
                     <details class="wb-disclosure av-catalog-more">
                       <summary>{t("new.store.blocksTitle")}</summary>
                       <ul class="av-catalog-grid av-catalog-grid-secondary">
@@ -1750,7 +1802,9 @@ function Inner() {
                       </ul>
                     </details>
                   </Show>
-                  <Show when={exampleCatalog().length > 0}>
+                  <Show
+                    when={showSecondaryCatalog() && exampleCatalog().length > 0}
+                  >
                     <details class="wb-disclosure av-catalog-more">
                       <summary>{t("new.store.examplesTitle")}</summary>
                       <ul class="av-catalog-grid av-catalog-grid-secondary">
