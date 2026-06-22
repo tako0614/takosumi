@@ -268,6 +268,23 @@ function providerResolutionTone(status: ProviderResolution["status"]): Tone {
   }
 }
 
+function providerDisplayName(provider: string): string {
+  const tail = provider.toLowerCase().trim().split("/").at(-1) ?? provider;
+  switch (tail) {
+    case "aws":
+      return "AWS";
+    case "cloudflare":
+      return "Cloudflare";
+    case "google":
+    case "google-beta":
+      return "Google Cloud";
+    case "hcloud":
+      return "Hetzner Cloud";
+    default:
+      return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : provider;
+  }
+}
+
 function providerResolutionNeedsAttention(row: ProviderResolutionRow): boolean {
   return row.status !== "resolved_provider_connection";
 }
@@ -278,7 +295,7 @@ function providerConnectionName(
 ): string | undefined {
   if (!connectionId) return undefined;
   const connection = connectionsById.get(connectionId);
-  return connection?.displayName || connection?.providerSource || connectionId;
+  return connection?.displayName || connection?.providerSource;
 }
 
 function providerResolutionRows(
@@ -316,13 +333,13 @@ function ProviderResolutionTable(props: {
               <span class="wa-provider-resolution-label">
                 {t("run.connections.provider")}
               </span>
-              <code>{row.provider}</code>
+              <span>{providerDisplayName(row.provider)}</span>
             </div>
             <div>
               <span class="wa-provider-resolution-label">
                 {t("run.connections.connection")}
               </span>
-              <code>{row.connectionName ?? row.connectionId ?? "—"}</code>
+              <span>{row.connectionName ?? "—"}</span>
             </div>
             <div>
               <span class="wa-provider-resolution-label">
@@ -773,7 +790,7 @@ function Inner() {
             {(id) => (
               <Button
                 variant="ghost"
-                href={`/capsules/${encodeURIComponent(id())}`}
+                href={`/services/${encodeURIComponent(id())}`}
               >
                 {t("run.backToApp")}
               </Button>
@@ -897,7 +914,7 @@ function Inner() {
                     {(id) => (
                       <Button
                         variant="primary"
-                        href={`/capsules/${encodeURIComponent(id())}`}
+                        href={`/services/${encodeURIComponent(id())}`}
                       >
                         {t("run.backToApp")}
                       </Button>
@@ -916,7 +933,7 @@ function Inner() {
                       onClick={() => {
                         setNeedsConfirm(false);
                         const id = installationId();
-                        if (id) navigate(`/capsules/${encodeURIComponent(id)}`);
+                        if (id) navigate(`/services/${encodeURIComponent(id)}`);
                       }}
                     >
                       {t("run.stop")}

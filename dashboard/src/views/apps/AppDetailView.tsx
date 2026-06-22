@@ -1,5 +1,5 @@
 /**
- * Service detail (`/capsules/:id` + tab routes) — one service. The primary tabs
+ * Service detail (`/services/:id` + tab routes) — one service. The primary tabs
  * stay focused on using/opening the service and reviewing updates; source,
  * provider mapping, and delete options remain reachable from advanced manage
  * routes instead of occupying the everyday tab strip.
@@ -215,7 +215,7 @@ function Inner() {
   };
 
   const tabItems = () => {
-    const base = `/capsules/${encodeURIComponent(installationId())}`;
+    const base = `/services/${encodeURIComponent(installationId())}`;
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
@@ -317,7 +317,7 @@ function Inner() {
                       reviewBusy={plan.busy()}
                       onReview={() => void plan.run()}
                       reviewError={plan.error()}
-                      settingsHref={`/capsules/${encodeURIComponent(installationId())}/settings`}
+                      settingsHref={`/services/${encodeURIComponent(installationId())}/settings`}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -326,7 +326,7 @@ function Inner() {
                       providerConnections={profile()?.connections}
                       availableProviderConnections={providerConnections() ?? []}
                       installationId={installationId()}
-                      dangerHref={`/capsules/${encodeURIComponent(installationId())}/danger`}
+                      dangerHref={`/services/${encodeURIComponent(installationId())}/danger`}
                       onSaved={() =>
                         void Promise.all([
                           refetchProfile(),

@@ -186,7 +186,7 @@ function eventHref(event: ActivityEvent): string | undefined {
     return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "installation") {
-    return `/capsules/${encodeURIComponent(event.targetId)}`;
+    return `/services/${encodeURIComponent(event.targetId)}`;
   }
   return undefined;
 }

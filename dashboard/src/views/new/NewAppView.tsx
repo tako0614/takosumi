@@ -1588,14 +1588,7 @@ function Inner() {
 
   return (
     <AppShell>
-      <PageHeader
-        title={t("new.title")}
-        actions={
-          <Button variant="ghost" href="/">
-            {t("app.backToList")}
-          </Button>
-        }
-      />
+      <PageHeader title={t("new.title")} />
 
       <Show
         when={spaceId()}
@@ -1651,18 +1644,16 @@ function Inner() {
                 )}
               </For>
             </ul>
-            <details class="wb-disclosure av-manual-import">
-              <summary>{t("new.advancedImport.open")}</summary>
-              <p class="wb-note">{t("new.advancedImport.subtitle")}</p>
+            <div class="av-manual-import">
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
                 type="button"
                 onClick={() => setActiveTab("git")}
               >
-                {t("new.advancedImport.title")}
+                {t("new.advancedImport.open")}
               </Button>
-            </details>
+            </div>
           </section>
         </Show>
 
@@ -2179,7 +2170,7 @@ function Inner() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        href={`/capsules/${encodeURIComponent(installation().id)}`}
+                        href={`/services/${encodeURIComponent(installation().id)}`}
                       >
                         {t("new.existing.open")}
                       </Button>

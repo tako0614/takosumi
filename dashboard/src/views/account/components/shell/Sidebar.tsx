@@ -9,17 +9,17 @@ import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import { t } from "../../../../i18n/index.ts";
 import type { MessageKey } from "../../../../i18n/index.ts";
-import { isTakosumiCloudRuntime } from "../../../../lib/deployment-brand.ts";
+import {
+  dashboardProductName,
+  isTakosEmbeddedRuntime,
+  isTakosumiCloudRuntime,
+} from "../../../../lib/deployment-brand.ts";
 
 /**
  * True only in the takos-embedded build of this shared dashboard source (set via
  * the takos web Vite `define`). In the standalone platform-worker dashboard build
  * it is undefined, so the "back to Takos product" affordance stays hidden there.
  */
-const TAKOS_EMBEDDED =
-  (import.meta.env as Record<string, string | undefined>)
-    .VITE_TAKOS_EMBEDDED === "1";
-
 type NavItem = {
   href: string;
   labelKey: MessageKey;
@@ -39,6 +39,7 @@ const ACCOUNT: NavItem[] = [
 
 export default function Sidebar() {
   const loc = useLocation();
+  const takosEmbedded = () => isTakosEmbeddedRuntime();
   const isActive = (item: NavItem) =>
     item.end
       ? loc.pathname === item.href
@@ -48,15 +49,16 @@ export default function Sidebar() {
     <aside class="sidebar">
       <div class="sidebar-brand">
         <Wordmark
-          href={TAKOS_EMBEDDED ? undefined : "/"}
+          href={takosEmbedded() ? undefined : "/"}
           size={22}
-          showSub={!TAKOS_EMBEDDED && isTakosumiCloudRuntime()}
+          productName={dashboardProductName()}
+          showSub={!takosEmbedded() && isTakosumiCloudRuntime()}
         />
-        <Show when={TAKOS_EMBEDDED}>
+        <Show when={takosEmbedded()}>
           <span class="sidebar-context-label">{t("nav.deployContext")}</span>
         </Show>
       </div>
-      <Show when={TAKOS_EMBEDDED}>
+      <Show when={takosEmbedded()}>
         <a href="/" class="sidebar-link sidebar-link-back">
           <ArrowLeft size={18} />
           <span class="sidebar-link-label">{t("nav.backToTakos")}</span>
