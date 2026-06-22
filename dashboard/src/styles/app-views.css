@@ -421,6 +421,7 @@
 .av-catalog-name {
   font-weight: 700;
   font-size: var(--tg-fs-lg);
+  overflow-wrap: anywhere;
 }
 .av-catalog-desc {
   color: var(--tg-fg-muted);
@@ -575,6 +576,18 @@ button.tg-tab {
 
   .av-run-history-row .tg-btn {
     width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .av-catalog-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .av-catalog-card .tg-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: center;
   }
 }
 
