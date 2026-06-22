@@ -91,7 +91,9 @@ export interface PlatformControlPlaneSmokeResult {
   readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
+  readonly workerUrl: string;
   readonly deploymentVerified: boolean;
+  readonly publicUrlVerified: boolean;
   readonly destroyVerified: boolean;
   readonly connectionRevoked?: boolean;
   readonly timedOutRunId?: string;
@@ -385,7 +387,9 @@ export function dryRunResult(
       : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
+    workerUrl: publicWorkerUrl(options),
     deploymentVerified: true,
+    publicUrlVerified: true,
     destroyVerified: true,
     inputs: publicInputSummary(options),
   };
@@ -448,6 +452,7 @@ export async function runPlatformControlPlaneSmoke(
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     await assertCloudflareWorkerExists(options);
+    await assertPublicWorkerUrl(options);
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
         spaceId,
@@ -516,7 +521,9 @@ export async function runPlatformControlPlaneSmoke(
         completedDestroy.policyStatus === "deny"
           ? failPolicy()
           : "passed",
+      workerUrl: publicWorkerUrl(options),
       deploymentVerified: true,
+      publicUrlVerified: true,
       destroyVerified: true,
       connectionRevoked,
       inputs: publicInputSummary(options),
@@ -617,7 +624,9 @@ function failedResult(
     backupRestoreRehearsal: input.backupRestoreRehearsal,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
+    workerUrl: publicWorkerUrl(options),
     deploymentVerified: false,
+    publicUrlVerified: false,
     destroyVerified: false,
     connectionRevoked: input.connectionRevoked,
     timedOutRunId: input.timedOutRunId,
@@ -1114,6 +1123,43 @@ async function assertCloudflareWorkerExists(
   );
 }
 
+function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
+  return `https://${options.appName}.${options.cloudflareWorkersSubdomain}.workers.dev`;
+}
+
+async function assertPublicWorkerUrl(
+  options: PlatformControlPlaneSmokeOptions,
+): Promise<void> {
+  const url = publicWorkerUrl(options);
+  const deadline = Date.now() + 60_000;
+  let lastStatus = 0;
+  let lastBody = "";
+  while (Date.now() <= deadline) {
+    try {
+      const response = await fetch(url, {
+        headers: { accept: "text/html" },
+      });
+      lastStatus = response.status;
+      lastBody = await response.text();
+      if (
+        response.ok &&
+        lastBody.includes("<h1>It works</h1>") &&
+        lastBody.includes("provisioned by a Takosumi Installation")
+      ) {
+        return;
+      }
+    } catch (error) {
+      lastBody = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(2_000);
+  }
+  throw new Error(
+    `Cloudflare Worker public URL did not return the expected Takosumi page (last HTTP ${lastStatus}, body ${JSON.stringify(
+      lastBody.slice(0, 120),
+    )})`,
+  );
+}
+
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -1420,6 +1466,7 @@ function requiredSteps(
     "plan",
     "apply",
     "deploymentVerified",
+    "publicUrlVerified",
   ];
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");
@@ -1450,6 +1497,10 @@ async function writeResult(
   console.log(`workspace: ${result.scratchSpaceId}`);
   console.log(`capsule: ${result.capsuleModule}`);
   console.log(`app: ${result.appName}`);
+  console.log(`worker URL: ${result.workerUrl}`);
+  console.log(
+    `public URL verified: ${result.publicUrlVerified ? "yes" : "no"}`,
+  );
   if (result.installationId)
     console.log(`installation: ${result.installationId}`);
   if (result.applyRunId) console.log(`apply run: ${result.applyRunId}`);
