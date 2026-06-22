@@ -25,6 +25,7 @@ const DEFAULT_CAPSULE_DIR = resolve(
   TAKOSUMI_ROOT,
   "providers/cloudflare/modules/cloudflare-hello-worker/module",
 );
+const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
 const API_PREFIX = "/api/v1";
 const TERMINAL_RUN_STATUSES = new Set([
   "succeeded",
@@ -325,7 +326,7 @@ export async function resolveOptions(
     deployTimeoutSeconds: parsePositiveInteger(
       args.deployTimeoutSeconds,
       "--deploy-timeout-seconds",
-      120,
+      DEFAULT_DEPLOY_TIMEOUT_SECONDS,
     ),
     pollIntervalMs: parsePositiveInteger(
       args.pollIntervalMs,
@@ -1467,7 +1468,7 @@ async function runSelfTest(): Promise<void> {
   );
   const result = dryRunResult(options);
   const serialized = JSON.stringify(result);
-  if (options.deployTimeoutSeconds !== 120) {
+  if (options.deployTimeoutSeconds !== DEFAULT_DEPLOY_TIMEOUT_SECONDS) {
     throw new Error("self-test default deploy timeout is wrong");
   }
   if (serialized.includes("account-session-token")) {
@@ -1627,7 +1628,7 @@ Options:
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --timeout-seconds <n>                           default 600
-  --deploy-timeout-seconds <n>                    default 120
+  --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
   --backup-restore-rehearsal                      create a Capsule state backup, approve a restore Run, and verify it succeeds before cleanup
   --keep-connection                               keep the temporary Workspace ProviderConnection
