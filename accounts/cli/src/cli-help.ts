@@ -743,8 +743,9 @@ export function installationsImportPlanHelpText(): string {
   return [
     "takosumi internal installations import-plan",
     "",
-    "Reads a takos-export/bundle.json payload and prints the target Accounts",
-    "projection request that a deploy-control restore/apply flow can review.",
+    "Reads a takos-export/bundle.json payload or a Cloudflare/R2 export JSON",
+    "document and prints the target Accounts projection request that a",
+    "deploy-control restore/apply flow can review.",
     "This does not call the retired public import route.",
     "",
     "Options:",

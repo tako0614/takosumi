@@ -18,7 +18,7 @@ import {
   installationsUninstallHelpText,
 } from "./cli-help.ts";
 import {
-  parseAccountsInstallationExportBundle,
+  parseAccountsInstallationExportBundleInput,
   planInstallationImport,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -412,7 +412,7 @@ export async function runInstallationsImportPlan(
     return 2;
   }
   try {
-    const bundle = parseAccountsInstallationExportBundle(
+    const bundle = parseAccountsInstallationExportBundleInput(
       parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
     );
     const plan = planInstallationImport({

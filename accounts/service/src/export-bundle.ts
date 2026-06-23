@@ -74,6 +74,15 @@ export interface AccountsInstallationExportBundle {
   readonly events: readonly ExportEventRef[];
 }
 
+export interface CloudflareR2InstallationExportDocument {
+  readonly kind: "takosumi.accounts.cloudflare-r2-installation-export@v1";
+  readonly version: "v1";
+  readonly exportedAt: string;
+  readonly operationId: string;
+  readonly request: JsonObject;
+  readonly bundle: AccountsInstallationExportBundle;
+}
+
 export interface ExportRuntimeTarget {
   readonly runtimeTargetId: string;
   readonly mode: AppInstallationMode;
@@ -467,6 +476,33 @@ export function parseAccountsInstallationExportBundle(
     serviceGrants: parseExportServiceGrants(bundle.serviceGrants),
     events: parseExportEvents(bundle.events),
   };
+}
+
+/**
+ * Parse a bundle input accepted by restore/import tooling.
+ *
+ * Operators usually pass `takos-export/bundle.json` from a tar.zst archive.
+ * The Cloudflare/R2 profile emits an age-encrypted JSON document instead; its
+ * canonical `bundle` member is the same bundle shape and is accepted here.
+ */
+export function parseAccountsInstallationExportBundleInput(
+  value: unknown,
+): AccountsInstallationExportBundle {
+  const document = requireRecord(value, "bundle input");
+  if (document.kind === TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND) {
+    return parseAccountsInstallationExportBundle(document);
+  }
+  if (
+    document.kind === "takosumi.accounts.cloudflare-r2-installation-export@v1"
+  ) {
+    if (document.version !== "v1") {
+      throw new TypeError(`bundle input.version must be "v1"`);
+    }
+    return parseAccountsInstallationExportBundle(document.bundle);
+  }
+  throw new TypeError(
+    `bundle input.kind must be ${TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND} or takosumi.accounts.cloudflare-r2-installation-export@v1`,
+  );
 }
 
 function parseInstallationFields(

@@ -226,9 +226,17 @@ final `takos-export-<op>.tar.zst[.age]` artifact and should be copied into
 `encrypted-export.archiveDigest` evidence together with the operation id and
 age recipient.
 
+For the Cloudflare/R2 hosted profile, encrypted metadata exports are delivered
+as a Cloudflare/R2 export JSON document. That document embeds the same canonical
+installation export bundle under `bundle`, and the import-plan command accepts
+either `takos-export/bundle.json` or the Cloudflare/R2 export JSON document.
+Data-bearing archive export still requires a substrate export worker; do not
+record Cloudflare/R2 metadata export alone as clean-import, post-import-login,
+or sample-data verification evidence.
+
 To prepare a self-host restore without reopening the retired public import
-route, extract `takos-export/bundle.json` from the archive and generate the
-target request:
+route, extract `takos-export/bundle.json` from the archive or use the decrypted
+Cloudflare/R2 export JSON document, then generate the target request:
 
 ```bash
 bun run cli -- internal installations import-plan \
