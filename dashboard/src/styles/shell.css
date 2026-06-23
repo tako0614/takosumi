@@ -523,10 +523,23 @@
   letter-spacing: 0;
   font-weight: 750;
   margin: 0 0 var(--tg-s-2);
+  line-height: var(--tg-lh-snug);
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 .sign-in-sub {
   color: var(--tg-fg-muted);
+  margin: 0 0 var(--tg-s-3);
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+.sign-in-preview-note {
   margin: 0 0 var(--tg-s-5);
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+  line-height: var(--tg-lh-body);
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 .sign-in-return-context {
   display: flex;

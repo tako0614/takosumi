@@ -152,6 +152,9 @@ export function SignInPanel() {
       <p class="sign-in-sub">
         {t(isTakosumiCloudRuntime() ? "auth.signInSubCloud" : "auth.signInSub")}
       </p>
+      <Show when={isTakosumiCloudRuntime()}>
+        <p class="sign-in-preview-note">{t("auth.signInCloudPreview")}</p>
+      </Show>
       <Show when={pendingInstall()}>
         <div
           class="sign-in-return-context"
