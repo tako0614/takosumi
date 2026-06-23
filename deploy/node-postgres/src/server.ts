@@ -286,6 +286,9 @@ async function buildAccountsHandler(
       ? { serviceGraphMaterialResolver: config.serviceGraphMaterialResolver }
       : {}),
     ...(config.stripeBilling ? { stripeBilling: config.stripeBilling } : {}),
+    ...(config.loginEmailAllowlist
+      ? { loginEmailAllowlist: config.loginEmailAllowlist }
+      : {}),
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(deployControl ? { deployControl } : {}),

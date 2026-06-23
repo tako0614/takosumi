@@ -107,6 +107,52 @@ test("node-postgres ignores non-Google first-party upstream OAuth env", () => {
   expect(config.upstreamOAuth).toBeUndefined();
 });
 
+test("node-postgres enforces the pre-GA login allowlist for official Cloud", () => {
+  const expected = {
+    emails: ["shoutatomiyama0614@gmail.com"],
+    requireVerifiedEmail: true,
+  };
+
+  expect(
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
+    }).loginEmailAllowlist,
+  ).toEqual(expected);
+  expect(
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST:
+        "someone-else@example.test,shoutatomiyama0614@gmail.com",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED: "false",
+    }).loginEmailAllowlist,
+  ).toEqual(expected);
+});
+
+test("node-postgres keeps login allowlist configurable for operator origins", () => {
+  expect(
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.example.test",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST:
+        "owner@example.test,admin@example.test",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED: "false",
+    }).loginEmailAllowlist,
+  ).toEqual({
+    emails: ["owner@example.test", "admin@example.test"],
+    requireVerifiedEmail: false,
+  });
+  expect(
+    parseEnv({
+      TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.example.test",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
+    }).loginEmailAllowlist,
+  ).toBeUndefined();
+});
+
 test("node-postgres rejects retired custom OIDC GitHub provider id", () => {
   expect(() =>
     parseEnv({

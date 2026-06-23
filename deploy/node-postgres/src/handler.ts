@@ -6,6 +6,7 @@
  */
 import type {
   PlatformAccessPolicy,
+  LoginEmailAllowlist,
   OidcClientRegistration,
   PasskeyHttpOptions,
   StripeBillingOptions,
@@ -70,6 +71,7 @@ export interface NodeAccountsServerConfig {
     | ServiceGraphMaterialResolverHttpOptions
     | undefined;
   readonly stripeBilling: StripeBillingOptions | undefined;
+  readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
   readonly stableOidc: NodeAccountsStableOidcConfig | undefined;
@@ -96,6 +98,7 @@ export function parseEnv(
     platformAccess: parsePlatformAccess(env),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     stripeBilling: parseStripeBilling(env),
+    loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
     stableOidc: parseStableOidc(env),
@@ -387,6 +390,44 @@ export function parseStripeBilling(
       ? { webhookToleranceSeconds }
       : {}),
   };
+}
+
+const TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL = "shoutatomiyama0614@gmail.com";
+
+function parseLoginEmailAllowlist(
+  env: Record<string, string | undefined>,
+  issuer: string,
+): LoginEmailAllowlist | undefined {
+  if (isOfficialTakosumiCloudIssuer(issuer)) {
+    return {
+      emails: [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL],
+      requireVerifiedEmail: true,
+    };
+  }
+  const configured = optional(env, "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST");
+  if (configured?.trim() === "*") return undefined;
+  const emails = configured !== undefined ? splitList(configured) : [];
+  if (emails.length === 0) return undefined;
+  return {
+    emails,
+    requireVerifiedEmail: !(
+      optional(env, "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED")
+        ?.toLowerCase() === "false"
+    ),
+  };
+}
+
+function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
+  try {
+    const url = new URL(issuer);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "app.takosumi.com" ||
+        url.hostname === "app-staging.takosumi.com")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function parsePasskeys(
