@@ -3,6 +3,8 @@ import { expect, test } from "bun:test";
 import {
   allowedEnvNamesForProvider,
   cloudFamilyForProvider,
+  isProviderEnvName,
+  isReservedProviderEnvName,
   PROVIDER_CREDENTIAL_ARG_MAP,
   PROVIDER_CREDENTIAL_ENV_RULES,
   providerCredentialArgs,
@@ -55,6 +57,16 @@ test("allowedEnvNamesForProvider returns the sorted env-name set", () => {
   expect(names).toContain("CF_API_TOKEN");
   expect([...names]).toEqual([...names].sort());
   expect(allowedEnvNamesForProvider("unknown")).toEqual([]);
+});
+
+test("provider env name validation admits provider variables but rejects runner-reserved names", () => {
+  expect(isProviderEnvName("SNOWFLAKE_PASSWORD")).toBe(true);
+  expect(isProviderEnvName("not_uppercase")).toBe(false);
+  expect(isReservedProviderEnvName("SNOWFLAKE_PASSWORD")).toBe(false);
+  expect(isReservedProviderEnvName("PATH")).toBe(true);
+  expect(isReservedProviderEnvName("TAKOSUMI_RUN_ID")).toBe(true);
+  expect(isReservedProviderEnvName("OPENTOFU_PROVIDER_MIRROR")).toBe(true);
+  expect(isReservedProviderEnvName("TF_VAR_SECRET")).toBe(true);
 });
 
 test("cloudFamilyForProvider maps providers to partitions, falling back to local-adapters", () => {

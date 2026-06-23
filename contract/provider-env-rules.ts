@@ -66,6 +66,52 @@ export function isProviderEnvName(value: string): boolean {
   return PROVIDER_ENV_NAME_PATTERN.test(value);
 }
 
+const RESERVED_PROVIDER_ENV_NAMES = new Set([
+  "ALL_PROXY",
+  "GIT_ASKPASS",
+  "HOME",
+  "HOSTNAME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LOGNAME",
+  "NO_PROXY",
+  "OLDPWD",
+  "PATH",
+  "PWD",
+  "SHELL",
+  "SSH_AUTH_SOCK",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USER",
+]);
+
+const RESERVED_PROVIDER_ENV_PREFIXES = [
+  "BUN_",
+  "DYLD_",
+  "LD_",
+  "NODE_",
+  "NPM_",
+  "OPENTOFU_",
+  "TAKOSUMI_",
+  "TF_",
+] as const;
+
+/**
+ * Env names reserved for the runner/runtime itself. Declared-env arbitrary
+ * providers may use broad provider-specific names, but must not override the
+ * command environment, OpenTofu runtime, Takosumi internals, or dynamic linker
+ * knobs. Built-in provider recipes do not use these names.
+ */
+export function isReservedProviderEnvName(value: string): boolean {
+  return (
+    RESERVED_PROVIDER_ENV_NAMES.has(value) ||
+    RESERVED_PROVIDER_ENV_PREFIXES.some((prefix) => value.startsWith(prefix))
+  );
+}
+
 /**
  * The canonical provider credential env-name table. Lifted from the runner so
  * the runner and the Connection/Vault core agree byte-for-byte.

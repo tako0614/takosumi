@@ -27,7 +27,9 @@
  * { sensitive = true, ephemeral = true }` per credential arg, and its provider
  * block sets that provider argument from the variable. The Vault mints the
  * matching `TF_VAR_<provider>_<alias>_<arg>` env per resolved Connection. A
- * provider WITHOUT an arg mapping keeps a credential-free block.
+ * provider WITHOUT an arg mapping keeps a credential-free block. Generic-env
+ * Provider Connections are delivered as runner process env, not generated-root
+ * variables.
  */
 
 import type {
@@ -105,10 +107,6 @@ export interface GenerateInstallationRootInput {
    * {@link generateRootModule}.
    */
   readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
-  /**
-   * Generic Env Provider delivered TF_VAR names (see {@link GenerateGenericCapsuleRootInput}).
-   */
-  readonly genericEnvVarNames?: readonly string[];
 }
 
 export interface GenerateGenericCapsuleRootInput {
@@ -116,20 +114,6 @@ export interface GenerateGenericCapsuleRootInput {
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
-  /**
-   * Generic Env Provider delivered TF_VAR names. A `generic_env_provider` Connection
-   * delivers each of its `envNames` to the runner as a `TF_VAR_<NAME>` env var,
-   * but OpenTofu SILENTLY DROPS a `TF_VAR_<NAME>` for which the root declares no
-   * `variable "<NAME>"`. So the generated root MUST declare a matching
-   * `variable "<NAME>" { type = string sensitive = true }` for every delivered
-   * name; otherwise the generic env credential never reaches the provider/child
-   * module (the value is dropped). These are generic passthrough variables — NOT
-   * wired into a provider block (the generic-env helper reads its own env /
-   * process `TF_VAR_<NAME>`), distinct from the per-alias provider-credential
-   * split. Each name is declared exactly once; an empty/omitted list emits
-   * nothing.
-   */
-  readonly genericEnvVarNames?: readonly string[];
 }
 
 /** Module input name an `app_source` template reads the built artifact path from. */
@@ -168,7 +152,6 @@ export function generateInstallationRoot(
 ): GeneratedRootModule {
   const { template, inputs, installType } = input;
   const providerEnvBindings = input.providerEnvBindings ?? [];
-  const genericEnvVarNames = input.genericEnvVarNames ?? [];
   const wantsArtifact =
     installType === "app_source" && ARTIFACT_PATH_INPUT in template.inputs;
   return {
@@ -178,7 +161,6 @@ export function generateInstallationRoot(
         template,
         inputs,
         providerEnvBindings,
-        genericEnvVarNames,
         wantsArtifact,
       ),
       "outputs.tf": renderOutputsTf(template),
@@ -197,14 +179,12 @@ export function generateGenericCapsuleRoot(
   input: GenerateGenericCapsuleRootInput,
 ): GeneratedRootModule {
   const providerEnvBindings = input.providerEnvBindings ?? [];
-  const genericEnvVarNames = input.genericEnvVarNames ?? [];
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(input.requiredProviders),
       "main.tf": renderGenericMainTf(
         input.inputs,
         providerEnvBindings,
-        genericEnvVarNames,
       ),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
@@ -286,13 +266,11 @@ function renderInstallationMainTf(
   template: TemplateDefinition,
   inputs: Readonly<Record<string, TemplateInputValue>>,
   providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
-  genericEnvVarNames: readonly string[],
   wantsArtifact: boolean,
 ): string {
   const sections: string[] = [];
 
   appendProviderSections(sections, providerEnvBindings);
-  appendGenericEnvVariableSections(sections, genericEnvVarNames);
 
   // Generated artifact_path variable for app_source installs.
   if (wantsArtifact) {
@@ -381,41 +359,6 @@ function appendProviderSections(
   }
 }
 
-/**
- * Declares a root `variable "<NAME>"` for each Generic Env Provider delivered name.
- *
- * The Vault delivers a `generic_env_provider` Connection's values to the runner as
- * `TF_VAR_<NAME>` env vars, but OpenTofu SILENTLY DROPS any `TF_VAR_<NAME>` for
- * which the root declares no `variable "<NAME>"` — so without this the generic
- * env credential never reaches the provider / child module. Each block is
- * emitted as a sensitive string variable (matching the file's `hclString` +
- * `sensitive` style); generic env values are static secrets, so unlike the
- * per-alias credential split they are NOT marked `ephemeral`. Names are deduped
- * (declared once) and emitted in first-seen order for deterministic golden
- * output. The values are generic passthrough — not wired into any provider block
- * — so the provider reads them through its own env / `var.<NAME>` in the child
- * module.
- */
-function appendGenericEnvVariableSections(
-  sections: string[],
-  genericEnvVarNames: readonly string[],
-): void {
-  const seen = new Set<string>();
-  for (const name of genericEnvVarNames) {
-    if (seen.has(name)) continue;
-    seen.add(name);
-    assertIdentifier(name, "rootgen: generic env provider variable name");
-    sections.push(
-      [
-        `variable ${hclString(name)} {`,
-        "  type      = string",
-        "  sensitive = true",
-        "}",
-      ].join("\n"),
-    );
-  }
-}
-
 function renderOutputsTf(template: TemplateDefinition): string {
   const blocks = Object.entries(template.outputs.public).map(([name, spec]) => {
     return [
@@ -430,11 +373,9 @@ function renderOutputsTf(template: TemplateDefinition): string {
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
   providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
-  genericEnvVarNames: readonly string[],
 ): string {
   const sections: string[] = [];
   appendProviderSections(sections, providerEnvBindings);
-  appendGenericEnvVariableSections(sections, genericEnvVarNames);
 
   const moduleLines = [
     'module "app" {',

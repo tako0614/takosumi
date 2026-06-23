@@ -834,7 +834,6 @@ export interface DeployControlActorContext {
 
 interface GenericRootPlanContext {
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
-  readonly genericEnvVarNames: readonly string[];
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly moduleFiles?: readonly OpenTofuCapsuleSourceFile[];
   readonly build?: DispatchBuildSpec;
@@ -2140,7 +2139,6 @@ export class OpenTofuDeploymentController {
       },
       genericRootPlan: {
         providerEnvBindings: installTypePlan.providerEnvBindings,
-        genericEnvVarNames: installTypePlan.genericEnvVarNames,
         outputAllowlist: input.installConfig.outputAllowlist,
         ...(installTypePlan.build ? { build: installTypePlan.build } : {}),
       },
@@ -2172,9 +2170,6 @@ export class OpenTofuDeploymentController {
           outputAllowlist: context.outputAllowlist,
           ...(context.providerEnvBindings.length > 0
             ? { providerEnvBindings: context.providerEnvBindings }
-            : {}),
-          ...(context.genericEnvVarNames.length > 0
-            ? { genericEnvVarNames: context.genericEnvVarNames }
             : {}),
         }),
         ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
@@ -2212,7 +2207,6 @@ export class OpenTofuDeploymentController {
       request,
       {
         providerEnvBindings: [],
-        genericEnvVarNames: [],
         outputAllowlist: installConfig.outputAllowlist,
         ...(installConfig.build?.enabled
           ? { build: installConfigBuildSpec(installConfig.build) }

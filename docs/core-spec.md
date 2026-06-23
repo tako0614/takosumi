@@ -123,6 +123,10 @@ connections:
 
 Secrets are never written to Capsule source, generated `.tfvars`, state
 metadata, logs, or audit messages. They are decrypted only for the run sandbox.
+For a declared-env arbitrary provider recipe, the declared names are injected
+into the runner process under the same names, such as `SNOWFLAKE_PASSWORD`.
+Runner/runtime-reserved names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and
+`TF_*` are rejected for declared-env recipes.
 
 ## Credential Recipes
 

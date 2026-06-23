@@ -218,13 +218,15 @@ export interface ConnectionVault {
    * Per-connection credential mint. For each provider env binding entry the
    * vault re-validates the id (existence + space ownership, like
    * {@link MintRequest.connectionIds}), opens the connection's sealed values, and
-   * maps its credential env names to `TF_VAR_<provider>_<alias>_<arg>`
-   * entries using the provider arg mapping (cloudflare: `api_token`; aws:
-   * `access_key` / `secret_key` / `token`). A generic-env provider-env provider
-   * connection maps its declared variables to `TF_VAR_<variable>`.
-   * A connection whose provider has neither mapping contributes no TF_VAR.
+   * maps built-in provider credential env names to
+   * `TF_VAR_<provider>_<alias>_<arg>` entries using the provider arg mapping
+   * (cloudflare: `api_token`; aws: `access_key` / `secret_key` / `token`). A
+   * generic-env Provider Connection maps its declared variables to process env
+   * under the same names (for example `SNOWFLAKE_PASSWORD`), so arbitrary
+   * providers can read their normal environment variables. A connection whose
+   * provider has neither mapping contributes no env.
    * Phase rule: tofu phases only (plan / apply / destroy). The returned bundle
-   * carries ONLY the per-alias TF_VAR env. Never serialized into logs.
+   * carries runner-dispatch env only and is never serialized into logs.
    */
   mintForInstallationProviderEnvBindings(
     spaceId: string,
