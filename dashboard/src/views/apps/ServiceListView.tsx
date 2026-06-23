@@ -1,0 +1,162 @@
+/**
+ * Services (`/services`) — the full list of every Capsule in the Workspace
+ * (apps and infra alike): the technical / OpenTofu surface. Each row opens the
+ * service detail (deploys / state / outputs / settings). The consumer-facing
+ * app launcher (declared apps only) lives on the separate `/` Apps page.
+ */
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import { useNavigate } from "@solidjs/router";
+import {
+  Box,
+  ChevronRight,
+  Database,
+  Globe,
+  LayoutGrid,
+  Plus,
+} from "lucide-solid";
+import type { JSX } from "solid-js";
+import AppShell from "../account/components/shell/AppShell.tsx";
+import Page from "../account/components/auth/Page.tsx";
+import { currentSpaceId } from "../../lib/space-state.ts";
+import {
+  type ControlApiError,
+  type Installation,
+  listInstallations,
+  listInstallConfigs,
+} from "../../lib/control-api.ts";
+import {
+  effectiveInstallationStatus,
+  isVisibleServiceInstallation,
+} from "../../lib/installations-ui.ts";
+import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
+import { relativeTime, t } from "../../i18n/index.ts";
+import {
+  Button,
+  Skeleton,
+  StatusBadge,
+  Toast,
+} from "../../components/ui/index.ts";
+
+export default function ServiceListView() {
+  return <Page title={t("services.title")}>{() => <Inner />}</Page>;
+}
+
+function serviceKindIcon(kind: string | undefined): JSX.Element {
+  switch (kind) {
+    case "site":
+      return <Globe />;
+    case "storage":
+      return <Database />;
+    case "worker":
+      return <Box />;
+    default:
+      return <LayoutGrid />;
+  }
+}
+
+function Inner() {
+  const navigate = useNavigate();
+  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+
+  const [installations] = createResource(spaceId, listInstallations);
+  const visible = createMemo(() =>
+    (installations() ?? []).filter(isVisibleServiceInstallation),
+  );
+  const [installConfigs] = createResource(spaceId, (id) =>
+    listInstallConfigs(id),
+  );
+  const kindByConfigId = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const config of installConfigs() ?? []) {
+      const kind = config.catalog?.kind;
+      if (kind) map.set(config.id, kind);
+    }
+    return map;
+  });
+  const open = (inst: Installation) =>
+    navigate(`/services/${encodeURIComponent(inst.id)}`);
+
+  return (
+    <AppShell>
+      {/* Title lives in the top bar; this slim toolbar carries the page's
+          context line + the add action. */}
+      <div class="av-list-toolbar">
+        <span class="av-list-toolbar-sub">{t("services.subtitle")}</span>
+        <Button variant="primary" href="/new" icon={<Plus size={16} />}>
+          {t("apps.add")}
+        </Button>
+      </div>
+      <Show
+        when={spaceId()}
+        fallback={<Toast tone="neutral">{t("space.selectMessage")}</Toast>}
+      >
+        <Switch>
+          <Match when={installations.loading}>
+            <div class="av-service-rows">
+              <Skeleton variant="row" count={5} />
+            </div>
+          </Match>
+          <Match when={installations.error}>
+            <Toast tone="error">
+              {t("common.fetchFailed", {
+                message: (installations.error as ControlApiError).message,
+              })}
+            </Toast>
+          </Match>
+          <Match when={installations()}>
+            <Show when={visible().length > 0} fallback={<ServicesEmpty />}>
+              <ul class="av-service-rows">
+                <For each={visible()}>
+                  {(inst) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="av-service-row"
+                        onClick={() => open(inst)}
+                      >
+                        <span class="av-service-row-icon" aria-hidden="true">
+                          {serviceKindIcon(
+                            kindByConfigId().get(inst.installConfigId),
+                          )}
+                        </span>
+                        <span class="av-service-row-name">{inst.name}</span>
+                        <StatusBadge
+                          status={effectiveInstallationStatus(inst)}
+                          label={installationStatusLabel}
+                          tone={installationTone}
+                        />
+                        <span class="av-service-row-time">
+                          {relativeTime(inst.updatedAt)}
+                        </span>
+                        <ChevronRight
+                          class="av-service-row-chevron"
+                          size={18}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </Match>
+        </Switch>
+      </Show>
+    </AppShell>
+  );
+}
+
+function ServicesEmpty() {
+  return (
+    <section class="av-start" aria-label={t("services.empty.title")}>
+      <div class="av-start-copy">
+        <h2 class="av-start-title">{t("services.empty.title")}</h2>
+        <p class="av-start-sub">{t("services.empty.body")}</p>
+      </div>
+      <a href="/new" class="av-start-action">
+        <Plus size={18} aria-hidden="true" />
+        <span>{t("apps.add")}</span>
+      </a>
+    </section>
+  );
+}

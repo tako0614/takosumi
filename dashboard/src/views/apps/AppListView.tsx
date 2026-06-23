@@ -1,11 +1,10 @@
 /**
- * Home (`/`) — the Workspace app launcher, the dashboard's primary surface.
- *
- * Each service is one tappable app tile (icon + name). Tapping opens the live
- * app when its public outputs expose a launch URL, otherwise its service
- * screen. A trailing "add" tile starts a new service. Management surfaces
- * (history / connections / settings) live in the profile menu, so the home
- * stays a launcher — not an ops console.
+ * Apps home (`/`) — the Workspace app launcher. Only services that DECLARE an
+ * app (via well-known OpenTofu outputs) appear here, and a service may declare
+ * several launchable surfaces (e.g. a blog's public site + its admin screen),
+ * each shown as its own tile. Tapping a tile opens that surface's URL, or the
+ * service screen when it has none. The full service list (all Capsules, → the
+ * OpenTofu detail) lives on the separate `/services` page.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -24,13 +23,22 @@ import {
   listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
+  type AppSurface,
+  appSurfacesFromOutputs,
+  isUrlString,
   isVisibleServiceInstallation,
-  launchUrlFromOutputs,
   needsAttention,
 } from "../../lib/installations-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
+
+/** One launcher tile: a declared surface belonging to a service. */
+interface AppTile {
+  readonly inst: Installation;
+  readonly surface: AppSurface;
+  readonly key: string;
+}
 
 export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
@@ -51,17 +59,13 @@ function serviceKindIcon(kind: string | undefined): JSX.Element {
 }
 
 /**
- * Vivid, deterministic app-icon color per service, so each tile reads as its
- * own app on a home screen — not an identical grey square. The hash keeps a
- * service's color stable across reloads; the palette is tuned to look like real
- * launcher icons on both dark and light backgrounds.
+ * Vivid, deterministic app-icon color per tile. Hue by grid position via the
+ * golden angle (137.5°) so consecutive icons land far apart on the wheel — even
+ * a few tiles always read as clearly distinct colors. Fixed saturation /
+ * lightness keeps every glyph-on-color icon glossy on both themes. (Tiles with
+ * a declared image / icon use that instead of the colored glyph.)
  */
 function appIconColor(index: number): readonly [string, string] {
-  // Hue by grid position via the golden angle (137.5°): consecutive icons land
-  // far apart on the wheel, so even 2–3 apps always read as clearly distinct
-  // colors (name-hashing clustered similar short names onto the same hue).
-  // Fixed saturation/lightness keeps every icon glossy with a white glyph on
-  // both themes.
   const hue = Math.round((index * 137.508 + 210) % 360);
   return [`hsl(${hue} 72% 56%)`, `hsl(${hue} 76% 44%)`];
 }
@@ -76,8 +80,8 @@ function Inner() {
   );
 
   // Map each Installation to a type-specific icon via its install config's
-  // catalog kind (site / storage / worker), so the launcher shows distinct app
-  // icons instead of one generic glyph for everything.
+  // catalog kind (site / storage / worker) — the fallback when a surface
+  // declares no image or icon of its own.
   const [installConfigs] = createResource(spaceId, (id) =>
     listInstallConfigs(id),
   );
@@ -92,27 +96,44 @@ function Inner() {
   const iconForInstallation = (inst: Installation): JSX.Element =>
     serviceKindIcon(kindByConfigId().get(inst.installConfigId));
 
-  // Launch URL per app, from its current Deployment's public outputs.
-  const [launchUrls] = createResource(visibleInstallations, async (list) => {
-    const map = new Map<string, string>();
-    await Promise.all(
-      list
-        .filter(
-          (inst): inst is Installation & { currentDeploymentId: string } =>
-            Boolean(inst.currentDeploymentId),
-        )
-        .map(async (inst) => {
-          try {
-            const deployment = await getDeployment(inst.currentDeploymentId);
-            const url = launchUrlFromOutputs(deployment.outputsPublic);
-            if (url) map.set(inst.id, url);
-          } catch {
-            // One failing deployment read must not blank the launcher; that
-            // tile simply opens its service screen instead of a live URL.
-          }
-        }),
-    );
-    return map;
+  // Declared app surfaces per service, read from its current Deployment's
+  // public outputs. A service with no app metadata contributes no tiles.
+  const [surfacesByInstallation] = createResource(
+    visibleInstallations,
+    async (list) => {
+      const map = new Map<string, AppSurface[]>();
+      await Promise.all(
+        list
+          .filter(
+            (inst): inst is Installation & { currentDeploymentId: string } =>
+              Boolean(inst.currentDeploymentId),
+          )
+          .map(async (inst) => {
+            try {
+              const deployment = await getDeployment(inst.currentDeploymentId);
+              const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
+              if (surfaces.length > 0) map.set(inst.id, surfaces);
+            } catch {
+              // A failed read just means this service contributes no app tiles.
+            }
+          }),
+      );
+      return map;
+    },
+  );
+
+  const appTiles = createMemo<AppTile[]>(() => {
+    const map = surfacesByInstallation();
+    if (!map) return [];
+    const tiles: AppTile[] = [];
+    for (const inst of visibleInstallations()) {
+      const surfaces = map.get(inst.id);
+      if (!surfaces) continue;
+      surfaces.forEach((surface, i) =>
+        tiles.push({ inst, surface, key: `${inst.id}:${i}` }),
+      );
+    }
+    return tiles;
   });
 
   const createFirstWorkspace = createAction(async (): Promise<Space> => {
@@ -144,17 +165,7 @@ function Inner() {
       >
         <Switch>
           <Match when={installations.loading}>
-            <ul class="av-launcher">
-              <For each={Array.from({ length: 6 })}>
-                {() => (
-                  <li>
-                    <span class="av-tile" aria-hidden="true">
-                      <span class="tg-skel av-tile-skel" />
-                    </span>
-                  </li>
-                )}
-              </For>
-            </ul>
+            <LauncherSkeleton />
           </Match>
           <Match when={installations.error}>
             <Toast tone="error">
@@ -165,22 +176,45 @@ function Inner() {
           </Match>
           <Match when={installations()}>
             <Show
-              when={visibleInstallations().length === 0}
-              fallback={
-                <ServiceList
-                  installations={visibleInstallations()}
-                  launchUrls={launchUrls() ?? new Map()}
-                  openDetail={openDetail}
-                  iconFor={iconForInstallation}
-                />
-              }
+              when={visibleInstallations().length > 0}
+              fallback={<WorkspaceStartPanel />}
             >
-              <WorkspaceStartPanel />
+              <Switch>
+                <Match when={surfacesByInstallation.loading}>
+                  <LauncherSkeleton />
+                </Match>
+                <Match when={appTiles().length === 0}>
+                  <AppsEmptyPanel />
+                </Match>
+                <Match when={appTiles().length > 0}>
+                  <AppLauncher
+                    tiles={appTiles()}
+                    openDetail={openDetail}
+                    iconFor={iconForInstallation}
+                  />
+                </Match>
+              </Switch>
             </Show>
           </Match>
         </Switch>
       </Show>
     </AppShell>
+  );
+}
+
+function LauncherSkeleton() {
+  return (
+    <ul class="av-launcher">
+      <For each={Array.from({ length: 6 })}>
+        {() => (
+          <li>
+            <span class="av-tile" aria-hidden="true">
+              <span class="tg-skel av-tile-skel" />
+            </span>
+          </li>
+        )}
+      </For>
+    </ul>
   );
 }
 
@@ -212,23 +246,21 @@ function NoWorkspaceStartPanel(props: {
   );
 }
 
-function ServiceList(props: {
-  readonly installations: readonly Installation[];
-  readonly launchUrls: ReadonlyMap<string, string>;
+function AppLauncher(props: {
+  readonly tiles: readonly AppTile[];
   readonly openDetail: (inst: Installation) => void;
   readonly iconFor: (inst: Installation) => JSX.Element;
 }) {
   return (
     <ul class="av-launcher">
-      <For each={props.installations}>
-        {(inst, index) => (
+      <For each={props.tiles}>
+        {(tile, index) => (
           <li>
-            <ServiceTile
-              inst={inst}
+            <AppTileView
+              tile={tile}
               index={index()}
-              url={props.launchUrls.get(inst.id)}
-              icon={props.iconFor(inst)}
-              onOpenDetail={() => props.openDetail(inst)}
+              icon={props.iconFor(tile.inst)}
+              onOpenDetail={() => props.openDetail(tile.inst)}
             />
           </li>
         )}
@@ -246,41 +278,61 @@ function ServiceList(props: {
 }
 
 /**
- * One launcher tile. A live launch URL renders an anchor that opens the app in
- * a new tab; otherwise a button that opens the service screen. Needs-attention
- * shows as a corner dot on the icon (plus a screen-reader label), keeping the
- * tile copy-free.
+ * One surface tile. The face is the declared image, else a declared icon
+ * (image-URL or emoji/glyph), else the service's type icon on a colored tile.
+ * A live surface URL renders an anchor (new tab); otherwise a button opens the
+ * service screen. Needs-attention shows as a corner dot (+ screen-reader text).
  */
-function ServiceTile(props: {
-  readonly inst: Installation;
+function AppTileView(props: {
+  readonly tile: AppTile;
   readonly index: number;
-  readonly url: string | undefined;
   readonly icon: JSX.Element;
   readonly onOpenDetail: () => void;
 }) {
-  const attention = () => needsAttention(props.inst);
+  const surface = () => props.tile.surface;
+  const attention = () => needsAttention(props.tile.inst);
   const color = appIconColor(props.index);
+  const name = () => surface().name ?? props.tile.inst.name;
+  const imageSrc = () =>
+    surface().image ??
+    (surface().icon && isUrlString(surface().icon)
+      ? surface().icon
+      : undefined);
+  const emojiIcon = () =>
+    surface().icon && !isUrlString(surface().icon) ? surface().icon : undefined;
+
   const body = () => (
     <>
       <span
         class="av-tile-icon"
+        classList={{ "av-tile-icon-image": Boolean(imageSrc()) }}
         style={{ "--app-c1": color[0], "--app-c2": color[1] }}
         aria-hidden="true"
       >
-        {props.icon}
+        <Switch fallback={props.icon}>
+          <Match when={imageSrc()}>
+            {(src) => (
+              <img class="av-tile-image" src={src()} alt="" loading="lazy" />
+            )}
+          </Match>
+          <Match when={emojiIcon()}>
+            {(emo) => <span class="av-tile-emoji">{emo()}</span>}
+          </Match>
+        </Switch>
         <Show when={attention()}>
           <span class="av-tile-dot" />
         </Show>
       </span>
-      <span class="av-tile-name">{props.inst.name}</span>
+      <span class="av-tile-name">{name()}</span>
       <Show when={attention()}>
         <span class="sr-only">{t("apps.needsAttention")}</span>
       </Show>
     </>
   );
+
   return (
     <Show
-      when={props.url}
+      when={surface().url}
       fallback={
         <button type="button" class="av-tile" onClick={props.onOpenDetail}>
           {body()}
@@ -307,6 +359,7 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
+/** Workspace exists but holds no services at all — first-run onboarding. */
 function WorkspaceStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
@@ -318,6 +371,22 @@ function WorkspaceStartPanel() {
       <a href="/new" class="av-start-action">
         <Sparkles size={18} aria-hidden="true" />
         <span>{t("apps.start.optionCatalog")}</span>
+      </a>
+    </section>
+  );
+}
+
+/** Services exist but none declare an app surface — point to the list / add. */
+function AppsEmptyPanel() {
+  return (
+    <section class="av-start" aria-label={t("apps.empty.aria")}>
+      <div class="av-start-copy">
+        <span class="av-start-kicker">{t("apps.empty.kicker")}</span>
+        <h2 class="av-start-title">{t("apps.empty.title")}</h2>
+        <p class="av-start-sub">{t("apps.empty.body")}</p>
+      </div>
+      <a href="/services" class="av-start-action">
+        <span>{t("apps.empty.viewServices")}</span>
       </a>
     </section>
   );

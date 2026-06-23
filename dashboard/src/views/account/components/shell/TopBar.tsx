@@ -1,10 +1,12 @@
 /**
- * TopBar — actions over the content well: [+ add] [bell + needs-attention badge]
- * [profile menu]. Brand and primary nav live in the sidebar; this bar carries
- * the create / notifications / account affordances. The bell badge counts
- * services needing attention in the current Workspace.
+ * TopBar — chrome over the content well: the current section title on the left;
+ * [+ add (mobile only)] [bell + needs-attention badge] [profile menu] on the
+ * right. Brand and primary nav live in the sidebar; this bar names where you
+ * are (important on mobile, where the sidebar is hidden) and carries the global
+ * create / notifications / account affordances. The bell badge counts services
+ * needing attention in the current Workspace.
  */
-import { A } from "@solidjs/router";
+import { A, useLocation } from "@solidjs/router";
 import { createMemo, createResource, Show } from "solid-js";
 import { Bell, Plus } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
@@ -17,9 +19,31 @@ import {
   isVisibleServiceInstallation,
   needsAttention,
 } from "../../../../lib/installations-ui.ts";
-import { t } from "../../../../i18n/index.ts";
+import { type MessageKey, t } from "../../../../i18n/index.ts";
+
+/** Section title shown in the top bar, by route. Detail routes show the
+ * section they belong to (the item's own name stays in the page header). */
+const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
+  [/^\/$/, "nav.apps"],
+  [/^\/services(\/|$)/, "nav.services"],
+  [/^\/new(\/|$)/, "nav.add"],
+  [/^\/connections(\/|$)/, "nav.connections"],
+  [/^\/advanced\/workspace(\/|$)/, "nav.spaceSettings"],
+  [/^\/billing(\/|$)/, "nav.billing"],
+  [/^\/runs(\/|$)/, "nav.runs"],
+  [/^\/run-groups(\/|$)/, "nav.runs"],
+  [/^\/notifications(\/|$)/, "nav.notifications"],
+  [/^\/activity(\/|$)/, "nav.activity"],
+  [/^\/account(\/|$)/, "nav.account"],
+];
 
 export default function TopBar() {
+  const loc = useLocation();
+  const sectionTitle = () => {
+    const hit = SECTION_TITLES.find(([re]) => re.test(loc.pathname));
+    return hit ? t(hit[1]) : "";
+  };
+
   const [installations] = createResource(
     () => currentSpaceId() || null,
     async (spaceId): Promise<readonly Installation[]> =>
@@ -35,6 +59,9 @@ export default function TopBar() {
 
   return (
     <header class="topbar">
+      <Show when={sectionTitle()}>
+        {(title) => <span class="topbar-title">{title()}</span>}
+      </Show>
       <div class="topbar-actions">
         <A
           href="/new"

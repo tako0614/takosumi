@@ -1,16 +1,17 @@
 /**
- * Mobile bottom bar mirroring the sidebar's primary destinations, so phones get
- * the same one-tap wayfinding (home / provider access / settings) instead of
- * burying everything in the profile menu.
+ * Mobile bottom bar mirroring the sidebar's primary destinations. Icon-only and
+ * compact (X-style) — the active tab is just the accent-colored glyph, with the
+ * destination name on the accessible label. The top bar names the screen.
  */
 import { A, useLocation } from "@solidjs/router";
-import { Home, Plug, Settings } from "lucide-solid";
+import { LayoutGrid, Plug, Server, Settings } from "lucide-solid";
 import { t } from "../../../../i18n/index.ts";
 
 export default function MobileTabs() {
   const loc = useLocation();
   const TABS = [
-    { href: "/", label: () => t("nav.home"), icon: Home, end: true },
+    { href: "/", label: () => t("nav.apps"), icon: LayoutGrid, end: true },
+    { href: "/services", label: () => t("nav.services"), icon: Server },
     { href: "/connections", label: () => t("nav.connections"), icon: Plug },
     {
       href: "/advanced/workspace",
@@ -33,8 +34,7 @@ export default function MobileTabs() {
           }}
           aria-label={tab.label()}
         >
-          <tab.icon size={20} />
-          <span>{tab.label()}</span>
+          <tab.icon size={24} />
         </A>
       ))}
     </nav>

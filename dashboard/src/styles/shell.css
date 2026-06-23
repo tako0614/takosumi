@@ -142,10 +142,15 @@
   top: 0;
   z-index: 30;
 }
-.topbar-brand {
-  display: flex;
-  align-items: center;
+.topbar-title {
   min-width: 0;
+  font-size: var(--tg-fs-lg);
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--tg-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topbar-actions {
   margin-left: auto;
@@ -360,7 +365,8 @@
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)
       calc(
-        var(--tg-mobile-tab-h) + var(--tg-s-4) + env(safe-area-inset-bottom, 0px)
+        var(--tg-mobile-tab-h) + var(--tg-s-4) +
+          env(safe-area-inset-bottom, 0px)
       );
   }
   .mobile-tabs {
@@ -371,36 +377,24 @@
     min-height: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
     z-index: 40;
   }
   .mobile-tab {
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    color: var(--tg-fg-muted);
-    font-size: 0.68rem;
-    line-height: 1.1;
+    color: var(--tg-fg-subtle);
     text-decoration: none;
-    min-width: 0;
-    padding: 0 2px;
+    transition: color var(--tg-dur) var(--tg-ease);
   }
-  .mobile-tab svg {
-    flex: none;
-  }
-  .mobile-tab span {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .mobile-tab:active {
+    color: var(--tg-fg-muted);
   }
   .mobile-tab.active {
-    color: var(--tg-accent-text);
-    background: var(--tg-accent-soft);
+    color: var(--tg-accent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -522,6 +516,31 @@
 .auth-spinner {
   color: var(--tg-fg-muted);
   margin-top: var(--tg-s-8);
+}
+/* First-load auth probe: a quiet centered spinner (no full sign-in chrome). */
+.auth-loading {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  background: var(--tg-bg);
+}
+.tg-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--tg-r-full);
+  border: 3px solid var(--tg-line);
+  border-top-color: var(--tg-accent);
+  animation: tg-spin 0.8s linear infinite;
+}
+@keyframes tg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tg-spinner {
+    animation-duration: 1.6s;
+  }
 }
 .sign-in-panel {
   width: 100%;

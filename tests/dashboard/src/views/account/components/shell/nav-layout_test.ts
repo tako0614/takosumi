@@ -7,7 +7,10 @@ import { ja } from "../../../../../../../dashboard/src/i18n/ja.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) =>
-  readFileSync(resolve(here, "../../../../../../../dashboard/src", rel), "utf8");
+  readFileSync(
+    resolve(here, "../../../../../../../dashboard/src", rel),
+    "utf8",
+  );
 
 const appShellSource = read("views/account/components/shell/AppShell.tsx");
 const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
@@ -34,8 +37,12 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("sidebar leads with everyday surfaces: home / cloud accounts / settings (+ Cloud billing)", () => {
-    expect(sidebarSource).toContain('labelKey: "nav.home"');
+  test("sidebar leads with everyday surfaces: apps / services / add / accounts / settings (+ Cloud billing)", () => {
+    // Apps (/) and the full Services list (/services) are split into two nav
+    // items; `/` is the app launcher, `/services` the technical list.
+    expect(sidebarSource).toContain('labelKey: "nav.apps"');
+    expect(sidebarSource).toContain('href: "/services"');
+    expect(sidebarSource).toContain('labelKey: "nav.services"');
     expect(sidebarSource).toContain('href: "/connections"');
     expect(sidebarSource).toContain('labelKey: "nav.connections"');
     expect(sidebarSource).toContain('href: "/advanced/workspace"');
@@ -56,11 +63,12 @@ describe("dashboard shell navigation layout", () => {
 
   test("mobile keeps persistent navigation while the add action stays in the top bar", () => {
     expect(mobileTabsSource).toContain('href: "/"');
+    expect(mobileTabsSource).toContain('href: "/services"');
     expect(mobileTabsSource).toContain('href: "/connections"');
     expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
     expect(mobileTabsSource).not.toContain('href: "/new"');
     expect(mobileTabsSource).not.toContain('href: "/account"');
-    expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
+    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
     expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
     expect(shellCssSource).toContain("display: inline-flex;");
   });

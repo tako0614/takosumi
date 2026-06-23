@@ -40,6 +40,7 @@ const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
 // --- Normal hosted-service surface --------------------------------------------
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
+const ServiceListView = lazy(() => import("./views/apps/ServiceListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
 const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
@@ -120,7 +121,7 @@ function App() {
 
       {/* Normal hosted-service surface (AuthGuard-gated inside each view). */}
       <Route path="/" component={AppListView} />
-      <Route path="/services" component={AppListView} />
+      <Route path="/services" component={ServiceListView} />
       <Route path="/new" component={NewAppView} />
       <Route path="/connections" component={ConnectionsView} />
       <Route path="/billing" component={BillingView} />
