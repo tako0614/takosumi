@@ -1098,6 +1098,86 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
   }
 });
 
+test("launch-readiness validate accepts rehearsal steps collected across multiple runs", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun("rehearsal-2026-05-production");
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry, index: number) =>
+    completePlatformReadinessEntry(
+      entry,
+      `rehearsal-step-${String(index + 1).padStart(2, "0")}`,
+    ),
+  );
+  await writeTextFile(file, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "validate", "--file", file, "--json"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.ready).toEqual(true);
+    expect(report.missingRehearsalSteps).toEqual([]);
+    expect(report.incompleteRehearsalSteps).toEqual([]);
+  } finally {
+    await removePath(file);
+  }
+});
+
+test("launch-readiness validate allows independent operation drills outside user-journey order", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun("rehearsal-2026-05-operations");
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry, index: number) =>
+    completePlatformReadinessEntry(entry, `operation-drill-${index}`),
+  );
+  const sharedCell = document.rehearsal.find(
+    (entry) => entry.id === "shared-cell-load",
+  )!;
+  const backupRestore = document.rehearsal.find(
+    (entry) => entry.id === "backup-restore",
+  )!;
+  sharedCell.completedAt = "2026-05-12T01:50:00Z";
+  backupRestore.completedAt = "2026-05-12T01:20:00Z";
+  await writeTextFile(file, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "validate", "--file", file, "--json"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.ready).toEqual(true);
+    expect(report.errors).toEqual([]);
+  } finally {
+    await removePath(file);
+  }
+});
+
 test("launch-readiness public-summary emits a public-safe ready summary", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
@@ -3214,7 +3294,7 @@ test("launch-readiness validate rejects generic IDs for structured billing evide
   }
 });
 
-test("launch-readiness validate rejects mixed rehearsal run evidence", async () => {
+test("launch-readiness validate rejects mixed run evidence inside one rehearsal step", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
   document.rehearsalRun = completeRehearsalRun("rehearsal-a");
@@ -3249,11 +3329,11 @@ test("launch-readiness validate rejects mixed rehearsal run evidence", async () 
     const report = JSON.parse(stdout.join("\n"));
     expect(report.ready).toEqual(false);
     expect(
-      report.incompleteRehearsalSteps.includes("fresh-signup"),
-    ).toBeTruthy();
-    expect(
       report.incompleteRehearsalSteps.includes("capsule-launch"),
     ).toBeTruthy();
+    expect(report.incompleteRehearsalSteps.includes("fresh-signup")).toEqual(
+      false,
+    );
   } finally {
     await removePath(file);
   }

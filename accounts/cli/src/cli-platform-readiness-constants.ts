@@ -805,6 +805,7 @@ export interface PlatformReadinessEvidenceReference {
   summary?: unknown;
   private?: unknown;
   publicSummary?: unknown;
+  runId?: unknown;
 }
 
 export interface PlatformReadinessReport {

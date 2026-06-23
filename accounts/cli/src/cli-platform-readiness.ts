@@ -32,6 +32,12 @@ import {
   stringValue,
 } from "./cli-util.ts";
 
+const orderedUserJourneyRehearsalStepIds = [
+  "fresh-signup",
+  "capsule-launch",
+  "git-url-install",
+] as const;
+
 export function validatePlatformReadinessDocument(
   document: unknown,
 ): PlatformReadinessReport {
@@ -545,7 +551,11 @@ function validateEvidenceEntries(
     }
   }
   if (fieldName === "rehearsal") {
-    validatePlatformReadinessRehearsalOrder(seen, requiredIds, errors);
+    validatePlatformReadinessRehearsalOrder(
+      seen,
+      orderedUserJourneyRehearsalStepIds,
+      errors,
+    );
   }
 
   const missing = requiredIds.filter((id) => !seen.has(id));
@@ -864,18 +874,17 @@ function incompleteEvidenceBlockingFields(
   if (!Array.isArray(entry.evidence) || entry.evidence.length === 0) {
     fields.add("evidence");
   }
-  if (
-    rehearsalRun?.runId &&
-    (typeof entry.runId !== "string" ||
-      entry.runId.trim() !== rehearsalRun.runId)
-  ) {
+  const entryRunId =
+    typeof entry.runId === "string" && entry.runId.trim().length > 0
+      ? entry.runId.trim()
+      : null;
+  if (scope === "rehearsal" && !entryRunId) {
     fields.add("runId");
   }
-  if (
-    rehearsalRun?.runId &&
-    !hasConsistentEvidenceRunId(entry, rehearsalRun.runId)
-  ) {
-    fields.add("evidence.runId");
+  if (scope === "rehearsal") {
+    if (!entryRunId || !hasConsistentEvidenceRunId(entry, entryRunId)) {
+      fields.add("evidence.runId");
+    }
   }
   if (scope === "rehearsal" && !hasConsistentRehearsalStepEvidence(entry)) {
     fields.add("evidence.consistency");
@@ -893,13 +902,10 @@ function isCompleteEvidenceEntry(
   },
   requiredEvidenceTypes: readonly string[] = [],
 ): boolean {
-  if (
-    rehearsalRun?.runId &&
-    (typeof entry.runId !== "string" ||
-      entry.runId.trim() !== rehearsalRun.runId)
-  ) {
-    return false;
-  }
+  const entryRunId =
+    typeof entry.runId === "string" && entry.runId.trim().length > 0
+      ? entry.runId.trim()
+      : null;
   const environment =
     typeof entry.environment === "string" ? entry.environment.trim() : "";
   const owner = typeof entry.owner === "string" ? entry.owner.trim() : "";
@@ -949,8 +955,8 @@ function isCompleteEvidenceEntry(
     Array.isArray(entry.evidence) &&
     entry.evidence.some(isCompleteEvidenceReference) &&
     hasRequiredEvidenceTypes(entry.evidence, requiredEvidenceTypes) &&
-    (!rehearsalRun?.runId ||
-      hasConsistentEvidenceRunId(entry, rehearsalRun.runId)) &&
+    (!rehearsalRun ||
+      (entryRunId !== null && hasConsistentEvidenceRunId(entry, entryRunId))) &&
     (!rehearsalRun || hasConsistentRehearsalStepEvidence(entry))
   );
 }
