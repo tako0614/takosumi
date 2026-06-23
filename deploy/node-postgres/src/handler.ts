@@ -77,6 +77,7 @@ export interface NodeAccountsServerConfig {
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
   readonly stableOidc: NodeAccountsStableOidcConfig | undefined;
   readonly exportDownload: NodeAccountsExportDownloadConfig | undefined;
+  readonly privacyOperationsToken: string | undefined;
   readonly subject: string | undefined;
 }
 
@@ -104,6 +105,10 @@ export function parseEnv(
     upstreamOAuth: parseUpstreamOAuth(env),
     stableOidc: parseStableOidc(env),
     exportDownload: parseExportDownload(env),
+    privacyOperationsToken: optional(
+      env,
+      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
+    ),
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
   };
 }

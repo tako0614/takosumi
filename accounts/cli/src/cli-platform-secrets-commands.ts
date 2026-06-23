@@ -128,6 +128,11 @@ const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
     generator: () => generateBase64UrlSecret(48),
   },
   {
+    name: "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
+    secretClass: "rotate_safe_generated",
+    generator: () => generateBase64UrlSecret(48),
+  },
+  {
     name: "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
     secretClass: "rotate_safe_generated",
     generator: () => generateBase64UrlSecret(32),

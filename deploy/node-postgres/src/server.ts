@@ -294,6 +294,9 @@ async function buildAccountsHandler(
     ...(deployControl ? { deployControl } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     ...(exportWorker ? { exportWorker } : {}),
+    ...(config.privacyOperationsToken
+      ? { privacyOperationsToken: config.privacyOperationsToken }
+      : {}),
   };
   const stableOidc = await buildStableOidc(config.stableOidc);
   if (stableOidc) {

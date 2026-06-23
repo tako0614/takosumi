@@ -23,6 +23,7 @@ import type {
   OidcClientRecord,
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
+  PrivacyRequestRecord,
   RefreshChainPruneResult,
   TakosumiAccountRecord,
   TokenRecord,
@@ -38,6 +39,7 @@ import * as installations from "./postgres/installations.ts";
 import * as launchTokens from "./postgres/launch-tokens.ts";
 import * as oidc from "./postgres/oidc.ts";
 import * as passkeys from "./postgres/passkeys.ts";
+import * as privacy from "./postgres/privacy.ts";
 import * as refreshChain from "./postgres/refresh-chain.ts";
 import * as sessions from "./postgres/sessions.ts";
 import * as tokens from "./postgres/tokens.ts";
@@ -198,6 +200,22 @@ export class PostgresAccountsStore implements AccountsStore {
       this.#client,
       installationId,
     );
+  }
+
+  savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
+    return privacy.savePrivacyRequest(this.#client, record);
+  }
+
+  findPrivacyRequest(
+    requestId: string,
+  ): Promise<PrivacyRequestRecord | undefined> {
+    return privacy.findPrivacyRequest(this.#client, requestId);
+  }
+
+  listPrivacyRequestsForSubject(
+    subject: TakosumiSubject,
+  ): Promise<readonly PrivacyRequestRecord[]> {
+    return privacy.listPrivacyRequestsForSubject(this.#client, subject);
   }
 
   saveAuthorizationCode(

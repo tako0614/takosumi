@@ -15,6 +15,7 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
+  TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   TAKOSUMI_ACCOUNTS_REVOKE_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
@@ -85,6 +86,13 @@ import {
   handleListPersonalAccessTokens,
   handleRevokePersonalAccessToken,
 } from "./pat-routes.ts";
+import {
+  handleCompletePrivacyRequest,
+  handleCreatePrivacyRequest,
+  handleGetPrivacyRequest,
+  handleListPrivacyRequests,
+  matchPrivacyRequestRoute,
+} from "./privacy-routes.ts";
 import {
   handleStripeBillingPortalRequest,
   handleStripeCheckoutRequest,
@@ -255,6 +263,8 @@ export type AccountsHandler = (request: Request) => Promise<Response>;
 
 export const TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER =
   "x-takosumi-billing-smoke-token";
+export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
+  "x-takosumi-privacy-operations-token";
 
 export interface AccountsHandlerOptions {
   issuer?: string;
@@ -300,6 +310,13 @@ export interface AccountsHandlerOptions {
    */
   billingCheckoutSmokeToken?: string;
   /**
+   * Operator-only token for marking privacy export/delete requests complete.
+   * Customers may create/read their own requests with their account session,
+   * but completion is support/operator evidence and must not be writable by
+   * the customer whose data is being handled.
+   */
+  privacyOperationsToken?: string;
+  /**
    * Operator billing plan catalog (spec §32): the subscription plans / credit
    * packs the dashboard offers, each bound server-side to a Stripe price.
    * When omitted the handler falls back to the `TAKOSUMI_BILLING_PLANS` env
@@ -341,6 +358,7 @@ export interface EphemeralAccountsHandlerOptions {
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   billingRedirectAllowlist?: readonly string[];
   billingCheckoutSmokeToken?: string;
+  privacyOperationsToken?: string;
   billingPlans?: readonly BillingPlan[];
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
@@ -608,6 +626,7 @@ export async function createEphemeralAccountsHandler(
     loginEmailAllowlist: options.loginEmailAllowlist,
     serviceGraphMaterialResolver: options.serviceGraphMaterialResolver,
     billingRedirectAllowlist: options.billingRedirectAllowlist,
+    privacyOperationsToken: options.privacyOperationsToken,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
     launchTokens: {
       pairwiseSubjectSecret: `takosumi-dev-launch-pairwise:${
@@ -820,6 +839,66 @@ export function createAccountsHandler(
         return await handleCreatePersonalAccessToken({ request, store });
       }
       return methodNotAllowed("GET, POST");
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH) {
+      const session = await requireAccountSession({
+        request: request.clone(),
+        store,
+      });
+      if (!session.ok) return session.response;
+      if (request.method === "GET") {
+        return await handleListPrivacyRequests({
+          store,
+          subject: session.subject,
+        });
+      }
+      if (request.method === "POST") {
+        return await handleCreatePrivacyRequest({
+          request,
+          store,
+          subject: session.subject,
+        });
+      }
+      return methodNotAllowed("GET, POST");
+    }
+
+    const privacyRequestRoute = matchPrivacyRequestRoute(
+      url.pathname,
+      TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
+    );
+    if (privacyRequestRoute) {
+      if (!privacyRequestRoute.action && request.method === "GET") {
+        const session = await requireAccountSession({
+          request: request.clone(),
+          store,
+        });
+        if (!session.ok) return session.response;
+        return await handleGetPrivacyRequest({
+          request,
+          store,
+          subject: session.subject,
+          requestId: privacyRequestRoute.requestId,
+        });
+      }
+      if (
+        privacyRequestRoute.action === "complete" &&
+        request.method === "POST"
+      ) {
+        const tokenBlocked = requirePrivacyOperationsAccess({
+          request,
+          token: options.privacyOperationsToken,
+        });
+        if (tokenBlocked) return tokenBlocked;
+        return await handleCompletePrivacyRequest({
+          request,
+          store,
+          requestId: privacyRequestRoute.requestId,
+        });
+      }
+      return methodNotAllowed(
+        privacyRequestRoute.action === "complete" ? "POST" : "GET",
+      );
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH) {
@@ -1524,6 +1603,28 @@ function billingCheckoutSmokeAllowed(input: {
     input.request.headers.get(TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER) ??
     "";
   return constantTimeEqual(header, input.token);
+}
+
+function requirePrivacyOperationsAccess(input: {
+  request: Request;
+  token: string | undefined;
+}): Response | undefined {
+  if (!input.token) {
+    return errorJson(
+      "feature_unavailable",
+      "Privacy operations are temporarily unavailable.",
+      503,
+    );
+  }
+  const header =
+    input.request.headers.get(TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER) ?? "";
+  if (constantTimeEqual(header, input.token)) return undefined;
+  return errorJson(
+    "unauthorized",
+    "privacy operations token is required",
+    401,
+    undefined,
+  );
 }
 
 function installationRouteAccountAccess(
