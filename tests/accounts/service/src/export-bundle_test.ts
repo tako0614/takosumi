@@ -20,6 +20,7 @@ import { signExportDownloadUrl } from "../../../../accounts/service/src/export-d
 import {
   buildInstallationExportBundle,
   parseAccountsInstallationExportBundle,
+  parseAccountsInstallationExportBundleInput,
   planInstallationImport,
 } from "../../../../accounts/service/src/export-bundle.ts";
 
@@ -227,6 +228,29 @@ test("installation export bundle parser accepts stored OIDC namespacePath", () =
 
   expect(parsed.oidcClient?.servicePath).toEqual("takosumi.identity.oidc");
   expect(parsed.oidcClient?.namespacePath).toEqual("takosumi.identity.oidc");
+});
+
+test("installation export bundle input parser accepts Cloudflare R2 export documents", () => {
+  const bundle = sampleExportBundle("https://accounts.source.test");
+  const parsed = parseAccountsInstallationExportBundleInput({
+    kind: "takosumi.accounts.cloudflare-r2-installation-export@v1",
+    version: "v1",
+    exportedAt: "2026-06-23T22:30:00.000Z",
+    operationId: "op_r2_export",
+    request: {
+      includeData: false,
+      format: "bundle",
+      encryption: { method: "age", recipients: ["age1recipient"] },
+      scope: { installation: true, ledger: true, outputs: true },
+    },
+    bundle,
+  });
+
+  expect(parsed.kind).toEqual(TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND);
+  expect(parsed.installation.installationId).toEqual(
+    bundle.installation.installationId,
+  );
+  expect(parsed.source.commit).toEqual(bundle.source.commit);
 });
 
 test("installation export import plan drops legacy secretRefs", () => {
