@@ -20,6 +20,7 @@ import {
   oidcMetricRoute,
   pollAutoSyncSources,
   summarizePrometheusMetrics,
+  verifyPlatformCloudExtensionPersonalAccessToken,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
@@ -770,6 +771,77 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       subject: "tsub_cloud_extension_smoke",
     },
   ]);
+});
+
+test("Cloud-only extension routes authenticate personal access tokens through accounts introspection", async () => {
+  const introspectionRequests: {
+    url: string;
+    body: string;
+    contentType: string | null;
+  }[] = [];
+  const context = await verifyPlatformCloudExtensionPersonalAccessToken(
+    new Request("https://app.takosumi.com/compat/cloudflare/client/v4/accounts", {
+      headers: { authorization: "Bearer takpat_cloud_provider" },
+    }),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "takpat_cloud_provider",
+    async (request: Request) => {
+      introspectionRequests.push({
+        url: request.url,
+        body: await request.text(),
+        contentType: request.headers.get("content-type"),
+      });
+      return Response.json({
+        active: true,
+        scope: "read write",
+        sub: "tsub_provider_user",
+      });
+    },
+  );
+
+  expect(context).toEqual({
+    authenticated: true,
+    subject: "tsub_provider_user",
+  });
+  expect(introspectionRequests).toHaveLength(1);
+  expect(introspectionRequests[0]?.url).toBe(
+    "https://app.takosumi.com/oauth/introspect",
+  );
+  expect(introspectionRequests[0]?.contentType).toBe(
+    "application/x-www-form-urlencoded",
+  );
+  expect(introspectionRequests[0]?.body).toContain(
+    "client_id=takosumi-cloud-extensions",
+  );
+  expect(introspectionRequests[0]?.body).toContain("token=takpat_cloud_provider");
+});
+
+test("Cloud-only extension personal access token auth fails closed", async () => {
+  const inactive = await verifyPlatformCloudExtensionPersonalAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "takpat_inactive",
+    async () => Response.json({ active: false }),
+  );
+  expect(inactive).toEqual({ authenticated: false });
+
+  const insufficientScope =
+    await verifyPlatformCloudExtensionPersonalAccessToken(
+      new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+      {
+        TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+        TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+      } as never,
+      "takpat_insufficient",
+      async () => Response.json({ active: true, scope: "profile" }),
+    );
+  expect(insufficientScope).toEqual({ authenticated: false });
 });
 
 test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud extension binding", async () => {

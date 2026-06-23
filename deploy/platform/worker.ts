@@ -937,6 +937,16 @@ export async function verifyPlatformCloudExtensionSession(
   request: Request,
   env: CloudflareWorkerEnv,
 ): Promise<PlatformCloudExtensionSessionContext> {
+  const patToken = platformCloudExtensionPersonalAccessToken(request);
+  if (patToken) {
+    const patSession = await verifyPlatformCloudExtensionPersonalAccessToken(
+      request,
+      env,
+      patToken,
+    );
+    if (patSession.authenticated) return patSession;
+  }
+
   const headers = sessionMirrorHeaders(request);
   if (!headers) return { authenticated: false };
   try {
@@ -959,6 +969,81 @@ export async function verifyPlatformCloudExtensionSession(
   } catch {
     return { authenticated: false };
   }
+}
+
+export type PlatformCloudExtensionIntrospectFetch = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+) => Promise<Response>;
+
+export async function verifyPlatformCloudExtensionPersonalAccessToken(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  token: string,
+  introspectFetch: PlatformCloudExtensionIntrospectFetch =
+    defaultPlatformCloudExtensionIntrospectFetch,
+): Promise<PlatformCloudExtensionSessionContext> {
+  const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
+  const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return { authenticated: false };
+  try {
+    const response = await introspectFetch(
+      new Request(new URL("/oauth/introspect", request.url), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          token,
+          client_id: clientId,
+          client_secret: clientSecret,
+        }),
+      }),
+      env,
+    );
+    if (!response.ok) return { authenticated: false };
+    const body = await response.json().catch(() => undefined);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return { authenticated: false };
+    }
+    const record = body as Record<string, unknown>;
+    if (record.active !== true) return { authenticated: false };
+    const scope = typeof record.scope === "string" ? record.scope : "";
+    if (!platformCloudExtensionScopesAllowAccess(scope)) {
+      return { authenticated: false };
+    }
+    const subject = record.sub;
+    return typeof subject === "string" && subject.length > 0
+      ? { authenticated: true, subject }
+      : { authenticated: true };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
+async function defaultPlatformCloudExtensionIntrospectFetch(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  return await accountsWorker.fetch(request, env);
+}
+
+function platformCloudExtensionPersonalAccessToken(
+  request: Request,
+): string | undefined {
+  const token = bearerValue(request.headers.get("authorization"));
+  return token?.startsWith("takpat_") ? token : undefined;
+}
+
+function bearerValue(authorization: string | null): string | undefined {
+  const match = authorization?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || undefined;
+}
+
+function platformCloudExtensionScopesAllowAccess(scope: string): boolean {
+  const scopes = new Set(scope.split(/\s+/u).filter(Boolean));
+  return scopes.has("read") || scopes.has("write") || scopes.has("admin");
 }
 
 function sessionMirrorHeaders(request: Request): Headers | undefined {
