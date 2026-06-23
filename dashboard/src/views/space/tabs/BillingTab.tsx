@@ -73,11 +73,13 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     (plans() ?? []).filter((plan) => plan.kind === "pack"),
   );
   const hasBillingCatalog = createMemo(() => (plans()?.length ?? 0) > 0);
+  const canStartCheckout = createMemo(
+    () => cloudBilling() && mode() !== undefined && mode() !== "disabled",
+  );
   const canOpenPortal = createMemo(
     () =>
       cloudBilling() &&
-      mode() !== undefined &&
-      mode() !== "disabled" &&
+      canStartCheckout() &&
       hasBillingCatalog(),
   );
   const billingSubtitle = createMemo(() => {
@@ -217,7 +219,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
         size="sm"
         type="button"
         busy={checkoutBusyId() === plan.id}
-        disabled={checkoutBusyId() !== null}
+        disabled={checkoutBusyId() !== null || !canStartCheckout()}
         onClick={() => void startCheckout(plan)}
       >
         {checkoutBusyId() === plan.id
@@ -325,8 +327,16 @@ export default function BillingTab(props: { readonly spaceId: string }) {
             </Match>
             <Match when={plans()}>
               <Show when={hasBillingCatalog()}>
-                <p class="muted av-plan-policy">
-                  {t("billing.plans.nonRefundable")}
+                <p
+                  class={
+                    canStartCheckout()
+                      ? "muted av-plan-policy"
+                      : "av-plan-policy av-plan-policy-disabled"
+                  }
+                >
+                  {canStartCheckout()
+                    ? t("billing.plans.nonRefundable")
+                    : t("billing.plans.disabled")}
                 </p>
               </Show>
               <Show

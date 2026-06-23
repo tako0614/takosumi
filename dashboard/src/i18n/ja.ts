@@ -903,6 +903,8 @@ export const ja = {
   "billing.plans.none": "現在、プランは提供されていません。",
   "billing.plans.nonRefundable":
     "クレジットは買い切りです。購入後の返金はできません。",
+  "billing.plans.disabled":
+    "このワークスペースでは現在、購入を受け付けていません。必要な場合は運営側で課金を有効化します。",
   "billing.plans.subscribe": "このプランにする",
   "billing.plans.perMonth": "毎月 {n} クレジット",
   "billing.packs.title": "クレジットパック",
