@@ -46,16 +46,32 @@ test("cloud extension smoke strict mode fails on compat materialization stub", a
   expect(result.gaReady).toBe(false);
   expect(
     result.checks.find(
-      (check) => check.name === "cloudflareCompatScriptMaterializationAuth",
+      (check) => check.name === "cloudflareCompatScriptPutAuth",
     )?.ok,
   ).toBe(false);
 });
 
-function authorization(init: RequestInit | undefined): string | undefined {
-  return typeof init?.headers === "object" && init.headers !== null
-    ? (init.headers as Record<string, string>).authorization
-    : undefined;
-}
+test("cloud extension smoke strict mode passes when compat lifecycle works", async () => {
+  const result = await runCloudExtensionSmoke(
+    { ...BASE_OPTIONS, requireCompatMaterialization: true },
+    async (url, init) =>
+      responseForImplementedCompat(
+        new URL(url).pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+      ),
+  );
+
+  expect(result.status).toBe("passed");
+  expect(result.gaReady).toBe(true);
+  expect(result.gaps).toEqual([]);
+  expect(
+    result.checks.find(
+      (check) => check.name === "cloudflareCompatScriptPutAuth",
+    )?.status,
+  ).toBe(201);
+  expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
+});
 
 function responseFor(pathname: string, authenticated: boolean): Response {
   if (pathname === "/v1/account/session/me") {
@@ -92,6 +108,32 @@ function responseFor(pathname: string, authenticated: boolean): Response {
     return cloudflare(true, []);
   }
   return cloudflare(false, null, 501, [9001]);
+}
+
+function responseForImplementedCompat(
+  pathname: string,
+  method: string,
+  authenticated: boolean,
+): Response {
+  if (!pathname.includes("/workers/scripts/takosumi-smoke")) {
+    return responseFor(pathname, authenticated);
+  }
+  if (method === "PUT") {
+    return cloudflare(true, { id: "takosumi-smoke" }, 201);
+  }
+  if (method === "GET") {
+    return cloudflare(true, { id: "takosumi-smoke" });
+  }
+  if (method === "DELETE") {
+    return cloudflare(true, { id: "takosumi-smoke", deleted: true });
+  }
+  return cloudflare(false, null, 405, [1001]);
+}
+
+function authorization(init: RequestInit | undefined): string | undefined {
+  return typeof init?.headers === "object" && init.headers !== null
+    ? (init.headers as Record<string, string>).authorization
+    : undefined;
 }
 
 function json(body: unknown, status = 200): Response {

@@ -288,8 +288,8 @@ operator-bearer hardening gate without printing the bearer token. Use
 Cloud-only extension worker smoke は account session token を使うが、証跡には
 token / cookie / token file path を保存しない。通常の deploy smoke は endpoint
 mount、platform-side session auth、AI Gateway、Cloudflare compatibility envelope、
-および unsupported resource の fail-closed を確認する。Cloudflare Workers script
-materialization がまだ 501 の場合、script は `status: "passed"` でも
+および Cloudflare Workers script の `PUT -> GET -> DELETE` lifecycle を確認する。
+Cloudflare Workers script materialization がまだ 501 の場合、script は `status: "passed"` でも
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` を必ず付け、501 を失敗にする。
 
