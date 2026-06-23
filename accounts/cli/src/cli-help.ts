@@ -705,3 +705,24 @@ export function installationsExportHelpText(): string {
     "  --json",
   ].join("\n");
 }
+
+export function installationsImportPlanHelpText(): string {
+  return [
+    "takosumi internal installations import-plan",
+    "",
+    "Reads a takos-export/bundle.json payload and prints the target Accounts",
+    "projection request that a deploy-control restore/apply flow can review.",
+    "This does not call the retired public import route.",
+    "",
+    "Options:",
+    "  --bundle-file <takos-export/bundle.json>",
+    "  --target-issuer <https://self-host.example>",
+    "  --target-account <account-id>",
+    "  --target-space <space-id>",
+    "  --created-by-subject <tsub_...>",
+    "  --target-installation-id <installation-id>",
+    "  --mode <self-hosted|dedicated>",
+    "  --out-file <path>",
+    "  --json",
+  ].join("\n");
+}

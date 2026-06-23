@@ -7197,6 +7197,123 @@ test("internal installations export requires age recipients", async () => {
   ]);
 });
 
+test("internal installations import-plan emits a target restore request", async () => {
+  const bundleFile = await makeTempFile({ suffix: ".json" });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("import-plan must not call the retired import route");
+  }) as typeof fetch;
+  await writeTextFile(
+    bundleFile,
+    JSON.stringify({
+      kind: "takosumi.accounts.installation-export-bundle@v1",
+      version: "v1",
+      exportedAt: "2026-06-23T13:00:00.000Z",
+      installation: {
+        installationId: "inst_source",
+        accountId: "acct_source",
+        spaceId: "space_source",
+        appId: "takos.chat",
+        billingAccountId: null,
+        mode: "dedicated",
+        status: "exported",
+      },
+      source: {
+        gitUrl: "https://github.com/takos/takos",
+        ref: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        planDigest: "sha256:app",
+        artifactDigest: "sha256:compiled",
+      },
+      runtimeTarget: null,
+      oidcClient: {
+        clientId: "oidc_source",
+        serviceBinding: "auth",
+        servicePath: "takosumi.identity.oidc",
+        issuerUrl: "https://accounts.source.test",
+        redirectUris: ["https://accounts.source.test/auth/callback"],
+        allowedScopes: ["openid", "profile"],
+        subjectMode: "pairwise",
+        tokenEndpointAuthMethod: "none",
+      },
+      serviceBindings: [
+        {
+          serviceBindingId: "bind_auth",
+          name: "auth",
+          kind: "identity.oidc",
+          template: {
+            configRef:
+              "https://accounts.source.test/.well-known/openid-configuration",
+          },
+        },
+      ],
+      serviceGrants: [
+        {
+          serviceGrantId: "grant_threads",
+          capability: "threads:read",
+          scope: {
+            pathPrefix: "threads/",
+            apiKey: "sk-secret-from-source",
+          },
+          grantedAt: "2026-06-23T13:00:00.000Z",
+          revokedAt: null,
+        },
+      ],
+      events: [],
+    }),
+  );
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "import-plan",
+        "--bundle-file",
+        bundleFile,
+        "--target-issuer",
+        "https://selfhost.example.test",
+        "--target-account",
+        "acct_target",
+        "--target-space",
+        "space_target",
+        "--target-installation-id",
+        "inst_target",
+        "--created-by-subject",
+        "tsub_target",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const plan = JSON.parse(stdout.join("\n"));
+    expect(plan.kind).toEqual("takosumi.accounts.installation-import-plan@v1");
+    expect(plan.sourceIssuer).toEqual("https://accounts.source.test");
+    expect(plan.targetIssuer).toEqual("https://selfhost.example.test");
+    expect(plan.request.installationId).toEqual("inst_target");
+    expect(plan.request.accountId).toEqual("acct_target");
+    expect(plan.request.spaceId).toEqual("space_target");
+    expect(plan.request.mode).toEqual("self-hosted");
+    expect(plan.request.oidcClients[0].issuerUrl).toEqual(
+      "https://selfhost.example.test",
+    );
+    expect(plan.request.oidcClients[0].redirectUris).toEqual([
+      "https://selfhost.example.test/auth/callback",
+    ]);
+    expect(JSON.stringify(plan)).not.toContain("sk-secret-from-source");
+    expect(plan.request.serviceGrants[0].scope.apiKey).toEqual("[REDACTED]");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await removePath(bundleFile);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // accounts migrate-d1 (Cloudflare D1 migration runner)
 //

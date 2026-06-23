@@ -574,8 +574,10 @@ OIDC service-binding metadata is also available at \`takos-export/oidc/service-b
 Restore this bundle through a Takosumi deploy-control restore/apply flow on the
 target Space, then let the target account plane create its Installation
 projection from that deploy-control ledger entry. The account-plane import
-route is fail-closed until it is wired to that restore flow, and the archive
-intentionally does not depend on a public install CLI command.
+route is fail-closed until it is wired to that restore flow. Operators may use
+\`takosumi internal installations import-plan --bundle-file takos-export/bundle.json\`
+to prepare review input for that flow; the archive intentionally does not
+depend on a public install CLI command.
 
 Source commit: \`${bundle.source.commit}\`
 Plan digest digest: \`${bundle.source.planDigest}\`
