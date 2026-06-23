@@ -112,6 +112,30 @@ test("Cloudflare Accounts Worker parses env clients without a sidecar container"
   assert.equal((await response.json()).issuer, "https://issuer.example");
 });
 
+test("Cloudflare Accounts Worker requires confidential clients for Service Graph token introspection", async () => {
+  const d1 = new InitOnlyD1Database();
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request("https://accounts.example/oauth/introspect", {
+      method: "POST",
+      body: new URLSearchParams({ token: "taksrv_bad" }),
+    }),
+    createEnv(d1, {
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://issuer.example",
+      TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([
+        {
+          clientId: "public-cloud-extension",
+          redirectUris: ["https://app.takosumi.com/callback"],
+          tokenEndpointAuthMethod: "none",
+          serviceGraphTokenIntrospection: true,
+        },
+      ]),
+    }),
+  );
+  assert.equal(response.status, 500);
+  assert.match(await response.text(), /requires a confidential client/);
+});
+
 test("Cloudflare Accounts Worker enforces the pre-GA login allowlist for official Cloud", () => {
   const expected = {
     emails: ["shoutatomiyama0614@gmail.com"],

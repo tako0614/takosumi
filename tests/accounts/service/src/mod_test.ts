@@ -5512,7 +5512,30 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
 
 test("accounts handler exposes service graph services and rotates event ingest tokens", async () => {
   const store = new InMemoryAccountsStore();
-  const handler = createAccountsHandler({ store });
+  const handler = createAccountsHandler({
+    store,
+    clients: [
+      {
+        clientId: "normal-introspector",
+        clientSecret: "normal-secret",
+        redirectUris: ["https://client.example.test/callback"],
+        tokenEndpointAuthMethod: "client_secret_post",
+      },
+      {
+        clientId: "cloud-extension-introspector",
+        clientSecret: "cloud-extension-secret",
+        redirectUris: ["https://app.takosumi.com/__takosumi/cloud/callback"],
+        tokenEndpointAuthMethod: "client_secret_post",
+        serviceGraphTokenIntrospection: true,
+      },
+      {
+        clientId: "public-extension-introspector",
+        redirectUris: ["https://app.takosumi.com/__takosumi/cloud/public"],
+        tokenEndpointAuthMethod: "none",
+        serviceGraphTokenIntrospection: true,
+      },
+    ],
+  });
   const now = Date.now();
   seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
   const sessionId = seedAccountSession(store, "tsub_owner", "sess_services");
@@ -5614,6 +5637,58 @@ test("accounts handler exposes service graph services and rotates event ingest t
   expect(JSON.stringify(rotatedAiGateway)).not.toContain("tokenHash");
   expect(JSON.stringify(rotatedAiGateway)).not.toContain("secretRef");
   expect(JSON.stringify(rotatedAiGateway)).not.toContain("secret_ref");
+
+  const normalIntrospectAiGateway = await handler(
+    new Request("https://accounts.example.test/oauth/introspect", {
+      method: "POST",
+      body: new URLSearchParams({
+        token: rotatedAiGateway.token,
+        client_id: "normal-introspector",
+        client_secret: "normal-secret",
+      }),
+    }),
+  );
+  expect((await normalIntrospectAiGateway.json()).active).toEqual(false);
+
+  const extensionIntrospectAiGateway = await handler(
+    new Request("https://accounts.example.test/oauth/introspect", {
+      method: "POST",
+      body: new URLSearchParams({
+        token: rotatedAiGateway.token,
+        client_id: "cloud-extension-introspector",
+        client_secret: "cloud-extension-secret",
+      }),
+    }),
+  );
+  const extensionIntrospectAiGatewayBody =
+    await extensionIntrospectAiGateway.json();
+  expect(extensionIntrospectAiGateway.status).toEqual(200);
+  expect(extensionIntrospectAiGatewayBody).toMatchObject({
+    active: true,
+    client_id: "service-graph-service:takosumi.ai.gateway",
+    scope: "ai.model ai.models.read ai.chat",
+    sub: "service-graph-service:inst_services",
+  });
+  expect(extensionIntrospectAiGatewayBody.takosumi).toMatchObject({
+    installation_id: "inst_services",
+    app_id: "example.app",
+    space_id: "space_1",
+    role: "service-graph-service",
+  });
+
+  const publicExtensionIntrospectAiGateway = await handler(
+    new Request("https://accounts.example.test/oauth/introspect", {
+      method: "POST",
+      body: new URLSearchParams({
+        token: rotatedAiGateway.token,
+        client_id: "public-extension-introspector",
+      }),
+    }),
+  );
+  expect(publicExtensionIntrospectAiGateway.status).toEqual(200);
+  expect((await publicExtensionIntrospectAiGateway.json()).active).toEqual(
+    false,
+  );
 
   const invalidAiGatewayScopes = await handler(
     new Request(

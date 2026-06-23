@@ -24,6 +24,7 @@ import {
   pollAutoSyncSources,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
+  verifyPlatformCloudExtensionServiceAccessToken,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
@@ -697,7 +698,7 @@ test("AI Gateway route delegates only to the Cloud extension binding", async () 
   expect(forwarded).toEqual([
     {
       url: "https://app.takosumi.com/gateway/ai/v1/models",
-      authorization: "Bearer runtime-token",
+      authorization: null,
     },
   ]);
 });
@@ -779,6 +780,66 @@ test("Cloud-only extension routes receive platform auth context without raw sess
   ]);
 });
 
+test("Cloud-only extension routes strip raw credentials even when auth fails", async () => {
+  const forwarded: {
+    authorization: string | null;
+    cookie: string | null;
+    session: string | null;
+    authenticated: string | null;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      headers: {
+        authorization: "Bearer taksrv_bad_scope",
+        cookie: "takosumi_session=sess_cookie",
+        "x-takosumi-account-session": "sess_header",
+      },
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            authorization: request.headers.get("authorization"),
+            cookie: request.headers.get("cookie"),
+            session: request.headers.get("x-takosumi-account-session"),
+            authenticated: request.headers.get(
+              "x-takosumi-cloud-authenticated",
+            ),
+          });
+          return Response.json(
+            {
+              error: {
+                type: "unauthorized",
+                code: "unauthorized",
+              },
+            },
+            { status: 401 },
+          );
+        },
+      },
+    } as never,
+    {
+      id: "ai.openai_compatible.v1",
+      kind: "ai_gateway",
+      basePath: "/gateway/ai/v1",
+      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+      protocol: "openai-compatible",
+      capabilities: ["models"],
+      smokeChecks: ["aiModelsAuth"],
+    },
+    async () => ({ authenticated: false }),
+  );
+  expect(response.status).toBe(401);
+  expect(forwarded).toEqual([
+    {
+      authorization: null,
+      cookie: null,
+      session: null,
+      authenticated: null,
+    },
+  ]);
+});
+
 test("Cloud-only extension routes authenticate personal access tokens through accounts introspection", async () => {
   const introspectionRequests: {
     url: string;
@@ -855,6 +916,95 @@ test("Cloud-only extension personal access token auth fails closed", async () =>
   expect(insufficientScope).toEqual({ authenticated: false });
 });
 
+test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async () => {
+  const introspectionRequests: { body: string }[] = [];
+  const aiRoute = {
+    id: "ai.openai_compatible.v1",
+    kind: "ai_gateway",
+    basePath: "/gateway/ai/v1",
+    bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+    protocol: "openai-compatible",
+    capabilities: ["models", "chat.completions", "embeddings"],
+    smokeChecks: ["aiModelsAuth", "aiGatewayStatus"],
+  } as const;
+
+  const context = await verifyPlatformCloudExtensionServiceAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      headers: { authorization: "Bearer taksrv_runtime" },
+    }),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "taksrv_runtime",
+    aiRoute,
+    async (request: Request) => {
+      introspectionRequests.push({ body: await request.text() });
+      return Response.json({
+        active: true,
+        client_id: "service-graph-service:takosumi.ai.gateway",
+        scope: "ai.model ai.models.read",
+        sub: "service-graph-service:inst_ai",
+      });
+    },
+  );
+
+  expect(context).toEqual({
+    authenticated: true,
+    subject: "service-graph-service:inst_ai",
+  });
+  expect(introspectionRequests[0]?.body).toContain("token=taksrv_runtime");
+
+  const missingChatScope = await verifyPlatformCloudExtensionServiceAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer taksrv_runtime" },
+    }),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "taksrv_runtime",
+    aiRoute,
+    async () =>
+      Response.json({
+        active: true,
+        client_id: "service-graph-service:takosumi.ai.gateway",
+        scope: "ai.model ai.models.read",
+      }),
+  );
+  expect(missingChatScope).toEqual({ authenticated: false });
+
+  const providerRoute = {
+    id: "provider.cloudflare.client_v4",
+    kind: "provider_compat",
+    provider: "cloudflare",
+    basePath: "/compat/cloudflare/client/v4",
+    bindingName: "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
+    protocol: "cloudflare-v4",
+    capabilities: ["accounts.list"],
+    smokeChecks: ["cloudflareCompatAccountsAuth"],
+  } as const;
+  const providerContext = await verifyPlatformCloudExtensionServiceAccessToken(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts",
+      {
+        headers: { authorization: "Bearer taksrv_runtime" },
+      },
+    ),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "taksrv_runtime",
+    providerRoute,
+    async () => {
+      throw new Error("provider compat must not introspect service tokens");
+    },
+  );
+  expect(providerContext).toEqual({ authenticated: false });
+});
+
 test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud extension binding", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
@@ -902,7 +1052,7 @@ test("Cloudflare Compatibility Gateway route delegates only to the Cloud extensi
   expect(forwarded).toEqual([
     {
       url: "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      authorization: "Bearer cf-compat-token",
+      authorization: null,
     },
   ]);
 });
@@ -1056,7 +1206,7 @@ test("Cloud-only extension routes are registry driven for future provider gatewa
   expect(forwarded).toEqual([
     {
       url: "https://app.takosumi.com/compat/aws/v1/sts",
-      authorization: "Bearer aws-compat-token",
+      authorization: null,
     },
   ]);
 });

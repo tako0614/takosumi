@@ -54,6 +54,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
+  readonly TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
@@ -704,7 +705,9 @@ function parsePreviousPublicJwks(
       );
     }
     if (kty !== "EC" || crv !== "P-256") {
-      throw new TypeError(`${label}.keys[${index}] must be an ES256 public JWK`);
+      throw new TypeError(
+        `${label}.keys[${index}] must be an ES256 public JWK`,
+      );
     }
     if (seen.has(kid)) {
       throw new TypeError(`${label}.keys[${index}] duplicates kid ${kid}`);
@@ -762,14 +765,26 @@ function parseClients(
       "TAKOSUMI_ACCOUNTS_CLIENT_ID and TAKOSUMI_ACCOUNTS_REDIRECT_URIS must be set together",
     );
   }
+  const clientSecret = optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET);
+  const tokenEndpointAuthMethod = parseClientAuthMethod(
+    env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
+  );
+  const serviceGraphTokenIntrospection =
+    env.TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION ===
+    "enabled";
+  validateServiceGraphIntrospectionClient({
+    clientSecret,
+    tokenEndpointAuthMethod,
+    serviceGraphTokenIntrospection,
+    label: "TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION",
+  });
   return [
     {
       clientId,
       redirectUris,
-      clientSecret: optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET),
-      tokenEndpointAuthMethod: parseClientAuthMethod(
-        env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
-      ),
+      clientSecret,
+      tokenEndpointAuthMethod,
+      serviceGraphTokenIntrospection,
     },
   ];
 }
@@ -787,14 +802,39 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
       "TAKOSUMI_ACCOUNTS_CLIENTS entries require clientId and redirectUris",
     );
   }
+  const clientSecret = optionalString(value.clientSecret);
+  const tokenEndpointAuthMethod = parseClientAuthMethod(
+    optionalString(value.tokenEndpointAuthMethod),
+  );
+  const serviceGraphTokenIntrospection =
+    value.serviceGraphTokenIntrospection === true;
+  validateServiceGraphIntrospectionClient({
+    clientSecret,
+    tokenEndpointAuthMethod,
+    serviceGraphTokenIntrospection,
+    label: "TAKOSUMI_ACCOUNTS_CLIENTS serviceGraphTokenIntrospection",
+  });
   return {
     clientId,
     redirectUris,
-    clientSecret: optionalString(value.clientSecret),
-    tokenEndpointAuthMethod: parseClientAuthMethod(
-      optionalString(value.tokenEndpointAuthMethod),
-    ),
+    clientSecret,
+    tokenEndpointAuthMethod,
+    serviceGraphTokenIntrospection,
   };
+}
+
+function validateServiceGraphIntrospectionClient(input: {
+  readonly clientSecret: string | undefined;
+  readonly tokenEndpointAuthMethod: OidcClientAuthMethod | undefined;
+  readonly serviceGraphTokenIntrospection: boolean;
+  readonly label: string;
+}): void {
+  if (!input.serviceGraphTokenIntrospection) return;
+  if (!input.clientSecret || input.tokenEndpointAuthMethod === "none") {
+    throw new TypeError(
+      `${input.label} requires a confidential client with a client secret`,
+    );
+  }
 }
 
 function parseClientAuthMethod(

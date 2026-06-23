@@ -100,6 +100,7 @@ type ResolvedOidcClient = {
   tokenEndpointAuthMethod: OidcClientAuthMethod;
   clientSecret?: string;
   clientSecretHash?: string;
+  serviceGraphTokenIntrospection?: boolean;
 };
 
 async function resolveOidcClient(input: {
@@ -116,6 +117,8 @@ async function resolveOidcClient(input: {
         staticClient.tokenEndpointAuthMethod ??
         (staticClient.clientSecret ? "client_secret_post" : "none"),
       clientSecret: staticClient.clientSecret,
+      serviceGraphTokenIntrospection:
+        staticClient.serviceGraphTokenIntrospection === true,
     };
   }
   const dynamicClient = await input.store.findOidcClient(input.clientId);
@@ -924,15 +927,23 @@ export async function handleIntrospect(input: {
   }
   const token = params.get("token");
   if (!token) return json({ active: false });
-  const authenticatedClientId = auth.client?.clientId;
+  const authenticatedClient = auth.client;
+  const authenticatedClientId = authenticatedClient?.clientId;
 
   const accessRecord = await input.store.findAccessToken(token);
   if (accessRecord) {
     // Only reveal token contents to the client that owns the token. In
     // degraded mode (no static clients wired) the delete-by-token behavior is kept.
+    // Confidential operator extension clients may opt into Service Graph
+    // token introspection so Cloud-only gateways can validate runtime tokens
+    // without receiving account sessions or upstream provider keys.
     if (
       authenticatedClientId !== undefined &&
-      accessRecord.clientId !== authenticatedClientId
+      accessRecord.clientId !== authenticatedClientId &&
+      !(
+        clientCanIntrospectServiceGraphTokens(authenticatedClient) &&
+        accessRecord.clientId.startsWith("service-graph-service:")
+      )
     ) {
       return json({ active: false });
     }
@@ -960,6 +971,14 @@ export async function handleIntrospect(input: {
     return json(personalAccessTokenIntrospectionBody(patRecord, input.issuer));
   }
   return json({ active: false });
+}
+
+function clientCanIntrospectServiceGraphTokens(
+  client: ResolvedOidcClient | undefined,
+): boolean {
+  if (!client?.serviceGraphTokenIntrospection) return false;
+  if (client.tokenEndpointAuthMethod === "none") return false;
+  return Boolean(client.clientSecret || client.clientSecretHash);
 }
 
 export function includesScope(scope: string, required: string): boolean {

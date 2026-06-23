@@ -386,6 +386,13 @@ export interface OidcClientRegistration {
   redirectUris: readonly string[];
   clientSecret?: string;
   tokenEndpointAuthMethod?: OidcClientAuthMethod;
+  /**
+   * Allows a confidential operator extension client to introspect
+   * Service Graph service access tokens (`service-graph-service:*`).
+   * Normal OIDC clients must leave this false so client-isolated
+   * introspection remains the default.
+   */
+  serviceGraphTokenIntrospection?: boolean;
 }
 
 export interface StripeBillingOptions {
