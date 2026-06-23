@@ -67,6 +67,7 @@ import type {
   InstallationProviderEnvBindingSet,
   InstallConfig,
   Installation,
+  OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
   PublicInstallation,
@@ -2789,6 +2790,15 @@ async function deployUploadedSnapshot(
       request,
     );
   }
+  const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
+  if (body.outputAllowlist !== undefined && outputAllowlist === undefined) {
+    return errorJson(
+      "invalid_argument",
+      "outputAllowlist must be an object of { from, type, required? } entries",
+      400,
+      request,
+    );
+  }
   const environment = stringValue(body.environment);
   let providerEnvBindings: InstallationProviderEnvBindings | undefined;
   if (body.providerEnvBindings !== undefined) {
@@ -2834,6 +2844,7 @@ async function deployUploadedSnapshot(
     ...(environment ? { environment } : {}),
     snapshotId,
     ...(vars ? { vars } : {}),
+    ...(outputAllowlist ? { outputAllowlist } : {}),
     ...(providerEnvBindings ? { providerEnvBindings } : {}),
     ...(planOnly !== undefined ? { planOnly } : {}),
     ...(autoApprove !== undefined ? { autoApprove } : {}),
@@ -3488,7 +3499,7 @@ async function createControlConnection(
         ? "cloudflare_api_token"
         : normalizedProvider === "google"
           ? "gcp_service_account_json"
-        : "generic_env",
+          : "generic_env",
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.
     kind: sourceGitKind
@@ -3497,7 +3508,7 @@ async function createControlConnection(
         ? "cloudflare_api_token"
         : normalizedProvider === "google"
           ? "gcp_service_account_json"
-        : "generic_env_provider",
+          : "generic_env_provider",
     authMethod: "static_secret",
     // Force Space scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
@@ -4059,6 +4070,43 @@ function jsonRecordValue(
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) return undefined;
     if (!isJsonValue(item)) return undefined;
     out[key] = item;
+  }
+  return out;
+}
+
+function outputAllowlistValue(
+  value: unknown,
+): Readonly<Record<string, OutputAllowlistEntry>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const out: Record<string, OutputAllowlistEntry> = {};
+  for (const [name, item] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) return undefined;
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const from = stringValue(record.from);
+    const type = stringValue(record.type);
+    if (!from || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(from)) return undefined;
+    if (
+      type !== "string" &&
+      type !== "url" &&
+      type !== "hostname" &&
+      type !== "number" &&
+      type !== "boolean" &&
+      type !== "json"
+    ) {
+      return undefined;
+    }
+    const required = booleanValue(record.required);
+    out[name] = {
+      from,
+      type,
+      ...(required !== undefined ? { required } : {}),
+    };
   }
   return out;
 }

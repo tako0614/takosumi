@@ -1131,6 +1131,10 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       environment: "preview",
       snapshotId: "snap_upload",
       vars: { greeting: "hi" },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string" },
+      },
       providerConnections: [
         {
           provider: "cloudflare",
@@ -1157,6 +1161,10 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       environment: "preview",
       snapshotId: "snap_upload",
       vars: { greeting: "hi" },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string" },
+      },
       providerEnvBindings: [
         {
           provider: "cloudflare",

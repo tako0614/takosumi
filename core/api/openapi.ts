@@ -1940,6 +1940,28 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           additionalProperties: { type: "string" },
         },
+        outputAllowlist: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["from", "type"],
+            properties: {
+              from: { type: "string" },
+              type: {
+                enum: [
+                  "string",
+                  "url",
+                  "hostname",
+                  "number",
+                  "boolean",
+                  "json",
+                ],
+              },
+              required: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
         providerConnections: {
           type: "array",
           items: installationProviderConnectionBinding,
@@ -1960,6 +1982,28 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         vars: {
           type: "object",
           additionalProperties: { type: "string" },
+        },
+        outputAllowlist: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["from", "type"],
+            properties: {
+              from: { type: "string" },
+              type: {
+                enum: [
+                  "string",
+                  "url",
+                  "hostname",
+                  "number",
+                  "boolean",
+                  "json",
+                ],
+              },
+              required: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
         },
         providerEnvBindings: {
           type: "array",
