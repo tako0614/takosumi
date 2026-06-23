@@ -10,6 +10,8 @@ const read = (rel: string) =>
   readFileSync(resolve(here, "../../../../../../../dashboard/src", rel), "utf8");
 
 const appShellSource = read("views/account/components/shell/AppShell.tsx");
+const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
+const mobileTabsSource = read("views/account/components/shell/MobileTabs.tsx");
 const topBarSource = read("views/account/components/shell/TopBar.tsx");
 const spaceSwitcherSource = read(
   "views/account/components/shell/SpaceSwitcher.tsx",
@@ -18,61 +20,73 @@ const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
 const shellCssSource = read("styles/shell.css");
 
 describe("dashboard shell navigation layout", () => {
-  test("puts navigation in a single top bar over a full-width well — no sidebar / mobile tabs", () => {
-    // The shell is just <TopBar> + content; the old sidebar and mobile tab bar
-    // are gone (deleted, not merely hidden).
-    expect(appShellSource).toContain("TopBar");
+  test("composes a persistent sidebar + top bar + mobile tabs over the content", () => {
+    expect(appShellSource).toContain("import Sidebar");
+    expect(appShellSource).toContain("import MobileTabs");
+    expect(appShellSource).toContain("<Sidebar />");
+    expect(appShellSource).toContain("<MobileTabs />");
+    expect(appShellSource).toContain('class="app-shell-main"');
     expect(appShellSource).toContain('class="app-shell-content"');
-    expect(appShellSource).not.toContain("Sidebar");
-    expect(appShellSource).not.toContain("MobileTabs");
-    expect(shellCssSource).toContain(".topbar");
-    expect(shellCssSource).toContain(".app-shell-content");
-    expect(shellCssSource).not.toContain(".sidebar");
-    expect(shellCssSource).not.toContain(".mobile-tabs");
-    expect(shellCssSource).not.toContain(".app-shell-main");
+    expect(shellCssSource).toContain(".sidebar");
+    expect(shellCssSource).toContain(".mobile-tabs");
+    expect(shellCssSource).toContain(
+      "grid-template-columns: var(--tg-sidebar-w) 1fr;",
+    );
   });
 
-  test("top bar is brand + add + notifications + profile, nothing else", () => {
-    expect(topBarSource).toContain("Wordmark");
-    expect(topBarSource).toContain('class="topbar-brand"');
+  test("sidebar leads with everyday surfaces: home / cloud accounts / settings (+ Cloud billing)", () => {
+    expect(sidebarSource).toContain('labelKey: "nav.home"');
+    expect(sidebarSource).toContain('href: "/connections"');
+    expect(sidebarSource).toContain('labelKey: "nav.connections"');
+    expect(sidebarSource).toContain('href: "/advanced/workspace"');
+    expect(sidebarSource).toContain('labelKey: "nav.spaceSettings"');
+    // Billing is a sidebar item, Cloud-only.
+    expect(sidebarSource).toContain("isTakosumiCloudRuntime");
+    expect(sidebarSource).toContain('href="/billing"');
+    expect(sidebarSource).toContain('t("nav.billing")');
+    // The workspace switcher moved out of the profile menu into the sidebar.
+    expect(sidebarSource).toContain("SpaceSwitcher");
+    // Runs / notifications / add are NOT first-class sidebar items.
+    expect(sidebarSource).not.toContain('href: "/runs"');
+    expect(sidebarSource).not.toContain('href: "/notifications"');
+    expect(sidebarSource).not.toContain('href: "/new"');
+  });
+
+  test("mobile bottom tabs mirror the sidebar primary set", () => {
+    expect(mobileTabsSource).toContain('href: "/"');
+    expect(mobileTabsSource).toContain('href: "/connections"');
+    expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
+    expect(mobileTabsSource).not.toContain('href: "/account"');
+    expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
+  });
+
+  test("top bar is actions-only; brand + workspace switch live in the sidebar", () => {
     expect(topBarSource).toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
-    // The workspace switcher moved into the profile menu, not the top bar.
+    expect(topBarSource).not.toContain("Wordmark");
+    expect(topBarSource).not.toContain("topbar-brand");
     expect(topBarSource).not.toContain("SpaceSwitcher");
   });
 
-  test("profile menu carries management routes (history / connections / settings) + workspace switch", () => {
-    expect(userMenuSource).toContain("SpaceSwitcher");
+  test("profile menu keeps account + history; connections/settings/billing/switcher moved to the sidebar", () => {
     expect(userMenuSource).toContain('href="/runs"');
-    expect(userMenuSource).toContain('href="/connections"');
-    expect(userMenuSource).toContain('href="/advanced/workspace"');
     expect(userMenuSource).toContain('href="/account"');
-    expect(userMenuSource).toContain('class="user-menu-workspace"');
-    // Switcher stays read/select only (no inline space creation in the menu).
+    expect(userMenuSource).toContain("dashboardDocsHref");
+    expect(userMenuSource).not.toContain("SpaceSwitcher");
+    expect(userMenuSource).not.toContain('href="/connections"');
+    expect(userMenuSource).not.toContain('href="/advanced/workspace"');
+    expect(userMenuSource).not.toContain('href="/billing"');
+    // Switcher stays read/select only (no inline space creation).
     expect(spaceSwitcherSource).toContain("loadedSpaces().length > 1");
-    expect(spaceSwitcherSource).toContain("createEffect");
     expect(spaceSwitcherSource).not.toContain("createSpace");
-    expect(spaceSwitcherSource).not.toContain("topbar-create-space");
-    expect(spaceSwitcherSource).not.toContain("@{s.handle}");
-    expect(shellCssSource).not.toContain(".topbar-create-space");
-    // Management vocabulary stays parity across locales. (Keys are flat with
-    // dots, so assert direct access — toHaveProperty would treat "a.b" as a
-    // nested path.)
-    expect(en["nav.runs"]).toBeTruthy();
-    expect(ja["nav.runs"]).toBeTruthy();
+    // Management vocabulary parity. Keys are flat with dots, so assert direct
+    // access — toHaveProperty would treat "a.b" as a nested path.
     expect(en["nav.connections"]).toBeTruthy();
     expect(ja["nav.connections"]).toBeTruthy();
     expect(en["nav.spaceSettings"]).toBeTruthy();
     expect(ja["nav.spaceSettings"]).toBeTruthy();
     expect(en["spaceSettings.title"]).toBe("Team settings");
     expect(ja["spaceSettings.title"]).toBe("チーム設定");
-  });
-
-  test("keeps paid billing out of the shared account menu unless Cloud is running", () => {
-    expect(userMenuSource).toContain("isTakosumiCloudRuntime");
-    expect(userMenuSource).toContain('href="/billing"');
-    expect(userMenuSource).toContain('t("nav.billing")');
-    expect(userMenuSource).toContain("dashboardDocsHref");
   });
 });

@@ -1,15 +1,12 @@
 /**
- * TopBar — the only chrome of the app-home surface:
- *   [brand] ............ [+ add] [bell + needs-attention badge] [profile menu].
- *
- * Navigation lives here (add) and in the profile menu (history / connections /
- * settings / account); the home screen itself is the launcher. The bell badge
- * counts services needing attention in the current Workspace.
+ * TopBar — actions over the content well: [+ add] [bell + needs-attention badge]
+ * [profile menu]. Brand and primary nav live in the sidebar; this bar carries
+ * the create / notifications / account affordances. The bell badge counts
+ * services needing attention in the current Workspace.
  */
 import { A } from "@solidjs/router";
 import { createMemo, createResource, Show } from "solid-js";
 import { Bell, Plus } from "lucide-solid";
-import Wordmark from "../brand/Wordmark.tsx";
 import UserMenu from "../auth/UserMenu.tsx";
 import { currentSpaceId } from "../../../../lib/space-state.ts";
 import {
@@ -20,11 +17,6 @@ import {
   isVisibleServiceInstallation,
   needsAttention,
 } from "../../../../lib/installations-ui.ts";
-import {
-  dashboardProductName,
-  isTakosEmbeddedRuntime,
-  isTakosumiCloudRuntime,
-} from "../../../../lib/deployment-brand.ts";
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
@@ -40,18 +32,9 @@ export default function TopBar() {
       (inst) => isVisibleServiceInstallation(inst) && needsAttention(inst),
     ).length;
   });
-  const takosEmbedded = () => isTakosEmbeddedRuntime();
 
   return (
     <header class="topbar">
-      <div class="topbar-brand">
-        <Wordmark
-          href={takosEmbedded() ? undefined : "/"}
-          size={20}
-          productName={dashboardProductName()}
-          showSub={!takosEmbedded() && isTakosumiCloudRuntime()}
-        />
-      </div>
       <div class="topbar-actions">
         <A
           href="/new"
