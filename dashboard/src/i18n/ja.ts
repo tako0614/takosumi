@@ -175,6 +175,7 @@ export const ja = {
   "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
+  "apps.needsAttention": "要対応",
   "apps.openApp": "サービスを開く",
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",

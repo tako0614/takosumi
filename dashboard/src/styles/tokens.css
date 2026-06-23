@@ -70,8 +70,13 @@
   --tg-lh-snug: 1.35;
   --tg-lh-body: 1.55;
 
-  /* Shadows — restrained app surfaces */
+  /* Shadows — subtle depth (premium, not heavy). xs = resting card,
+     card-hover = lift, md/lg = popovers / overlays. */
+  --tg-shadow-xs:
+    0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
   --tg-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --tg-shadow-card-hover:
+    0 2px 4px rgba(16, 24, 40, 0.05), 0 10px 24px rgba(16, 24, 40, 0.1);
   --tg-shadow-md: 0 8px 18px rgba(16, 24, 40, 0.08);
   --tg-shadow-lg: 0 20px 44px rgba(16, 24, 40, 0.14);
 
@@ -81,6 +86,20 @@
   --tg-r-lg: 8px;
   --tg-r-xl: 10px;
   --tg-r-full: 999px;
+
+  /* Icon sizes (theme-independent; inherited by dark). */
+  --tg-icon-sm: 16px;
+  --tg-icon-md: 20px;
+  --tg-icon-lg: 24px;
+  --tg-icon-tile: 22px;
+
+  /* Motion — one easing + base duration for a consistent feel. */
+  --tg-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --tg-dur: 140ms;
+  --tg-dur-slow: 200ms;
+
+  /* Focus ring (accent halo). */
+  --tg-ring: 0 0 0 3px color-mix(in srgb, var(--tg-accent) 30%, transparent);
 
   /* Layout */
   --tg-container: 1120px;
@@ -119,7 +138,10 @@
   --tg-danger: #ff6f6a;
   --tg-danger-fg: #190706;
 
+  --tg-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.3);
   --tg-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --tg-shadow-card-hover:
+    0 2px 6px rgba(0, 0, 0, 0.34), 0 12px 28px rgba(0, 0, 0, 0.46);
   --tg-shadow-md: 0 10px 24px rgba(0, 0, 0, 0.34);
   --tg-shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.44);
 }

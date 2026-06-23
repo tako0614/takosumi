@@ -4,7 +4,16 @@
  */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { CreditCard, HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
+import {
+  Clock3,
+  CreditCard,
+  HelpCircle,
+  LogOut,
+  Plug,
+  Settings,
+  UserCircle2,
+} from "lucide-solid";
+import SpaceSwitcher from "../shell/SpaceSwitcher.tsx";
 import {
   clearSession,
   readSession,
@@ -81,6 +90,27 @@ export default function UserMenu() {
               {(email) => <div class="user-menu-sub">{email()}</div>}
             </Show>
           </div>
+          <div class="user-menu-workspace" onClick={(e) => e.stopPropagation()}>
+            <SpaceSwitcher />
+          </div>
+          <a class="user-menu-item" href="/runs" onClick={() => setOpen(false)}>
+            <Clock3 size={16} /> {t("nav.runs")}
+          </a>
+          <a
+            class="user-menu-item"
+            href="/connections"
+            onClick={() => setOpen(false)}
+          >
+            <Plug size={16} /> {t("nav.connections")}
+          </a>
+          <a
+            class="user-menu-item"
+            href="/advanced/workspace"
+            onClick={() => setOpen(false)}
+          >
+            <Settings size={16} /> {t("nav.spaceSettings")}
+          </a>
+          <div class="user-menu-divider" />
           <a
             class="user-menu-item"
             href="/account"
