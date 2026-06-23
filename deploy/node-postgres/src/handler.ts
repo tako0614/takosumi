@@ -24,6 +24,7 @@ import {
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
   readonly keyId?: string;
+  readonly previousPublicJwksJson?: string;
   readonly subject?: string;
   readonly oidcPairwiseSubjectSecret: string;
   readonly launchTokenPairwiseSecret: string;
@@ -664,10 +665,15 @@ function parseStableOidc(
     );
   }
   const keyId = optional(env, "TAKOSUMI_ACCOUNTS_ES256_KEY_ID");
+  const previousPublicJwksJson = optional(
+    env,
+    "TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS",
+  );
   const subject = optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT");
   return {
     privateJwkJson,
     ...(keyId ? { keyId } : {}),
+    ...(previousPublicJwksJson ? { previousPublicJwksJson } : {}),
     ...(subject ? { subject } : {}),
     oidcPairwiseSubjectSecret,
     launchTokenPairwiseSecret,

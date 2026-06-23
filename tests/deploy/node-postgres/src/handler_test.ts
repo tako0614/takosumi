@@ -153,6 +153,34 @@ test("node-postgres keeps login allowlist configurable for operator origins", ()
   ).toBeUndefined();
 });
 
+test("node-postgres carries previous OIDC public JWKS for rotation overlap", () => {
+  const previousPublicJwks = JSON.stringify({
+    keys: [
+      {
+        kty: "EC",
+        crv: "P-256",
+        kid: "previous-key",
+        x: "public-x",
+        y: "public-y",
+      },
+    ],
+  });
+  const config = parseEnv({
+    TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+    TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK:
+      '{"kty":"EC","crv":"P-256","d":"private-d","x":"active-x","y":"active-y"}',
+    TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "active-key",
+    TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS: previousPublicJwks,
+    TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET: "pairwise-secret",
+    TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET: "launch-secret",
+  });
+
+  expect(config.stableOidc).toMatchObject({
+    keyId: "active-key",
+    previousPublicJwksJson: previousPublicJwks,
+  });
+});
+
 test("node-postgres rejects retired custom OIDC GitHub provider id", () => {
   expect(() =>
     parseEnv({

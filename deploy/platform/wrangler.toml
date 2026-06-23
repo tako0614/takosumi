@@ -197,6 +197,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 # Required secrets (pushed via `wrangler secret put`, NEVER committed):
 #   TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK            stable OIDC signing key (JWK JSON)
 #   TAKOSUMI_ACCOUNTS_ES256_KEY_ID                 signing key id (kid)
+#   TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS   optional public-only JWKS for signing-key rotation overlap
 #   TAKOSUMI_SECRET_STORE_PASSPHRASE               sealed SecretBlob/vault passphrase
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
 #   TAKOSUMI_ACCOUNT_SESSION_HASH_SALT             account session hash-at-rest salt

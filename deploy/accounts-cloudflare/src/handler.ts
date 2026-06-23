@@ -56,6 +56,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
+  readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNT_SESSION_HASH_SALT?: string;
   readonly TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET?: string;
@@ -645,8 +646,13 @@ async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
     ["sign"],
   );
   const publicJwk = publicJwkFromPrivate(privateJwk, kid);
+  const previousPublicJwks = parsePreviousPublicJwks(
+    optionalString(env.TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS),
+    "TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS",
+    kid,
+  );
   return {
-    jwks: { keys: [publicJwk] },
+    jwks: { keys: [publicJwk, ...previousPublicJwks] },
     oidcFlow: {
       subject:
         optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT) ?? "tsub_cloudflare_seed",
@@ -662,6 +668,58 @@ async function parseStableOidcFlow(env: CloudflareWorkerEnv): Promise<
       pairwiseSubjectSecret: launchPairwiseSubjectSecret,
     },
   };
+}
+
+function parsePreviousPublicJwks(
+  raw: string | undefined,
+  label: string,
+  activeKid: string,
+): AccountsJsonWebKey[] {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  const keys = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.keys)
+      ? parsed.keys
+      : null;
+  if (!keys) {
+    throw new TypeError(`${label} must be a JWK Set object or JWK array`);
+  }
+  const seen = new Set([activeKid]);
+  return keys.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new TypeError(`${label}.keys[${index}] must be an object`);
+    }
+    if ("d" in entry) {
+      throw new TypeError(`${label}.keys[${index}] must be public only`);
+    }
+    const kid = optionalString(entry.kid);
+    const kty = optionalString(entry.kty);
+    const crv = optionalString(entry.crv);
+    const x = optionalString(entry.x);
+    const y = optionalString(entry.y);
+    if (!kid || !kty || !crv || !x || !y) {
+      throw new TypeError(
+        `${label}.keys[${index}] requires kid, kty, crv, x, and y`,
+      );
+    }
+    if (kty !== "EC" || crv !== "P-256") {
+      throw new TypeError(`${label}.keys[${index}] must be an ES256 public JWK`);
+    }
+    if (seen.has(kid)) {
+      throw new TypeError(`${label}.keys[${index}] duplicates kid ${kid}`);
+    }
+    seen.add(kid);
+    return {
+      kty: "EC",
+      crv: "P-256",
+      x,
+      y,
+      kid,
+      use: "sig",
+      alg: "ES256",
+    };
+  });
 }
 
 function publicJwkFromPrivate(
