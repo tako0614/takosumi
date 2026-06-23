@@ -5,10 +5,10 @@
  * method + request body each client fn sends, so a drift from the server route
  * contract in accounts/service/src/control-routes.ts fails loudly.
  *
- *   GET    /api/v1/spaces/:id/members            -> { members: [...] }
- *   POST   /api/v1/spaces/:id/members            -> { member: {...} }  (201)
- *   PATCH  /api/v1/spaces/:id/members/:subject   -> { member: {...} }
- *   DELETE /api/v1/spaces/:id/members/:subject   -> { member: {...} }
+ *   GET    /api/v1/workspaces/:id/members            -> { members: [...] }
+ *   POST   /api/v1/workspaces/:id/members            -> { member: {...} }  (201)
+ *   PATCH  /api/v1/workspaces/:id/members/:subject   -> { member: {...} }
+ *   DELETE /api/v1/workspaces/:id/members/:subject   -> { member: {...} }
  *
  * The spaceId is ALWAYS a path segment (never a body field) — the server
  * re-resolves and gates it; these tests assert it never leaks into the body.
@@ -79,7 +79,7 @@ describe("listMembers", () => {
     const rows = await listMembers("spc 1");
     const req = captured();
     expect(req.method).toBe("GET");
-    expect(req.url).toBe("/api/v1/spaces/spc%201/members");
+    expect(req.url).toBe("/api/v1/workspaces/spc%201/members");
     expect(req.body).toBeUndefined();
     expect(rows).toEqual([MEMBER]);
   });
@@ -99,7 +99,7 @@ describe("inviteMember", () => {
     });
     const req = captured();
     expect(req.method).toBe("POST");
-    expect(req.url).toBe("/api/v1/spaces/spc%201/members");
+    expect(req.url).toBe("/api/v1/workspaces/spc%201/members");
     // The spaceId is the path, NOT the body — the server re-resolves it.
     expect(req.body).toEqual({ email: "alice@example.test", role: "admin" });
     expect(got).toEqual(MEMBER);
@@ -125,7 +125,7 @@ describe("setMemberRole", () => {
     const req = captured();
     expect(req.method).toBe("PATCH");
     // Both the spaceId and the target subject are URL-encoded path segments.
-    expect(req.url).toBe("/api/v1/spaces/spc_1/members/acct%20alice");
+    expect(req.url).toBe("/api/v1/workspaces/spc_1/members/acct%20alice");
     expect(req.body).toEqual({ roles: "admin" });
   });
 
@@ -152,7 +152,7 @@ describe("removeMember", () => {
     const got = await removeMember("spc_1", "acct alice");
     const req = captured();
     expect(req.method).toBe("DELETE");
-    expect(req.url).toBe("/api/v1/spaces/spc_1/members/acct%20alice");
+    expect(req.url).toBe("/api/v1/workspaces/spc_1/members/acct%20alice");
     expect(req.body).toBeUndefined();
     // The backend soft-removes (status: suspended) and returns the projection.
     expect(got.status).toBe("suspended");

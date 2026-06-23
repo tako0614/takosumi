@@ -962,7 +962,9 @@ interface DispatchInput {
 async function dispatch(input: DispatchInput): Promise<Response> {
   const { request, url, tail, operations, store } = input;
   const method = request.method;
-  const segments = tail.split("/").filter(Boolean); // ["spaces", ":id", ...]
+  const segments = normalizePublicControlSegments(
+    tail.split("/").filter(Boolean),
+  );
 
   // GET /api/v1/billing/plans — the instance-wide operator plan catalog
   // (spec §32), public projection (no Stripe price ids). Session-authed but
@@ -982,7 +984,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     });
   }
 
-  // GET/POST /api/v1/spaces
+  // GET/POST /api/v1/workspaces (legacy-compatible: /api/v1/spaces)
   if (segments.length === 1 && segments[0] === "spaces") {
     if (method === "GET") {
       await maybeEnsurePersonalSpaceForSession({
@@ -1011,7 +1013,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     );
   }
 
-  // /api/v1/spaces/:spaceId ; /api/v1/spaces/:spaceId/...
+  // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
+  // (legacy-compatible: /api/v1/spaces/:spaceId)
   if (segments[0] === "spaces" && segments.length >= 2) {
     const spaceId = decodeURIComponent(segments[1] ?? "");
     const auth = await requireSpaceAccess({
@@ -1030,7 +1033,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     const leaf = segments[2];
     if (leaf === "members") {
-      // /api/v1/spaces/:spaceId/members[/:subject]. The Space is already
+      // /api/v1/workspaces/:workspaceId/members[/:subject]. The Space is already
       // resolved server-side and namespace-gated above; the member handlers add
       // the membership-ROLE gate (list = any member; mutate = owner/admin;
       // role-change + remove = owner-only with a last-owner guard).
@@ -1179,7 +1182,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /api/v1/installations/:id ; .../plan ; .../destroy-plan ; .../dependencies
+  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies
+  // (legacy-compatible: /api/v1/installations/:id)
   if (segments[0] === "installations" && segments.length >= 2) {
     const installationId = decodeURIComponent(segments[1] ?? "");
     const installation =
@@ -1462,7 +1466,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     return json(await publicCompatibilityReportResponse(operations, response));
   }
 
-  // /api/v1/deployments/:deploymentId ; .../rollback-plan — session-authed
+  // /api/v1/state-versions/:stateVersionId ; .../rollback-plan — session-authed
+  // (legacy-compatible: /api/v1/deployments/:deploymentId)
   // deployment read + rollback (§30 GUI deploy). Each resolves the Deployment to
   // learn its owning Space, then space-permission gates before projecting /
   // mutating. The read returns ONLY the allowlist-projected outputsPublic (no
@@ -1696,6 +1701,35 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   }
 
   return errorJson("not_found", "not found", 404);
+}
+
+function normalizePublicControlSegments(
+  segments: readonly string[],
+): readonly string[] {
+  if (segments[0] === "workspaces") {
+    return segments.map((segment, index) =>
+      index === 0
+        ? "spaces"
+        : index === 2 && segment === "capsules"
+          ? "installations"
+          : segment,
+    );
+  }
+  if (segments[0] === "capsules") {
+    return segments.map((segment, index) =>
+      index === 0
+        ? "installations"
+        : index === 2 && segment === "state-versions"
+          ? "deployments"
+          : segment,
+    );
+  }
+  if (segments[0] === "state-versions") {
+    return segments.map((segment, index) =>
+      index === 0 ? "deployments" : segment,
+    );
+  }
+  return segments;
 }
 
 // --- Spaces ----------------------------------------------------------------
