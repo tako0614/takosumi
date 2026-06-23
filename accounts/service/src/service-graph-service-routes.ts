@@ -11,9 +11,20 @@ import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
   TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS,
   TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL,
   TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_EMBEDDING_MODEL,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_PROTOCOL_MCP_SERVER,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_GIT_SMART_HTTP,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_REPOSITORY,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_FILESYSTEM,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_OBJECT,
   type TakosumiAccountsServiceGraphServiceDescriptor,
   type TakosumiAccountsServiceGraphServiceId,
   type TakosumiAccountsServiceGraphServiceProjection,
@@ -65,6 +76,11 @@ const AI_GATEWAY_DEFAULT_SCOPES = [
 
 export interface ServiceGraphRuntimeAvailability {
   readonly aiGatewayConfigured?: boolean;
+  readonly takosProfileConfigured?: boolean;
+  readonly takosMcpRegistryConfigured?: boolean;
+  readonly takosStorageConfigured?: boolean;
+  readonly takosGitConfigured?: boolean;
+  readonly takosAgentRuntimeConfigured?: boolean;
 }
 
 export const SERVICE_GRAPH_SERVICE_DESCRIPTORS: readonly TakosumiAccountsServiceGraphServiceDescriptor[] =
@@ -114,6 +130,38 @@ export const SERVICE_GRAPH_SERVICE_DESCRIPTORS: readonly TakosumiAccountsService
       description:
         "OpenAI-compatible model and embedding endpoint backed by operator-selected upstream AI providers.",
       secret_backed: true,
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_PROTOCOL_MCP_SERVER,
+      title: "Takos MCP registry",
+      description:
+        "Takos workspace MCP registry and tool-provider projection for installed services.",
+      secret_backed: false,
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_FILESYSTEM,
+      title: "Takos workspace storage",
+      description:
+        "Takos workspace file and object storage surface on the distribution origin.",
+      secret_backed: false,
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_GIT_SMART_HTTP,
+      title: "Takos Git service",
+      description:
+        "Takos repository metadata and Git Smart HTTP surface on the distribution origin.",
+      secret_backed: false,
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME,
+      title: "Takos agent runtime",
+      description:
+        "Takos workspace agent task runtime and tool-provider surface.",
+      secret_backed: false,
     },
   ];
 
@@ -358,6 +406,22 @@ async function buildInstallationServiceGraphServiceProjections(input: {
   });
   const aiGatewayConfigured =
     input.runtimeAvailability?.aiGatewayConfigured === true;
+  const takosMcpRegistryConfigured = takosRuntimeConfigured(
+    input.runtimeAvailability?.takosMcpRegistryConfigured,
+    input.runtimeAvailability?.takosProfileConfigured,
+  );
+  const takosStorageConfigured = takosRuntimeConfigured(
+    input.runtimeAvailability?.takosStorageConfigured,
+    input.runtimeAvailability?.takosProfileConfigured,
+  );
+  const takosGitConfigured = takosRuntimeConfigured(
+    input.runtimeAvailability?.takosGitConfigured,
+    input.runtimeAvailability?.takosProfileConfigured,
+  );
+  const takosAgentRuntimeConfigured = takosRuntimeConfigured(
+    input.runtimeAvailability?.takosAgentRuntimeConfigured,
+    input.runtimeAvailability?.takosProfileConfigured,
+  );
 
   const billingEndpoint = new URL(
     takosumiAccountsInstallationBillingUsageReportsPath(
@@ -495,7 +559,89 @@ async function buildInstallationServiceGraphServiceProjections(input: {
       issuer,
       installationId: input.installation.installationId,
     }),
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_PROTOCOL_MCP_SERVER,
+      status: takosMcpRegistryConfigured ? "ready" : "not_configured",
+      endpoint: new URL("/api/mcp/servers", issuer).toString(),
+      material: {
+        serverListUrl: new URL("/api/mcp/servers", issuer).toString(),
+        oauthCallbackUrl: new URL("/api/mcp/oauth/callback", issuer).toString(),
+        capabilities: [
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_PROTOCOL_MCP_SERVER,
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER,
+        ],
+        runtimeConfigured: takosMcpRegistryConfigured,
+      },
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_FILESYSTEM,
+      status: takosStorageConfigured ? "ready" : "not_configured",
+      endpoint: new URL(
+        `/api/spaces/${encodeURIComponent(input.installation.spaceId)}/storage`,
+        issuer,
+      ).toString(),
+      material: {
+        baseUrl: new URL(
+          `/api/spaces/${encodeURIComponent(input.installation.spaceId)}/storage`,
+          issuer,
+        ).toString(),
+        browserUrl: new URL(
+          `/storage/${encodeURIComponent(input.installation.spaceId)}`,
+          issuer,
+        ).toString(),
+        capabilities: [
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_FILESYSTEM,
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_STORAGE_OBJECT,
+        ],
+        scope: "workspace",
+        runtimeConfigured: takosStorageConfigured,
+      },
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_GIT_SMART_HTTP,
+      status: takosGitConfigured ? "ready" : "not_configured",
+      endpoint: new URL("/git/", issuer).toString(),
+      material: {
+        smartHttpBaseUrl: new URL("/git/", issuer).toString(),
+        repositoryApiBaseUrl: new URL("/api/repos", issuer).toString(),
+        capabilities: [
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_REPOSITORY,
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_SOURCE_GIT_SMART_HTTP,
+        ],
+        runtimeConfigured: takosGitConfigured,
+      },
+    },
+    {
+      id: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
+      capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME,
+      status: takosAgentRuntimeConfigured ? "ready" : "not_configured",
+      endpoint: new URL(
+        `/api/spaces/${encodeURIComponent(input.installation.spaceId)}/agent-tasks`,
+        issuer,
+      ).toString(),
+      material: {
+        taskApiUrl: new URL(
+          `/api/spaces/${encodeURIComponent(input.installation.spaceId)}/agent-tasks`,
+          issuer,
+        ).toString(),
+        capabilities: [
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME,
+          TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER,
+        ],
+        runtimeConfigured: takosAgentRuntimeConfigured,
+      },
+    },
   ];
+}
+
+function takosRuntimeConfigured(
+  serviceConfigured: boolean | undefined,
+  profileConfigured: boolean | undefined,
+): boolean {
+  return serviceConfigured ?? profileConfigured ?? false;
 }
 
 function withRotation(input: {

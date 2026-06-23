@@ -21,6 +21,11 @@ import {
   rotateAccountSession,
   serializeAccountSessionCookie,
 } from "./account-session.ts";
+import {
+  type LoginEmailAllowlist,
+  loginEmailIsAllowed,
+  upstreamLoginNotAllowedResponse,
+} from "./login-email-allowlist.ts";
 
 const upstreamOAuthStateCookie = "takosumi_oauth_state";
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
@@ -130,6 +135,7 @@ export async function handleUpstreamCallbackRequest(input: {
   store: AccountsStore;
   upstreamOAuth: UpstreamOAuthOptions;
   secureCookie: boolean;
+  loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const resolved = resolveUpstreamClient(
     input.upstreamOAuth,
@@ -174,6 +180,7 @@ export async function handleUpstreamCallbackRequest(input: {
   }
 
   try {
+    const previousSessionId = extractAccountSessionId(input.request);
     const exchange = await exchangeUpstreamAuthorizationCode({
       provider: resolved.provider,
       clientId: resolved.client.clientId,
@@ -183,13 +190,25 @@ export async function handleUpstreamCallbackRequest(input: {
       subjectSecret: input.upstreamOAuth.subjectSecret,
       fetch: input.upstreamOAuth.fetch,
     });
+    const profile = profileFromUpstreamUserInfo(exchange.userInfo);
+    if (
+      !loginEmailIsAllowed(
+        { email: profile.email, emailVerified: profile.emailVerified },
+        input.loginEmailAllowlist,
+      )
+    ) {
+      if (previousSessionId?.startsWith("sess_")) {
+        await input.store.deleteAccountSession(previousSessionId);
+      }
+      return upstreamLoginNotAllowedResponse(input.secureCookie);
+    }
     const account = await resolveUpstreamAccount({
       store: input.store,
       subjectSecret: input.upstreamOAuth.subjectSecret,
       providerId: exchange.providerId,
       upstreamIssuer: exchange.upstreamIssuer,
       upstreamSubject: exchange.upstreamSubject,
-      profile: profileFromUpstreamUserInfo(exchange.userInfo),
+      profile,
     });
     const now = Date.now();
     const ttlMs = input.upstreamOAuth.sessionTtlMs ?? 30 * 24 * 60 * 60 * 1000;
@@ -199,7 +218,6 @@ export async function handleUpstreamCallbackRequest(input: {
     // browser), revoke it and mint a new id. Do NOT return the session
     // id in the JSON body; the browser's HttpOnly cookie is the only
     // delivery channel.
-    const previousSessionId = extractAccountSessionId(input.request);
     const rotated = await rotateAccountSession({
       store: input.store,
       oldSessionId: previousSessionId,
