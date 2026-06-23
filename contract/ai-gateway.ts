@@ -37,6 +37,10 @@ export type TakosumiAiGatewayProvider =
   | "openai_compatible"
   | (string & {});
 
+export type TakosumiAiGatewayProfileType =
+  | "openai_compatible"
+  | "workers_ai_binding";
+
 export interface TakosumiAiGatewayModelAlias {
   /**
    * Model id accepted by clients at /gateway/ai/v1. Examples:
@@ -58,9 +62,15 @@ export interface TakosumiAiGatewayModelAlias {
   readonly metadata?: JsonObject;
 }
 
-export interface TakosumiAiGatewayUpstreamProfile {
+interface TakosumiAiGatewayBaseProfile {
+  readonly type?: TakosumiAiGatewayProfileType;
   readonly id: string;
   readonly provider: TakosumiAiGatewayProvider;
+  readonly models: readonly TakosumiAiGatewayModelAlias[];
+}
+
+export interface TakosumiOpenAiCompatibleProfile extends TakosumiAiGatewayBaseProfile {
+  readonly type?: "openai_compatible";
   readonly baseUrl: string;
   /**
    * Name of the operator secret/env var that holds the upstream API key.
@@ -73,9 +83,16 @@ export interface TakosumiAiGatewayUpstreamProfile {
    * providers can set `x-api-key` or similar without putting the key in config.
    */
   readonly apiKeyHeader?: string;
-  readonly models: readonly TakosumiAiGatewayModelAlias[];
   readonly headers?: Readonly<Record<string, string>>;
 }
+
+export interface TakosumiWorkersAiBindingProfile extends TakosumiAiGatewayBaseProfile {
+  readonly type: "workers_ai_binding";
+}
+
+export type TakosumiAiGatewayUpstreamProfile =
+  | TakosumiOpenAiCompatibleProfile
+  | TakosumiWorkersAiBindingProfile;
 
 export interface TakosumiAiGatewayModelListResponse {
   readonly object: "list";
@@ -104,6 +121,7 @@ export interface TakosumiAiGatewayStatusResponse {
   readonly upstreamProfiles: readonly {
     readonly id: string;
     readonly provider: TakosumiAiGatewayProvider;
+    readonly type?: TakosumiAiGatewayProfileType;
     readonly endpointOrigin: string;
     readonly modelCount: number;
     readonly publicModels: readonly {

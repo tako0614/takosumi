@@ -391,6 +391,29 @@ async function aiGatewayProfileApiKeyEnvNames(
         `AI Gateway profile ${id}.apiKey must not be embedded; use apiKeyEnv`,
       );
     }
+    const profileType = stringValue(entry.type) ?? "openai_compatible";
+    if (profileType === "workers_ai_binding") {
+      if ("apiKeyEnv" in entry || "apiKeyHeader" in entry) {
+        throw new TypeError(
+          `AI Gateway profile ${id} uses Workers AI binding and must not define apiKeyEnv or apiKeyHeader`,
+        );
+      }
+      if ("baseUrl" in entry) {
+        throw new TypeError(
+          `AI Gateway profile ${id} uses Workers AI binding and must not define baseUrl`,
+        );
+      }
+      if ("headers" in entry) {
+        throw new TypeError(
+          `AI Gateway profile ${id} uses Workers AI binding and must not define static headers`,
+        );
+      }
+      assertNoSecretBearingAiGatewayModelMetadata(entry, id);
+      return;
+    }
+    if (profileType !== "openai_compatible") {
+      throw new TypeError(`AI Gateway profile ${id}.type is unsupported`);
+    }
     const apiKeyEnv = stringValue(entry.apiKeyEnv);
     if (!apiKeyEnv) {
       throw new TypeError(`AI Gateway profile ${id}.apiKeyEnv is required`);

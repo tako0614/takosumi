@@ -5,9 +5,9 @@ import {
   type TakosumiAiGatewayEndpoint,
   type TakosumiAiGatewayModelAlias,
   type TakosumiAiGatewayModelListResponse,
+  type TakosumiOpenAiCompatibleProfile,
   type TakosumiAiGatewayProvider,
   type TakosumiAiGatewayScope,
-  type TakosumiAiGatewayUpstreamProfile,
 } from "takosumi-contract/ai-gateway";
 import type { JsonObject, JsonValue } from "takosumi-contract";
 import {
@@ -23,9 +23,10 @@ export interface TakosumiAiGatewayConfig {
 }
 
 export interface ResolvedAiGatewayUpstreamProfile extends Omit<
-  TakosumiAiGatewayUpstreamProfile,
+  TakosumiOpenAiCompatibleProfile,
   "apiKeyEnv"
 > {
+  readonly type: "openai_compatible";
   readonly apiKey: string;
 }
 
@@ -454,6 +455,13 @@ function parseProfile(
     entry.provider,
     `AI Gateway profile ${index}.provider`,
   ) as TakosumiAiGatewayProvider;
+  const profileType =
+    entry.type === undefined ? "openai_compatible" : entry.type;
+  if (profileType !== "openai_compatible") {
+    throw new TypeError(
+      `AI Gateway profile ${id}.type is not supported by the OpenAI-compatible handler`,
+    );
+  }
   const baseUrl = normalizeBaseUrl(
     requiredString(entry.baseUrl, `AI Gateway profile ${index}.baseUrl`),
     `AI Gateway profile ${index}.baseUrl`,
@@ -485,7 +493,16 @@ function parseProfile(
   );
   const models = parseModels(entry.models, id);
   const headers = parseHeaders(entry.headers, id, apiKeyHeader);
-  return { id, provider, baseUrl, apiKey, apiKeyHeader, models, headers };
+  return {
+    type: "openai_compatible",
+    id,
+    provider,
+    baseUrl,
+    apiKey,
+    apiKeyHeader,
+    models,
+    headers,
+  };
 }
 
 function parseModels(

@@ -287,6 +287,27 @@ test("AI Gateway config rejects embedded key values", () => {
   ).toThrow("must not be embedded");
 });
 
+test("AI Gateway OpenAI-compatible handler rejects Workers AI binding profiles", () => {
+  expect(() =>
+    createTakosumiAiGatewayConfigFromEnv({
+      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+        {
+          type: "workers_ai_binding",
+          id: "workers-ai",
+          provider: "workers_ai",
+          models: [
+            {
+              publicModel: "workers-ai/chat",
+              upstreamModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+              endpoints: ["chat.completions"],
+            },
+          ],
+        },
+      ]),
+    }),
+  ).toThrow("not supported by the OpenAI-compatible handler");
+});
+
 test("AI Gateway config rejects secret-bearing static upstream headers", () => {
   expect(() =>
     createTakosumiAiGatewayConfigFromEnv({

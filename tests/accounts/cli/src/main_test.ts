@@ -2092,11 +2092,9 @@ test("launch-readiness oidc-account-security evidence merges verified JWKS evide
   oidcSecurity.status = "blocked";
   oidcSecurity.evidence = oidcSecurity.evidence.filter(
     (entry) =>
-      ![
-        "key-rotation-drill",
-        "client-secret-rotation",
-        "audit-event",
-      ].includes(entry.type),
+      !["key-rotation-drill", "client-secret-rotation", "audit-event"].includes(
+        entry.type,
+      ),
   );
 
   try {
@@ -8522,12 +8520,8 @@ test("platform-secrets status requires Stripe secrets when billing is configured
     expect(code).toEqual(1);
     expect(stderr).toEqual([]);
     const output = stdout.join("\n");
-    expect(output).toContain(
-      "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
-    );
-    expect(output).toContain(
-      "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-    );
+    expect(output).toContain("TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY");
+    expect(output).toContain("TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET");
     expect(output).toContain("Manual present: none");
   } finally {
     await removePath(dir, { recursive: true });
@@ -8567,6 +8561,76 @@ test("platform-secrets status reads multiline AI Gateway profiles from wrangler 
     expect(stdout.join("\n")).toContain(
       "Missing required manual: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
     );
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
+test("platform-secrets status accepts Workers AI binding profiles without manual upstream secrets", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
+      "[",
+      '  {"type":"workers_ai_binding","id":"workers-ai","provider":"workers_ai","models":[{"publicModel":"workers-ai/llama-3.1-8b-instruct-fast","upstreamModel":"@cf/meta/llama-3.1-8b-instruct-fast","endpoints":["chat.completions"],"default":true}]}',
+      "]",
+      "'''",
+    ].join("\n"),
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["status", "--config", config, "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async () => ({ code: 0, stdout: "[]", stderr: "" }),
+    );
+
+    expect(code).toEqual(1);
+    expect(stderr).toEqual([]);
+    const output = stdout.join("\n");
+    expect(output).toContain("Missing required manual: none");
+    expect(output).not.toContain("TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY");
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
+test("platform-secrets status rejects Workers AI binding profiles with upstream secret fields", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      'TAKOSUMI_AI_GATEWAY_PROFILES = \'[{"type":"workers_ai_binding","id":"workers-ai","provider":"workers_ai","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_UNSAFE_API_KEY","models":[{"publicModel":"workers-ai/chat","upstreamModel":"@cf/meta/llama-3.1-8b-instruct-fast","endpoints":["chat.completions"]}]}]\'',
+    ].join("\n"),
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["status", "--config", config, "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async () => ({ code: 0, stdout: "[]", stderr: "" }),
+    );
+
+    expect(code).toEqual(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("must not define apiKeyEnv");
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);
@@ -8905,9 +8969,7 @@ test("platform-secrets apply fails when configured billing Stripe secrets are mi
 
     expect(code).toEqual(2);
     expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain(
-      "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
-    );
+    expect(stderr.join("\n")).toContain("TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY");
     expect(stderr.join("\n")).toContain(
       "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
     );

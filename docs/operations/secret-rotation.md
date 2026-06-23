@@ -71,8 +71,9 @@ takosumi secrets status \
 bearer secret class として扱います。値は operator vault にだけ置きます。
 Cloud-only AI Gateway extension 用の `TAKOSUMI_AI_GATEWAY_PROFILES` が env または wrangler config `[vars]`
 にある場合、
-`takosumi secrets status` は profile の `apiKeyEnv` が指す upstream provider
-secret 名も不足検出します。
+`takosumi secrets status` は `openai_compatible` profile の `apiKeyEnv` が指す
+upstream provider secret 名も不足検出します。`workers_ai_binding` profile は
+Worker の `AI` binding を使うため upstream provider secret を要求しません。
 
 ### Upstream OAuth sign-in secret
 
