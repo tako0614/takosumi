@@ -516,6 +516,7 @@ export function exportOperationBody(
     status?: "preparing" | "exported" | "failed";
     downloadUrl?: string | null;
     downloadExpiresAt?: string | null;
+    archiveDigest?: string | null;
     error?: string;
   } = {},
 ): Record<string, unknown> {
@@ -536,6 +537,10 @@ export function exportOperationBody(
           )
         : null,
     downloadExpiresAt: options.downloadExpiresAt ?? null,
+    archiveDigest:
+      status === "exported" && options.archiveDigest
+        ? options.archiveDigest
+        : null,
     ...(options.error ? { error: options.error } : {}),
   };
 }
@@ -556,6 +561,7 @@ export function exportOperationBodyFromEvents(input: {
       downloadUrl: stringValue(completed.payload.downloadUrl) ?? null,
       downloadExpiresAt:
         stringValue(completed.payload.downloadExpiresAt) ?? null,
+      archiveDigest: stringValue(completed.payload.archiveDigest) ?? null,
     });
   }
   const failed = findOperationEvent({
@@ -583,6 +589,7 @@ export async function appendExportOperationCompletion(input: {
   operationId: string;
   downloadUrl: string;
   downloadExpiresAt?: string;
+  archiveDigest?: string;
 }): Promise<InstallationEventRecord> {
   const now = Date.now();
   const updated = transitionAppInstallationStatus(
@@ -613,6 +620,7 @@ export async function appendExportOperationCompletion(input: {
       reason: "export worker completed bundle",
       downloadUrl: input.downloadUrl,
       downloadExpiresAt: input.downloadExpiresAt ?? null,
+      archiveDigest: input.archiveDigest ?? null,
     },
     now,
   });

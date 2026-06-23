@@ -8701,6 +8701,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
           operationId: accepted.operationId,
           downloadUrl: "https://downloads.example.test/export.tar.zst",
           downloadExpiresAt: "2999-05-10T00:00:00.000Z",
+          archiveDigest: `sha256:${"c".repeat(64)}`,
         }),
       },
     ),
@@ -8710,6 +8711,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   expect(exportedStatusBody.event.type).toEqual("installation.exported");
   expect(exportedStatusBody.event.payload.downloadUrl).toEqual(
     `/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
+  );
+  expect(exportedStatusBody.event.payload.archiveDigest).toEqual(
+    `sha256:${"c".repeat(64)}`,
   );
   expect(JSON.stringify(exportedStatusBody.event)).not.toContain(
     "https://downloads.example.test",
@@ -8723,6 +8727,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
   expect(completedOperationResponse.status).toEqual(200);
   const completedOperation = await completedOperationResponse.json();
   expect(completedOperation.status).toEqual("exported");
+  expect(completedOperation.archiveDigest).toEqual(`sha256:${"c".repeat(64)}`);
   expect(completedOperation.downloadUrl).toEqual(
     `/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
   );
@@ -8965,6 +8970,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
       return {
         downloadUrl: `https://downloads.example.test/${input.operationId}/takos-export.tar.zst`,
         downloadExpiresAt: "2999-05-10T00:00:00.000Z",
+        archiveDigest: `sha256:${"b".repeat(64)}`,
       };
     },
   });
@@ -9037,9 +9043,13 @@ test("accounts handler runs configured export worker and closes operation", asyn
   expect(exported.downloadUrl).toEqual(
     `/v1/installation-projections/inst_export_worker/exports/${exported.operationId}/download`,
   );
+  expect(exported.archiveDigest).toEqual(`sha256:${"b".repeat(64)}`);
   expect(exported.event.type).toEqual("installation.exported");
   expect(exported.event.payload.downloadUrl).toEqual(
     `/v1/installation-projections/inst_export_worker/exports/${exported.operationId}/download`,
+  );
+  expect(exported.event.payload.archiveDigest).toEqual(
+    `sha256:${"b".repeat(64)}`,
   );
   expect(JSON.stringify(exported.event)).not.toContain(
     "https://downloads.example.test",
@@ -9070,7 +9080,9 @@ test("accounts handler runs configured export worker and closes operation", asyn
     ),
   );
   expect(operationResponse.status).toEqual(200);
-  expect((await operationResponse.json()).status).toEqual("exported");
+  const operationBody = await operationResponse.json();
+  expect(operationBody.status).toEqual("exported");
+  expect(operationBody.archiveDigest).toEqual(`sha256:${"b".repeat(64)}`);
 
   const repeatedResponse = await handler(
     new Request(

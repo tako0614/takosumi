@@ -220,5 +220,7 @@ export function formatInstallationOperation(
   if (trackingUrl) lines.push(`  tracking: ${trackingUrl}`);
   const downloadUrl = stringValue(response.downloadUrl);
   if (downloadUrl) lines.push(`  download: ${downloadUrl}`);
+  const archiveDigest = stringValue(response.archiveDigest);
+  if (archiveDigest) lines.push(`  archive digest: ${archiveDigest}`);
   return lines.join("\n");
 }

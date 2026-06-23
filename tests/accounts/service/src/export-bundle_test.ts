@@ -78,6 +78,13 @@ async function removePath(
   await rm(target, { recursive: options.recursive ?? false, force: true });
 }
 
+async function sha256File(path: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await readFile(path));
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
 test("installation export bundle import plan rewrites OIDC issuer", () => {
   const sourceIssuer = "https://accounts.source.test";
   const targetIssuer = "https://accounts.target.test";
@@ -529,6 +536,9 @@ test("metadata-only export worker writes archive and returns download URL", asyn
       "https://downloads.example.test/accounts/exports/takos-export-op_worker.tar.zst",
     );
     expect(result.downloadExpiresAt).toEqual("2026-05-09T00:01:00.000Z");
+    expect(result.archiveDigest).toEqual(
+      await sha256File(join(root, "takos-export-op_worker.tar.zst")),
+    );
     const list = await commandOutputText(
       command("tar", {
         args: [
@@ -922,7 +932,11 @@ test("metadata-only export worker uploads archive through injectable object-stor
       encryption: "age",
       dataIncluded: "false",
       artifactDescriptorIncluded: "false",
+      archiveDigest: result.archiveDigest,
     });
+    expect(result.archiveDigest).toEqual(
+      await sha256File(join(root, "takos-export-op_upload.tar.zst.age")),
+    );
     expect(uploads[0].bytes.byteLength > 0).toBeTruthy();
 
     const list = await commandOutputText(

@@ -220,6 +220,12 @@ evidence must include an encrypted archive digest, recipient fingerprint,
 clean self-host import, post-import login/state verification, retention state,
 and privacy request rehearsal using scratch data only.
 
+For node-postgres/Bun substrate exports, the accepted archive digest source is
+the completed export operation's `archiveDigest` field. It is computed from the
+final `takos-export-<op>.tar.zst[.age]` artifact and should be copied into
+`encrypted-export.archiveDigest` evidence together with the operation id and
+age recipient.
+
 ## Escalation Matrix
 
 Takosumi Cloud support ownership is:

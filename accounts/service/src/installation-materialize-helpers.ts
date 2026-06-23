@@ -19,6 +19,7 @@ import {
   installationMaterializeFailedEvent,
   installationMaterializeRequestedEvent,
   installationMaterializeSucceededEvent,
+  isSha256DigestRef,
   nullableString,
   operationClosedEventTypes,
   operationRequestedEventType,
@@ -415,6 +416,7 @@ export async function completeAppInstallationExportWithWorker(input: {
 
   const downloadUrl = stringValue(result.downloadUrl);
   const downloadExpiresAt = stringValue(result.downloadExpiresAt);
+  const archiveDigest = stringValue(result.archiveDigest);
   if (!downloadUrl) {
     return await exportOperationFailedBody({
       store: input.store,
@@ -441,12 +443,21 @@ export async function completeAppInstallationExportWithWorker(input: {
       error: "export worker returned an invalid downloadExpiresAt",
     });
   }
+  if (archiveDigest && !isSha256DigestRef(archiveDigest)) {
+    return await exportOperationFailedBody({
+      store: input.store,
+      installation: input.installation,
+      operationId: input.operationId,
+      error: "export worker returned an invalid archiveDigest",
+    });
+  }
   const event = await appendExportOperationCompletion({
     store: input.store,
     installation: input.installation,
     operationId: input.operationId,
     downloadUrl,
     downloadExpiresAt,
+    archiveDigest,
   });
   return {
     ...exportOperationBody(
@@ -456,6 +467,7 @@ export async function completeAppInstallationExportWithWorker(input: {
         status: "exported",
         downloadUrl,
         downloadExpiresAt: downloadExpiresAt ?? null,
+        archiveDigest: archiveDigest ?? null,
       },
     ),
     event: serializeInstallationEvent(event),

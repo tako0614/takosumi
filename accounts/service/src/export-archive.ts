@@ -19,7 +19,14 @@
 // rather than a partial or silently-succeeding one.
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AccountsInstallationExportBundle } from "./export-bundle.ts";
@@ -88,6 +95,7 @@ export interface InstallationExportArchiveUploadInput {
 export interface InstallationExportArchiveUploadResult {
   readonly downloadUrl: string;
   readonly downloadExpiresAt: string;
+  readonly archiveDigest?: string;
 }
 
 export type InstallationExportArchiveUploader = (
@@ -251,9 +259,10 @@ export function createMetadataOnlyInstallationExportWorker(
       zstdExecutable: options.zstdExecutable,
       ageExecutable: options.ageExecutable,
     });
+    const archiveDigest = await sha256HexBytes(await readFile(outputPath));
     const now = options.now?.() ?? new Date();
     const downloadExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
-    return await uploader({
+    const uploaded = await uploader({
       filePath: outputPath,
       objectKey,
       contentType: "application/zstd",
@@ -269,8 +278,10 @@ export function createMetadataOnlyInstallationExportWorker(
         dataIncluded: dataFiles.length > 0 ? "true" : "false",
         artifactDescriptorIncluded:
           artifactDescriptorContent !== undefined ? "true" : "false",
+        archiveDigest,
       },
     });
+    return { ...uploaded, archiveDigest };
   };
 }
 
