@@ -48,7 +48,7 @@ import {
   startCloudflareOAuth,
   testConnection,
 } from "../../../lib/control-api.ts";
-import { t } from "../../../i18n/index.ts";
+import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -142,6 +142,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   );
   const fields = createMemo(() => descriptor()?.fields ?? []);
   const tokenHelper = createMemo(() => descriptor()?.tokenHelper);
+  const setupGuide = createMemo(() => descriptor()?.setupGuide);
 
   const setFieldValue = (envName: string, value: string) => {
     setValues((prev) => ({ ...prev, [envName]: value }));
@@ -432,6 +433,15 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
             </div>
             <div class="wc-conn-meta">
               <span>{providerConnectionProviderLabel(connection)}</span>
+              <Show when={connection.expiresAt}>
+                {(expiresAt) => (
+                  <span>
+                    {t("conn.expiresAt", {
+                      date: formatDateTime(expiresAt()),
+                    })}
+                  </span>
+                )}
+              </Show>
             </div>
             <div class="wc-conn-actions">
               <Button
@@ -684,53 +694,84 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 <Show
                   when={tokenHelper()}
                   fallback={
-                    <details class="connection-advanced connection-help">
-                      <summary>{t("conn.advanced.summary")}</summary>
-                      <form
-                        class="wc-form"
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          void create.run();
-                        }}
+                    <>
+                      <Show when={setupGuide()}>
+                        {(guide) => (
+                          <div class="wc-guided">
+                            <div class="wc-form-actions">
+                              <Button
+                                variant="secondary"
+                                href={guide().url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                {t("conn.guided.openProvider", {
+                                  provider: descriptor()?.label ?? "",
+                                })}
+                              </Button>
+                            </div>
+                            <details class="connection-instructions">
+                              <summary>{t("conn.guided.instructions")}</summary>
+                              <ol class="wc-steps">
+                                <For each={guide().steps}>
+                                  {(s) => <li>{s}</li>}
+                                </For>
+                              </ol>
+                            </details>
+                          </div>
+                        )}
+                      </Show>
+                      <details
+                        class="connection-advanced connection-help"
+                        open={Boolean(setupGuide())}
                       >
-                        <Index each={fields()}>
-                          {(field) => (
-                            <FormField
-                              label={field().label}
-                              required={field().required}
+                        <summary>{t("conn.advanced.summary")}</summary>
+                        <form
+                          class="wc-form"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void create.run();
+                          }}
+                        >
+                          <Index each={fields()}>
+                            {(field) => (
+                              <FormField
+                                label={field().label}
+                                required={field().required}
+                              >
+                                <Input
+                                  id={`connection-field-${field().envName}`}
+                                  name={`field:${field().envName}`}
+                                  type={field().secret ? "password" : "text"}
+                                  value={values()[field().envName] ?? ""}
+                                  onInput={(e) =>
+                                    setFieldValue(
+                                      field().envName,
+                                      e.currentTarget.value,
+                                    )
+                                  }
+                                  placeholder={field().placeholder}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                            )}
+                          </Index>
+                          <div class="wc-form-actions">
+                            <Button
+                              variant="primary"
+                              type="submit"
+                              busy={create.busy()}
                             >
-                              <Input
-                                id={`connection-field-${field().envName}`}
-                                name={`field:${field().envName}`}
-                                type={field().secret ? "password" : "text"}
-                                value={values()[field().envName] ?? ""}
-                                onInput={(e) =>
-                                  setFieldValue(
-                                    field().envName,
-                                    e.currentTarget.value,
-                                  )
-                                }
-                                placeholder={field().placeholder}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                          )}
-                        </Index>
-                        <div class="wc-form-actions">
-                          <Button
-                            variant="primary"
-                            type="submit"
-                            busy={create.busy()}
-                          >
-                            {create.busy()
-                              ? t("conn.registering")
-                              : t("conn.register")}
-                          </Button>
-                        </div>
-                        <ActionError error={create.error} />
-                      </form>
-                    </details>
+                              {create.busy()
+                                ? t("conn.registering")
+                                : t("conn.register")}
+                            </Button>
+                          </div>
+                          <ActionError error={create.error} />
+                        </form>
+                      </details>
+                    </>
                   }
                 >
                   {(helper) => (

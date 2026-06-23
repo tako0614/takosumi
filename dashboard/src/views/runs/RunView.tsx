@@ -60,6 +60,7 @@ import {
   isTerminalRunStatus,
 } from "../../lib/run-logs.ts";
 import {
+  diagnosticSeverityLabel,
   operationLabel,
   policyStatusLabel,
   policyTone,
@@ -147,7 +148,14 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
         </Show>
         <Show
           when={cloudBilling()}
-          fallback={<p class="muted">{t("run.cost.operatorHelp")}</p>}
+          fallback={
+            <>
+              <p class="muted">{t("run.cost.operatorHelp")}</p>
+              <Button variant="secondary" size="sm" href="/billing">
+                {t("run.cost.quotaCta")}
+              </Button>
+            </>
+          }
         >
           <Button variant="secondary" size="sm" href="/billing">
             {t("run.cost.billingCta")}
@@ -169,7 +177,9 @@ function isDestructiveConfirmationRequired(error: ControlApiError): boolean {
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
-      <span class="wa-diag-sev">{props.diagnostic.severity}</span>
+      <span class="wa-diag-sev">
+        {diagnosticSeverityLabel(props.diagnostic.severity)}
+      </span>
       <span class="wa-diag-msg">{props.diagnostic.message}</span>
       <Show when={props.diagnostic.detail}>
         <pre class="wa-pre">{props.diagnostic.detail}</pre>
@@ -401,13 +411,17 @@ function planResourceScopeLabel(
   if (!scope) return undefined;
   const parts = [
     scope.cloudflareAccountId
-      ? `Cloudflare account ${scope.cloudflareAccountId}`
+      ? t("run.scope.cloudflareAccount", { id: scope.cloudflareAccountId })
       : undefined,
     scope.cloudflareZoneId
-      ? `Cloudflare zone ${scope.cloudflareZoneId}`
+      ? t("run.scope.cloudflareZone", { id: scope.cloudflareZoneId })
       : undefined,
-    scope.awsAccountId ? `AWS account ${scope.awsAccountId}` : undefined,
-    scope.awsRegion ? `AWS ${scope.awsRegion}` : undefined,
+    scope.awsAccountId
+      ? t("run.scope.awsAccount", { id: scope.awsAccountId })
+      : undefined,
+    scope.awsRegion
+      ? t("run.scope.awsRegion", { region: scope.awsRegion })
+      : undefined,
   ].filter((part): part is string => Boolean(part));
   return parts.length > 0 ? parts.join(" / ") : undefined;
 }
@@ -1087,6 +1101,13 @@ function Inner() {
                 </Show>
               </Card>
 
+              {/* ===== change detail — surfaced by default, not buried ===== */}
+              <Show when={planResources().some(isActionablePlanResource)}>
+                <Card>
+                  <PlanResourceReview resources={planResources()} />
+                </Card>
+              </Show>
+
               <Show when={providerRowsNeedingAttention().length > 0}>
                 <details class="wb-disclosure">
                   <summary>{t("run.connections.reviewTitle")}</summary>
@@ -1147,11 +1168,6 @@ function Inner() {
                       <KVList items={debugDetailItems(r())} />
                     </Card>
                   </details>
-                  <Show when={planResources().some(isActionablePlanResource)}>
-                    <Card>
-                      <PlanResourceReview resources={planResources()} />
-                    </Card>
-                  </Show>
                   <Card>
                     <CardHeader title={t("run.inputs.title")} />
                     <Show

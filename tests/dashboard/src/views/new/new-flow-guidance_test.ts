@@ -58,6 +58,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).toContain("function CatalogCard");
     expect(newAppViewSource).toContain("const catalogEntries = createMemo");
+    expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
+    expect(newAppViewSource).toContain("function catalogConfigPriority");
+    expect(newAppViewSource).toContain("config.spaceId === undefined");
+    expect(newAppViewSource).toContain('config.id.startsWith("cfg-official-")');
     expect(newAppViewSource).toContain("config.catalog?.source");
     expect(newAppViewSource).toContain("const primaryCatalog = createMemo");
     expect(newAppViewSource).toContain(

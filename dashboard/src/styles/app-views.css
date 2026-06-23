@@ -136,34 +136,35 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--tg-s-3);
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--tg-s-4);
 }
 .av-service-card {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-3);
+  gap: var(--tg-s-4);
   min-width: 0;
-  min-height: 188px;
-  padding: var(--tg-s-4);
+  min-height: 196px;
+  padding: var(--tg-s-5);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-sm);
   transition:
-    border-color 120ms ease,
-    background 120ms ease,
-    box-shadow 120ms ease;
+    transform 160ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    border-color 160ms ease,
+    background 160ms ease;
 }
 .av-service-card:hover {
+  transform: translateY(-2px);
   border-color: var(--tg-line-strong);
-  box-shadow: var(--tg-shadow-md);
+  background: color-mix(in srgb, var(--tg-fg) 3%, var(--tg-bg-elev));
 }
 .av-service-card-attention {
-  border-color: color-mix(in srgb, var(--tg-warn) 42%, var(--tg-line));
+  border-color: color-mix(in srgb, var(--tg-warn) 38%, var(--tg-line));
 }
 .av-service-main {
   display: flex;
+  flex-direction: column;
   flex: 1;
   align-items: flex-start;
   gap: var(--tg-s-3);
@@ -182,11 +183,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--tg-r-md);
-  background: var(--tg-accent-soft);
-  color: var(--tg-accent-text);
+  background: var(--tg-bg-subtle);
+  border: 1px solid var(--tg-line);
+  color: var(--tg-fg-muted);
+}
+.av-service-icon svg {
+  width: 22px;
+  height: 22px;
 }
 .av-service-head {
   display: flex;
@@ -196,8 +202,10 @@
   min-width: 0;
 }
 .av-service-name {
-  font-weight: 700;
-  font-size: var(--tg-fs-md);
+  font-weight: 650;
+  font-size: var(--tg-fs-lg);
+  line-height: 1.25;
+  letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 .av-service-updated {
@@ -205,14 +213,10 @@
   font-size: var(--tg-fs-xs);
   line-height: 1.4;
 }
+/* Ops metadata (environment) is a detail-view concern; keep the launcher tile
+   focused on name + status + open, not admin-console fields. */
 .av-service-meta {
-  display: flex;
-  min-height: 20px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--tg-s-2);
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-muted);
+  display: none;
 }
 .av-service-warn {
   color: var(--tg-warn, #e8a33d);
@@ -222,9 +226,14 @@
   align-items: center;
   gap: var(--tg-s-2);
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: stretch;
   min-width: 0;
   margin-top: auto;
+}
+.av-service-actions .tg-btn {
+  min-height: 44px;
+  border-radius: var(--tg-r-md);
+  font-weight: 700;
 }
 .av-service-actions .tg-btn-primary {
   flex: 1 1 auto;
@@ -395,11 +404,17 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--tg-s-3);
-  padding: var(--tg-s-4);
+  padding: var(--tg-s-5);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-sm);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+.av-catalog-card:hover {
+  border-color: var(--tg-line-strong);
+  background: color-mix(in srgb, var(--tg-fg) 3%, var(--tg-bg-elev));
 }
 .av-catalog-text {
   display: flex;
@@ -412,11 +427,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--tg-r-md);
   background: var(--tg-bg-subtle);
-  color: var(--tg-accent-text);
+  border: 1px solid var(--tg-line);
+  color: var(--tg-fg-muted);
 }
 .av-catalog-name {
   font-weight: 700;
@@ -514,8 +530,10 @@
 }
 .av-manual-import {
   display: flex;
-  justify-content: center;
-  padding-top: var(--tg-s-2);
+  justify-content: flex-start;
+  margin-top: var(--tg-s-2);
+  padding-top: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
 }
 .av-service-setup {
   display: grid;

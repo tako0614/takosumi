@@ -7,7 +7,16 @@
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { ExternalLink, LayoutGrid, Plus, Sparkles } from "lucide-solid";
+import {
+  Box,
+  Database,
+  ExternalLink,
+  Globe,
+  LayoutGrid,
+  Plus,
+  Sparkles,
+} from "lucide-solid";
+import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
@@ -18,6 +27,7 @@ import {
   type Installation,
   type Space,
   listInstallations,
+  listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
   effectiveInstallationStatus,
@@ -26,7 +36,7 @@ import {
   needsAttention,
 } from "../../lib/installations-ui.ts";
 import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
-import { formatDateTime, t } from "../../i18n/index.ts";
+import { relativeTime, t } from "../../i18n/index.ts";
 import {
   Button,
   PageHeader,
@@ -40,6 +50,20 @@ export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
 
+/** A type-specific launcher icon so services read as distinct apps, not rows. */
+function serviceKindIcon(kind: string | undefined): JSX.Element {
+  switch (kind) {
+    case "site":
+      return <Globe size={22} />;
+    case "storage":
+      return <Database size={22} />;
+    case "worker":
+      return <Box size={22} />;
+    default:
+      return <LayoutGrid size={22} />;
+  }
+}
+
 function Inner() {
   const navigate = useNavigate();
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
@@ -48,6 +72,23 @@ function Inner() {
   const visibleInstallations = createMemo(() =>
     (installations() ?? []).filter(isVisibleServiceInstallation),
   );
+
+  // Map each Installation to a type-specific icon via its install config's
+  // catalog kind (site / storage / worker), so the launcher shows distinct
+  // app icons instead of one generic glyph for everything.
+  const [installConfigs] = createResource(spaceId, (id) =>
+    listInstallConfigs(id),
+  );
+  const kindByConfigId = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const config of installConfigs() ?? []) {
+      const kind = config.catalog?.kind;
+      if (kind) map.set(config.id, kind);
+    }
+    return map;
+  });
+  const iconForInstallation = (inst: Installation): JSX.Element =>
+    serviceKindIcon(kindByConfigId().get(inst.installConfigId));
 
   // Launch URL per app, from its current Deployment's public outputs.
   const [launchUrls] = createResource(visibleInstallations, async (list) => {
@@ -152,6 +193,7 @@ function Inner() {
                   installations={visibleInstallations()}
                   launchUrls={launchUrls() ?? new Map()}
                   openDetail={openDetail}
+                  iconFor={iconForInstallation}
                 />
               }
             >
@@ -196,6 +238,7 @@ function ServiceList(props: {
   readonly installations: readonly Installation[];
   readonly launchUrls: ReadonlyMap<string, string>;
   readonly openDetail: (inst: Installation) => void;
+  readonly iconFor: (inst: Installation) => JSX.Element;
 }) {
   return (
     <ul class="av-service-grid">
@@ -213,7 +256,7 @@ function ServiceList(props: {
               onClick={() => props.openDetail(inst)}
             >
               <span class="av-service-icon" aria-hidden="true">
-                <LayoutGrid size={20} />
+                {props.iconFor(inst)}
               </span>
               <div class="av-service-head">
                 <span class="av-service-name">{inst.name}</span>
@@ -224,7 +267,7 @@ function ServiceList(props: {
                 />
                 <span class="av-service-updated">
                   {t("apps.updated", {
-                    date: formatDateTime(inst.updatedAt),
+                    date: relativeTime(inst.updatedAt),
                   })}
                 </span>
               </div>

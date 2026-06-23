@@ -140,17 +140,16 @@
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
-  padding: var(--tg-s-4);
+  padding: var(--tg-s-5);
   position: relative;
   overflow: hidden;
-  box-shadow: var(--tg-shadow-sm);
   transition:
     border-color 120ms ease,
-    box-shadow 120ms ease;
+    background 120ms ease;
 }
 .tg-card-hover:hover {
   border-color: var(--tg-line-strong);
-  box-shadow: var(--tg-shadow-md);
+  background: color-mix(in srgb, var(--tg-fg) 3%, var(--tg-bg-elev));
 }
 .tg-card-header {
   display: flex;
@@ -196,31 +195,79 @@
   vertical-align: middle;
   white-space: nowrap;
 }
-.tg-badge-ok {
-  background: color-mix(in srgb, var(--tg-success) 14%, transparent);
-  color: var(--tg-success);
-  border-color: color-mix(in srgb, var(--tg-success) 30%, transparent);
-}
-.tg-badge-warn {
-  background: color-mix(in srgb, var(--tg-warn) 14%, transparent);
-  color: var(--tg-warn);
-  border-color: color-mix(in srgb, var(--tg-warn) 30%, transparent);
-}
-.tg-badge-danger {
-  background: color-mix(in srgb, var(--tg-danger) 14%, transparent);
-  color: var(--tg-danger);
-  border-color: color-mix(in srgb, var(--tg-danger) 30%, transparent);
-}
+/* Status tones render as a refined dot + label (transparent pill), not a loud
+   colored chip — calmer, less admin-dashboard. The leading dot carries the
+   colour; the label stays high-contrast and readable. */
+.tg-badge-ok,
+.tg-badge-warn,
+.tg-badge-danger,
 .tg-badge-info {
-  background: color-mix(in srgb, var(--tg-info) 12%, transparent);
+  background: transparent;
+  border-color: transparent;
+  color: var(--tg-fg);
+  padding-left: 2px;
+  gap: 6px;
+}
+.tg-badge-ok::before,
+.tg-badge-warn::before,
+.tg-badge-danger::before,
+.tg-badge-info::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--tg-r-full);
+  flex: none;
+  background: currentColor;
+}
+.tg-badge-ok::before {
+  color: var(--tg-success);
+}
+.tg-badge-warn::before {
+  color: var(--tg-warn);
+}
+.tg-badge-danger::before {
+  color: var(--tg-danger);
+}
+.tg-badge-info::before {
   color: var(--tg-info);
-  border-color: color-mix(in srgb, var(--tg-info) 26%, transparent);
 }
 .tg-badge-muted {
   background: var(--tg-bg-subtle);
   color: var(--tg-fg-subtle);
   border-color: var(--tg-line);
 }
+/* ----- Segmented control (refined toggle group; quiet, not accent-filled) - */
+.tg-segmented {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  flex-wrap: wrap;
+  gap: var(--tg-s-1);
+  padding: var(--tg-s-1);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.tg-segmented .tg-btn,
+.tg-segmented .tg-btn:hover:not(:disabled) {
+  min-height: 32px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--tg-fg-muted);
+  font-weight: 600;
+}
+.tg-segmented .tg-btn:hover:not(:disabled) {
+  color: var(--tg-fg);
+}
+.tg-segmented .tg-btn-primary,
+.tg-segmented .tg-btn-primary:hover:not(:disabled) {
+  background: var(--tg-bg-elev);
+  color: var(--tg-fg);
+  box-shadow: var(--tg-shadow-sm);
+}
+
 /* ----- Form fields ----- */
 .tg-field {
   display: flex;
@@ -299,7 +346,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--tg-s-4);
-  margin-bottom: var(--tg-s-5);
+  margin-bottom: var(--tg-s-6);
   flex-wrap: wrap;
 }
 .tg-page-header-text {
@@ -309,7 +356,7 @@
   font-family: var(--tg-font-display);
   font-size: var(--tg-fs-2xl);
   letter-spacing: 0;
-  font-weight: 720;
+  font-weight: 700;
   margin: 0;
 }
 .tg-page-subtitle {
@@ -326,8 +373,8 @@
 .tg-empty {
   position: relative;
   overflow: hidden;
-  padding: var(--tg-s-6) var(--tg-s-5);
-  border: 1px dashed var(--tg-line-strong);
+  padding: var(--tg-s-7) var(--tg-s-5);
+  border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   text-align: center;
   background: var(--tg-bg-elev);
@@ -340,11 +387,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-accent-soft);
-  color: var(--tg-accent-text);
+  width: 48px;
+  height: 48px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  border: 1px solid var(--tg-line);
+  color: var(--tg-fg-muted);
   position: relative;
   z-index: 1;
 }

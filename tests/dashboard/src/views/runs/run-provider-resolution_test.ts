@@ -69,7 +69,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain(
       "<PlanResourceReview resources={planResources()} />",
     );
-    expect(runViewSource.indexOf("<PlanResourceReview")).toBeGreaterThan(
+    // The per-resource change list is surfaced by default (right after the
+    // change-count strip), NOT buried inside the folded "Reference info"
+    // expert details. It must appear before that expert-details summary.
+    expect(runViewSource.indexOf("<PlanResourceReview")).toBeLessThan(
       runViewSource.indexOf('summary>{t("run.details.title")}</summary>'),
     );
     expect(en["run.resources.title"]).toBe("Planned changes");
