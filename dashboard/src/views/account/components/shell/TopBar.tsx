@@ -1,11 +1,7 @@
 /**
  * TopBar: [Workspace switcher] ......... [bell + needs-attention badge] [UserMenu].
  *
- * The bell badge counts unseen needs-attention events (run failures / drift /
- * revoked connections) for the current Workspace, via the cached feed loader in
- * lib/notifications.ts (TTL-cached because each view mounts its own shell).
- * Opening /notifications marks the feed seen, which clears the badge reactively
- * through the shared `seenVersion` signal.
+ * The bell badge counts services needing attention in the current Workspace.
  */
 import { A } from "@solidjs/router";
 import { createMemo, createResource, Show } from "solid-js";
@@ -14,22 +10,27 @@ import UserMenu from "../auth/UserMenu.tsx";
 import SpaceSwitcher from "./SpaceSwitcher.tsx";
 import { currentSpaceId } from "../../../../lib/space-state.ts";
 import {
-  loadFeedForBadge,
-  seenVersion,
-  unseenFailureCount,
-} from "../../../../lib/notifications.ts";
+  type Installation,
+  listInstallations,
+} from "../../../../lib/control-api.ts";
+import {
+  isVisibleServiceInstallation,
+  needsAttention,
+} from "../../../../lib/installations-ui.ts";
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
-  const [feed] = createResource(
+  const [installations] = createResource(
     () => currentSpaceId() || null,
-    async (spaceId) => (spaceId ? loadFeedForBadge(spaceId) : []),
+    async (spaceId): Promise<readonly Installation[]> =>
+      spaceId ? listInstallations(spaceId) : [],
   );
   const badge = createMemo(() => {
-    seenVersion(); // re-derive when the seen marker moves
-    const list = feed();
+    const list = installations();
     if (!list) return 0;
-    return unseenFailureCount(list);
+    return list.filter(
+      (inst) => isVisibleServiceInstallation(inst) && needsAttention(inst),
+    ).length;
   });
 
   return (

@@ -14,6 +14,10 @@ const appViewsCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/app-views.css"),
   "utf8",
 );
+const installationsUiSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/installations-ui.ts"),
+  "utf8",
+);
 
 describe("AppListView Workspace starter", () => {
   test("keeps first-run home focused on choosing a service, not a deploy procedure", () => {
@@ -36,9 +40,12 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).not.toContain("function ServiceLauncherHeader");
     expect(appListSource).not.toContain("<ServiceLauncherHeader");
     expect(appListSource).toContain("<ServiceList");
-    expect(appListSource).toContain("function isVisibleServiceInstallation");
-    expect(appListSource).toContain('inst.status !== "destroyed"');
+    expect(appListSource).toContain("isVisibleServiceInstallation");
     expect(appListSource).toContain("visibleInstallations()");
+    expect(installationsUiSource).toContain(
+      "export function isVisibleServiceInstallation",
+    );
+    expect(installationsUiSource).toContain('inst.status !== "destroyed"');
     expect(appListSource).toContain('class="av-service-grid"');
     expect(appListSource).toContain('class="av-service-card"');
     expect(appListSource).not.toContain('t("apps.summary.title")');
