@@ -76,8 +76,10 @@ export const en: Record<keyof typeof ja, string> = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
   "auth.signInSub": "Use your Google account to continue.",
-  "auth.signInCloud": "Sign in to Takosumi Cloud",
-  "auth.signInSubCloud": "Use your Google account to continue.",
+  "auth.signInCloud": "Takosumi Cloud",
+  "auth.signInSubCloud": "Sign in with your Google account.",
+  "auth.signInCloudPreview":
+    "Until GA, access is limited to invited Google accounts.",
   "auth.continueWith": "Continue with {provider}",
   "auth.notConfigured": "Currently unavailable",
   "auth.providerChecking": "Checking availability",
