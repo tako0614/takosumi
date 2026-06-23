@@ -166,6 +166,8 @@ export function installationStatusPatchBody(
   if (downloadUrl) body.downloadUrl = downloadUrl;
   const downloadExpiresAt = optionalStringOption(options, "downloadExpiresAt");
   if (downloadExpiresAt) body.downloadExpiresAt = downloadExpiresAt;
+  const archiveDigest = optionalStringOption(options, "archiveDigest");
+  if (archiveDigest) body.archiveDigest = archiveDigest;
   const error = optionalStringOption(options, "error");
   if (error) body.error = error;
   return body;

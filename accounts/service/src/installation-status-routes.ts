@@ -19,6 +19,7 @@ import {
   installationExportedEvent,
   installationMaterializeFailedEvent,
   installationMaterializeSucceededEvent,
+  isSha256DigestRef,
   serializeServiceBindingMaterial,
   serializeServiceGrantMaterial,
   serializeAppInstallation,
@@ -124,6 +125,7 @@ export async function handleUpdateAppInstallationStatus(input: {
   }
   const exportedDownloadUrl = stringValue(body.downloadUrl);
   const exportedDownloadExpiresAt = stringValue(body.downloadExpiresAt);
+  const exportedArchiveDigest = stringValue(body.archiveDigest);
   if (updated.status === "exported") {
     if (statusOperationId && !exportedDownloadUrl) {
       return errorJson(
@@ -150,6 +152,13 @@ export async function handleUpdateAppInstallationStatus(input: {
       return errorJson(
         "invalid_request",
         "downloadExpiresAt must be a valid timestamp",
+        400,
+      );
+    }
+    if (exportedArchiveDigest && !isSha256DigestRef(exportedArchiveDigest)) {
+      return errorJson(
+        "invalid_request",
+        "archiveDigest must be sha256:<digest>",
         400,
       );
     }
@@ -222,6 +231,7 @@ export async function handleUpdateAppInstallationStatus(input: {
           reason: publicReason,
           downloadUrl: exportedDownloadUrl ?? null,
           downloadExpiresAt: exportedDownloadExpiresAt ?? null,
+          archiveDigest: exportedArchiveDigest ?? null,
         },
         now: updated.updatedAt,
       });

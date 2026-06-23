@@ -248,6 +248,7 @@ export async function handleGetAppInstallationExportOperation(input: {
         downloadUrl: stringValue(completed.payload.downloadUrl) ?? null,
         downloadExpiresAt:
           stringValue(completed.payload.downloadExpiresAt) ?? null,
+        archiveDigest: stringValue(completed.payload.archiveDigest) ?? null,
       }),
     );
   }

@@ -6787,6 +6787,67 @@ test("internal installations status sends operation completion metadata", async 
   }
 });
 
+test("internal installations status sends export archive digest metadata", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Promise.resolve(
+      Response.json({
+        installation: {
+          id: "inst_1",
+          status: "exported",
+        },
+        event: {
+          type: "installation.exported",
+        },
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "status",
+        "inst_1",
+        "--status",
+        "exported",
+        "--operation-id",
+        "op_export",
+        "--download-url",
+        "https://downloads.example.test/export.tar.zst.age",
+        "--download-expires-at",
+        "2999-05-10T00:00:00.000Z",
+        "--archive-digest",
+        `sha256:${"c".repeat(64)}`,
+        "--accounts-url",
+        "http://accounts.local",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(await requests[0]?.json()).toEqual({
+      status: "exported",
+      operationId: "op_export",
+      downloadUrl: "https://downloads.example.test/export.tar.zst.age",
+      downloadExpiresAt: "2999-05-10T00:00:00.000Z",
+      archiveDigest: `sha256:${"c".repeat(64)}`,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("internal installations status sends operation failure metadata", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];

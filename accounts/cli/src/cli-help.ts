@@ -659,6 +659,7 @@ export function installationsStatusHelpText(): string {
     "  --runtime-target-id <id>",
     "  --download-url <url>",
     "  --download-expires-at <iso8601>",
+    "  --archive-digest <sha256:...>",
     "  --error <message>",
     "  --accounts-url <url>",
     "  --token <accounts-write-bearer>",

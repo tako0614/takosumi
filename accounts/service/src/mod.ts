@@ -496,6 +496,7 @@ export interface AppInstallationExportWorkerInput {
 export interface AppInstallationExportWorkerResult {
   readonly downloadUrl: string;
   readonly downloadExpiresAt?: string;
+  readonly archiveDigest?: string;
 }
 
 export type AppInstallationExportWorker = (

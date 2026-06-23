@@ -77,6 +77,8 @@ The export worker writes archives to the local filesystem. The shipped `docker-c
 
 When `EXPORT_DOWNLOAD_BASE_URL` points at this server, the `accounts` service handles the download path itself and verifies the HMAC signature + expiry fail-closed (invalid signature → 403, expired → 410) before reading the archive off disk; a basename-only file resolution prevents path traversal. Do not point export downloads at an unauthenticated static directory: the service-owned verifier is the security boundary for export artifacts.
 
+Completed export operations include `archiveDigest` (`sha256:<hex>`) computed from the final `takos-export-<op>.tar.zst[.age]` artifact. Use that value as the `encrypted-export.archiveDigest` launch-readiness evidence; do not recompute it from a download URL or unsigned object-store metadata.
+
 ## Billing configuration boundary
 
 `TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` (publishable key, `pk_live_...` or `pk_test_...`) is parsed for compatibility with
