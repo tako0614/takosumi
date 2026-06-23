@@ -50,6 +50,64 @@ test("pre-init policy still fails closed when no root-only provider credential w
   ).toThrow("required credential env for provider");
 });
 
+test("pre-init policy accepts declared-env provider credentials under real env names", () => {
+  const provider = "registry.opentofu.org/snowflake-labs/snowflake";
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        planRun: {
+          ...REQUEST.planRun,
+          requiredProviders: [provider],
+        },
+        credentials: {
+          SNOWFLAKE_PASSWORD: "run-scoped-secret",
+        },
+      },
+      {
+        id: "generic-opentofu-provider",
+        allowedProviders: [provider],
+        requireCredentialRefs: true,
+        credentialRefs: [
+          {
+            provider,
+            ref: "env://SNOWFLAKE_PASSWORD",
+            required: true,
+          },
+        ],
+      },
+    ),
+  ).not.toThrow();
+});
+
+test("pre-init policy ignores runner-reserved declared-env names", () => {
+  const provider = "registry.opentofu.org/example/example";
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        planRun: {
+          ...REQUEST.planRun,
+          requiredProviders: [provider],
+        },
+        credentials: {
+          TAKOSUMI_FORBIDDEN_TOKEN: "override",
+        },
+      },
+      {
+        id: "generic-opentofu-provider",
+        allowedProviders: [provider],
+        requireCredentialRefs: true,
+        credentialRefs: [
+          {
+            provider,
+            ref: "env://TAKOSUMI_FORBIDDEN_TOKEN",
+            required: true,
+          },
+        ],
+      },
+    ),
+  ).toThrow("required credential env for provider");
+});
+
 test("source URL policy rejects git/libcurl backslash parser differentials", () => {
   expect(() =>
     assertSourceUrlPolicy("https://github.com\\@10.0.0.1/acme/repo.git"),

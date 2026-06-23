@@ -23,6 +23,7 @@ import type { CreateConnectionRequest } from "takosumi-contract/connections";
 import {
   allowedEnvNamesForProvider,
   isProviderEnvName,
+  isReservedProviderEnvName,
   providerEnvRule,
 } from "takosumi-contract/provider-env-rules";
 
@@ -98,6 +99,12 @@ export function validateGenericEnvProviderRegistration(
       throw new GenericEnvProviderConnectionError(
         "invalid_argument",
         `env name ${name} must be an uppercase environment variable name`,
+      );
+    }
+    if (isReservedProviderEnvName(name)) {
+      throw new GenericEnvProviderConnectionError(
+        "invalid_argument",
+        `env name ${name} is reserved for the runner runtime`,
       );
     }
     if (allowed && !allowed.has(name)) {

@@ -16,6 +16,8 @@ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import {
   PROVIDER_CREDENTIAL_ENV_RULES,
   type ProviderCredentialEnvRule,
+  isProviderEnvName,
+  isReservedProviderEnvName,
   providerCredentialArgs,
   providerEnvRule,
 } from "../contract/provider-env-rules.ts";
@@ -43,6 +45,11 @@ const PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX =
   "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_";
 const PROVIDER_SNAPSHOT_POINTER_DIR_ENV =
   "TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR";
+const ROOT_ONLY_PROVIDER_ENV_NAMES = new Set(
+  PROVIDER_CREDENTIAL_ENV_RULES.flatMap((rule) =>
+    providerCredentialArgs(rule.shortName).map((arg) => arg.envName),
+  ),
+);
 
 type RunRequest = {
   readonly action?: unknown;
@@ -3004,14 +3011,19 @@ export function commandContextFromRequest(
     runnerProfile,
     "maxSourceDecompressedBytes",
   );
-  // §13 per-alias credential split: the generated root declares sensitive
-  // `var.<provider>_<capability>_<arg>` variables, and tofu reads their values
-  // from `TF_VAR_…` env. These arrive ONLY via dispatched credentials (the Vault
-  // mints them per resolved Connection — never from Bun.env, never from the
-  // runner profile env map) so admit exactly the TF_VAR_-prefixed payload
-  // entries. The values are never logged and never echoed in the run response.
+  // §13 per-alias credential split uses `TF_VAR_…` env. Declared-env arbitrary
+  // providers use their real provider env names (e.g. SNOWFLAKE_PASSWORD). Both
+  // arrive ONLY via dispatched credentials (the Vault mints them per resolved
+  // Connection — never from Bun.env, never from the runner profile env map). The
+  // values are never logged and never echoed in the run response.
   for (const [name, value] of Object.entries(payloadCredentials)) {
-    if (name.startsWith("TF_VAR_")) env[name] = value;
+    if (name.startsWith("TF_VAR_")) {
+      env[name] = value;
+      continue;
+    }
+    if (isAdmittedDeclaredProviderEnvName(name)) {
+      env[name] = value;
+    }
   }
   return {
     env,
@@ -3039,10 +3051,10 @@ export function assertRunnerPolicyForRequest(
 
 /**
  * Extracts the minted credential env map from the dispatch payload's
- * `credentials` field. Only §13 per-alias tofu variables
- * `TF_VAR_<provider>_<capability>_<arg>` are admitted; shared provider env names
- * such as `CLOUDFLARE_API_TOKEN` are intentionally ignored so provider
- * credentials remain generated-root-only.
+ * `credentials` field. §13 per-alias tofu variables (`TF_VAR_...`) are admitted
+ * for built-in root-only provider args. Declared-env provider variables are
+ * admitted under their real env names after rejecting runner/runtime reserved
+ * names and raw env names reserved for root-only provider args.
  */
 function credentialsFromRequest(request: unknown): Record<string, string> {
   const credentials = recordField(request, "credentials");
@@ -3050,9 +3062,23 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(credentials)) {
     if (typeof value !== "string") continue;
-    if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name)) out[name] = value;
+    if (/^TF_VAR_[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      out[name] = value;
+      continue;
+    }
+    if (isAdmittedDeclaredProviderEnvName(name)) {
+      out[name] = value;
+    }
   }
   return out;
+}
+
+function isAdmittedDeclaredProviderEnvName(name: string): boolean {
+  return (
+    isProviderEnvName(name) &&
+    !isReservedProviderEnvName(name) &&
+    !ROOT_ONLY_PROVIDER_ENV_NAMES.has(name)
+  );
 }
 
 function redactionValuesFromRequest(request: unknown): string[] {

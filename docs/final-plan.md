@@ -550,7 +550,10 @@ auth_modes:
 
 Built-in recipes are convenience, validation, and guided UI. They are not a
 provider allowlist. For unsupported providers, the explicit env names on a
-generic-env Provider Connection become the run-local Credential Recipe.
+generic-env Provider Connection become the run-local Credential Recipe and are
+injected into the runner process under those same env names. Runner/runtime
+reserved names (`PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, `TF_*`, and similar process
+control env) are rejected.
 
 ## 7. Provider Binding
 

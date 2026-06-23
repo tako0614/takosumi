@@ -858,7 +858,7 @@ test("mintForInstallationProviderEnvBindings contributes no TF_VAR for a provide
   expect(bundle.env).toEqual({});
 });
 
-test("mintForInstallationProviderEnvBindings maps approved generic-env variables to root-only TF_VARs", async () => {
+test("mintForInstallationProviderEnvBindings maps approved generic-env variables to process env", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(
     store,
@@ -882,9 +882,10 @@ test("mintForInstallationProviderEnvBindings maps approved generic-env variables
   ]);
 
   expect(bundle.env).toEqual({
-    TF_VAR_GITHUB_TOKEN: "github-secret",
+    GITHUB_TOKEN: "github-secret",
   });
-  expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(true);
+  expect(bundle.providerCredentialEvidence[0]?.delivery).toBe("provider_env");
+  expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(false);
 });
 
 test("generic-env provider registration accepts arbitrary providers with explicit env names", async () => {
@@ -907,7 +908,7 @@ test("generic-env provider registration accepts arbitrary providers with explici
   ]);
 
   expect(bundle.env).toEqual({
-    TF_VAR_NOT_A_REAL_PROVIDER_TOKEN: "secret",
+    NOT_A_REAL_PROVIDER_TOKEN: "secret",
   });
 });
 
@@ -922,6 +923,28 @@ test("generic-env provider registration rejects env names outside the provider a
       values: { GITHUB_TOKEN: "github-secret", VERCEL_API_TOKEN: "nope" },
     }),
   ).rejects.toThrow("is not allowed for provider");
+});
+
+test("generic-env provider registration rejects runner-reserved env names", async () => {
+  const { vault } = makeVault();
+  await expect(
+    vault.register({
+      spaceId: "space_1",
+      provider: "registry.opentofu.org/example/example",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: { PATH: "/tmp/evil" },
+    }),
+  ).rejects.toThrow("reserved for the runner runtime");
+  await expect(
+    vault.register({
+      spaceId: "space_1",
+      provider: "registry.opentofu.org/example/example",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: { TAKOSUMI_RUN_ID: "override" },
+    }),
+  ).rejects.toThrow("reserved for the runner runtime");
 });
 
 test("mintForInstallationProviderEnvBindings re-validates InstallationProviderEnvBinding provider before opening values", async () => {

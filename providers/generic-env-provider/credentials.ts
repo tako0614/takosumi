@@ -5,13 +5,13 @@
  * write-only provider env values for arbitrary OpenTofu providers. Known
  * providers can still use built-in env allowlists; unknown providers use the
  * connection's own `envNames` as the declared recipe. There is no per-provider
- * arg mapping: each declared variable is passed straight through to the
- * generated root as `TF_VAR_<name>`.
+ * arg mapping: each declared variable is passed straight through to the runner
+ * process under its real environment-variable name.
  *
  * This driver is the extracted, self-contained form of the vault's
  * `#mintCustomProviderVariables` logic. The crypto / secret-opening stays in
  * core (the vault opens the sealed blob and hands the decrypted values in); this
- * driver maps already-opened values to the runner-facing `TF_VAR_*` env map and
+ * driver maps already-opened values to the runner-facing env map and
  * the provider-credential mint evidence.
  *
  * Behavior is byte-identical to the in-vault path:
@@ -19,7 +19,7 @@
  *     `undefined`), so rootgen emits a credential-free alias.
  *   - A `generic_env_provider` connection that is not Space-scoped is a precondition
  *     failure (operator-scoped generic-env provider credentials are not allowed).
- *   - Each string value `NAME` becomes `TF_VAR_NAME`; non-string values are
+ *   - Each string value `NAME` becomes `NAME`; non-string values are
  *     skipped (defensive — the open path already filters to strings).
  */
 import type { Connection } from "takosumi-contract/connections";
@@ -48,7 +48,7 @@ export class GenericEnvProviderDriverError extends Error {
   }
 }
 
-/** Successful mint output: the `TF_VAR_*` env map plus mint evidence. */
+/** Successful mint output: the process env map plus mint evidence. */
 export interface GenericEnvProviderMintResult {
   readonly env: Readonly<Record<string, string>>;
   readonly evidence: ProviderCredentialMintEvidence;
@@ -64,9 +64,9 @@ export interface GenericEnvProviderMintResult {
  * @param alias the OpenTofu provider alias declared by the generated root, if
  *   any. Accepted for parity with the per-alias provider-credential drivers;
  *   the generic passthrough does not vary by alias.
- * @returns the `TF_VAR_<name>` env map and mint evidence, or `undefined` when
- *   the connection is not a `generic_env_provider` (no per-alias split applies, so
- *   the runner admits no shared provider credential env for it).
+ * @returns the process env map and mint evidence, or `undefined` when the
+ *   connection is not a `generic_env_provider` (no generic process-env delivery
+ *   applies).
  */
 export function mintGenericEnvProviderVariables(
   connection: Connection,
@@ -95,7 +95,7 @@ export function mintGenericEnvProviderVariables(
         "invalid_argument",
       );
     }
-    env[`TF_VAR_${name}`] = value;
+    env[name] = value;
   }
   return {
     env,
@@ -103,8 +103,8 @@ export function mintGenericEnvProviderVariables(
       providerEnvId: connection.id,
       provider: connection.provider,
       connectionId: connection.id,
-      delivery: "generated_root_variable",
-      rootOnly: true,
+      delivery: "provider_env",
+      rootOnly: false,
       temporary: false,
       ttlEnforced: false,
       issuer: "static_secret",

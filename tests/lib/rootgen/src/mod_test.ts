@@ -495,15 +495,7 @@ test("generateGenericCapsuleRoot does not materialize generic env provider block
   expect(main).toContain('project_name = "talk"');
 });
 
-// ---------------------------------------------------------------------------
-// Generic Env Provider delivered TF_VAR variable declarations.
-//
-// A generic_env_provider Connection delivers each name as TF_VAR_<NAME>, but
-// OpenTofu drops a TF_VAR_<NAME> with no `variable "<NAME>"` declaration, so the
-// generated root MUST declare each one (else the credential is silently lost).
-// ---------------------------------------------------------------------------
-
-test("generateGenericCapsuleRoot declares a sensitive variable for every generic env helper name", () => {
+test("generateGenericCapsuleRoot leaves generic-env credentials to the runner process env", () => {
   const { files } = generateGenericCapsuleRoot({
     requiredProviders: ["registry.opentofu.org/vercel/vercel"],
     inputs: {
@@ -512,99 +504,27 @@ test("generateGenericCapsuleRoot declares a sensitive variable for every generic
     outputAllowlist: {
       deployment_url: { from: "deployment_url", type: "url" },
     },
-    genericEnvVarNames: ["VERCEL_API_TOKEN", "VERCEL_TEAM_ID"],
   });
 
   const main = files["main.tf"]!;
-  // Each delivered name gets a sensitive (NOT ephemeral) string variable.
-  expect(main).toContain(
-    [
-      'variable "VERCEL_API_TOKEN" {',
-      "  type      = string",
-      "  sensitive = true",
-      "}",
-    ].join("\n"),
-  );
-  expect(main).toContain(
-    [
-      'variable "VERCEL_TEAM_ID" {',
-      "  type      = string",
-      "  sensitive = true",
-      "}",
-    ].join("\n"),
-  );
-  // Generic env helper credentials are static secrets, so they are NOT marked ephemeral
-  // (unlike the per-alias provider-credential split).
+  expect(main).not.toContain('variable "VERCEL_API_TOKEN"');
+  expect(main).not.toContain('variable "VERCEL_TEAM_ID"');
   expect(main).not.toContain("  ephemeral = true");
-  // No provider block is materialized for the generic env helper — the value is a
-  // generic passthrough consumed via env / the child module's own var.<NAME>.
   expect(main).not.toContain('provider "vercel"');
   expect(main).toContain('module "app"');
   expect(main).toContain('project_name = "talk"');
 });
 
-test("generateGenericCapsuleRoot dedupes repeated generic env helper names and rejects non-identifiers", () => {
-  const { files } = generateGenericCapsuleRoot({
-    requiredProviders: ["registry.opentofu.org/vercel/vercel"],
-    inputs: { project_name: "talk" },
-    outputAllowlist: {},
-    genericEnvVarNames: ["VERCEL_API_TOKEN", "VERCEL_API_TOKEN"],
-  });
-  const declarations = files["main.tf"]!.split("\n").filter(
-    (line) => line === 'variable "VERCEL_API_TOKEN" {',
-  );
-  expect(declarations.length).toEqual(1);
-
-  expect(() =>
-    generateGenericCapsuleRoot({
-      requiredProviders: ["registry.opentofu.org/vercel/vercel"],
-      inputs: {},
-      outputAllowlist: {},
-      genericEnvVarNames: ["not a valid identifier"],
-    }),
-  ).toThrow();
-});
-
-test("generateInstallationRoot declares generic env helper variables alongside provider aliases", () => {
+test("generateInstallationRoot keeps generic-env credentials out of generated root", () => {
   const { files } = generateInstallationRoot({
     template: R2_TEMPLATE,
     inputs: { bucketName: "b", accountId: "a", location: "" },
     installType: "opentofu_module",
     providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
-    genericEnvVarNames: ["EXTRA_PROVIDER_TOKEN"],
   });
   const main = files["main.tf"]!;
-  // The per-alias provider credential split is unchanged...
   expect(main).toContain('variable "cloudflare_main_api_token" {');
   expect(main).toContain("  ephemeral = true");
-  // ...and the generic env helper name gets its own sensitive (non-ephemeral)
-  // declaration.
-  expect(main).toContain(
-    [
-      'variable "EXTRA_PROVIDER_TOKEN" {',
-      "  type      = string",
-      "  sensitive = true",
-      "}",
-    ].join("\n"),
-  );
-  // Generic env helper names produce no provider block of their own.
+  expect(main).not.toContain('variable "EXTRA_PROVIDER_TOKEN"');
   expect(main).not.toContain('provider "EXTRA_PROVIDER_TOKEN"');
-});
-
-test("generateInstallationRoot with no generic env helper names is byte-stable vs the existing root", () => {
-  const inputs = { bucketName: "b", accountId: "a", location: "" };
-  const withEmpty = generateInstallationRoot({
-    template: R2_TEMPLATE,
-    inputs,
-    installType: "opentofu_module",
-    providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
-    genericEnvVarNames: [],
-  });
-  const without = generateInstallationRoot({
-    template: R2_TEMPLATE,
-    inputs,
-    installType: "opentofu_module",
-    providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
-  });
-  expect(withEmpty.files).toEqual(without.files);
 });

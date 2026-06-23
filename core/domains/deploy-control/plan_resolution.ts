@@ -68,8 +68,6 @@ export interface InstallTypePlanContext {
   readonly installType: GeneratedRootInstallType;
   /** Provider mapping derived from the resolved provider env bindings. */
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
-  /** Generic-env Connection env names that must be declared as root variables. */
-  readonly genericEnvVarNames: readonly string[];
   /**
    * Non-secret provider scope metadata available to fill requested Capsule
    * inputs. The controller only applies these defaults under keys already
@@ -157,7 +155,6 @@ export class PlanResolutionService {
       requiredProviders,
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
-    const genericEnvVarNames = genericEnvVarNamesFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
@@ -167,7 +164,6 @@ export class PlanResolutionService {
       // core / opentofu_module / app_source map 1:1 to the generated-root types.
       installType: installType as GeneratedRootInstallType,
       providerEnvBindings,
-      genericEnvVarNames,
       providerInputDefaults,
       usesCloudOnlyGatewayMaterialization,
       ...(installConfig.build?.enabled
@@ -248,9 +244,6 @@ export class PlanResolutionService {
           ...(installTypePlan.providerEnvBindings.length > 0
             ? { providerEnvBindings: installTypePlan.providerEnvBindings }
             : {}),
-          ...(installTypePlan.genericEnvVarNames.length > 0
-            ? { genericEnvVarNames: installTypePlan.genericEnvVarNames }
-            : {}),
         })
       : generateRootModule(template, inputs);
     const generatedRoot: DispatchGeneratedRoot = {
@@ -293,24 +286,6 @@ function providerEnvBindingsFromResolved(
     });
   }
   return providers;
-}
-
-function genericEnvVarNamesFromResolved(
-  resolved: readonly ResolvedInstallationProviderEnvBinding[],
-): readonly string[] {
-  const names = new Set<string>();
-  for (const entry of resolved) {
-    const connection = entry.connection;
-    if (!connection) continue;
-    if (
-      connection.kind !== "generic_env_provider" &&
-      connection.credentialDriver !== "generic_env"
-    ) {
-      continue;
-    }
-    for (const name of connection.envNames) names.add(name);
-  }
-  return [...names].sort();
 }
 
 function providerInputDefaultsFromResolved(
