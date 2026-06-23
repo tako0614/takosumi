@@ -50,6 +50,22 @@ function serviceKindIcon(kind: string | undefined): JSX.Element {
   }
 }
 
+/**
+ * Vivid, deterministic app-icon color per service, so each tile reads as its
+ * own app on a home screen — not an identical grey square. The hash keeps a
+ * service's color stable across reloads; the palette is tuned to look like real
+ * launcher icons on both dark and light backgrounds.
+ */
+function appIconColor(index: number): readonly [string, string] {
+  // Hue by grid position via the golden angle (137.5°): consecutive icons land
+  // far apart on the wheel, so even 2–3 apps always read as clearly distinct
+  // colors (name-hashing clustered similar short names onto the same hue).
+  // Fixed saturation/lightness keeps every icon glossy with a white glyph on
+  // both themes.
+  const hue = Math.round((index * 137.508 + 210) % 360);
+  return [`hsl(${hue} 72% 56%)`, `hsl(${hue} 76% 44%)`];
+}
+
 function Inner() {
   const navigate = useNavigate();
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
@@ -205,10 +221,11 @@ function ServiceList(props: {
   return (
     <ul class="av-launcher">
       <For each={props.installations}>
-        {(inst) => (
+        {(inst, index) => (
           <li>
             <ServiceTile
               inst={inst}
+              index={index()}
               url={props.launchUrls.get(inst.id)}
               icon={props.iconFor(inst)}
               onOpenDetail={() => props.openDetail(inst)}
@@ -236,16 +253,18 @@ function ServiceList(props: {
  */
 function ServiceTile(props: {
   readonly inst: Installation;
+  readonly index: number;
   readonly url: string | undefined;
   readonly icon: JSX.Element;
   readonly onOpenDetail: () => void;
 }) {
   const attention = () => needsAttention(props.inst);
+  const color = appIconColor(props.index);
   const body = () => (
     <>
       <span
         class="av-tile-icon"
-        classList={{ "av-tile-icon-attention": attention() }}
+        style={{ "--app-c1": color[0], "--app-c2": color[1] }}
         aria-hidden="true"
       >
         {props.icon}
