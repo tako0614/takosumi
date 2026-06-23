@@ -1285,7 +1285,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /api/v1/install-configs
+  // /api/v1/capsule-configs (legacy-compatible: /api/v1/install-configs)
   if (segments.length === 1 && segments[0] === "install-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listInstallConfigs(
@@ -1579,7 +1579,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /api/v1/connections?spaceId=  (GET list / POST create)
+  // /api/v1/connections?workspaceId=  (GET list / POST create)
+  // (legacy-compatible: ?spaceId=)
   if (segments.length === 1 && segments[0] === "connections") {
     if (method === "GET") {
       return await listControlConnections(
@@ -1689,7 +1690,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
   }
 
-  // /api/v1/provider-connections?spaceId=
+  // /api/v1/provider-connections?workspaceId=
+  // (legacy-compatible: ?spaceId=)
   if (segments.length === 1 && segments[0] === "provider-connections") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listProviderConnections(
@@ -1706,6 +1708,11 @@ async function dispatch(input: DispatchInput): Promise<Response> {
 function normalizePublicControlSegments(
   segments: readonly string[],
 ): readonly string[] {
+  if (segments[0] === "capsule-configs") {
+    return segments.map((segment, index) =>
+      index === 0 ? "install-configs" : segment,
+    );
+  }
   if (segments[0] === "workspaces") {
     return segments.map((segment, index) =>
       index === 0
@@ -2532,15 +2539,17 @@ async function listInstallConfigs(
   url: URL,
 ): Promise<Response> {
   const spaceId =
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   // Without a spaceId only built-in shared configs (spaceId-less configs) are
   // returned; with one, built-ins plus that Space's own configs —
-  // mirroring the §30 `/api/v1/install-configs` projection. The official + scoped
-  // union is a small set, so it is materialized, merge-sorted by (createdAt,
-  // id), and bounded with the in-memory keyset pager.
+  // mirroring the §30 `/api/v1/capsule-configs` projection. The official +
+  // scoped union is a small set, so it is materialized, merge-sorted by
+  // (createdAt, id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
     (config) => config.spaceId === undefined,
   );
@@ -2692,12 +2701,14 @@ async function listSources(
   url: URL,
 ): Promise<Response> {
   const spaceId =
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
     return errorJson(
       "invalid_request",
-      "spaceId query parameter is required",
+      "workspaceId query parameter is required",
       400,
     );
   }
@@ -3453,16 +3464,18 @@ async function listControlConnections(
   url: URL,
 ): Promise<Response> {
   const spaceId =
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   // The accounts plane has no admin notion distinct from a normal session, so
-  // a spaceId is REQUIRED here; operator-scoped Connection listing stays on the
-  // operator-bearer §30 surface. (If/when the accounts plane grows an admin
+  // a Workspace id is REQUIRED here; operator-scoped Connection listing stays on
+  // the operator-bearer §30 surface. (If/when the accounts plane grows an admin
   // role, this can branch to listOperatorConnections.)
   if (!spaceId) {
     return errorJson(
       "invalid_request",
-      "spaceId query parameter is required",
+      "workspaceId query parameter is required",
       400,
     );
   }
@@ -3804,12 +3817,14 @@ async function listProviderConnections(
   url: URL,
 ): Promise<Response> {
   const spaceId =
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
     return errorJson(
       "invalid_request",
-      "spaceId query parameter is required",
+      "workspaceId query parameter is required",
       400,
     );
   }
@@ -3914,12 +3929,14 @@ async function listOutputShares(
   url: URL,
 ): Promise<Response> {
   const spaceId =
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
     stringValue(url.searchParams.get("spaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   if (!spaceId) {
     return errorJson(
       "invalid_request",
-      "spaceId query parameter is required",
+      "workspaceId query parameter is required",
       400,
     );
   }

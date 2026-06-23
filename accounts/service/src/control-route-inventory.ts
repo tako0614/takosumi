@@ -232,14 +232,14 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/install-configs",
-      summary: "List InstallConfigs visible to the caller",
+      path: "/api/v1/capsule-configs",
+      summary: "List Capsule creation configs visible to the caller",
       auth: "account-session",
     },
     {
       method: "GET",
-      path: "/api/v1/install-configs/{installConfigId}",
-      summary: "Read an InstallConfig",
+      path: "/api/v1/capsule-configs/{capsuleConfigId}",
+      summary: "Read a Capsule creation config",
       auth: "account-session",
     },
     {

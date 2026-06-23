@@ -1164,13 +1164,13 @@ export async function putInstallationProviderConnectionSet(
   return body.providerConnectionSet;
 }
 
-// --- InstallConfigs --------------------------------------------------------
+// --- Capsule configs -------------------------------------------------------
 
 export async function listInstallConfigs(
   spaceId?: string,
 ): Promise<readonly InstallConfig[]> {
   return await fetchAllPages<InstallConfig>(
-    `${BASE}/install-configs${query({ spaceId })}`,
+    `${BASE}/capsule-configs${query({ workspaceId: spaceId })}`,
     (body) => (body.installConfigs as readonly InstallConfig[]) ?? [],
   );
 }
@@ -1398,7 +1398,7 @@ export async function listActivity(
 
 export async function listSources(spaceId: string): Promise<readonly Source[]> {
   return await fetchAllPages<Source>(
-    `${BASE}/sources${query({ spaceId })}`,
+    `${BASE}/sources${query({ workspaceId: spaceId })}`,
     (body) => (body.sources as readonly Source[]) ?? [],
   );
 }
@@ -1694,7 +1694,7 @@ export async function listConnections(
   spaceId: string,
 ): Promise<readonly Connection[]> {
   return await fetchAllPages<Connection>(
-    `${BASE}/connections${query({ spaceId })}`,
+    `${BASE}/connections${query({ workspaceId: spaceId })}`,
     (body) => (body.connections as readonly Connection[]) ?? [],
   );
 }
@@ -1704,7 +1704,7 @@ export async function listProviderConnections(
 ): Promise<readonly ProviderConnection[]> {
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
-  }>(`${BASE}/provider-connections${query({ spaceId })}`);
+  }>(`${BASE}/provider-connections${query({ workspaceId: spaceId })}`);
   return body.providerConnections ?? [];
 }
 
@@ -1850,7 +1850,7 @@ export async function listOutputShares(
   spaceId: string,
 ): Promise<readonly OutputShare[]> {
   return await fetchAllPages<OutputShare>(
-    `${BASE}/output-shares${query({ spaceId })}`,
+    `${BASE}/output-shares${query({ workspaceId: spaceId })}`,
     (body) => (body.shares as readonly OutputShare[]) ?? [],
   );
 }
