@@ -1,21 +1,15 @@
 /**
- * Home (`/`) — the Workspace service list, the dashboard's primary surface.
+ * Home (`/`) — the Workspace app launcher, the dashboard's primary surface.
  *
- * Service launcher over the current compatibility Installation list: open when
- * public outputs expose a launch URL, otherwise show the service details. The
- * control-plane state stays available deeper in the service view.
+ * Each service is one tappable app tile (icon + name). Tapping opens the live
+ * app when its public outputs expose a launch URL, otherwise its service
+ * screen. A trailing "add" tile starts a new service. Management surfaces
+ * (history / connections / settings) live in the profile menu, so the home
+ * stays a launcher — not an ops console.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import {
-  Box,
-  Database,
-  ExternalLink,
-  Globe,
-  LayoutGrid,
-  Plus,
-  Sparkles,
-} from "lucide-solid";
+import { Box, Database, Globe, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -30,20 +24,12 @@ import {
   listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
-  effectiveInstallationStatus,
   isVisibleServiceInstallation,
   launchUrlFromOutputs,
   needsAttention,
 } from "../../lib/installations-ui.ts";
-import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
-import { relativeTime, t } from "../../i18n/index.ts";
-import {
-  Button,
-  PageHeader,
-  Skeleton,
-  StatusBadge,
-  Toast,
-} from "../../components/ui/index.ts";
+import { t } from "../../i18n/index.ts";
+import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 
 export default function AppListView() {
@@ -54,13 +40,13 @@ export default function AppListView() {
 function serviceKindIcon(kind: string | undefined): JSX.Element {
   switch (kind) {
     case "site":
-      return <Globe size={22} />;
+      return <Globe />;
     case "storage":
-      return <Database size={22} />;
+      return <Database />;
     case "worker":
-      return <Box size={22} />;
+      return <Box />;
     default:
-      return <LayoutGrid size={22} />;
+      return <LayoutGrid />;
   }
 }
 
@@ -74,8 +60,8 @@ function Inner() {
   );
 
   // Map each Installation to a type-specific icon via its install config's
-  // catalog kind (site / storage / worker), so the launcher shows distinct
-  // app icons instead of one generic glyph for everything.
+  // catalog kind (site / storage / worker), so the launcher shows distinct app
+  // icons instead of one generic glyph for everything.
   const [installConfigs] = createResource(spaceId, (id) =>
     listInstallConfigs(id),
   );
@@ -105,18 +91,14 @@ function Inner() {
             const url = launchUrlFromOutputs(deployment.outputsPublic);
             if (url) map.set(inst.id, url);
           } catch {
-            // One failing deployment read must not blank the list; that row
-            // simply gets no launch link.
+            // One failing deployment read must not blank the launcher; that
+            // tile simply opens its service screen instead of a live URL.
           }
         }),
     );
     return map;
   });
 
-  /** Services currently needing attention (error / stale under either model). */
-  const attentionCount = createMemo(
-    () => visibleInstallations().filter(needsAttention).length,
-  );
   const createFirstWorkspace = createAction(async (): Promise<Space> => {
     const space = await createSpace({
       handle: defaultWorkspaceHandle(),
@@ -129,30 +111,11 @@ function Inner() {
     return space;
   });
 
-  const showAddServiceAction = createMemo(() => {
-    const list = visibleInstallations();
-    return Boolean(list && list.length > 0);
-  });
-
   const openDetail = (inst: Installation) =>
     navigate(`/services/${encodeURIComponent(inst.id)}`);
 
   return (
     <AppShell>
-      <PageHeader
-        title={t("apps.title")}
-        subtitle={t("apps.subtitle")}
-        actions={
-          showAddServiceAction() ? (
-            <div class="av-actions">
-              <Button variant="primary" href="/new" icon={<Plus size={16} />}>
-                {t("apps.add")}
-              </Button>
-            </div>
-          ) : undefined
-        }
-      />
-
       <Show
         when={spaceId()}
         fallback={
@@ -163,20 +126,19 @@ function Inner() {
           />
         }
       >
-        <Show when={attentionCount() > 0}>
-          <div class="av-attention" role="status">
-            <span>{t("apps.attention", { n: attentionCount() })}</span>
-            <Button variant="secondary" size="sm" href="/notifications">
-              {t("apps.attentionView")}
-            </Button>
-          </div>
-        </Show>
-
         <Switch>
           <Match when={installations.loading}>
-            <div class="av-service-list">
-              <Skeleton variant="row" count={4} />
-            </div>
+            <ul class="av-launcher">
+              <For each={Array.from({ length: 6 })}>
+                {() => (
+                  <li>
+                    <span class="av-tile" aria-hidden="true">
+                      <span class="tg-skel av-tile-skel" />
+                    </span>
+                  </li>
+                )}
+              </For>
+            </ul>
           </Match>
           <Match when={installations.error}>
             <Toast tone="error">
@@ -241,77 +203,82 @@ function ServiceList(props: {
   readonly iconFor: (inst: Installation) => JSX.Element;
 }) {
   return (
-    <ul class="av-service-grid">
+    <ul class="av-launcher">
       <For each={props.installations}>
         {(inst) => (
-          <li
-            class="av-service-card"
-            classList={{
-              "av-service-card-attention": needsAttention(inst),
-            }}
-          >
-            <button
-              type="button"
-              class="av-service-main"
-              onClick={() => props.openDetail(inst)}
-            >
-              <span class="av-service-icon" aria-hidden="true">
-                {props.iconFor(inst)}
-              </span>
-              <div class="av-service-head">
-                <span class="av-service-name">{inst.name}</span>
-                <StatusBadge
-                  status={effectiveInstallationStatus(inst)}
-                  label={installationStatusLabel}
-                  tone={installationTone}
-                />
-                <span class="av-service-updated">
-                  {t("apps.updated", {
-                    date: relativeTime(inst.updatedAt),
-                  })}
-                </span>
-              </div>
-              <div class="av-service-meta">
-                <span>{inst.environment}</span>
-              </div>
-            </button>
-            <div class="av-service-actions">
-              <Show
-                when={props.launchUrls.get(inst.id)}
-                fallback={
-                  <>
-                    <span class="av-service-link-state">
-                      {t("apps.noOpenLink")}
-                    </span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      type="button"
-                      onClick={() => props.openDetail(inst)}
-                    >
-                      {t("apps.viewDetails")}
-                    </Button>
-                  </>
-                }
-              >
-                {(url) => (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    icon={<ExternalLink size={14} />}
-                    href={url()}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                  >
-                    {t("apps.openApp")}
-                  </Button>
-                )}
-              </Show>
-            </div>
+          <li>
+            <ServiceTile
+              inst={inst}
+              url={props.launchUrls.get(inst.id)}
+              icon={props.iconFor(inst)}
+              onOpenDetail={() => props.openDetail(inst)}
+            />
           </li>
         )}
       </For>
+      <li>
+        <a class="av-tile av-tile-add" href="/new">
+          <span class="av-tile-icon" aria-hidden="true">
+            <Plus />
+          </span>
+          <span class="av-tile-name">{t("apps.add")}</span>
+        </a>
+      </li>
     </ul>
+  );
+}
+
+/**
+ * One launcher tile. A live launch URL renders an anchor that opens the app in
+ * a new tab; otherwise a button that opens the service screen. Needs-attention
+ * shows as a corner dot on the icon (plus a screen-reader label), keeping the
+ * tile copy-free.
+ */
+function ServiceTile(props: {
+  readonly inst: Installation;
+  readonly url: string | undefined;
+  readonly icon: JSX.Element;
+  readonly onOpenDetail: () => void;
+}) {
+  const attention = () => needsAttention(props.inst);
+  const body = () => (
+    <>
+      <span
+        class="av-tile-icon"
+        classList={{ "av-tile-icon-attention": attention() }}
+        aria-hidden="true"
+      >
+        {props.icon}
+        <Show when={attention()}>
+          <span class="av-tile-dot" />
+        </Show>
+      </span>
+      <span class="av-tile-name">{props.inst.name}</span>
+      <Show when={attention()}>
+        <span class="sr-only">{t("apps.needsAttention")}</span>
+      </Show>
+    </>
+  );
+  return (
+    <Show
+      when={props.url}
+      fallback={
+        <button type="button" class="av-tile" onClick={props.onOpenDetail}>
+          {body()}
+        </button>
+      }
+    >
+      {(url) => (
+        <a
+          class="av-tile"
+          href={url()}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          {body()}
+        </a>
+      )}
+    </Show>
   );
 }
 

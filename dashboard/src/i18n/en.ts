@@ -171,6 +171,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.add": "Add service",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
+  "apps.needsAttention": "Needs attention",
   "apps.openApp": "Open service",
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
