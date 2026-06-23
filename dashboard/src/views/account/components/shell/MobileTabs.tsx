@@ -1,6 +1,6 @@
 /**
  * Mobile bottom bar mirroring the sidebar's primary destinations, so phones get
- * the same one-tap wayfinding (home / cloud accounts / settings) instead of
+ * the same one-tap wayfinding (home / provider access / settings) instead of
  * burying everything in the profile menu.
  */
 import { A, useLocation } from "@solidjs/router";

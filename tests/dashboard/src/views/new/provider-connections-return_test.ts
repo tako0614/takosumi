@@ -141,8 +141,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain("missingOwnKeyProviderRows");
     expect(newAppViewSource).not.toContain("operator" + "Missing");
     expect(newAppViewSource).not.toContain("error" + "OperatorManaged");
-    expect(en["new.providers.missingBody"]).toContain("cloud account");
-    expect(ja["new.providers.missingBody"]).toContain("クラウドアカウント");
+    expect(en["new.providers.missingBody"]).toContain("provider access");
+    expect(ja["new.providers.missingBody"]).toContain("Provider アクセス");
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {
@@ -355,6 +355,8 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("custom ProviderConnection path asks for provider source and env variables", () => {
+    expect(connectionsTabSource).toContain("GENERIC_ENV_PROVIDER_OPTION");
+    expect(connectionsTabSource).toContain('"conn.genericEnv.option"');
     expect(connectionsTabSource).toContain(
       'placeholder={t("conn.genericEnv.providerPlaceholder")}',
     );
@@ -363,17 +365,22 @@ describe("/new Provider Connections return context", () => {
     );
     expect(connectionsTabSource).toContain('"conn.genericEnv.providerName"');
     expect(connectionsTabSource).toContain('"conn.genericEnv.envName"');
-    expect(en["conn.custom.summary"]).toContain("OpenTofu provider");
-    expect(en["conn.genericEnv.providerName"]).toBe("OpenTofu provider");
+    expect(en["conn.genericEnv.option"]).toBe("Any OpenTofu provider");
+    expect(en["conn.genericEnv.providerName"]).toBe("Provider source");
     expect(en["conn.genericEnv.providerPlaceholder"]).toBe(
       "snowflake-labs/snowflake",
     );
-    expect(en["conn.genericEnv.envName"]).toBe("Environment variable");
+    expect(en["conn.genericEnv.envName"]).toBe("Env name");
     expect(en["conn.genericEnv.envNamePlaceholder"]).toBe("SNOWFLAKE_PASSWORD");
-    expect(ja["conn.custom.summary"]).toContain("OpenTofu provider");
-    expect(ja["conn.genericEnv.envName"]).toBe("環境変数名");
+    expect(ja["conn.genericEnv.option"]).toBe("任意の OpenTofu provider");
+    expect(ja["conn.genericEnv.envName"]).toBe("env 名");
     expect(connectionsTabSource).not.toContain('placeholder="private-api"');
     expect(connectionsTabSource).not.toContain('placeholder="API_TOKEN"');
+    expect(connectionsTabSource).not.toContain(
+      '"conn.genericEnv.cloudflareGuided"',
+    );
+    expect(en).not.toHaveProperty("conn.custom.summary");
+    expect(ja).not.toHaveProperty("conn.custom.summary");
   });
 
   test("ProviderConnection list stays friendly and hides raw credential plumbing", () => {

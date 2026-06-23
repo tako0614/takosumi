@@ -740,9 +740,10 @@ output "id" {
   ).toBe(true);
 });
 
-test("still rejects arbitrary providers by default", () => {
-  // Widening the resource-type layer does not relax the provider allowlist:
-  // the default Capsule Gate coverage stays cloudflare/aws/random/tls only.
+test("admits arbitrary OpenTofu providers with generic env by default", () => {
+  // The catalog is not the provider boundary. Unknown-but-qualified provider
+  // sources can proceed to Provider Connection setup; runner mirror/egress and
+  // plan policy remain the enforcement layers.
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -752,31 +753,35 @@ test("still rejects arbitrary providers by default", () => {
         text: `
 terraform {
   required_providers {
-    evil = {
-      source = "acme/evil"
+    snowflake = {
+      source = "snowflake-labs/snowflake"
     }
   }
 }
 
-resource "cloudflare_r2_bucket" "ok" {
-  account_id = var.account_id
-  name       = var.name
+resource "snowflake_database" "app" {
+  name = "APP"
 }
 
-output "url" {
-  value = "https://example.workers.dev"
+output "database_name" {
+  value = snowflake_database.app.name
 }
 `,
       },
     ],
   });
 
-  expect(result.level).toBe("unsupported");
+  expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
-    { source: "acme/evil", aliases: [], allowed: false },
+    { source: "snowflake-labs/snowflake", aliases: [], allowed: true },
+  ]);
+  expect(result.resources).toEqual([
+    { type: "snowflake_database", count: 1, allowed: true },
   ]);
   expect(
-    result.findings.some((finding) => finding.code === "provider_not_allowed"),
+    result.findings.some(
+      (finding) => finding.code === "generic_provider_connection_required",
+    ),
   ).toBe(true);
 });
 
@@ -895,6 +900,7 @@ output "value" {
   // Nothing inside the heredoc body participates in block matching.
   expect(result.provisioners).toEqual([]);
   expect(result.resources).toEqual([
-    { type: "null_resource", count: 1, allowed: false },
+    { type: "null_resource", count: 1, allowed: true },
   ]);
+  expect(result.level).toBe("ready");
 });

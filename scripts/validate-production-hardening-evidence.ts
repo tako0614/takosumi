@@ -129,7 +129,8 @@ export interface RestoreRehearsalEvidence extends BaseEvidence {
 export interface ProviderCatalogEvidence extends BaseEvidence {
   readonly providers: readonly {
     readonly id: string;
-    readonly ownershipOptions: readonly ["own_key"];
+    readonly connectionModes: readonly ["provider_connection"];
+    readonly genericEnvSupported: true;
   }[];
   readonly cloudOnlyGatewayProjectionReturned: false;
   readonly secretValuesReturned: false;
@@ -265,17 +266,37 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
         rpoMinutes: 15,
       },
       providerCatalog: {
-        evidenceRef: `${evidenceRefBase}#evidence/provider-catalog.md`,
+        evidenceRef: `${evidenceRefBase}#evidence/provider-connections.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Production Provider Catalog returned only own-key provider metadata and no Cloud-only Gateway or secret projection.",
+          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only Gateway or secret projection.",
         providers: [
-          { id: "aws", ownershipOptions: ["own_key"] },
-          { id: "cloudflare", ownershipOptions: ["own_key"] },
-          { id: "gcp", ownershipOptions: ["own_key"] },
-          { id: "github", ownershipOptions: ["own_key"] },
-          { id: "kubernetes", ownershipOptions: ["own_key"] },
+          {
+            id: "aws",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "cloudflare",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "gcp",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "github",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "kubernetes",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
         ],
         cloudOnlyGatewayProjectionReturned: false,
         secretValuesReturned: false,
@@ -606,9 +627,7 @@ function readPlatformControlPlaneSmoke(
     );
   }
   if (row.publicUrlVerified !== true) {
-    throw new Error(
-      "platformControlPlaneSmoke.publicUrlVerified must be true",
-    );
+    throw new Error("platformControlPlaneSmoke.publicUrlVerified must be true");
   }
   if (row.deploymentLedgerVerified !== true) {
     throw new Error(
@@ -754,27 +773,30 @@ function readRestoreRehearsal(value: unknown): RestoreRehearsalEvidence {
 function readProviderCatalog(value: unknown): ProviderCatalogEvidence {
   const base = readBase(value, "providerCatalog");
   const row = record(value, "providerCatalog evidence");
-  const providersRaw = array(
-    row.providers,
-    "providerCatalog.providers",
-  );
+  const providersRaw = array(row.providers, "providerCatalog.providers");
   const providers = providersRaw.map((item, index) => {
     const provider = record(item, `providerCatalog.providers[${index}]`);
     if (!nonEmptyString(provider.id)) {
       throw new Error(`providerCatalog.providers[${index}].id is required`);
     }
-    const ownershipOptions = stringArray(
-      provider.ownershipOptions,
-      `providerCatalog.providers[${index}].ownershipOptions`,
+    const connectionModes = stringArray(
+      provider.connectionModes,
+      `providerCatalog.providers[${index}].connectionModes`,
     );
     requireSameMembers(
-      ownershipOptions,
-      ["own_key"],
-      `providerCatalog.providers[${index}].ownershipOptions`,
+      connectionModes,
+      ["provider_connection"],
+      `providerCatalog.providers[${index}].connectionModes`,
     );
+    if (provider.genericEnvSupported !== true) {
+      throw new Error(
+        `providerCatalog.providers[${index}].genericEnvSupported must be true`,
+      );
+    }
     return {
       id: provider.id,
-      ownershipOptions: ["own_key"] as const,
+      connectionModes: ["provider_connection"] as const,
+      genericEnvSupported: true as const,
     };
   });
   const providerIds = providers.map((provider) => provider.id);
@@ -802,10 +824,7 @@ function readProviderCatalog(value: unknown): ProviderCatalogEvidence {
 function readCostAttribution(value: unknown): CostAttributionEvidence {
   const base = readBase(value, "costAttribution");
   const row = record(value, "costAttribution evidence");
-  const usageLedger = record(
-    row.usageLedger,
-    "costAttribution.usageLedger",
-  );
+  const usageLedger = record(row.usageLedger, "costAttribution.usageLedger");
   if (!nonEmptyString(usageLedger.spaceId)) {
     throw new Error("costAttribution.usageLedger.spaceId is required");
   }

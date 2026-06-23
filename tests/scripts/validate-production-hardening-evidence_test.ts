@@ -23,16 +23,19 @@ test("production hardening evidence template carries every required check", () =
     "restoreRehearsal",
     "secretBoundary",
   ]);
-  expect(template.checks.providerCatalog.providers.map((item) => item.id)).toEqual([
-    "aws",
-    "cloudflare",
-    "gcp",
-    "github",
-    "kubernetes",
-  ]);
-  expect(template.checks.providerCatalog.cloudOnlyGatewayProjectionReturned).toBe(
-    false,
-  );
+  expect(
+    template.checks.providerCatalog.providers.map((item) => item.id),
+  ).toEqual(["aws", "cloudflare", "gcp", "github", "kubernetes"]);
+  expect(
+    template.checks.providerCatalog.providers.every(
+      (item) =>
+        item.genericEnvSupported === true &&
+        item.connectionModes.includes("provider_connection"),
+    ),
+  ).toBe(true);
+  expect(
+    template.checks.providerCatalog.cloudOnlyGatewayProjectionReturned,
+  ).toBe(false);
   expect(template.checks.secretBoundary.leakTargetsChecked).toContain(
     "hardeningGatePayloads",
   );
@@ -53,7 +56,7 @@ test("production hardening evidence manifest emits hardening gate env", () => {
     TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/restore-rehearsal.md",
     TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
-      "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-catalog.md",
+      "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
     TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/cost-attribution.md",
     TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF:
@@ -124,7 +127,7 @@ test("production hardening evidence requires secret-boundary leak targets", () =
   );
 });
 
-test("production hardening evidence requires provider catalog coverage", () => {
+test("production hardening evidence requires provider connection coverage", () => {
   const manifest = validManifest();
   manifest.checks.providerCatalog.providers =
     manifest.checks.providerCatalog.providers.filter(
@@ -367,18 +370,38 @@ function validManifest(): any {
       },
       providerCatalog: {
         evidenceRef:
-          "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-catalog.md",
+          "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
         evidenceDigest:
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Production Provider Catalog returned only own-key provider metadata and no Cloud-only Gateway or secret projection.",
+          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only Gateway or secret projection.",
         providers: [
-          { id: "aws", ownershipOptions: ["own_key"] },
-          { id: "cloudflare", ownershipOptions: ["own_key"] },
-          { id: "gcp", ownershipOptions: ["own_key"] },
-          { id: "github", ownershipOptions: ["own_key"] },
-          { id: "kubernetes", ownershipOptions: ["own_key"] },
+          {
+            id: "aws",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "cloudflare",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "gcp",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "github",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "kubernetes",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
         ],
         cloudOnlyGatewayProjectionReturned: false,
         secretValuesReturned: false,

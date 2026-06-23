@@ -286,13 +286,11 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     await runTest(connection.id);
   });
 
-  // Custom Provider Connection submit.
+  // Generic Provider Connection submit. This is the first-class path for any
+  // provider not covered by a guided recipe.
   const createGenericEnvProvider = createAction(async () => {
     const name = genericEnvProvider().trim();
     if (!name) throw new Error(t("conn.genericEnv.providerRequired"));
-    if (name === "cloudflare") {
-      throw new Error(t("conn.genericEnv.cloudflareGuided"));
-    }
     const submitValues: Record<string, string> = {};
     for (const pair of envPairs()) {
       const envName = pair.name.trim();
@@ -672,6 +670,9 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 <For each={PROVIDERS}>
                   {(p) => <option value={p.provider}>{p.label}</option>}
                 </For>
+                <option value={GENERIC_ENV_PROVIDER_OPTION}>
+                  {t("conn.genericEnv.option")}
+                </option>
               </Select>
             </FormField>
 
@@ -892,7 +893,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 </Show>
               }
             >
-              {/* Custom service editor for providers without a preset form. */}
+              {/* Generic service editor for providers without a preset form. */}
               <div class="wc-guided">
                 <div class="wc-form-actions">
                   <Button
@@ -996,19 +997,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                   <ActionError error={createGenericEnvProvider.error} />
                 </form>
               </div>
-            </Show>
-            <Show when={!isGenericEnvProvider()}>
-              <details class="connection-advanced">
-                <summary>{t("conn.custom.summary")}</summary>
-                <p class="muted">{t("conn.custom.body")}</p>
-                <Button
-                  variant="secondary"
-                  type="button"
-                  onClick={() => setProvider(GENERIC_ENV_PROVIDER_OPTION)}
-                >
-                  {t("conn.custom.use")}
-                </Button>
-              </details>
             </Show>
           </div>
         </Card>

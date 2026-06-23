@@ -1,12 +1,12 @@
 /**
- * Add a service (`/new`) — service catalog first, link/source import second,
- * one underlying flow.
+ * Add a service (`/new`) — install link / Git source first, starter catalog
+ * second, one underlying flow.
  *
  * Three entry shapes, identical install path:
+ *   - Link/source import: the primary path for app install links or raw Git
+ *     URLs, including services that are not in the starter catalog.
  *   - Examples: curated first-party / known service coordinates returned by
- *     the InstallConfig API. Picking one pre-fills the Git tab.
- *   - Link/source import: an advanced path for app install links or raw source
- *     URLs when a service is not in the catalog.
+ *     the InstallConfig API. Picking one pre-fills the same Git-backed flow.
  *   - External install link: another site links `/install?git=…` (or the
  *     packed `?source=git::…` form); the router forwards the query here and
  *     lib/install-link.ts seeds the Git form. A link only PRE-FILLS — the
@@ -519,12 +519,10 @@ function Inner() {
     !prefill &&
     hasInstallPrefillParams(location.search);
 
-  const opensLinkMode =
-    typeof location !== "undefined" &&
-    new URLSearchParams(location.search).get("mode") === "link";
-  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
-    prefill || opensLinkMode ? "git" : "catalog",
-  );
+  // The install-link / Git URL form is the primary path: manual paste, and the
+  // landing spot for an external `/install?git=…` redirect (which pre-fills it).
+  // The curated catalog is a secondary "pick a starter" option behind it.
+  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">("git");
   const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
     null,
   );
@@ -1318,7 +1316,7 @@ function Inner() {
   /**
    * Single install action. Folds the old two-step (check → confirm) into one:
    * run the compatibility check when needed, stop only on a real blocker (compat
-   * level not runnable, or a missing/unselected cloud account) so the inline
+   * level not runnable, or missing/unselected provider access) so the inline
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
