@@ -80,8 +80,10 @@ export const ja = {
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
   "auth.signInSub": "Google アカウントで続けます。",
-  "auth.signInCloud": "Takosumi Cloud にサインイン",
-  "auth.signInSubCloud": "Google アカウントで続けます。",
+  "auth.signInCloud": "Takosumi Cloud",
+  "auth.signInSubCloud": "Google アカウントでサインインします。",
+  "auth.signInCloudPreview":
+    "GAまでは招待済みGoogleアカウントのみ利用できます。",
   "auth.continueWith": "{provider} で続ける",
   "auth.notConfigured": "現在利用できません",
   "auth.providerChecking": "利用可否を確認中です",
