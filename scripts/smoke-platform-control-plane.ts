@@ -57,7 +57,12 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly space: string;
   readonly appName: string;
   readonly environment: string;
+  readonly sourceMode: "upload" | "git";
   readonly capsuleDir: string;
+  readonly sourceGitUrl?: string;
+  readonly sourceRef?: string;
+  readonly sourcePath?: string;
+  readonly sourceName?: string;
   readonly timeoutSeconds: number;
   readonly deployTimeoutSeconds: number;
   readonly pollIntervalMs: number;
@@ -83,6 +88,9 @@ export interface PlatformControlPlaneSmokeResult {
   readonly environment: string;
   readonly connectionId?: string;
   readonly providerConnectionId?: string;
+  readonly sourceId?: string;
+  readonly sourceSyncRunId?: string;
+  readonly sourceSnapshotId?: string;
   readonly installationId?: string;
   readonly planRunId?: string;
   readonly applyRunId?: string;
@@ -111,7 +119,11 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareAccountIdSource: "env" | "file" | "arg";
     readonly cloudflareAccountIdDigest: string;
     readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
-    readonly capsuleDir: string;
+    readonly sourceMode: "upload" | "git";
+    readonly capsuleDir?: string;
+    readonly sourceGitUrlDigest?: string;
+    readonly sourceRef?: string;
+    readonly sourcePath?: string;
   };
 }
 
@@ -139,6 +151,10 @@ interface CliArgs {
   readonly appName?: string;
   readonly environment?: string;
   readonly capsuleDir?: string;
+  readonly sourceGitUrl?: string;
+  readonly sourceRef?: string;
+  readonly sourcePath?: string;
+  readonly sourceName?: string;
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
@@ -177,6 +193,7 @@ interface RunRecord {
   readonly id: string;
   readonly status: string;
   readonly type: string;
+  readonly sourceSnapshotId?: string;
   readonly policyStatus?: string;
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
@@ -193,6 +210,12 @@ interface DeployResponse {
   readonly planRun?: RunRecord;
   readonly applyRun?: RunRecord;
   readonly created?: boolean;
+}
+
+interface InstallConfigRecord {
+  readonly id?: string;
+  readonly sourceKind?: string;
+  readonly name?: string;
 }
 
 interface InstallationRecord {
@@ -331,8 +354,21 @@ export async function resolveOptions(
     label: "Cloudflare API token",
     dryRun: args.dryRun === true,
   });
+  const rawSourceGitUrl =
+    args.sourceGitUrl ?? env.TAKOSUMI_SMOKE_SOURCE_GIT_URL;
+  const sourceGitUrl =
+    rawSourceGitUrl !== undefined
+      ? normalizeSmokeSourceGitUrl(rawSourceGitUrl)
+      : undefined;
+  const sourceRef =
+    args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
+  const sourcePath =
+    args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
+  const sourceName =
+    args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
+  const sourceMode = sourceGitUrl ? "git" : "upload";
   const capsuleDir = resolve(args.capsuleDir ?? DEFAULT_CAPSULE_DIR);
-  if (args.dryRun !== true) {
+  if (args.dryRun !== true && sourceMode === "upload") {
     await access(capsuleDir);
   }
   return {
@@ -348,7 +384,12 @@ export async function resolveOptions(
     space,
     appName: args.appName ?? defaultAppName(),
     environment: args.environment ?? defaultSmokeEnvironment(url),
+    sourceMode,
     capsuleDir,
+    ...(sourceGitUrl ? { sourceGitUrl } : {}),
+    ...(sourceGitUrl ? { sourceRef } : {}),
+    ...(sourceGitUrl ? { sourcePath } : {}),
+    ...(sourceGitUrl && sourceName ? { sourceName } : {}),
     timeoutSeconds: parsePositiveInteger(
       args.timeoutSeconds,
       "--timeout-seconds",
@@ -387,6 +428,7 @@ export function dryRunResult(
     scratchSpaceId: options.space,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
+    sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     appName: options.appName,
     environment: options.environment,
@@ -431,6 +473,9 @@ export async function runPlatformControlPlaneSmoke(
   let connectionId: string | undefined;
   let providerConnectionId: string | undefined;
   let connectionRevoked = false;
+  let sourceId: string | undefined;
+  let sourceSyncRunId: string | undefined;
+  let sourceSnapshotId: string | undefined;
   let installationId: string | undefined;
   let planRunId: string | undefined;
   let applyRunId: string | undefined;
@@ -455,12 +500,19 @@ export async function runPlatformControlPlaneSmoke(
     const connection = await createSpaceCloudflareConnection(options, spaceId);
     connectionId = connection.rawConnectionId;
     providerConnectionId = connection.providerConnectionId;
-    const snapshot = await uploadCapsule(options, spaceId);
-    const deploy = await deploySnapshot(options, {
-      spaceId,
-      snapshotId: snapshot.id,
-      providerConnectionId,
-    });
+    const deploy =
+      options.sourceMode === "git"
+        ? await deployGitSourceCapsule(options, {
+            spaceId,
+            providerConnectionId,
+          })
+        : await deployUploadedCapsule(options, {
+            spaceId,
+            providerConnectionId,
+          });
+    sourceId = deploy.sourceId;
+    sourceSyncRunId = deploy.sourceSyncRunId;
+    sourceSnapshotId = deploy.sourceSnapshotId;
     installationId = deploy.installation.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
     capsuleGateStatus = "passed";
@@ -545,11 +597,15 @@ export async function runPlatformControlPlaneSmoke(
       scratchSpaceId: spaceId,
       capsuleModule: "cloudflare-hello-worker",
       credentialPath: "space_scoped_provider_connection",
+      sourceMode: options.sourceMode,
       steps: requiredSteps(options),
       appName: options.appName,
       environment: options.environment,
       connectionId,
       providerConnectionId,
+      sourceId,
+      sourceSyncRunId,
+      sourceSnapshotId,
       installationId,
       planRunId,
       applyRunId,
@@ -611,6 +667,9 @@ export async function runPlatformControlPlaneSmoke(
     connectionId,
     providerConnectionId,
     installationId,
+    sourceId,
+    sourceSyncRunId,
+    sourceSnapshotId,
     planRunId,
     applyRunId,
     destroyPlanRunId,
@@ -635,6 +694,9 @@ function failedResult(
     readonly spaceId: string;
     readonly connectionId?: string;
     readonly providerConnectionId?: string;
+    readonly sourceId?: string;
+    readonly sourceSyncRunId?: string;
+    readonly sourceSnapshotId?: string;
     readonly installationId?: string;
     readonly planRunId?: string;
     readonly applyRunId?: string;
@@ -664,11 +726,15 @@ function failedResult(
     scratchSpaceId: input.spaceId,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
+    sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     appName: options.appName,
     environment: options.environment,
     connectionId: input.connectionId,
     providerConnectionId: input.providerConnectionId,
+    sourceId: input.sourceId,
+    sourceSyncRunId: input.sourceSyncRunId,
+    sourceSnapshotId: input.sourceSnapshotId,
     installationId: input.installationId,
     planRunId: input.planRunId,
     applyRunId: input.applyRunId,
@@ -877,6 +943,220 @@ async function uploadCapsule(
   const id = response.snapshot?.id;
   if (!id) throw new Error("upload response did not include snapshot.id");
   return { id };
+}
+
+async function deployUploadedCapsule(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly providerConnectionId: string;
+  },
+): Promise<
+  DeployResponse & {
+    readonly sourceSnapshotId: string;
+  }
+> {
+  const snapshot = await uploadCapsule(options, input.spaceId);
+  const deploy = await deploySnapshot(options, {
+    spaceId: input.spaceId,
+    snapshotId: snapshot.id,
+    providerConnectionId: input.providerConnectionId,
+  });
+  return { ...deploy, sourceSnapshotId: snapshot.id };
+}
+
+async function deployGitSourceCapsule(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly providerConnectionId: string;
+  },
+): Promise<
+  DeployResponse & {
+    readonly sourceId: string;
+    readonly sourceSyncRunId: string;
+    readonly sourceSnapshotId: string;
+  }
+> {
+  if (!options.sourceGitUrl) {
+    throw new Error("sourceGitUrl is required for git source smoke");
+  }
+  const source = await createSmokeSource(options, input.spaceId);
+  const sourceSyncRun = await syncSmokeSource(options, source.id);
+  const sourceSnapshotId = sourceSyncRun.sourceSnapshotId;
+  if (!sourceSnapshotId) {
+    throw new Error(
+      `source sync run ${sourceSyncRun.id} succeeded without sourceSnapshotId`,
+    );
+  }
+  const installConfigId = await findGenericCapsuleInstallConfigId(
+    options,
+    input.spaceId,
+  );
+  const installation = await createSourceInstallation(options, {
+    spaceId: input.spaceId,
+    sourceId: source.id,
+    installConfigId,
+  });
+  await putInstallationProviderConnections(options, {
+    installationId: installation.id,
+    providerConnectionId: input.providerConnectionId,
+  });
+  const plan = await requestJson<{ readonly run: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      installation.id,
+    )}/plan`,
+    timeoutMs: options.deployTimeoutSeconds * 1000,
+    body: {},
+  });
+  return {
+    installation,
+    run: plan.run,
+    planRun: plan.run,
+    created: true,
+    sourceId: source.id,
+    sourceSyncRunId: sourceSyncRun.id,
+    sourceSnapshotId,
+  };
+}
+
+async function createSmokeSource(
+  options: PlatformControlPlaneSmokeOptions,
+  spaceId: string,
+): Promise<{ readonly id: string }> {
+  const response = await requestJson<{
+    readonly source?: { readonly id?: string };
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/sources`,
+    body: {
+      spaceId,
+      name: options.sourceName ?? `${options.appName}-source`,
+      url: options.sourceGitUrl,
+      defaultRef: options.sourceRef,
+      defaultPath: options.sourcePath,
+    },
+  });
+  const id = response.source?.id;
+  if (!id) throw new Error("source create response did not include source.id");
+  return { id };
+}
+
+async function syncSmokeSource(
+  options: PlatformControlPlaneSmokeOptions,
+  sourceId: string,
+): Promise<RunRecord & { readonly sourceSnapshotId: string }> {
+  const created = await requestJson<{ readonly run: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/sources/${encodeURIComponent(sourceId)}/sync`,
+    body: {},
+  });
+  const completed = await pollRun(options, created.run.id);
+  assertRunSucceeded(completed, "source sync");
+  if (!completed.sourceSnapshotId) {
+    throw new Error(
+      `source sync run ${completed.id} did not expose sourceSnapshotId`,
+    );
+  }
+  return completed as RunRecord & { readonly sourceSnapshotId: string };
+}
+
+async function findGenericCapsuleInstallConfigId(
+  options: PlatformControlPlaneSmokeOptions,
+  spaceId: string,
+): Promise<string> {
+  const response = await requestJson<{
+    readonly installConfigs?: readonly InstallConfigRecord[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/capsule-configs?workspaceId=${encodeURIComponent(
+      spaceId,
+    )}`,
+  });
+  const match = (response.installConfigs ?? []).find(
+    (config) =>
+      typeof config.id === "string" &&
+      config.sourceKind === "generic_capsule",
+  );
+  if (!match?.id) {
+    throw new Error(
+      "generic_capsule install config was not available to the scratch Workspace",
+    );
+  }
+  return match.id;
+}
+
+async function createSourceInstallation(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly sourceId: string;
+    readonly installConfigId: string;
+  },
+): Promise<{ readonly id: string; readonly name?: string }> {
+  const response = await requestJson<{
+    readonly installation?: { readonly id?: string; readonly name?: string };
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/spaces/${encodeURIComponent(
+      input.spaceId,
+    )}/installations`,
+    body: {
+      name: options.appName,
+      environment: options.environment,
+      sourceId: input.sourceId,
+      installConfigId: input.installConfigId,
+      vars: {
+        accountId: options.cloudflareAccountId,
+        appName: options.appName,
+        workersSubdomain: options.cloudflareWorkersSubdomain,
+      },
+    },
+  });
+  const id = response.installation?.id;
+  if (!id) {
+    throw new Error("installation create response did not include id");
+  }
+  return {
+    id,
+    ...(response.installation?.name ? { name: response.installation.name } : {}),
+  };
+}
+
+async function putInstallationProviderConnections(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly installationId: string;
+    readonly providerConnectionId: string;
+  },
+): Promise<void> {
+  await requestJson({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "PUT",
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      input.installationId,
+    )}/provider-connections`,
+    body: {
+      connections: [
+        {
+          provider: "cloudflare",
+          alias: "main",
+          connectionId: input.providerConnectionId,
+        },
+      ],
+    },
+  });
 }
 
 async function ensurePlanReadyForApply(
@@ -1675,6 +1955,17 @@ function normalizeBaseUrl(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+function normalizeSmokeSourceGitUrl(value: string): string {
+  const url = new URL(value);
+  if (url.username || url.password) {
+    throw new Error(
+      "--source-git-url must not include embedded credentials; use a public fixture repo or a Source Git Connection",
+    );
+  }
+  url.hash = "";
+  return url.toString();
+}
+
 function defaultAppName(): string {
   const suffix = Math.random().toString(36).slice(2, 10);
   return `takosumi-smoke-${suffix}`;
@@ -1686,7 +1977,11 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareAccountIdSource: "env" | "file" | "arg";
   readonly cloudflareAccountIdDigest: string;
   readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
-  readonly capsuleDir: string;
+  readonly sourceMode: "upload" | "git";
+  readonly capsuleDir?: string;
+  readonly sourceGitUrlDigest?: string;
+  readonly sourceRef?: string;
+  readonly sourcePath?: string;
 } {
   return {
     accountSessionTokenSource: options.accountSessionTokenSource,
@@ -1694,7 +1989,17 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
     cloudflareAccountIdDigest: sha256(options.cloudflareAccountId),
     cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
-    capsuleDir: options.capsuleDir,
+    sourceMode: options.sourceMode,
+    ...(options.sourceMode === "upload"
+      ? { capsuleDir: options.capsuleDir }
+      : {}),
+    ...(options.sourceMode === "git" && options.sourceGitUrl
+      ? {
+          sourceGitUrlDigest: sha256(options.sourceGitUrl),
+          sourceRef: options.sourceRef ?? "main",
+          sourcePath: options.sourcePath ?? ".",
+        }
+      : {}),
   };
 }
 
@@ -1726,12 +2031,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredSteps(
   options?: Pick<
     PlatformControlPlaneSmokeOptions,
-    "backupRestoreRehearsal" | "keepConnection"
+    "backupRestoreRehearsal" | "keepConnection" | "sourceMode"
   >,
 ): readonly string[] {
   const steps = [
     "spaceScopedProviderConnection",
     "connectionVerified",
+    ...(options?.sourceMode === "git" ? ["sourceRegistered"] : []),
+    ...(options?.sourceMode === "git" ? ["sourceSynced"] : []),
     "scratchInstall",
     "plan",
     "apply",
@@ -1769,6 +2076,7 @@ async function writeResult(
   console.log(`${label} ${result.kind}`);
   console.log(`service: ${result.serviceUrl}`);
   console.log(`workspace: ${result.scratchSpaceId}`);
+  console.log(`source mode: ${result.sourceMode}`);
   console.log(`capsule: ${result.capsuleModule}`);
   console.log(`app: ${result.appName}`);
   console.log(`worker URL: ${result.workerUrl}`);
@@ -1777,6 +2085,8 @@ async function writeResult(
   );
   if (result.installationId)
     console.log(`installation: ${result.installationId}`);
+  if (result.sourceSyncRunId)
+    console.log(`source sync run: ${result.sourceSyncRunId}`);
   if (result.applyRunId) console.log(`apply run: ${result.applyRunId}`);
   if (result.destroyApplyRunId) {
     console.log(`destroy apply run: ${result.destroyApplyRunId}`);
@@ -1849,8 +2159,45 @@ async function runSelfTest(): Promise<void> {
   if (serialized.includes("acc_selftest")) {
     throw new Error("self-test leaked Cloudflare account id");
   }
+  if (result.sourceMode !== "upload") {
+    throw new Error("self-test default source mode is not upload");
+  }
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
+  }
+  const gitOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      sourceGitUrl: "https://github.example/takosumi-fixture.git",
+      sourceRef: "main",
+      sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
+    },
+    {},
+  );
+  const gitResult = dryRunResult(gitOptions);
+  const serializedGit = JSON.stringify(gitResult);
+  if (gitResult.sourceMode !== "git") {
+    throw new Error("self-test did not enable git source mode");
+  }
+  if (
+    !gitResult.steps.includes("sourceRegistered") ||
+    !gitResult.steps.includes("sourceSynced")
+  ) {
+    throw new Error("git self-test result is missing source steps");
+  }
+  if (
+    serializedGit.includes("github.example") ||
+    serializedGit.includes("takosumi-fixture.git")
+  ) {
+    throw new Error("git self-test leaked source Git URL");
   }
   const rehearsalOptions = await resolveOptions(
     {
@@ -1990,6 +2337,10 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --capsule-dir <path>                            default cloudflare-hello-worker module
+  --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
+  --source-ref <ref>                              Git ref for --source-git-url, default main
+  --source-path <path>                            Capsule path inside the Git repo, default .
+  --source-name <name>                            Source display name, default <app-name>-source
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
