@@ -33,6 +33,9 @@ test("cloud extension smoke records redacted pass with a materialization gap", a
   expect(result.gaps).toEqual([
     "cloudflare_compat_materialization_not_enabled",
   ]);
+  expect(
+    result.checks.find((check) => check.name === "cloudExtensionCatalog")?.ok,
+  ).toBe(true);
   expect(seenAuth.length).toBeGreaterThan(0);
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
 });
@@ -87,6 +90,27 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
 });
 
+test("cloud extension smoke fails readiness when catalog bindings are missing", async () => {
+  const result = await runCloudExtensionSmoke(
+    { ...BASE_OPTIONS, requireCompatMaterialization: true },
+    async (url, init) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === "/__takosumi/cloud/extensions") {
+        return cloudExtensionCatalog(false);
+      }
+      return responseForImplementedCompat(
+        pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+      );
+    },
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain("cloud_extension_catalog_not_ready");
+});
+
 test("cloud extension smoke supports PAT auth and provider E2E evidence", async () => {
   const patOptions: CloudExtensionSmokeOptions = {
     ...BASE_OPTIONS,
@@ -134,6 +158,9 @@ function responseFor(pathname: string, authenticated: boolean): Response {
   if (pathname === "/v1/account/session/me") {
     return json({ subject: "tsub_test" });
   }
+  if (pathname === "/__takosumi/cloud/extensions") {
+    return cloudExtensionCatalog(true);
+  }
   if (pathname === "/gateway/ai/v1/models" && !authenticated) {
     return openAiError(401);
   }
@@ -165,6 +192,16 @@ function responseFor(pathname: string, authenticated: boolean): Response {
     return cloudflare(true, []);
   }
   return cloudflare(false, null, 501, [9001]);
+}
+
+function cloudExtensionCatalog(configured: boolean): Response {
+  return json({
+    kind: "takosumi.platform-cloud-extensions@v1",
+    extensions: [
+      { id: "ai.openai_compatible.v1", configured },
+      { id: "provider.cloudflare.client_v4", configured },
+    ],
+  });
 }
 
 function responseForImplementedCompat(

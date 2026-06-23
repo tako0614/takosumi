@@ -6,6 +6,7 @@ import {
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
   handlePlatformCloudExtensionRequest,
+  handlePlatformCloudExtensionCatalogRequest,
   handlePlatformCloudExtensionRouteRequest,
   handlePlatformCloudflareCompatRequest,
   handlePlatformAiGatewayRequest,
@@ -14,7 +15,9 @@ import {
   handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOidcMetricPath,
+  isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
+  platformCloudExtensionCatalog,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
@@ -755,6 +758,9 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       kind: "ai_gateway",
       basePath: "/gateway/ai/v1",
       bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+      protocol: "openai-compatible",
+      capabilities: ["models"],
+      smokeChecks: ["aiModelsAuth"],
     },
     async () => ({
       authenticated: true,
@@ -947,6 +953,51 @@ test("Cloud-only extension route matcher rejects near-prefixes and unregistered 
   ).toBe(undefined);
 });
 
+test("Cloud-only extension catalog reports configured public capabilities without binding names", async () => {
+  const catalog = platformCloudExtensionCatalog(
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async () => Response.json({ object: "list", data: [] }),
+      },
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async () =>
+          Response.json({ success: true, result: [], errors: [] }),
+      },
+    } as never,
+    "https://app.takosumi.com",
+  );
+
+  expect(catalog.kind).toBe("takosumi.platform-cloud-extensions@v1");
+  expect(catalog.serviceUrl).toBe("https://app.takosumi.com");
+  expect(catalog.summary).toEqual({ total: 2, configured: 2, missing: 0 });
+  expect(catalog.extensions.map((extension) => extension.id)).toEqual([
+    "ai.openai_compatible.v1",
+    "provider.cloudflare.client_v4",
+  ]);
+  expect(catalog.extensions.map((extension) => extension.configured)).toEqual([
+    true,
+    true,
+  ]);
+  const serialized = JSON.stringify(catalog);
+  expect(serialized).not.toContain("TAKOSUMI_CLOUD_AI_GATEWAY");
+  expect(serialized).not.toContain("TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT");
+});
+
+test("Cloud-only extension catalog is a stable platform endpoint", async () => {
+  const url = new URL("https://app.takosumi.com/__takosumi/cloud/extensions");
+  expect(isPlatformCloudExtensionCatalogPath(url.pathname)).toBe(true);
+
+  const response = handlePlatformCloudExtensionCatalogRequest(
+    new Request(url),
+    url,
+    {} as never,
+  );
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.summary).toEqual({ total: 2, configured: 0, missing: 2 });
+  expect(JSON.stringify(body)).not.toContain("bindingName");
+});
+
 test("Cloud-only extension routes are registry driven for future provider gateways", async () => {
   const awsRoute = {
     id: "provider.aws.v1",
@@ -954,6 +1005,9 @@ test("Cloud-only extension routes are registry driven for future provider gatewa
     provider: "aws",
     basePath: "/compat/aws/v1",
     bindingName: "TAKOSUMI_CLOUD_AWS_COMPAT",
+    protocol: "aws-compatible",
+    capabilities: ["sts.get-caller-identity"],
+    smokeChecks: ["awsCompatStsAuth"],
   } as const;
   expect(
     matchPlatformCloudExtensionRoute("/compat/aws/v1/sts", [awsRoute]),
