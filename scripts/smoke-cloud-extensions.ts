@@ -22,6 +22,7 @@ const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accoun
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
   "export default { fetch() { return new Response('takosumi smoke'); } };";
 const CLOUD_EXTENSION_CATALOG_PATH = "/__takosumi/cloud/extensions";
+const AI_GATEWAY_STATUS_PATH = "/gateway/ai/v1/__takosumi/status";
 const REQUIRED_CLOUD_EXTENSION_IDS = [
   "ai.openai_compatible.v1",
   "provider.cloudflare.client_v4",
@@ -39,6 +40,7 @@ export interface CloudExtensionSmokeOptions {
   readonly json: boolean;
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
+  readonly requireAiUpstreamProfile: boolean;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -64,6 +66,7 @@ export interface CloudExtensionSmokeResult {
   readonly sessionTokenSource: "env" | "file";
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
+  readonly requireAiUpstreamProfile: boolean;
   readonly platformVersion?: string;
   readonly extensionVersions?: {
     readonly aiGateway?: string;
@@ -83,6 +86,7 @@ interface CliArgs {
   readonly json?: boolean;
   readonly requireCompatMaterialization?: boolean;
   readonly requireProviderE2e?: boolean;
+  readonly requireAiUpstreamProfile?: boolean;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -129,7 +133,7 @@ export async function resolveOptions(
   const tokenFile =
     authTokenKind === "pat"
       ? patTokenFile
-      : args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE;
+      : (args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE);
   if (tokenFile) {
     const sessionToken = (await Bun.file(tokenFile).text()).trim();
     if (!sessionToken) throw new Error("auth token file is empty");
@@ -143,6 +147,7 @@ export async function resolveOptions(
       requireCompatMaterialization: args.requireCompatMaterialization === true,
       requireProviderE2E:
         args.requireProviderE2E === true || args.requireProviderE2e === true,
+      requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
       cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -167,6 +172,7 @@ export async function resolveOptions(
     requireCompatMaterialization: args.requireCompatMaterialization === true,
     requireProviderE2E:
       args.requireProviderE2E === true || args.requireProviderE2e === true,
+    requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
     cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -186,8 +192,7 @@ export type CloudExtensionProviderE2ERunner = (
 export async function runCloudExtensionSmoke(
   options: CloudExtensionSmokeOptions,
   fetchImpl: FetchLike = fetch,
-  providerE2eRunner: CloudExtensionProviderE2ERunner =
-    runCloudflareCompatProviderE2E,
+  providerE2eRunner: CloudExtensionProviderE2ERunner = runCloudflareCompatProviderE2E,
 ): Promise<CloudExtensionSmokeResult> {
   const authHeaders = {
     authorization: `Bearer ${options.sessionToken}`,
@@ -229,6 +234,28 @@ export async function runCloudExtensionSmoke(
       pass: (response, body) =>
         response.status === 200 && modelIds(body).includes("takosumi/default"),
       summarize: (body) => ({ modelIds: modelIds(body) }),
+    }),
+    await requestCheck(fetchImpl, options, {
+      name: "aiGatewayStatus",
+      path: AI_GATEWAY_STATUS_PATH,
+      expected: options.requireAiUpstreamProfile
+        ? "authenticated AI Gateway status reports at least one configured upstream profile"
+        : "authenticated AI Gateway status reports configured upstreams or the explicit Workers AI fallback",
+      headers: authHeaders,
+      pass: (response, body) => {
+        if (response.status !== 200) return false;
+        const mode = record(body).mode;
+        if (options.requireAiUpstreamProfile) {
+          return (
+            mode === "configured_upstreams" &&
+            positiveNumber(record(record(body).summary).profileCount)
+          );
+        }
+        return (
+          mode === "configured_upstreams" || mode === "workers_ai_fallback"
+        );
+      },
+      summarize: summarizeAiGatewayStatus,
     }),
     await requestCheck(fetchImpl, options, {
       name: "aiChatAuth",
@@ -365,12 +392,12 @@ export async function runCloudExtensionSmoke(
     }),
   ];
   if (options.requireProviderE2E) {
-    checks.push(await cloudflareCompatProviderE2ECheck(options, providerE2eRunner));
+    checks.push(
+      await cloudflareCompatProviderE2ECheck(options, providerE2eRunner),
+    );
   }
   const gaps = cloudExtensionGaps(checks);
-  const gaReady =
-    checks.every((check) => check.ok) &&
-    !gaps.includes("cloudflare_compat_materialization_not_enabled");
+  const gaReady = checks.every((check) => check.ok) && gaps.length === 0;
   const status =
     checks.every((check) => check.ok) &&
     (gaReady || !options.requireCompatMaterialization)
@@ -386,6 +413,7 @@ export async function runCloudExtensionSmoke(
     sessionTokenSource: options.sessionTokenSource,
     requireCompatMaterialization: options.requireCompatMaterialization,
     requireProviderE2E: options.requireProviderE2E,
+    requireAiUpstreamProfile: options.requireAiUpstreamProfile,
     platformVersion: options.platformVersion,
     extensionVersions:
       options.aiGatewayVersion || options.cloudflareCompatVersion
@@ -512,9 +540,22 @@ function cloudExtensionGaps(
   checks: readonly CloudExtensionSmokeCheck[],
 ): string[] {
   const gaps: string[] = [];
-  const catalog = checks.find((check) => check.name === "cloudExtensionCatalog");
+  const catalog = checks.find(
+    (check) => check.name === "cloudExtensionCatalog",
+  );
   if (catalog && !catalog.ok) {
     gaps.push("cloud_extension_catalog_not_ready");
+  }
+  const aiStatus = checks.find((check) => check.name === "aiGatewayStatus");
+  if (
+    aiStatus &&
+    aiStatus.ok &&
+    aiStatus.summary.mode === "workers_ai_fallback"
+  ) {
+    gaps.push("ai_gateway_external_upstream_not_configured");
+  }
+  if (aiStatus && !aiStatus.ok) {
+    gaps.push("ai_gateway_status_not_ready");
   }
   const materialization = checks.find(
     (check) =>
@@ -529,7 +570,9 @@ function cloudExtensionGaps(
 async function runCloudflareCompatProviderE2E(
   options: CloudExtensionSmokeOptions,
 ): Promise<CloudExtensionProviderE2EResult> {
-  const workdir = await mkdtemp(join(tmpdir(), "takosumi-cloud-compat-provider-"));
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
   const bucketName = `takosumi-e2e-${Date.now().toString(36)}`;
   const completedSteps: string[] = [];
   try {
@@ -568,7 +611,11 @@ output "bucket_name" {
     };
     await tofu(["init", "-input=false", "-no-color"], workdir, env);
     completedSteps.push("init");
-    await tofu(["plan", "-input=false", "-no-color", "-out=tfplan"], workdir, env);
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
     completedSteps.push("plan");
     await tofu(
       ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
@@ -599,7 +646,8 @@ output "bucket_name" {
         resource: "cloudflare_r2_bucket",
         bucketName,
         completedSteps,
-        errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+        errorClass:
+          error instanceof Error ? error.name || "Error" : typeof error,
         message: sanitizeErrorMessage(
           error instanceof Error ? error.message : String(error),
         ),
@@ -665,7 +713,9 @@ function summarizeCloudflareEnvelope(body: unknown): Record<string, unknown> {
   };
 }
 
-function summarizeCloudExtensionCatalog(body: unknown): Record<string, unknown> {
+function summarizeCloudExtensionCatalog(
+  body: unknown,
+): Record<string, unknown> {
   const extensions = cloudExtensionCatalogItems(body);
   const configuredIds = configuredCloudExtensionIds(body);
   return {
@@ -678,6 +728,32 @@ function summarizeCloudExtensionCatalog(body: unknown): Record<string, unknown> 
       (id) => !configuredIds.includes(id),
     ),
   };
+}
+
+function summarizeAiGatewayStatus(body: unknown): Record<string, unknown> {
+  const row = record(body);
+  const summary = record(row.summary);
+  return {
+    kind: row.kind,
+    mode: typeof row.mode === "string" ? row.mode : undefined,
+    defaultModel:
+      typeof row.defaultModel === "string" ? row.defaultModel : undefined,
+    profileCount:
+      typeof summary.profileCount === "number" ? summary.profileCount : 0,
+    publicModelCount:
+      typeof summary.publicModelCount === "number"
+        ? summary.publicModelCount
+        : 0,
+    providers: Array.isArray(summary.providers)
+      ? summary.providers.filter(
+          (provider): provider is string => typeof provider === "string",
+        )
+      : [],
+  };
+}
+
+function positiveNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function configuredCloudExtensionIds(body: unknown): string[] {
@@ -758,7 +834,9 @@ function optionalString(value: string | undefined): string | undefined {
   return value && value.trim() ? value.trim() : undefined;
 }
 
-function authTokenKindValue(value: string | undefined): AuthTokenKind | undefined {
+function authTokenKindValue(
+  value: string | undefined,
+): AuthTokenKind | undefined {
   if (value === undefined) return undefined;
   if (value === "session" || value === "pat") return value;
   throw new Error("--auth-token-kind must be session or pat");
@@ -800,6 +878,7 @@ async function runSelfTest(): Promise<void> {
     json: true,
     requireCompatMaterialization: false,
     requireProviderE2E: false,
+    requireAiUpstreamProfile: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
     const parsed = new URL(url);
@@ -827,6 +906,9 @@ async function runSelfTest(): Promise<void> {
         object: "list",
         data: [{ id: "takosumi/default", object: "model" }],
       });
+    }
+    if (parsed.pathname === AI_GATEWAY_STATUS_PATH) {
+      return aiGatewayStatusResponse("workers_ai_fallback");
     }
     if (parsed.pathname === "/gateway/ai/v1/chat/completions") {
       return jsonResponse({ choices: [{ index: 0 }] });
@@ -915,6 +997,9 @@ function jsonResponseForSelfTest(
       data: [{ id: "takosumi/default", object: "model" }],
     });
   }
+  if (url.pathname === AI_GATEWAY_STATUS_PATH) {
+    return aiGatewayStatusResponse("workers_ai_fallback");
+  }
   if (url.pathname === "/gateway/ai/v1/chat/completions") {
     return jsonResponse({ choices: [{ index: 0 }] });
   }
@@ -980,6 +1065,22 @@ function cloudExtensionCatalogResponse(configured: boolean): Response {
   });
 }
 
+function aiGatewayStatusResponse(
+  mode: "configured_upstreams" | "workers_ai_fallback",
+): Response {
+  return jsonResponse({
+    kind: "takosumi.ai-gateway-status@v1",
+    mode,
+    defaultModel: "takosumi/default",
+    summary: {
+      profileCount: mode === "configured_upstreams" ? 1 : 0,
+      publicModelCount: mode === "configured_upstreams" ? 1 : 3,
+      providers:
+        mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+    },
+  });
+}
+
 function printHelp(): void {
   console.log(`Usage:
   bun run smoke:cloud-extensions -- --url <origin> --session-token-file <path>
@@ -994,6 +1095,7 @@ Options:
   --out-file <path>                    write redacted JSON evidence to a private file
   --require-compat-materialization     fail if Cloudflare Workers script materialization still returns 501
   --require-provider-e2e               run tofu init/plan/apply/destroy through the Cloudflare compat endpoint
+  --require-ai-upstream-profile        fail when AI Gateway only has the Workers AI fallback configured
   --platform-version <id>              include deployed platform version id in evidence
   --ai-gateway-version <id>            include deployed AI gateway worker version id in evidence
   --cloudflare-compat-version <id>     include deployed Cloudflare compat worker version id in evidence

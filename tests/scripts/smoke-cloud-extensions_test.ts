@@ -14,6 +14,7 @@ const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   json: true,
   requireCompatMaterialization: false,
   requireProviderE2E: false,
+  requireAiUpstreamProfile: false,
 };
 
 test("cloud extension smoke records redacted pass with a materialization gap", async () => {
@@ -68,6 +69,7 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
         new URL(url).pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
+        "configured_upstreams",
       ),
     async () => ({
       status: 200,
@@ -90,6 +92,34 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
 });
 
+test("cloud extension smoke can require external AI upstream profiles", async () => {
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiUpstreamProfile: true,
+    },
+    async (url, init) =>
+      responseForImplementedCompat(
+        new URL(url).pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "workers_ai_fallback",
+      ),
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain("ai_gateway_status_not_ready");
+  expect(
+    result.checks.find((check) => check.name === "aiGatewayStatus")?.summary,
+  ).toMatchObject({
+    mode: "workers_ai_fallback",
+    profileCount: 0,
+    providers: ["workers_ai"],
+  });
+});
+
 test("cloud extension smoke fails readiness when catalog bindings are missing", async () => {
   const result = await runCloudExtensionSmoke(
     { ...BASE_OPTIONS, requireCompatMaterialization: true },
@@ -102,6 +132,7 @@ test("cloud extension smoke fails readiness when catalog bindings are missing", 
         pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
+        "configured_upstreams",
       );
     },
   );
@@ -126,6 +157,7 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
         new URL(url).pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
+        "configured_upstreams",
       ),
     async (options) => ({
       status: 200,
@@ -170,6 +202,9 @@ function responseFor(pathname: string, authenticated: boolean): Response {
       data: [{ id: "takosumi/default", object: "model" }],
     });
   }
+  if (pathname === "/gateway/ai/v1/__takosumi/status") {
+    return aiGatewayStatus("configured_upstreams");
+  }
   if (pathname === "/gateway/ai/v1/chat/completions") {
     return json({ choices: [{ index: 0 }] });
   }
@@ -204,11 +239,33 @@ function cloudExtensionCatalog(configured: boolean): Response {
   });
 }
 
+function aiGatewayStatus(
+  mode: "configured_upstreams" | "workers_ai_fallback",
+): Response {
+  return json({
+    kind: "takosumi.ai-gateway-status@v1",
+    mode,
+    defaultModel: "takosumi/default",
+    summary: {
+      profileCount: mode === "configured_upstreams" ? 1 : 0,
+      publicModelCount: mode === "configured_upstreams" ? 1 : 3,
+      providers:
+        mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+    },
+  });
+}
+
 function responseForImplementedCompat(
   pathname: string,
   method: string,
   authenticated: boolean,
+  aiMode:
+    | "configured_upstreams"
+    | "workers_ai_fallback" = "configured_upstreams",
 ): Response {
+  if (pathname === "/gateway/ai/v1/__takosumi/status") {
+    return aiGatewayStatus(aiMode);
+  }
   if (!pathname.includes("/workers/scripts/takosumi-smoke")) {
     return responseFor(pathname, authenticated);
   }
