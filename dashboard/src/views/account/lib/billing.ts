@@ -8,6 +8,7 @@
  */
 import { apiFetch } from "./http.ts";
 import * as paths from "./paths.ts";
+import { buildBillingReturnUrl } from "./billing-return.ts";
 
 export interface StripeCheckoutResult {
   readonly url?: string;
@@ -19,8 +20,6 @@ export interface StripePortalResult {
   readonly sessionId?: string;
 }
 
-const BILLING_RETURN_PATH = "/billing";
-
 export async function startStripeCheckout(input: {
   readonly subject: string;
   readonly planId: string;
@@ -31,16 +30,18 @@ export async function startStripeCheckout(input: {
 }): Promise<StripeCheckoutResult> {
   const successUrl =
     input.successUrl ??
-    new URL(
-      `${BILLING_RETURN_PATH}?checkout=success`,
-      location.origin,
-    ).toString();
+    buildBillingReturnUrl({
+      origin: location.origin,
+      checkout: "success",
+      spaceId: input.spaceId,
+    });
   const cancelUrl =
     input.cancelUrl ??
-    new URL(
-      `${BILLING_RETURN_PATH}?checkout=cancelled`,
-      location.origin,
-    ).toString();
+    buildBillingReturnUrl({
+      origin: location.origin,
+      checkout: "cancelled",
+      spaceId: input.spaceId,
+    });
   const body = await apiFetch<
     StripeCheckoutResult & { readonly session_id?: string }
   >(paths.STRIPE_CHECKOUT, {
@@ -66,7 +67,7 @@ export async function startStripePortal(input: {
 }): Promise<StripePortalResult> {
   const returnUrl =
     input.returnUrl ??
-    new URL(`${BILLING_RETURN_PATH}?portal=return`, location.origin).toString();
+    new URL("/billing?portal=return", location.origin).toString();
   const body = await apiFetch<
     StripePortalResult & { readonly session_id?: string }
   >(paths.STRIPE_PORTAL, {

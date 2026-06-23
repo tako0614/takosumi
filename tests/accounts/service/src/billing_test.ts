@@ -10,6 +10,7 @@ import {
   reconcileBillingEntitlements,
   verifyStripeWebhookSignature,
 } from "../../../../accounts/service/src/billing.ts";
+import { stripeInvoiceCreditReconciliationInput } from "../../../../accounts/service/src/billing-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 
 const textEncoder = new TextEncoder();
@@ -76,6 +77,36 @@ test("verifyStripeWebhookSignature rejects bad or stale signatures", async () =>
     TypeError,
     "outside tolerance",
   );
+});
+
+test("stripe invoice credit reconciliation reads Stripe 2026 parent subscription metadata", () => {
+  expect(
+    stripeInvoiceCreditReconciliationInput(
+      JSON.stringify(
+        stripeEvent({
+          id: "evt_invoice_paid",
+          type: "invoice.paid",
+          object: {
+            id: "in_paid",
+            parent: {
+              subscription_details: {
+                subscription: "sub_1",
+                metadata: {
+                  space_id: "space_133669ab2c4c450c",
+                  credits: "1000",
+                  plan_code: "starter",
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ),
+  ).toEqual({
+    spaceId: "space_133669ab2c4c450c",
+    credits: 1000,
+    stripeEventId: "evt_invoice_paid",
+  });
 });
 
 test("createStripeCheckoutSession posts Takosumi subject metadata", async () => {
