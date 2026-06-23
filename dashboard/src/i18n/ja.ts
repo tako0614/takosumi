@@ -395,13 +395,10 @@ export const ja = {
   "new.subtitle": "おすすめから選ぶか、リンクを貼って追加します。",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "何をホストしますか？",
-  "new.store.subtitle":
-    "おすすめを選ぶと、必要な項目だけ入力して始められます。",
   "new.store.blocksTitle": "保存先と部品",
   "new.store.examplesTitle": "サンプル",
   "new.store.empty.title": "追加できるサービスがありません",
   "new.store.empty.message": "リンクから追加できます。",
-  "new.catalog.select": "選択",
   "new.advancedImport.open": "その他のリンクから追加",
   "new.advancedImport.close": "一覧に戻る",
   "new.advancedImport.title": "リンクから追加",

@@ -153,9 +153,8 @@
   align-items: center;
   gap: var(--tg-s-2);
 }
-/* The add (+) action sits in the icon-button family (bell / avatar); a faint
- * accent tint keeps the primary "create" affordance reading first. */
 .topbar-icon-btn.topbar-add {
+  display: none;
   color: var(--tg-accent-text);
 }
 .topbar-icon-btn.topbar-add:hover {
@@ -354,6 +353,9 @@
   }
   .topbar-actions {
     gap: var(--tg-s-1);
+  }
+  .topbar-icon-btn.topbar-add {
+    display: inline-flex;
   }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)

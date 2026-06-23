@@ -5,7 +5,7 @@
  * (where am I, what else is there) that the chromeless shell had lost.
  */
 import { A, useLocation } from "@solidjs/router";
-import { ArrowLeft, CreditCard, Home, Plug, Settings } from "lucide-solid";
+import { ArrowLeft, CreditCard, Home, Plug, Plus, Settings } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
 import SpaceSwitcher from "./SpaceSwitcher.tsx";
@@ -27,6 +27,7 @@ type NavItem = {
 
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home, end: true },
+  { href: "/new", labelKey: "nav.add", icon: Plus },
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   { href: "/advanced/workspace", labelKey: "nav.spaceSettings", icon: Settings },
 ];

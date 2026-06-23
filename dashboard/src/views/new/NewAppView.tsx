@@ -95,7 +95,6 @@ import {
   EmptyState,
   FormField,
   Input,
-  PageHeader,
   Select,
   Skeleton,
   Toast,
@@ -155,23 +154,22 @@ function CatalogCard(props: {
   readonly onSelect: (entry: CatalogEntry) => void;
 }) {
   return (
-    <li class="av-catalog-card">
-      <div class="av-catalog-icon" aria-hidden="true">
-        <CatalogIcon entry={props.entry} />
-      </div>
-      <div class="av-catalog-text">
-        <span class="av-catalog-src">{props.entry.badge[locale()]}</span>
-        <span class="av-catalog-name">{props.entry.name[locale()]}</span>
-        <span class="av-catalog-desc">{props.entry.description[locale()]}</span>
-      </div>
-      <Button
-        variant="primary"
-        size="sm"
+    <li>
+      <button
         type="button"
+        class="av-catalog-card"
         onClick={() => props.onSelect(props.entry)}
       >
-        {t("new.catalog.select")}
-      </Button>
+        <span class="av-catalog-icon" aria-hidden="true">
+          <CatalogIcon entry={props.entry} />
+        </span>
+        <span class="av-catalog-text">
+          <span class="av-catalog-name">{props.entry.name[locale()]}</span>
+          <span class="av-catalog-desc">
+            {props.entry.description[locale()]}
+          </span>
+        </span>
+      </button>
     </li>
   );
 }
@@ -1837,8 +1835,6 @@ function Inner() {
 
   return (
     <AppShell>
-      <PageHeader title={t("new.title")} subtitle={t("new.subtitle")} />
-
       <Show
         when={spaceId()}
         fallback={
@@ -1861,7 +1857,6 @@ function Inner() {
             <div class="av-store-head">
               <div>
                 <h2>{t("new.store.title")}</h2>
-                <p>{t("new.store.subtitle")}</p>
               </div>
             </div>
             <Switch>

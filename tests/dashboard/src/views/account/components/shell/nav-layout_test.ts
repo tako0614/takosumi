@@ -40,24 +40,29 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).toContain('labelKey: "nav.connections"');
     expect(sidebarSource).toContain('href: "/advanced/workspace"');
     expect(sidebarSource).toContain('labelKey: "nav.spaceSettings"');
+    // "Add a service" is a first-class sidebar item (mirrors the launcher).
+    expect(sidebarSource).toContain('href: "/new"');
+    expect(sidebarSource).toContain('labelKey: "nav.add"');
     // Billing is a sidebar item, Cloud-only.
     expect(sidebarSource).toContain("isTakosumiCloudRuntime");
     expect(sidebarSource).toContain('href="/billing"');
     expect(sidebarSource).toContain('t("nav.billing")');
     // The workspace switcher moved out of the profile menu into the sidebar.
     expect(sidebarSource).toContain("SpaceSwitcher");
-    // Runs / notifications / add are NOT first-class sidebar items.
+    // Runs / notifications are NOT first-class sidebar items.
     expect(sidebarSource).not.toContain('href: "/runs"');
     expect(sidebarSource).not.toContain('href: "/notifications"');
-    expect(sidebarSource).not.toContain('href: "/new"');
   });
 
-  test("mobile bottom tabs mirror the sidebar primary set", () => {
+  test("mobile keeps persistent navigation while the add action stays in the top bar", () => {
     expect(mobileTabsSource).toContain('href: "/"');
     expect(mobileTabsSource).toContain('href: "/connections"');
     expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
+    expect(mobileTabsSource).not.toContain('href: "/new"');
     expect(mobileTabsSource).not.toContain('href: "/account"');
     expect(shellCssSource).toContain("grid-template-columns: repeat(3, 1fr);");
+    expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
+    expect(shellCssSource).toContain("display: inline-flex;");
   });
 
   test("top bar is actions-only; brand + workspace switch live in the sidebar", () => {
