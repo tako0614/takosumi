@@ -8,9 +8,10 @@ import { A, useLocation } from "@solidjs/router";
 import {
   ArrowLeft,
   CreditCard,
-  Home,
+  LayoutGrid,
   Plug,
   Plus,
+  Server,
   Settings,
 } from "lucide-solid";
 import { Show } from "solid-js";
@@ -27,13 +28,14 @@ import {
 type NavItem = {
   href: string;
   labelKey: MessageKey;
-  icon: typeof Home;
-  /** Match only the exact path (the "/" home link). */
+  icon: typeof LayoutGrid;
+  /** Match only the exact path (the "/" apps link). */
   end?: boolean;
 };
 
 const PRIMARY: NavItem[] = [
-  { href: "/", labelKey: "nav.home", icon: Home, end: true },
+  { href: "/", labelKey: "nav.apps", icon: LayoutGrid, end: true },
+  { href: "/services", labelKey: "nav.services", icon: Server },
   { href: "/new", labelKey: "nav.add", icon: Plus },
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   {

@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import {
   onSessionChange,
+  readSession,
   refreshSession,
   type SessionRecord,
 } from "../../lib/session.ts";
@@ -33,8 +34,14 @@ type AuthState = "loading" | "authenticated" | "unauthenticated";
  * product `useAuth()` session.
  */
 export default function AuthGuard(props: Props) {
-  const [session, setSession] = createSignal<SessionRecord | null>(null);
-  const [state, setState] = createSignal<AuthState>("loading");
+  // Cache-first: the session is held module-side and survives navigation, so a
+  // page change that already has a known session renders instantly instead of
+  // re-probing /session/me and flashing a full-screen spinner every time.
+  const cached = readSession();
+  const [session, setSession] = createSignal<SessionRecord | null>(cached);
+  const [state, setState] = createSignal<AuthState>(
+    cached ? "authenticated" : "loading",
+  );
   const nav = useNavigate();
   const loc = useLocation();
 
@@ -46,6 +53,11 @@ export default function AuthGuard(props: Props) {
   };
 
   onMount(() => {
+    // With a cached session we already render the page; readSession() above has
+    // already scheduled a quiet background refresh if it was stale, and
+    // onSessionChange reacts if it changed. Only block on the probe when there
+    // is no session yet (genuine first load / signed out).
+    if (session()) return;
     void refreshSession().then((s) => {
       setSession(s);
       if (s) {
@@ -74,8 +86,12 @@ export default function AuthGuard(props: Props) {
   return (
     <Switch>
       <Match when={state() === "loading"}>
-        <div class="auth-page">
-          <p class="auth-spinner">{t("common.loading")}</p>
+        <div
+          class="auth-loading"
+          role="status"
+          aria-label={t("common.loading")}
+        >
+          <span class="tg-spinner" aria-hidden="true" />
         </div>
       </Match>
       <Match when={state() === "authenticated" && session()}>

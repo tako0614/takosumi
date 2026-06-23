@@ -44,10 +44,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(en["run.details.title"]).toBe("Reference info");
     expect(ja["run.details.title"]).toBe("参照情報");
     expect(en["run.connections.reviewTitle"]).toBe(
-      "Cloud account review needed",
+      "Provider access review needed",
     );
     expect(ja["run.connections.reviewTitle"]).toBe(
-      "クラウドアカウントの確認が必要です",
+      "Provider アクセスの確認が必要です",
     );
     expect(en).not.toHaveProperty("run.connections.ownership");
     expect(ja).not.toHaveProperty("run.connections.ownership");

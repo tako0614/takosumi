@@ -57,6 +57,94 @@ export function launchUrlFromOutputs(
   return undefined;
 }
 
+/**
+ * A declared app surface (a launchable screen) from a Capsule's public outputs.
+ * One service may declare several — e.g. a blog's public site plus its admin
+ * screen — and each becomes its own launcher tile.
+ */
+export interface AppSurface {
+  /** Display name; the launcher falls back to the service name when absent. */
+  readonly name?: string;
+  /** Emoji / short glyph, or an icon image URL. */
+  readonly icon?: string;
+  /** Image URL used as the tile face when present. */
+  readonly image?: string;
+  /** Launch URL; tapping the tile opens it. */
+  readonly url?: string;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+function urlValue(value: unknown): string | undefined {
+  return isUrlString(value) ? value.trim() : undefined;
+}
+
+/** Normalize one declared-surface object; null unless it carries a name. */
+function surfaceFromObject(value: unknown): AppSurface | null {
+  if (!value || typeof value !== "object") return null;
+  const rec = value as Record<string, unknown>;
+  const name = nonEmptyString(rec.name);
+  if (!name) return null;
+  return {
+    name,
+    icon: nonEmptyString(rec.icon),
+    image: urlValue(rec.image),
+    url: urlValue(rec.url),
+  };
+}
+
+/**
+ * The app surfaces a Capsule declares via well-known public outputs. This is
+ * the dashboard's opt-in "this is an app" signal — a service with no app
+ * metadata returns []. Supported declaration forms:
+ *   - `apps`: an array of `{ name, icon?, image?, url? }` (multi-surface)
+ *   - `app`: a single object, or an array of objects
+ *   - flat `app_name` / `app_icon` / `app_image` / `app_url` (single surface;
+ *     url falls back to the generic launch URL)
+ * Object/array entries require a `name` (nameless entries are dropped); the
+ * flat form allows an absent name (the launcher fills in the service name).
+ */
+export function appSurfacesFromOutputs(
+  outputs: Readonly<Record<string, unknown>>,
+): AppSurface[] {
+  const surfaces: AppSurface[] = [];
+
+  if (Array.isArray(outputs.apps)) {
+    for (const entry of outputs.apps) {
+      const surface = surfaceFromObject(entry);
+      if (surface) surfaces.push(surface);
+    }
+  }
+  if (Array.isArray(outputs.app)) {
+    for (const entry of outputs.app) {
+      const surface = surfaceFromObject(entry);
+      if (surface) surfaces.push(surface);
+    }
+  } else {
+    const single = surfaceFromObject(outputs.app);
+    if (single) surfaces.push(single);
+  }
+
+  if (surfaces.length === 0) {
+    const name = nonEmptyString(outputs.app_name);
+    const icon = nonEmptyString(outputs.app_icon);
+    const image = urlValue(outputs.app_image);
+    if (name || icon || image) {
+      surfaces.push({
+        name,
+        icon,
+        image,
+        url: urlValue(outputs.app_url) ?? launchUrlFromOutputs(outputs),
+      });
+    }
+  }
+
+  return surfaces;
+}
+
 /** Friendly label for a well-known public output key; humanized key otherwise. */
 const OUTPUT_LABEL_KEYS: Record<string, MessageKey> = {
   launch_url: "app.output.launchUrl",
