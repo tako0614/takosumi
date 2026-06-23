@@ -8,8 +8,9 @@
  * file path is written to the evidence JSON.
  */
 
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import process from "node:process";
 
 export const CLOUD_EXTENSION_SMOKE_KIND =
@@ -22,14 +23,17 @@ const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
   "export default { fetch() { return new Response('takosumi smoke'); } };";
 
 type FetchLike = typeof fetch;
+type AuthTokenKind = "session" | "pat";
 
 export interface CloudExtensionSmokeOptions {
   readonly url: string;
   readonly sessionToken: string;
+  readonly authTokenKind: AuthTokenKind;
   readonly sessionTokenSource: "env" | "file";
   readonly outFile?: string;
   readonly json: boolean;
   readonly requireCompatMaterialization: boolean;
+  readonly requireProviderE2E: boolean;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -51,8 +55,10 @@ export interface CloudExtensionSmokeResult {
   readonly gaReady: boolean;
   readonly generatedAt: string;
   readonly serviceUrl: string;
+  readonly authTokenKind: AuthTokenKind;
   readonly sessionTokenSource: "env" | "file";
   readonly requireCompatMaterialization: boolean;
+  readonly requireProviderE2E: boolean;
   readonly platformVersion?: string;
   readonly extensionVersions?: {
     readonly aiGateway?: string;
@@ -71,9 +77,12 @@ interface CliArgs {
   readonly outFile?: string;
   readonly json?: boolean;
   readonly requireCompatMaterialization?: boolean;
+  readonly requireProviderE2e?: boolean;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
+  readonly authTokenKind?: string;
+  readonly patTokenFile?: string;
 }
 
 if (import.meta.main) {
@@ -106,66 +115,81 @@ export async function resolveOptions(
 ): Promise<CloudExtensionSmokeOptions> {
   const url = args.url ?? env.TAKOSUMI_PLATFORM_URL;
   if (!url) throw new Error("--url or TAKOSUMI_PLATFORM_URL is required");
+  const explicitKind = authTokenKindValue(args.authTokenKind);
+  const patTokenFile =
+    args.patTokenFile ?? env.TAKOSUMI_CLOUD_EXTENSION_PAT_FILE;
+  const patToken = env.TAKOSUMI_CLOUD_EXTENSION_PAT?.trim();
+  const authTokenKind =
+    explicitKind ?? (patTokenFile || patToken ? "pat" : "session");
   const tokenFile =
-    args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE;
+    authTokenKind === "pat"
+      ? patTokenFile
+      : args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE;
   if (tokenFile) {
     const sessionToken = (await Bun.file(tokenFile).text()).trim();
-    if (!sessionToken) throw new Error("session token file is empty");
+    if (!sessionToken) throw new Error("auth token file is empty");
     return {
       url: normalizeBaseUrl(url),
       sessionToken,
+      authTokenKind,
       sessionTokenSource: "file",
       outFile: args.outFile,
       json: args.json === true,
       requireCompatMaterialization: args.requireCompatMaterialization === true,
+      requireProviderE2E:
+        args.requireProviderE2E === true || args.requireProviderE2e === true,
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
       cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
     };
   }
-  const sessionToken = env.TAKOSUMI_ACCOUNT_SESSION_TOKEN?.trim();
+  const sessionToken =
+    authTokenKind === "pat"
+      ? patToken
+      : env.TAKOSUMI_ACCOUNT_SESSION_TOKEN?.trim();
   if (!sessionToken) {
     throw new Error(
-      "--session-token-file, TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE, or TAKOSUMI_ACCOUNT_SESSION_TOKEN is required",
+      "--session-token-file, --pat-token-file, TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE, TAKOSUMI_ACCOUNT_SESSION_TOKEN, TAKOSUMI_CLOUD_EXTENSION_PAT_FILE, or TAKOSUMI_CLOUD_EXTENSION_PAT is required",
     );
   }
   return {
     url: normalizeBaseUrl(url),
     sessionToken,
+    authTokenKind,
     sessionTokenSource: "env",
     outFile: args.outFile,
     json: args.json === true,
     requireCompatMaterialization: args.requireCompatMaterialization === true,
+    requireProviderE2E:
+      args.requireProviderE2E === true || args.requireProviderE2e === true,
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
     cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
   };
 }
 
+export interface CloudExtensionProviderE2EResult {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly summary: Record<string, unknown>;
+}
+
+export type CloudExtensionProviderE2ERunner = (
+  options: CloudExtensionSmokeOptions,
+) => Promise<CloudExtensionProviderE2EResult>;
+
 export async function runCloudExtensionSmoke(
   options: CloudExtensionSmokeOptions,
   fetchImpl: FetchLike = fetch,
+  providerE2eRunner: CloudExtensionProviderE2ERunner =
+    runCloudflareCompatProviderE2E,
 ): Promise<CloudExtensionSmokeResult> {
   const authHeaders = {
     authorization: `Bearer ${options.sessionToken}`,
     accept: "application/json",
   };
-  const checks = [
-    await requestCheck(fetchImpl, options, {
-      name: "sessionMeAuth",
-      path: "/v1/account/session/me",
-      expected: "authenticated session mirror returns subject",
-      headers: authHeaders,
-      pass: (response, body) =>
-        response.status === 200 &&
-        record(body).subject !== undefined &&
-        typeof record(body).subject === "string",
-      summarize: (body) => ({
-        subjectPresent: typeof record(body).subject === "string",
-        primaryAccountIdPresent:
-          typeof record(body).primaryAccountId === "string",
-      }),
-    }),
+  const checks: CloudExtensionSmokeCheck[] = [
+    await authTokenCheck(fetchImpl, options, authHeaders),
     await requestCheck(fetchImpl, options, {
       name: "aiModelsUnauth",
       path: "/gateway/ai/v1/models",
@@ -323,6 +347,9 @@ export async function runCloudExtensionSmoke(
       summarize: summarizeCloudflareEnvelope,
     }),
   ];
+  if (options.requireProviderE2E) {
+    checks.push(await cloudflareCompatProviderE2ECheck(options, providerE2eRunner));
+  }
   const gaps = cloudExtensionGaps(checks);
   const gaReady =
     checks.every((check) => check.ok) &&
@@ -338,8 +365,10 @@ export async function runCloudExtensionSmoke(
     gaReady,
     generatedAt: new Date().toISOString(),
     serviceUrl: options.url,
+    authTokenKind: options.authTokenKind,
     sessionTokenSource: options.sessionTokenSource,
     requireCompatMaterialization: options.requireCompatMaterialization,
+    requireProviderE2E: options.requireProviderE2E,
     platformVersion: options.platformVersion,
     extensionVersions:
       options.aiGatewayVersion || options.cloudflareCompatVersion
@@ -351,8 +380,78 @@ export async function runCloudExtensionSmoke(
     checks,
     gaps,
     safety:
-      "Authenticated smoke uses a Takosumi account session only for request headers; evidence stores status codes and redacted response summaries, never bearer/cookie/session material.",
+      "Authenticated smoke uses a Takosumi account session or personal access token only for request headers; evidence stores status codes and redacted response summaries, never bearer/cookie/session/token material.",
   };
+}
+
+async function authTokenCheck(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  authHeaders: Record<string, string>,
+): Promise<CloudExtensionSmokeCheck> {
+  if (options.authTokenKind === "pat") {
+    return await requestCheck(fetchImpl, options, {
+      name: "cloudExtensionPatAuth",
+      path: "/compat/cloudflare/client/v4/user/tokens/verify",
+      expected:
+        "authenticated PAT can enter the Cloud-only provider compatibility seam",
+      headers: authHeaders,
+      pass: (response, body) =>
+        response.status === 200 && record(body).success === true,
+      summarize: summarizeCloudflareEnvelope,
+    });
+  }
+  return await requestCheck(fetchImpl, options, {
+    name: "sessionMeAuth",
+    path: "/v1/account/session/me",
+    expected: "authenticated session mirror returns subject",
+    headers: authHeaders,
+    pass: (response, body) =>
+      response.status === 200 &&
+      record(body).subject !== undefined &&
+      typeof record(body).subject === "string",
+    summarize: (body) => ({
+      subjectPresent: typeof record(body).subject === "string",
+      primaryAccountIdPresent:
+        typeof record(body).primaryAccountId === "string",
+    }),
+  });
+}
+
+async function cloudflareCompatProviderE2ECheck(
+  options: CloudExtensionSmokeOptions,
+  runner: CloudExtensionProviderE2ERunner,
+): Promise<CloudExtensionSmokeCheck> {
+  try {
+    const result = await runner(options);
+    return {
+      name: "cloudflareCompatProviderE2E",
+      method: "TOFU",
+      path: "/compat/cloudflare/client/v4",
+      status: result.status,
+      ok: result.ok,
+      expected:
+        "Cloudflare Terraform/OpenTofu provider can plan, apply, and destroy through the compatibility endpoint",
+      summary: result.summary,
+    };
+  } catch (error) {
+    return {
+      name: "cloudflareCompatProviderE2E",
+      method: "TOFU",
+      path: "/compat/cloudflare/client/v4",
+      status: 500,
+      ok: false,
+      expected:
+        "Cloudflare Terraform/OpenTofu provider can plan, apply, and destroy through the compatibility endpoint",
+      summary: {
+        errorClass:
+          error instanceof Error ? error.name || "Error" : typeof error,
+        message: sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      },
+    };
+  }
 }
 
 interface RequestCheckInput {
@@ -404,6 +503,112 @@ function cloudExtensionGaps(
     gaps.push("cloudflare_compat_materialization_not_enabled");
   }
   return gaps;
+}
+
+async function runCloudflareCompatProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderE2EResult> {
+  const workdir = await mkdtemp(join(tmpdir(), "takosumi-cloud-compat-provider-"));
+  const bucketName = `takosumi-e2e-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "bucket_name" {
+  type = string
+}
+
+resource "cloudflare_r2_bucket" "smoke" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  name       = var.bucket_name
+}
+
+output "bucket_name" {
+  value = cloudflare_r2_bucket.smoke.name
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_bucket_name: bucketName,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(["plan", "-input=false", "-no-color", "-out=tfplan"], workdir, env);
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      status: 200,
+      ok: true,
+      summary: {
+        resource: "cloudflare_r2_bucket",
+        bucketName,
+        completedSteps,
+      },
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      ok: false,
+      summary: {
+        resource: "cloudflare_r2_bucket",
+        bucketName,
+        completedSteps,
+        errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+        message: sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      },
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function tofu(
+  args: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+): Promise<void> {
+  const proc = Bun.spawn(["tofu", ...args], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
+    const output = sanitizeErrorMessage(`${stdout}\n${stderr}`.trim());
+    throw new Error(`tofu ${args[0]} exited ${code}: ${output.slice(0, 800)}`);
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -505,6 +710,20 @@ function optionalString(value: string | undefined): string | undefined {
   return value && value.trim() ? value.trim() : undefined;
 }
 
+function authTokenKindValue(value: string | undefined): AuthTokenKind | undefined {
+  if (value === undefined) return undefined;
+  if (value === "session" || value === "pat") return value;
+  throw new Error("--auth-token-kind must be session or pat");
+}
+
+function sanitizeErrorMessage(value: string): string {
+  return value
+    .replaceAll(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer <redacted>")
+    .replaceAll(/takpat_[A-Za-z0-9._~+/=-]+/g, "takpat_<redacted>")
+    .replaceAll(/token=[^&\s]+/g, "token=<redacted>")
+    .replaceAll(/client_secret=[^&\s]+/g, "client_secret=<redacted>");
+}
+
 async function writeResult(
   result: CloudExtensionSmokeResult,
   options: CloudExtensionSmokeOptions,
@@ -528,9 +747,11 @@ async function runSelfTest(): Promise<void> {
   const options: CloudExtensionSmokeOptions = {
     url: "https://app.takosumi.test",
     sessionToken: "sess_super_secret_value",
+    authTokenKind: "session",
     sessionTokenSource: "file",
     json: true,
     requireCompatMaterialization: false,
+    requireProviderE2E: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
     const parsed = new URL(url);
@@ -702,10 +923,13 @@ function printHelp(): void {
 Required inputs:
   --url <origin>                       or TAKOSUMI_PLATFORM_URL
   --session-token-file <path>          or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
+  --pat-token-file <path>              or TAKOSUMI_CLOUD_EXTENSION_PAT_FILE / TAKOSUMI_CLOUD_EXTENSION_PAT
 
 Options:
+  --auth-token-kind <session|pat>       force token interpretation when using env token inputs
   --out-file <path>                    write redacted JSON evidence to a private file
   --require-compat-materialization     fail if Cloudflare Workers script materialization still returns 501
+  --require-provider-e2e               run tofu init/plan/apply/destroy through the Cloudflare compat endpoint
   --platform-version <id>              include deployed platform version id in evidence
   --ai-gateway-version <id>            include deployed AI gateway worker version id in evidence
   --cloudflare-compat-version <id>     include deployed Cloudflare compat worker version id in evidence
