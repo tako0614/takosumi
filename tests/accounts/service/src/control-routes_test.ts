@@ -943,6 +943,46 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
   expect(createCall?.type).toEqual("personal");
 });
 
+test("GET /api/v1/workspaces aliases the final Workspace route", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/workspaces", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { spaces: unknown[] };
+  expect(body.spaces.length).toEqual(1);
+  expect(operations.calls.listSpacesByOwner).toBeDefined();
+});
+
+test("GET /api/v1/workspaces/:id/capsules aliases the final Capsule list route", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/capsules",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { installations: unknown[] };
+  expect(body.installations.length).toEqual(1);
+  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_a");
+});
+
 test("anonymous /api/v1 requests are 401", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
@@ -4648,6 +4688,51 @@ test("GET /api/v1/installations/:id/deployments lists deployments for an owned S
   expect(body.deployments[0]!.outputsPublic).toEqual({
     launch_url: "https://app.example.test",
   });
+});
+
+test("GET /api/v1/capsules/:id/state-versions aliases the final StateVersion list route", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/capsules/inst_1/state-versions",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    deployments: Array<Record<string, unknown>>;
+  };
+  expect(body.deployments.length).toEqual(1);
+  expect(operations.calls.getInstallation).toEqual(["inst_1"]);
+  expect(operations.calls.listDeployments).toEqual(["inst_1"]);
+});
+
+test("GET /api/v1/state-versions/:id aliases the final StateVersion read route", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  const { request: req, url } = request("GET", "/api/v1/state-versions/dep_1", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    deployment: Record<string, unknown>;
+  };
+  expect(body.deployment.id).toEqual("dep_1");
+  expect(operations.calls.getDeployment).toEqual(["dep_1"]);
 });
 
 test("GET /api/v1/installations/:id/deployments rejects a non-member session with 403", async () => {

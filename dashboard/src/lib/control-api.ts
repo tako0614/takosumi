@@ -462,7 +462,7 @@ export interface Dependency {
   readonly createdAt: string;
 }
 
-/** `GET /api/v1/spaces/:id/graph` projection. */
+/** `GET /api/v1/workspaces/:id/graph` projection. */
 export interface SpaceGraph {
   readonly nodes: readonly GraphNode[];
   readonly edges: readonly GraphEdge[];
@@ -695,8 +695,8 @@ export type DeploymentStatus =
 
 /**
  * Public projection of a Deployment as returned by the session control surface
- * (`GET /api/v1/installations/:id/deployments` and
- * `GET /api/v1/deployments/:id`). The backend intentionally drops the raw
+ * (`GET /api/v1/capsules/:id/state-versions` and
+ * `GET /api/v1/state-versions/:id`). The backend intentionally drops the raw
  * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
  * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
  * dashboard read never exposes a handle to the un-projected output envelope.
@@ -895,7 +895,7 @@ type _ContractResponseAssignableToDashboardMirrors = [
 
 export async function listSpaces(): Promise<readonly Space[]> {
   const body = await controlFetch<{ spaces?: readonly Space[] }>(
-    `${BASE}/spaces`,
+    `${BASE}/workspaces`,
   );
   return body.spaces ?? [];
 }
@@ -905,7 +905,7 @@ export async function createSpace(input: {
   readonly displayName?: string;
   readonly type?: SpaceType;
 }): Promise<Space> {
-  const body = await controlFetch<{ space: Space }>(`${BASE}/spaces`, {
+  const body = await controlFetch<{ space: Space }>(`${BASE}/workspaces`, {
     method: "POST",
     body: {
       handle: input.handle,
@@ -918,7 +918,7 @@ export async function createSpace(input: {
 
 export async function getSpace(spaceId: string): Promise<Space> {
   const body = await controlFetch<{ space: Space }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}`,
   );
   return body.space;
 }
@@ -931,7 +931,7 @@ export async function updateSpace(
   },
 ): Promise<Space> {
   const body = await controlFetch<{ space: Space }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}`,
     { method: "PATCH", body: input },
   );
   return body.space;
@@ -939,7 +939,7 @@ export async function updateSpace(
 
 export async function getSpaceBilling(spaceId: string): Promise<SpaceBilling> {
   const body = await controlFetch<{ billing: SpaceBilling }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/billing`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/billing`,
   );
   return body.billing;
 }
@@ -948,7 +948,7 @@ export async function listSpaceUsage(
   spaceId: string,
 ): Promise<readonly UsageEvent[]> {
   return await fetchAllPages<UsageEvent>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/usage`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/usage`,
     (body) => (body.usageEvents as readonly UsageEvent[]) ?? [],
   );
 }
@@ -958,7 +958,7 @@ export async function listSpaceCreditReservations(
 ): Promise<readonly CreditReservation[]> {
   const body = await controlFetch<{
     creditReservations?: readonly CreditReservation[];
-  }>(`${BASE}/spaces/${encodeURIComponent(spaceId)}/credit-reservations`);
+  }>(`${BASE}/workspaces/${encodeURIComponent(spaceId)}/credit-reservations`);
   return body.creditReservations ?? [];
 }
 
@@ -994,7 +994,7 @@ export async function listBillingPlans(): Promise<
 // --- Members (Space membership / roles) ------------------------------------
 //
 // Backs the Members screen over the session-authed
-// `/api/v1/spaces/:id/members[/:subject]` routes (see
+// `/api/v1/workspaces/:id/members[/:subject]` routes (see
 // accounts/service/src/control-routes.ts). The Space is resolved
 // server-side and the membership-ROLE gate is enforced by the backend
 // (list = any active member; add/invite = owner/admin; role change + remove =
@@ -1022,21 +1022,21 @@ export interface PublicSpaceMember {
 }
 
 /**
- * Lists a Space's members (`GET /api/v1/spaces/:id/members`). Any active
+ * Lists a Space's members (`GET /api/v1/workspaces/:id/members`). Any active
  * member of the Space may read the roster; the backend gates this server-side.
  */
 export async function listMembers(
   spaceId: string,
 ): Promise<readonly PublicSpaceMember[]> {
   const body = await controlFetch<{ members?: readonly PublicSpaceMember[] }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members`,
   );
   return body.members ?? [];
 }
 
 /**
  * Adds (or re-activates) a member by verified account email or account subject
- * (`POST /api/v1/spaces/:id/members`). This is not an outbound email
+ * (`POST /api/v1/workspaces/:id/members`). This is not an outbound email
  * notification flow: the target must already have signed in once so the
  * account plane can resolve a verified email to a Takosumi subject.
  */
@@ -1049,7 +1049,7 @@ export async function inviteMember(
   },
 ): Promise<PublicSpaceMember> {
   const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members`,
     {
       method: "POST",
       body: {
@@ -1063,7 +1063,7 @@ export async function inviteMember(
 }
 
 /**
- * Changes a member's role set (`PATCH /api/v1/spaces/:id/members/:subject`).
+ * Changes a member's role set (`PATCH /api/v1/workspaces/:id/members/:subject`).
  * Owner-only. The backend's last-owner guard rejects demoting the sole
  * remaining owner with 403, so a Space is never left unmanaged.
  */
@@ -1073,14 +1073,14 @@ export async function setMemberRole(
   roles: ControlSpaceRole | readonly ControlSpaceRole[],
 ): Promise<PublicSpaceMember> {
   const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
     { method: "PATCH", body: { roles } },
   );
   return body.member;
 }
 
 /**
- * Removes a member (`DELETE /api/v1/spaces/:id/members/:subject`).
+ * Removes a member (`DELETE /api/v1/workspaces/:id/members/:subject`).
  * Owner-only. The membership store has no hard delete, so the backend soft-
  * removes (sets `status: "suspended"`) and returns the updated projection. The
  * last-owner guard rejects removing the sole remaining owner with 403.
@@ -1090,7 +1090,7 @@ export async function removeMember(
   subject: string,
 ): Promise<PublicSpaceMember> {
   const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
     { method: "DELETE" },
   );
   return body.member;
@@ -1102,14 +1102,14 @@ export async function listInstallations(
   spaceId: string,
 ): Promise<readonly Installation[]> {
   return await fetchAllPages<Installation>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/installations`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/capsules`,
     (body) => (body.installations as readonly Installation[]) ?? [],
   );
 }
 
 export async function getInstallation(id: string): Promise<Installation> {
   const body = await controlFetch<{ installation: Installation }>(
-    `${BASE}/installations/${encodeURIComponent(id)}`,
+    `${BASE}/capsules/${encodeURIComponent(id)}`,
   );
   return body.installation;
 }
@@ -1123,7 +1123,7 @@ export async function createInstallation(input: {
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
 }): Promise<Installation> {
   const body = await controlFetch<{ installation: Installation }>(
-    `${BASE}/spaces/${encodeURIComponent(input.spaceId)}/installations`,
+    `${BASE}/workspaces/${encodeURIComponent(input.spaceId)}/capsules`,
     {
       method: "POST",
       body: {
@@ -1146,7 +1146,7 @@ export async function getInstallationProviderConnectionSet(
   const body = await controlFetch<{
     providerConnectionSet: InstallationProviderConnectionSet | null;
   }>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/provider-connections`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/provider-connections`,
   );
   return body.providerConnectionSet;
 }
@@ -1158,7 +1158,7 @@ export async function putInstallationProviderConnectionSet(
   const body = await controlFetch<{
     providerConnectionSet: InstallationProviderConnectionSet;
   }>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/provider-connections`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/provider-connections`,
     { method: "PUT", body: { connections } },
   );
   return body.providerConnectionSet;
@@ -1293,7 +1293,7 @@ export async function checkCapsuleCompatibility(input: {
 
 export async function getSpaceGraph(spaceId: string): Promise<SpaceGraph> {
   return await controlFetch<SpaceGraph>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/graph`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/graph`,
   );
 }
 
@@ -1303,7 +1303,7 @@ export async function createSpaceBackup(
   spaceId: string,
 ): Promise<BackupRecord> {
   const body = await controlFetch<{ backup: BackupRecord }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups`,
     { method: "POST" },
   );
   return body.backup;
@@ -1313,7 +1313,7 @@ export async function createInstallationBackup(
   installationId: string,
 ): Promise<BackupRecord> {
   const body = await controlFetch<{ backup: BackupRecord }>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/backups`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/backups`,
     { method: "POST" },
   );
   return body.backup;
@@ -1323,7 +1323,7 @@ export async function listSpaceBackups(
   spaceId: string,
 ): Promise<readonly BackupRecord[]> {
   return await fetchAllPages<BackupRecord>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups`,
     (body) => (body.backups as readonly BackupRecord[]) ?? [],
   );
 }
@@ -1340,7 +1340,7 @@ export async function createBackupRestore(
   },
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
     {
       method: "POST",
       body: input,
@@ -1361,7 +1361,7 @@ export async function createDependency(
   },
 ): Promise<Dependency> {
   const body = await controlFetch<{ dependency: Dependency }>(
-    `${BASE}/installations/${encodeURIComponent(consumerInstallationId)}/dependencies`,
+    `${BASE}/capsules/${encodeURIComponent(consumerInstallationId)}/dependencies`,
     {
       method: "POST",
       body: {
@@ -1389,7 +1389,7 @@ export async function listActivity(
   limit?: number,
 ): Promise<readonly ActivityEvent[]> {
   const body = await controlFetch<{ events?: readonly ActivityEvent[] }>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/activity${query({ limit })}`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/activity${query({ limit })}`,
   );
   return body.events ?? [];
 }
@@ -1534,7 +1534,7 @@ export async function planInstallation(
   installationId: string,
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/plan`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/plan`,
     { method: "POST" },
   );
 }
@@ -1543,7 +1543,7 @@ export async function destroyPlanInstallation(
   installationId: string,
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/destroy-plan`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/destroy-plan`,
     { method: "POST" },
   );
 }
@@ -1618,7 +1618,7 @@ export async function createApplyRun(
 
 /**
  * Lists an Installation's Deployment ledger (current + past) for the dashboard
- * session (`GET /api/v1/installations/:id/deployments`). The backend
+ * session (`GET /api/v1/capsules/:id/state-versions`). The backend
  * resolves the Installation's owning Space and space-permission gates first;
  * each row carries only the allowlist-projected `outputsPublic` (no sensitive
  * outputs, no raw output-snapshot pointer). Rows arrive newest-first.
@@ -1627,14 +1627,14 @@ export async function listDeployments(
   installationId: string,
 ): Promise<readonly PublicDeployment[]> {
   return await fetchAllPages<PublicDeployment>(
-    `${BASE}/installations/${encodeURIComponent(installationId)}/deployments`,
+    `${BASE}/capsules/${encodeURIComponent(installationId)}/state-versions`,
     (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
   );
 }
 
 /**
  * Reads one Deployment ledger record by id (`GET
- * /api/v1/deployments/:id`). Space-permission gated server-side; the
+ * /api/v1/state-versions/:id`). Space-permission gated server-side; the
  * returned record is the public projection (outputsPublic only, no
  * outputSnapshotId, no sensitive values).
  */
@@ -1642,14 +1642,14 @@ export async function getDeployment(
   deploymentId: string,
 ): Promise<PublicDeployment> {
   const body = await controlFetch<{ deployment: PublicDeployment }>(
-    `${BASE}/deployments/${encodeURIComponent(deploymentId)}`,
+    `${BASE}/state-versions/${encodeURIComponent(deploymentId)}`,
   );
   return body.deployment;
 }
 
 /**
  * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
- * `POST /api/v1/deployments/:id/rollback-plan`): re-plans the Deployment's
+ * `POST /api/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's
  * Installation pinned to that Deployment's source snapshot. The plan then flows
  * through the normal approve -> apply path, so the response is the public Run
  * envelope (`{ run: { id, ... } }`) and the caller navigates to the Run
@@ -1659,7 +1659,7 @@ export async function createDeploymentRollbackPlan(
   deploymentId: string,
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/deployments/${encodeURIComponent(deploymentId)}/rollback-plan`,
+    `${BASE}/state-versions/${encodeURIComponent(deploymentId)}/rollback-plan`,
     { method: "POST" },
   );
 }
@@ -1670,7 +1670,7 @@ export async function createSpacePlanUpdate(
   spaceId: string,
 ): Promise<RunGroupWithRuns> {
   return await controlFetch<RunGroupWithRuns>(
-    `${BASE}/spaces/${encodeURIComponent(spaceId)}/plan-update`,
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/plan-update`,
     { method: "POST" },
   );
 }

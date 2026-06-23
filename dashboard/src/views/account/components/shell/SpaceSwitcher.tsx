@@ -4,7 +4,7 @@
  *
  * Replaces the per-view `lib/space-state.ts` signal: every view
  * now reads the same `space-state.ts` signal this control writes. Lists Workspaces
- * via `GET /api/v1/spaces` and defaults to the first Space when none is
+ * via `GET /api/v1/workspaces` and defaults to the first Workspace when none is
  * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
  */
 import {
@@ -75,9 +75,7 @@ export default function SpaceSwitcher() {
           onChange={(e) => setCurrentSpaceId(e.currentTarget.value)}
         >
           <For each={loadedSpaces()}>
-            {(s) => (
-              <option value={s.id}>{s.displayName || s.handle}</option>
-            )}
+            {(s) => <option value={s.id}>{s.displayName || s.handle}</option>}
           </For>
         </Select>
       </Show>
