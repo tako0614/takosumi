@@ -21,6 +21,7 @@ import {
 } from "../../lib/control-api.ts";
 import {
   effectiveInstallationStatus,
+  isVisibleServiceInstallation,
   launchUrlFromOutputs,
   needsAttention,
 } from "../../lib/installations-ui.ts";
@@ -161,10 +162,6 @@ function Inner() {
       </Show>
     </AppShell>
   );
-}
-
-function isVisibleServiceInstallation(inst: Installation): boolean {
-  return inst.status !== "destroyed";
 }
 
 function NoWorkspaceStartPanel(props: {

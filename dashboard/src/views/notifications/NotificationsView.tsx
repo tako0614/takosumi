@@ -1,8 +1,7 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
  * person, aggregated across every Space they belong to (the friendly
- * counterpart of the raw Activity view). Opening this page marks the feed seen,
- * which clears the TopBar bell badge.
+ * counterpart of the raw Activity view).
  *
  * Honesty contract: every sentence renders ONLY values the backend already
  * recorded as public-safe Activity metadata (names, ids, counts, compact error
@@ -10,7 +9,6 @@
  */
 import "../../styles/wave-c.css";
 import {
-  createEffect,
   createMemo,
   createResource,
   For,
@@ -31,7 +29,6 @@ import {
   type FeedEntry,
   isFailureAction,
   loadNotificationFeed,
-  markSeen,
 } from "../../lib/notifications.ts";
 import { operationLabel } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
@@ -243,12 +240,6 @@ export default function NotificationsView() {
         );
         const failureCount = () =>
           (feed() ?? []).filter((e) => isFailureAction(e.event.action)).length;
-
-        // Once the feed is loaded, the visitor has SEEN it — clear the badge.
-        createEffect(() => {
-          const list = feed();
-          if (list) markSeen(list);
-        });
 
         return (
           <AppShell>
