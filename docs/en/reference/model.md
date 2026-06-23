@@ -7,21 +7,21 @@ ecosystem. It does not model compatibility gateways or managed cloud resources.
 
 ## Public Concepts
 
-| Concept | Meaning |
-| --- | --- |
-| Workspace | User/team isolation boundary for projects, state, secrets, runs, and audit |
-| Project | One product, service, or infrastructure group |
-| Capsule | One OpenTofu/Terraform module execution unit |
-| Source | Git URL/ref/commit/path, tarball, template, or local upload |
-| ProviderConnection | Stored provider credential configuration |
-| CredentialRecipe | Provider-specific env/file/pre-run materialization recipe |
-| ProviderBinding | Provider name/alias to ProviderConnection mapping |
-| Secret | Encrypted credential or input material |
-| Run | One init/validate/plan/apply/destroy/refresh/output action |
-| StateVersion | Stored state generation for a Capsule |
-| Output | Captured OpenTofu output value |
-| Runner | Local/docker/remote/operator/cloud execution worker |
-| AuditEvent | Actor/action/target/result evidence |
+| Concept            | Meaning                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| Workspace          | User/team isolation boundary for projects, state, secrets, runs, and audit |
+| Project            | One product, service, or infrastructure group                              |
+| Capsule            | One OpenTofu/Terraform module execution unit                               |
+| Source             | Git URL/ref/commit/path, tarball, template, or local upload                |
+| ProviderConnection | Stored provider credential configuration                                   |
+| CredentialRecipe   | Provider-specific env/file/pre-run materialization recipe                  |
+| ProviderBinding    | Provider name/alias to ProviderConnection mapping                          |
+| Secret             | Encrypted credential or input material                                     |
+| Run                | One init/validate/plan/apply/destroy/refresh/output action                 |
+| StateVersion       | Stored state generation for a Capsule                                      |
+| Output             | Captured OpenTofu output value                                             |
+| Runner             | Local/docker/remote/operator/cloud execution worker                        |
+| AuditEvent         | Actor/action/target/result evidence                                        |
 
 ## Provider Resolution
 
@@ -59,6 +59,13 @@ provider_bindings:
 
 Takosumi injects the runtime env/files required by the selected
 ProviderConnection. The manifest should not contain secrets.
+
+Built-in Credential Recipes are guided setup shortcuts, not the provider
+boundary. A provider that is not in the catalog can still run when the user
+creates a ProviderConnection with the provider source from `required_providers`
+and the explicit environment variables documented by that provider. Those
+declared env names become the run-local CredentialRecipe, subject to runner
+policy, provider plugin policy, and egress policy.
 
 ## Runner Policy
 
