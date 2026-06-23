@@ -8,10 +8,12 @@ gateway services as part of the public OSS contract.
 The Cloud extension is a Takosumi Cloud operator-backed, OpenAI-compatible
 runtime profile projected through Service Graph. It lets a deployed Capsule
 runtime use one Takosumi endpoint and one rotated Service Graph service token
-while Takosumi Cloud keeps upstream provider keys in platform secrets. OSS code
-may carry the fail-closed route seam so the shared platform worker can be
-composed and tested, but enabling upstream profiles and provider keys belongs
-to the closed Takosumi Cloud deployment.
+while Takosumi Cloud keeps upstream provider keys in platform secrets. The OSS
+platform worker carries only a fail-closed route seam and an optional
+Cloud-extension service binding handoff. The seam is registered in the same
+Cloud extension route registry used for provider-compatible Cloud-only
+gateways. Upstream profiles, provider keys, and request forwarding belong to
+the closed Takosumi Cloud deployment.
 
 It is not an OpenTofu provider credential and it is not an OpenTofu output secret. OpenTofu provisions and deploys the
 service that will consume the model API; runtime model access is granted after deployment through
@@ -56,10 +58,12 @@ Body:
 If `scopes` is omitted, the gateway token receives all three endpoint scopes. A narrower token can be issued for a
 service that only needs model listing or chat completions.
 
-## Operator Configuration
+## Cloud Extension Configuration
 
-The platform worker reads upstream profiles from `TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. Each
-profile names the env/secret that contains the upstream key.
+The closed Takosumi Cloud AI Gateway service reads upstream profiles from
+`TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. Each profile
+names the env/secret that contains the upstream key. The OSS platform worker
+does not parse this config or forward model requests by itself.
 
 ```json
 [
@@ -144,14 +148,15 @@ response headers before returning the upstream response.
 
 ## Failure Model
 
-- missing or invalid gateway config: `503 ai_gateway_not_configured`
+- Cloud extension not mounted on the platform worker: `404 { "error": "not found" }`
+- invalid gateway config: `500 gateway_misconfigured`
 - missing or stale Service Graph token: `401 invalid_token`
 - missing endpoint scope: `403 insufficient_scope`
 - unknown model or wrong endpoint for a model alias: `404 model_not_found`
 - upstream network failure: `502 upstream_unavailable`
 - upstream HTTP error: same upstream status with `upstream_error`; the upstream response body is not passed through
 
-All errors use an OpenAI-style JSON shape:
+Errors returned by the Cloud extension use an OpenAI-style JSON shape:
 
 ```json
 {

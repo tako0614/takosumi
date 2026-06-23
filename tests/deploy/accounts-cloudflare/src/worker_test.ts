@@ -4,6 +4,7 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
   createR2InstallationExportWorker,
+  parseLoginEmailAllowlist,
   type R2Bucket,
   type R2ObjectBody,
   type R2PutOptions,
@@ -109,6 +110,40 @@ test("Cloudflare Accounts Worker parses env clients without a sidecar container"
 
   assert.equal(response.status, 200);
   assert.equal((await response.json()).issuer, "https://issuer.example");
+});
+
+test("Cloudflare Accounts Worker defaults app.takosumi.com to the pre-GA login allowlist", () => {
+  assert.deepEqual(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+      }),
+      "https://app.takosumi.com",
+    ),
+    {
+      emails: ["shoutatomiyama0614@gmail.com"],
+      requireVerifiedEmail: true,
+    },
+  );
+  assert.equal(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
+      }),
+      "https://app.takosumi.test",
+    ),
+    undefined,
+  );
+  assert.equal(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+        TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
+      }),
+      "https://app.takosumi.com",
+    ),
+    undefined,
+  );
 });
 
 test("Cloudflare Accounts Worker can use a stable OIDC signing key", async () => {

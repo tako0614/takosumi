@@ -30,10 +30,11 @@ import {
   type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
   type ServiceGraphMaterialResolverHttpOptions,
+  type ServiceGraphRuntimeAvailability,
+  type LoginEmailAllowlist,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
-import { createTakosumiAiGatewayConfigFromEnv } from "../../../core/domains/ai-gateway/openai_compatible.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
@@ -76,6 +77,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
+  readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST?: string;
+  readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI?: string;
@@ -167,6 +170,12 @@ export interface CreateCloudflareWorkerOptions {
   readonly controlPlaneOperations?: (
     env: CloudflareWorkerEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
+  readonly serviceGraphRuntimeAvailability?: (
+    env: CloudflareWorkerEnv,
+  ) =>
+    | ServiceGraphRuntimeAvailability
+    | Promise<ServiceGraphRuntimeAvailability | undefined>
+    | undefined;
 }
 
 export interface R2Bucket {
@@ -322,6 +331,41 @@ function parsePasskeysFailClosed(
   }
 }
 
+const TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL = "shoutatomiyama0614@gmail.com";
+
+export function parseLoginEmailAllowlist(
+  env: CloudflareWorkerEnv,
+  issuer: string,
+): LoginEmailAllowlist | undefined {
+  const configured = optionalString(
+    env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST,
+  );
+  if (configured?.trim() === "*") return undefined;
+  const emails =
+    configured !== undefined
+      ? splitList(configured)
+      : isOfficialTakosumiCloudIssuer(issuer)
+        ? [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL]
+        : [];
+  if (emails.length === 0) return undefined;
+  return {
+    emails,
+    requireVerifiedEmail:
+      optionalBooleanString(
+        env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED,
+      ) ?? true,
+  };
+}
+
+function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
+  try {
+    const url = new URL(issuer);
+    return url.protocol === "https:" && url.hostname === "app.takosumi.com";
+  } catch {
+    return false;
+  }
+}
+
 async function cachedAccountsHandler(
   env: CloudflareWorkerEnv,
   options: CreateCloudflareWorkerOptions,
@@ -373,6 +417,8 @@ async function buildAccountsHandler(
   const clients = parseClients(env);
   const deployControlOperations = await options.deployControlOperations?.(env);
   const controlPlaneOperations = await options.controlPlaneOperations?.(env);
+  const hostRuntimeAvailability =
+    await options.serviceGraphRuntimeAvailability?.(env);
   const commonOptions = {
     issuer,
     clients,
@@ -380,6 +426,7 @@ async function buildAccountsHandler(
     stripeBilling: parseStripeBilling(env),
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
+    loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     platformAccess: parsePlatformAccess(env),
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
@@ -398,7 +445,10 @@ async function buildAccountsHandler(
       : {}),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     serviceGraphRuntimeAvailability: {
-      aiGatewayConfigured: isAiGatewayConfigured(env),
+      ...hostRuntimeAvailability,
+      aiGatewayConfigured:
+        isAiGatewayConfigured(env) ||
+        hostRuntimeAvailability?.aiGatewayConfigured === true,
     },
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -934,15 +984,12 @@ function parseServiceGraphMaterials(
 }
 
 function isAiGatewayConfigured(env: CloudflareWorkerEnv): boolean {
-  try {
-    return (
-      createTakosumiAiGatewayConfigFromEnv(
-        env as unknown as Record<string, unknown>,
-      ).profiles.length > 0
-    );
-  } catch {
-    return false;
-  }
+  const binding = (env as Record<string, unknown>).TAKOSUMI_CLOUD_AI_GATEWAY;
+  return (
+    Boolean(binding) &&
+    typeof binding === "object" &&
+    typeof (binding as { fetch?: unknown }).fetch === "function"
+  );
 }
 
 function parseR2ExportWorker(
@@ -1406,6 +1453,14 @@ function optionalInteger(value: unknown): number | undefined {
     throw new TypeError(`expected a non-negative integer, received ${raw}`);
   }
   return parsed;
+}
+
+function optionalBooleanString(value: unknown): boolean | undefined {
+  const raw = optionalString(value)?.toLowerCase();
+  if (raw === undefined) return undefined;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  throw new TypeError(`expected a boolean string, received ${raw}`);
 }
 
 function splitList(value: unknown): readonly string[] {
