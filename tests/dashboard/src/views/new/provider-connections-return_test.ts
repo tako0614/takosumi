@@ -354,6 +354,28 @@ describe("/new Provider Connections return context", () => {
     expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
   });
 
+  test("custom ProviderConnection path asks for provider source and env variables", () => {
+    expect(connectionsTabSource).toContain(
+      'placeholder={t("conn.genericEnv.providerPlaceholder")}',
+    );
+    expect(connectionsTabSource).toContain(
+      '"conn.genericEnv.envNamePlaceholder"',
+    );
+    expect(connectionsTabSource).toContain('"conn.genericEnv.providerName"');
+    expect(connectionsTabSource).toContain('"conn.genericEnv.envName"');
+    expect(en["conn.custom.summary"]).toContain("OpenTofu provider");
+    expect(en["conn.genericEnv.providerName"]).toBe("OpenTofu provider");
+    expect(en["conn.genericEnv.providerPlaceholder"]).toBe(
+      "snowflake-labs/snowflake",
+    );
+    expect(en["conn.genericEnv.envName"]).toBe("Environment variable");
+    expect(en["conn.genericEnv.envNamePlaceholder"]).toBe("SNOWFLAKE_PASSWORD");
+    expect(ja["conn.custom.summary"]).toContain("OpenTofu provider");
+    expect(ja["conn.genericEnv.envName"]).toBe("環境変数名");
+    expect(connectionsTabSource).not.toContain('placeholder="private-api"');
+    expect(connectionsTabSource).not.toContain('placeholder="API_TOKEN"');
+  });
+
   test("ProviderConnection list stays friendly and hides raw credential plumbing", () => {
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
     expect(connectionsTabSource).toContain('class="wc-conn-actions"');

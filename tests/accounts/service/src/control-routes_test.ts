@@ -3522,6 +3522,53 @@ test("Connections create: normalizes Google Cloud to service-account JSON driver
   expect(text).not.toContain("BEGIN PRIVATE KEY");
 });
 
+test("Connections create: registers arbitrary OpenTofu provider env values", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const provider = "registry.opentofu.org/snowflake-labs/snowflake";
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider,
+      displayName: "Snowflake",
+      values: {
+        SNOWFLAKE_ACCOUNT: "acct",
+        SNOWFLAKE_USER: "svc",
+        SNOWFLAKE_PASSWORD: "snowflake-secret",
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    spaceId?: string;
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    scope?: string;
+    values?: Record<string, string>;
+  };
+  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.provider).toEqual(provider);
+  expect(passed.kind).toEqual("generic_env_provider");
+  expect(passed.credentialDriver).toEqual("generic_env");
+  expect(passed.scope).toEqual("space");
+  expect(passed.values?.SNOWFLAKE_PASSWORD).toEqual("snowflake-secret");
+
+  const text = await response!.text();
+  expect(text).not.toContain("snowflake-secret");
+  expect(text).not.toContain("SNOWFLAKE_PASSWORD");
+});
+
 test("Connections create: requires spaceId and values", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

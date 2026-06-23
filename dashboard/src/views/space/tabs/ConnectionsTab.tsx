@@ -919,7 +919,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                       onInput={(e) =>
                         setGenericEnvProvider(e.currentTarget.value)
                       }
-                      placeholder="private-api"
+                      placeholder={t("conn.genericEnv.providerPlaceholder")}
                       autocomplete="off"
                       spellcheck={false}
                     />
@@ -937,7 +937,9 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                             onInput={(e) =>
                               setEnvPair(index, { name: e.currentTarget.value })
                             }
-                            placeholder="API_TOKEN"
+                            placeholder={t(
+                              "conn.genericEnv.envNamePlaceholder",
+                            )}
                             autocomplete="off"
                             spellcheck={false}
                           />
