@@ -4,10 +4,14 @@ import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
+  handlePlatformCloudExtensionRequest,
+  handlePlatformCloudflareCompatRequest,
+  handlePlatformAiGatewayRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handleSourceWebhookRequest,
   isOidcMetricPath,
+  matchPlatformCloudExtensionRoute,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
@@ -318,9 +322,12 @@ test("platform metrics dashboard renders protected live metric samples", async (
   const env = { TAKOSUMI_METRICS_SCRAPE_TOKEN: "scrape-token" } as never;
   const forwarded: { url: string; authorization: string | null }[] = [];
   const response = await handlePlatformMetricsDashboardRequest(
-    new Request("https://app.takosumi.com/internal/platform/metrics-dashboard", {
-      headers: { authorization: "Bearer scrape-token" },
-    }),
+    new Request(
+      "https://app.takosumi.com/internal/platform/metrics-dashboard",
+      {
+        headers: { authorization: "Bearer scrape-token" },
+      },
+    ),
     env,
     () => ({
       fetch: async (input: RequestInfo | URL) => {
@@ -374,8 +381,9 @@ test("platform metrics dashboard forwards auth failures from scrape endpoint", a
 test("platform metrics route does not capture dashboard paths", async () => {
   expect(isPlatformMetricsPath("/metrics")).toBe(true);
   expect(isPlatformMetricsPath("/metrics/extra")).toBe(false);
-  expect(isPlatformMetricsDashboardPath("/internal/platform/metrics-dashboard"))
-    .toBe(true);
+  expect(
+    isPlatformMetricsDashboardPath("/internal/platform/metrics-dashboard"),
+  ).toBe(true);
   const response = await handlePlatformMetricsRequest(
     new Request("https://app.takosumi.com/metrics/extra"),
     {} as never,
@@ -396,9 +404,11 @@ test("platform metrics summary captures required metric and label coverage", () 
     ].join("\n"),
   );
   expect(summary.metricCount).toBe(2);
-  expect(summary.requiredMetrics.find((metric) =>
-    metric.name === "takosumi_deploy_operation_count"
-  )?.present).toBe(true);
+  expect(
+    summary.requiredMetrics.find(
+      (metric) => metric.name === "takosumi_deploy_operation_count",
+    )?.present,
+  ).toBe(true);
   expect(summary.missingRequiredMetrics).toContain(
     "takosumi_apply_duration_seconds_bucket",
   );
@@ -542,34 +552,243 @@ test("operator billing route validates settings before mutation", async () => {
   expect(subscriptionCalls).toHaveLength(0);
 });
 
-test("AI Gateway route is not mounted by the OSS platform worker", async () => {
+test("AI Gateway route stays unmounted without the Cloud extension binding", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const env = {
-    TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
-      {
-        id: "deepseek",
-        provider: "deepseek",
-        baseUrl: "https://api.deepseek.example/v1",
-        apiKeyEnv: "TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-        models: [
-          {
-            publicModel: "deepseek/chat",
-            upstreamModel: "deepseek-chat",
-            endpoints: ["chat.completions"],
-            default: true,
-          },
-        ],
-      },
-    ]),
-    TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY: "upstream-secret",
-  } as never;
 
   const response = await worker.fetch(
     new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    env,
+    {
+      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+        {
+          id: "deepseek",
+          provider: "deepseek",
+          baseUrl: "https://api.deepseek.example/v1",
+          apiKeyEnv: "TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
+          models: [
+            {
+              publicModel: "deepseek/chat",
+              upstreamModel: "deepseek-chat",
+              endpoints: ["chat.completions"],
+              default: true,
+            },
+          ],
+        },
+      ]),
+      TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY: "upstream-secret",
+    } as never,
   );
   expect(response.status).toBe(404);
   expect(await response.json()).toEqual({ error: "not found" });
+});
+
+test("AI Gateway route delegates only to the Cloud extension binding", async () => {
+  const forwarded: { url: string; authorization: string | null }[] = [];
+  const response = await handlePlatformAiGatewayRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      headers: { authorization: "Bearer runtime-token" },
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            url: request.url,
+            authorization: request.headers.get("authorization"),
+          });
+          return Response.json({
+            object: "list",
+            data: [{ id: "takosumi/default", object: "model" }],
+          });
+        },
+      },
+    } as never,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    object: "list",
+    data: [{ id: "takosumi/default", object: "model" }],
+  });
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/gateway/ai/v1/models",
+      authorization: "Bearer runtime-token",
+    },
+  ]);
+});
+
+test("AI Gateway route delegates through the platform worker fetch registry", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const forwarded: string[] = [];
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async (request: Request) => {
+          forwarded.push(request.url);
+          return Response.json({ object: "list", data: [] });
+        },
+      },
+    } as never,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ object: "list", data: [] });
+  expect(forwarded).toEqual(["https://app.takosumi.com/gateway/ai/v1/models"]);
+});
+
+test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud extension binding", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const response = await worker.fetch(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+      { headers: { authorization: "Bearer runtime-token" } },
+    ),
+    {} as never,
+  );
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: "not found" });
+});
+
+test("Cloudflare Compatibility Gateway route delegates only to the Cloud extension binding", async () => {
+  const forwarded: { url: string; authorization: string | null }[] = [];
+  const response = await handlePlatformCloudflareCompatRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+      { headers: { authorization: "Bearer cf-compat-token" } },
+    ),
+    {
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            url: request.url,
+            authorization: request.headers.get("authorization"),
+          });
+          return Response.json({
+            success: true,
+            result: { id: "api", script_name: "api" },
+            errors: [],
+            messages: [],
+          });
+        },
+      },
+    } as never,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    success: true,
+    result: { id: "api", script_name: "api" },
+    errors: [],
+    messages: [],
+  });
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+      authorization: "Bearer cf-compat-token",
+    },
+  ]);
+});
+
+test("Cloudflare Compatibility Gateway route delegates through the platform worker fetch registry", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const forwarded: string[] = [];
+  const response = await worker.fetch(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+    ),
+    {
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async (request: Request) => {
+          forwarded.push(request.url);
+          return Response.json({ success: true, result: {}, errors: [] });
+        },
+      },
+    } as never,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    success: true,
+    result: {},
+    errors: [],
+  });
+  expect(forwarded).toEqual([
+    "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+  ]);
+});
+
+test("Cloud-only extension route matcher rejects near-prefixes and unregistered future gateways", async () => {
+  expect(matchPlatformCloudExtensionRoute("/gateway/ai/v10/models")).toBe(
+    undefined,
+  );
+  expect(
+    matchPlatformCloudExtensionRoute(
+      "/compat/cloudflare/client/v40/accounts/virtual",
+    ),
+  ).toBe(undefined);
+  expect(matchPlatformCloudExtensionRoute("/compat/aws/v1/sts")).toBe(
+    undefined,
+  );
+  expect(
+    await handlePlatformCloudExtensionRequest(
+      new Request("https://app.takosumi.com/compat/aws/v1/sts"),
+      {
+        TAKOSUMI_CLOUD_AWS_COMPAT: {
+          fetch: async () => Response.json({ delegated: true }),
+        },
+      } as never,
+    ),
+  ).toBe(undefined);
+});
+
+test("Cloud-only extension routes are registry driven for future provider gateways", async () => {
+  const awsRoute = {
+    id: "provider.aws.v1",
+    kind: "provider_compat",
+    provider: "aws",
+    basePath: "/compat/aws/v1",
+    bindingName: "TAKOSUMI_CLOUD_AWS_COMPAT",
+  } as const;
+  expect(
+    matchPlatformCloudExtensionRoute("/compat/aws/v1/sts", [awsRoute]),
+  ).toEqual(awsRoute);
+
+  const missing = await handlePlatformCloudExtensionRequest(
+    new Request("https://app.takosumi.com/compat/aws/v1/sts"),
+    {} as never,
+    [awsRoute],
+  );
+  expect(missing?.status).toBe(404);
+  expect(await missing?.json()).toEqual({ error: "not found" });
+
+  const forwarded: { url: string; authorization: string | null }[] = [];
+  const response = await handlePlatformCloudExtensionRequest(
+    new Request("https://app.takosumi.com/compat/aws/v1/sts", {
+      headers: { authorization: "Bearer aws-compat-token" },
+    }),
+    {
+      TAKOSUMI_CLOUD_AWS_COMPAT: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            url: request.url,
+            authorization: request.headers.get("authorization"),
+          });
+          return Response.json({
+            kind: "aws-compat-test",
+            delegated: true,
+          });
+        },
+      },
+    } as never,
+    [awsRoute],
+  );
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({
+    kind: "aws-compat-test",
+    delegated: true,
+  });
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/compat/aws/v1/sts",
+      authorization: "Bearer aws-compat-token",
+    },
+  ]);
 });
 
 test("scheduled poll continues past a failing source", async () => {

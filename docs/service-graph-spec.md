@@ -253,15 +253,39 @@ The service token scope is `ai.model` plus one or more endpoint scopes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`               |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`         |
 
-Operator upstream provider keys stay in operator secrets/env vars referenced by the platform worker's
-`TAKOSUMI_AI_GATEWAY_PROFILES` config. A profile declares public model aliases and the env var name that contains the
-upstream key (`apiKeyEnv`); it must not contain the key value itself, including through static upstream `headers`.
+Operator upstream provider keys stay in operator secrets/env vars referenced by
+the closed Takosumi Cloud AI Gateway service's
+`TAKOSUMI_AI_GATEWAY_PROFILES` config. A profile declares public model aliases
+and the env var name that contains the upstream key (`apiKeyEnv`); it must not
+contain the key value itself, including through static upstream `headers`.
 Model alias `metadata` is returned by `GET /gateway/ai/v1/models`, so it is public display/protocol metadata only:
 secret-shaped keys, bearer-token strings, API keys, credential URLs, and password-bearing values are invalid profile
 config.
 At request time the gateway maps the public model alias to the provider-native model id, injects the upstream key,
 forwards the call, and returns only safe response headers. The rotated Service Graph service token is the only key
 projected to an installed service.
+
+### 5.2 Takos Runtime Profile
+
+Takos may project first-party runtime surfaces through Service Graph when the
+host worker is the Takos distribution worker. These are product runtime
+surfaces, not Takosumi managed cloud resources and not provider-compatible
+Gateway endpoints.
+
+Initial service ids:
+
+| service id                | capability                 | endpoint shape                      |
+| ------------------------- | -------------------------- | ----------------------------------- |
+| `takos.mcp.registry`      | `protocol.mcp.server`      | `/api/mcp/servers`                  |
+| `takos.storage.workspace` | `storage.filesystem`       | `/api/spaces/{spaceId}/storage`     |
+| `takos.git.smart_http`    | `source.git.smart_http`    | `/git/`                             |
+| `takos.agent.runtime`     | `automation.agent_runtime` | `/api/spaces/{spaceId}/agent-tasks` |
+
+The hosted Takosumi platform worker leaves these projections
+`not_configured`. The Takos distribution worker marks them ready by passing a
+host runtime profile into the shared Accounts plane. They do not issue Service
+Graph service tokens until their receiving APIs actually enforce such tokens;
+otherwise the projection would look usable while the token has no authority.
 
 ## 6. OpenTofu Projection
 

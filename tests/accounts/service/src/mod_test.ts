@@ -5,6 +5,10 @@ import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
   TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS,
   TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
   type TakosumiSubject,
@@ -1242,6 +1246,38 @@ test("accounts handler does not expose a service descriptor anchor", async () =>
   );
 
   expect(response.status).toEqual(404);
+});
+
+test("accounts handler deletes existing sessions outside the pre-GA email allowlist", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_blocked",
+    email: "blocked@example.test",
+    emailVerified: true,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_blocked",
+    subject: "tsub_blocked",
+    createdAt: 1000,
+    expiresAt: Date.now() + 60_000,
+  });
+  const handler = createAccountsHandler({
+    store,
+    loginEmailAllowlist: { emails: ["shoutatomiyama0614@gmail.com"] },
+  });
+
+  const response = await handler(
+    new Request(`${testIssuer}/v1/account/session/me`, {
+      headers: { authorization: "Bearer sess_blocked" },
+    }),
+  );
+
+  expect(response.status).toEqual(403);
+  expect((await response.json()).error.code).toEqual("login_not_allowed");
+  expect(store.findAccountSession("sess_blocked")).toEqual(undefined);
+  expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
 });
 
 test("accounts handler proxies installation PlanRun to deployControl", async () => {
@@ -3052,6 +3088,128 @@ test("accounts handler exchanges upstream OAuth codes into sessions", async () =
   const sessionCookie = extractSessionCookieForTest(response);
   expect(typeof sessionCookie).toEqual("string");
   expect(response.headers.get("set-cookie") ?? "").toContain("Secure");
+  expect(store.findAccountSession(sessionCookie!)?.subject).toEqual(
+    body.subject,
+  );
+});
+
+test("accounts handler rejects upstream OAuth login outside the pre-GA email allowlist", async () => {
+  const store = new InMemoryAccountsStore();
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://oauth2.googleapis.com/token") {
+      return Response.json({ access_token: "google-token" });
+    }
+    if (request.url === "https://openidconnect.googleapis.com/v1/userinfo") {
+      return Response.json({
+        sub: "google-subject-123",
+        name: "Google User",
+        email: "someone-else@example.test",
+        email_verified: true,
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  };
+  const handler = createAccountsHandler({
+    store,
+    loginEmailAllowlist: { emails: ["shoutatomiyama0614@gmail.com"] },
+    upstreamOAuth: {
+      subjectSecret: "subject-secret",
+      sessionTtlMs: 60_000,
+      fetch: fetchImpl,
+      providers: [
+        {
+          providerId: "google",
+          clientId: "google-client",
+          clientSecret: "google-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
+    },
+  });
+
+  const authorizeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/authorize?provider=google&state=state-google",
+    ),
+  );
+  const serverState = upstreamStateFromAuthorizeResponse(authorizeResponse);
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test/v1/auth/upstream/callback?provider=google&code=code-1&state=${serverState}`,
+      {
+        headers: { cookie: authorizeResponse.headers.get("set-cookie") ?? "" },
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(403);
+  expect((await response.json()).error).toEqual("access_denied");
+  expect(store.findAccountByVerifiedEmail("someone-else@example.test")).toEqual(
+    undefined,
+  );
+  expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
+});
+
+test("accounts handler accepts the pre-GA email allowlist only when Google verifies the address", async () => {
+  const store = new InMemoryAccountsStore();
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://oauth2.googleapis.com/token") {
+      return Response.json({ access_token: "google-token" });
+    }
+    if (request.url === "https://openidconnect.googleapis.com/v1/userinfo") {
+      return Response.json({
+        sub: "google-subject-allowed",
+        name: "Allowed User",
+        email: "SHOUTATOMIYAMA0614@gmail.com",
+        email_verified: true,
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  };
+  const handler = createAccountsHandler({
+    store,
+    loginEmailAllowlist: { emails: ["shoutatomiyama0614@gmail.com"] },
+    upstreamOAuth: {
+      subjectSecret: "subject-secret",
+      sessionTtlMs: 60_000,
+      fetch: fetchImpl,
+      providers: [
+        {
+          providerId: "google",
+          clientId: "google-client",
+          clientSecret: "google-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
+    },
+  });
+
+  const authorizeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/authorize?provider=google&state=state-google",
+    ),
+  );
+  const serverState = upstreamStateFromAuthorizeResponse(authorizeResponse);
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test/v1/auth/upstream/callback?provider=google&code=code-1&state=${serverState}`,
+      {
+        headers: { cookie: authorizeResponse.headers.get("set-cookie") ?? "" },
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(store.findAccount(body.subject)?.email).toEqual(
+    "SHOUTATOMIYAMA0614@gmail.com",
+  );
+  const sessionCookie = extractSessionCookieForTest(response);
+  expect(typeof sessionCookie).toEqual("string");
   expect(store.findAccountSession(sessionCookie!)?.subject).toEqual(
     body.subject,
   );
@@ -5510,6 +5668,251 @@ test("accounts handler marks AI Gateway service ready only when host runtime is 
   const body = await rotate.json();
   expect(body.service.status).toEqual("ready");
   expect(body.service.material.runtimeConfigured).toEqual(true);
+});
+
+test("accounts handler projects Takos runtime services only when the host profile is configured", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    serviceGraphRuntimeAvailability: { takosProfileConfigured: true },
+  });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acc_takos_runtime", "space_takos");
+  const sessionId = seedAccountSession(
+    store,
+    "tsub_owner",
+    "sess_takos_runtime",
+  );
+  store.saveAppInstallation({
+    installationId: "inst_takos_runtime",
+    accountId: "acc_takos_runtime",
+    spaceId: "space_takos",
+    appId: "example.takos-app",
+    sourceGitUrl: "https://github.com/example/takos-app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationServicesPath("inst_takos_runtime")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(response.status).toEqual(200);
+  const services = (await response.json()).services;
+  const byId = new Map<
+    string,
+    {
+      status: string;
+      material: Record<string, unknown>;
+      rotate_token_url?: string;
+    }
+  >(
+    services.map(
+      (service: {
+        id: string;
+        status: string;
+        material: Record<string, unknown>;
+        rotate_token_url?: string;
+      }) => [service.id, service],
+    ),
+  );
+
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY)?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE)
+      ?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP)?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME)?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE)
+      ?.material.baseUrl,
+  ).toEqual("https://accounts.example.test/api/spaces/space_takos/storage");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP)?.material
+      .smartHttpBaseUrl,
+  ).toEqual("https://accounts.example.test/git/");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME)?.material
+      .taskApiUrl,
+  ).toEqual("https://accounts.example.test/api/spaces/space_takos/agent-tasks");
+
+  for (const serviceId of [
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
+  ]) {
+    expect(byId.get(serviceId)?.rotate_token_url).toEqual(undefined);
+    const rotateNonSecretService = await handler(
+      new Request(
+        `${testIssuer}${takosumiAccountsInstallationServiceRotateTokenPath(
+          "inst_takos_runtime",
+          serviceId,
+        )}`,
+        {
+          method: "POST",
+          headers: accountSessionHeaders(sessionId),
+          body: "{}",
+        },
+      ),
+    );
+    expect(rotateNonSecretService.status).toEqual(400);
+    expect((await rotateNonSecretService.json()).error.code).toEqual(
+      "service_not_secret_backed",
+    );
+  }
+});
+
+test("accounts handler keeps Takos runtime projections not configured unless the host enables them", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({ store });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acc_takos_disabled", "space_takos");
+  const sessionId = seedAccountSession(
+    store,
+    "tsub_owner",
+    "sess_takos_disabled",
+  );
+  store.saveAppInstallation({
+    installationId: "inst_takos_disabled",
+    accountId: "acc_takos_disabled",
+    spaceId: "space_takos",
+    appId: "example.takos-app",
+    sourceGitUrl: "https://github.com/example/takos-app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationServicesPath("inst_takos_disabled")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(response.status).toEqual(200);
+  const services = (await response.json()).services as {
+    id: string;
+    status: string;
+    rotate_token_url?: string;
+  }[];
+  for (const serviceId of [
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
+  ]) {
+    const service = services.find((candidate) => candidate.id === serviceId);
+    expect(service?.status).toEqual("not_configured");
+    expect(service?.rotate_token_url).toEqual(undefined);
+  }
+});
+
+test("accounts handler lets Takos runtime service readiness be enabled or disabled per surface", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    serviceGraphRuntimeAvailability: {
+      takosProfileConfigured: true,
+      takosGitConfigured: false,
+      takosAgentRuntimeConfigured: false,
+    },
+  });
+  const storageOnlyHandler = createAccountsHandler({
+    store,
+    serviceGraphRuntimeAvailability: { takosStorageConfigured: true },
+  });
+  const now = Date.now();
+  seedOwnedSpace(store, "tsub_owner", "acc_takos_partial", "space_takos");
+  const sessionId = seedAccountSession(
+    store,
+    "tsub_owner",
+    "sess_takos_partial",
+  );
+  store.saveAppInstallation({
+    installationId: "inst_takos_partial",
+    accountId: "acc_takos_partial",
+    spaceId: "space_takos",
+    appId: "example.takos-app",
+    sourceGitUrl: "https://github.com/example/takos-app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationServicesPath("inst_takos_partial")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(response.status).toEqual(200);
+  const services = (await response.json()).services as {
+    id: string;
+    status: string;
+  }[];
+  const byId = new Map(services.map((service) => [service.id, service]));
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY)?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE)
+      ?.status,
+  ).toEqual("ready");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP)?.status,
+  ).toEqual("not_configured");
+  expect(
+    byId.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME)?.status,
+  ).toEqual("not_configured");
+
+  const storageOnlyResponse = await storageOnlyHandler(
+    new Request(
+      `${testIssuer}${takosumiAccountsInstallationServicesPath("inst_takos_partial")}`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+  expect(storageOnlyResponse.status).toEqual(200);
+  const storageOnlyServices = (await storageOnlyResponse.json()).services as {
+    id: string;
+    status: string;
+  }[];
+  const storageOnly = new Map(
+    storageOnlyServices.map((service) => [service.id, service]),
+  );
+  expect(
+    storageOnly.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE)
+      ?.status,
+  ).toEqual("ready");
+  expect(
+    storageOnly.get(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY)
+      ?.status,
+  ).toEqual("not_configured");
 });
 
 test("accounts handler accepts rotated billing service tokens without ServiceGrantMaterial storage", async () => {

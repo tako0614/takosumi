@@ -24,6 +24,11 @@ import {
   serializeAccountSessionCookie,
 } from "./account-session.ts";
 import {
+  accountLoginNotAllowedResponse,
+  accountMatchesLoginAllowlist,
+  type LoginEmailAllowlist,
+} from "./login-email-allowlist.ts";
+import {
   type PasskeyChallengeIntent,
   passkeyChallengeKey,
 } from "./passkey-challenge-store.ts";
@@ -315,6 +320,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
   store: AccountsStore;
   passkeys: PasskeyHttpOptions;
   secureCookie: boolean;
+  loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -370,6 +376,11 @@ export async function handlePasskeyAuthenticateComplete(input: {
       clientDataJSON,
       signature,
     });
+    if (
+      !accountMatchesLoginAllowlist(result.account, input.loginEmailAllowlist)
+    ) {
+      return accountLoginNotAllowedResponse(input.request, input.secureCookie);
+    }
     const now = Date.now();
     // Agent 6 item 8: rotate the session id on successful authentication.
     // If the caller presented a prior session, revoke it; otherwise just

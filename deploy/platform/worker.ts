@@ -19,9 +19,7 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import {
-  type ControlPlaneOperations,
-} from "@takosjp/takosumi-accounts-service";
+import { type ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -106,9 +104,11 @@ export default {
       );
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
-    if (isCloudOnlyAiGatewayPath(url.pathname)) {
-      return Response.json({ error: "not found" }, { status: 404 });
-    }
+    const cloudExtensionResponse = await handlePlatformCloudExtensionRequest(
+      request,
+      env,
+    );
+    if (cloudExtensionResponse) return cloudExtensionResponse;
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
     // deploy-control service seam BEFORE delegating to the accounts handler.
@@ -231,7 +231,11 @@ export async function handlePlatformMetricsRequest(
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   if (isPlatformMetricsDashboardPath(url.pathname)) {
-    return await handlePlatformMetricsDashboardRequest(request, env, seamForEnv);
+    return await handlePlatformMetricsDashboardRequest(
+      request,
+      env,
+      seamForEnv,
+    );
   }
   if (!isPlatformMetricsPath(url.pathname)) return undefined;
   return await seamForEnv(env).fetch(request);
@@ -289,7 +293,9 @@ interface PlatformMetricSummary {
   readonly missingRequiredLabels: readonly string[];
 }
 
-export function summarizePrometheusMetrics(text: string): PlatformMetricSummary {
+export function summarizePrometheusMetrics(
+  text: string,
+): PlatformMetricSummary {
   const byName = new Map<
     string,
     { sampleCount: number; labels: Set<string> }
@@ -297,9 +303,7 @@ export function summarizePrometheusMetrics(text: string): PlatformMetricSummary 
   for (const rawLine of text.split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
-    const match = /^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{([^}]*)\})?\s+/u.exec(
-      line,
-    );
+    const match = /^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{([^}]*)\})?\s+/u.exec(line);
     if (!match) continue;
     const [, name, labelsText] = match;
     const metric = byName.get(name) ?? { sampleCount: 0, labels: new Set() };
@@ -329,25 +333,28 @@ export function summarizePrometheusMetrics(text: string): PlatformMetricSummary 
     missingRequiredMetrics: requiredMetrics
       .filter((metric) => !metric.present)
       .map((metric) => metric.name),
-    missingRequiredLabels: REQUIRED_DASHBOARD_LABELS.filter((label) =>
-      !labelSet.includes(label)
+    missingRequiredLabels: REQUIRED_DASHBOARD_LABELS.filter(
+      (label) => !labelSet.includes(label),
     ),
   };
 }
 
 function parsePrometheusLabelNames(labelsText: string): string[] {
-  return [...labelsText.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/gu)].map(
-    (match) => match[1] ?? "",
-  ).filter(Boolean);
+  return [...labelsText.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/gu)]
+    .map((match) => match[1] ?? "")
+    .filter(Boolean);
 }
 
 function renderPlatformMetricsDashboard(
   summary: PlatformMetricSummary,
   metricsText: string,
 ): string {
-  const requiredRows = summary.requiredMetrics.map((metric) =>
-    `<tr><td>${escapeHtml(metric.name)}</td><td>${metric.present ? "ok" : "missing"}</td><td>${metric.sampleCount}</td><td>${escapeHtml(metric.labels.join(", "))}</td></tr>`
-  ).join("");
+  const requiredRows = summary.requiredMetrics
+    .map(
+      (metric) =>
+        `<tr><td>${escapeHtml(metric.name)}</td><td>${metric.present ? "ok" : "missing"}</td><td>${metric.sampleCount}</td><td>${escapeHtml(metric.labels.join(", "))}</td></tr>`,
+    )
+    .join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -394,10 +401,11 @@ function renderPlatformMetricsDashboard(
 }
 
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(
-    ">",
-    "&gt;",
-  ).replaceAll('"', "&quot;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
@@ -622,8 +630,123 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isCloudOnlyAiGatewayPath(pathname: string): boolean {
-  return pathname === "/gateway/ai/v1" || pathname.startsWith("/gateway/ai/v1/");
+export type PlatformCloudExtensionKind = "ai_gateway" | "provider_compat";
+
+export interface PlatformCloudExtensionRoute {
+  readonly id: string;
+  readonly kind: PlatformCloudExtensionKind;
+  readonly basePath: `/${string}`;
+  readonly bindingName: string;
+  readonly provider?: string;
+}
+
+const AI_GATEWAY_BASE_PATH = "/gateway/ai/v1";
+const CLOUDFLARE_COMPAT_BASE_PATH = "/compat/cloudflare/client/v4";
+
+export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRoute[] =
+  [
+    {
+      id: "ai.openai_compatible.v1",
+      kind: "ai_gateway",
+      basePath: AI_GATEWAY_BASE_PATH,
+      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+    },
+    {
+      id: "provider.cloudflare.client_v4",
+      kind: "provider_compat",
+      provider: "cloudflare",
+      basePath: CLOUDFLARE_COMPAT_BASE_PATH,
+      bindingName: "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
+    },
+  ] as const;
+
+export function matchPlatformCloudExtensionRoute(
+  pathname: string,
+  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
+): PlatformCloudExtensionRoute | undefined {
+  return routes.find((route) => pathIsUnderBase(pathname, route.basePath));
+}
+
+export async function handlePlatformCloudExtensionRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
+): Promise<Response | undefined> {
+  const route = matchPlatformCloudExtensionRoute(
+    new URL(request.url).pathname,
+    routes,
+  );
+  if (!route) return undefined;
+  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
+}
+
+export async function handlePlatformCloudExtensionRouteRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+): Promise<Response> {
+  const binding = platformCloudExtensionBinding(env, route.bindingName);
+  if (!binding) return Response.json({ error: "not found" }, { status: 404 });
+  return await binding.fetch(request);
+}
+
+export function isCloudOnlyAiGatewayPath(pathname: string): boolean {
+  return pathIsUnderBase(pathname, AI_GATEWAY_BASE_PATH);
+}
+
+export async function handlePlatformAiGatewayRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  const route = PLATFORM_CLOUD_EXTENSION_ROUTES.find(
+    (candidate) => candidate.id === "ai.openai_compatible.v1",
+  );
+  if (!route) return Response.json({ error: "not found" }, { status: 404 });
+  return (
+    (await handlePlatformCloudExtensionRequest(request, env, [route])) ??
+    Response.json({ error: "not found" }, { status: 404 })
+  );
+}
+
+export function isCloudOnlyCloudflareCompatPath(pathname: string): boolean {
+  return pathIsUnderBase(pathname, CLOUDFLARE_COMPAT_BASE_PATH);
+}
+
+export async function handlePlatformCloudflareCompatRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  const route = PLATFORM_CLOUD_EXTENSION_ROUTES.find(
+    (candidate) => candidate.id === "provider.cloudflare.client_v4",
+  );
+  if (!route) return Response.json({ error: "not found" }, { status: 404 });
+  return (
+    (await handlePlatformCloudExtensionRequest(request, env, [route])) ??
+    Response.json({ error: "not found" }, { status: 404 })
+  );
+}
+
+interface PlatformCloudExtensionBinding {
+  fetch(request: Request): Response | Promise<Response>;
+}
+
+function platformCloudExtensionBinding(
+  env: CloudflareWorkerEnv,
+  bindingName: string,
+): PlatformCloudExtensionBinding | undefined {
+  const binding = (env as Record<string, unknown>)[bindingName];
+  if (
+    !binding ||
+    typeof binding !== "object" ||
+    typeof (binding as { fetch?: unknown }).fetch !== "function"
+  ) {
+    return undefined;
+  }
+  return binding as PlatformCloudExtensionBinding;
+}
+
+function pathIsUnderBase(pathname: string, basePath: string): boolean {
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
 }
 
 const HARDENING_GATE_REF_PREFIX = "git+";

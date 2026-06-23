@@ -116,11 +116,16 @@ import {
 } from "./http-helpers.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
+  extractAccountSessionId,
   handleAccountSessionMeDelete,
   handleAccountSessionMeGet,
   requireAccountSession,
   TAKOSUMI_ACCOUNTS_SESSION_ME_PATH,
 } from "./account-session.ts";
+import {
+  type LoginEmailAllowlist,
+  rejectDisallowedPresentedSession,
+} from "./login-email-allowlist.ts";
 import { handleConsumeLaunchToken } from "./installation-routes-internal.ts";
 import {
   handleAuthProvidersRequest,
@@ -186,6 +191,8 @@ export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
+export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
+export type { ServiceGraphRuntimeAvailability } from "./service-graph-service-routes.ts";
 export { requireCurrentServiceGraphServiceAccessToken } from "./service-graph-service-tokens.ts";
 export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
 export type {
@@ -275,6 +282,7 @@ export interface AccountsHandlerOptions {
   materializeWorker?: AppInstallationMaterializeWorker;
   exportWorker?: AppInstallationExportWorker;
   platformAccess?: PlatformAccessPolicy;
+  loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   /**
@@ -328,6 +336,7 @@ export interface EphemeralAccountsHandlerOptions {
   materializeWorker?: AppInstallationMaterializeWorker;
   exportWorker?: AppInstallationExportWorker;
   platformAccess?: PlatformAccessPolicy;
+  loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   billingRedirectAllowlist?: readonly string[];
@@ -588,6 +597,7 @@ export async function createEphemeralAccountsHandler(
     platformAccess: options.platformAccess ?? {
       status: "closed",
     },
+    loginEmailAllowlist: options.loginEmailAllowlist,
     serviceGraphMaterialResolver: options.serviceGraphMaterialResolver,
     billingRedirectAllowlist: options.billingRedirectAllowlist,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
@@ -636,6 +646,7 @@ export function createAccountsHandler(
   );
   const store = options.store ?? new InMemoryAccountsStore();
   const isProductionIssuer = isHttpsIssuer(issuer);
+  const loginEmailAllowlist = options.loginEmailAllowlist;
 
   // Per-isolate rate limiters. Each entry maps client IP to a sliding window
   // of recent request timestamps. These limiters guard the abuse-prone OIDC
@@ -710,6 +721,17 @@ export function createAccountsHandler(
     if (url.pathname === TAKOSUMI_ACCOUNTS_JWKS_PATH) {
       if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
       return json(jwks);
+    }
+
+    if (!isLoginAllowlistBypassPath(url.pathname)) {
+      const rejectedSession = await rejectDisallowedPresentedSession({
+        request,
+        store,
+        sessionId: extractAccountSessionId(request),
+        allowlist: loginEmailAllowlist,
+        secureCookie: isProductionIssuer,
+      });
+      if (rejectedSession) return rejectedSession;
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH) {
@@ -837,6 +859,7 @@ export function createAccountsHandler(
         store,
         upstreamOAuth: options.upstreamOAuth,
         secureCookie: isProductionIssuer,
+        loginEmailAllowlist,
       });
     }
 
@@ -878,6 +901,7 @@ export function createAccountsHandler(
         store,
         passkeys: options.passkeys,
         secureCookie: isProductionIssuer,
+        loginEmailAllowlist,
       });
     }
 
@@ -1335,6 +1359,16 @@ export function startAccountsServer(
 
 function isGetOrHead(request: Request): boolean {
   return request.method === "GET" || request.method === "HEAD";
+}
+
+function isLoginAllowlistBypassPath(pathname: string): boolean {
+  return (
+    pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH
+  );
 }
 
 interface InMemoryRateLimiter {
