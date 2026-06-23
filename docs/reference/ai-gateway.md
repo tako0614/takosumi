@@ -52,6 +52,7 @@ OpenAI-compatible routes:
 | route                                  | scope            | behavior                                 |
 | -------------------------------------- | ---------------- | ---------------------------------------- |
 | `GET /gateway/ai/v1/models`            | `ai.models.read` | lists public model aliases               |
+| `GET /gateway/ai/v1/__takosumi/status` | `ai.models.read` | reports secret-free gateway readiness    |
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`        | forwards chat completions to an upstream |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`  | forwards embeddings to an upstream       |
 
@@ -146,6 +147,16 @@ Rules:
 Provider examples such as DeepSeek, Z.AI GLM, Gemini, OpenAI, Workers AI, or any OpenAI-compatible host are all the
 same gateway mechanism: configure a profile, map public aliases to upstream model ids, and keep the upstream key behind
 `apiKeyEnv`.
+
+`GET /gateway/ai/v1/__takosumi/status` returns only public readiness
+metadata. It reports whether the gateway is using `configured_upstreams` or
+`workers_ai_fallback`, the public providers/model aliases, and whether the
+Workers AI fallback binding exists. It never returns upstream keys, `apiKeyEnv`
+names, raw `Authorization` material, or service-binding names. Takosumi Cloud
+GA smoke may pass in fallback mode for the base managed AI capability, but any
+launch claim that includes DeepSeek, Z.AI/GLM, Gemini, OpenAI, or another
+external upstream must run `smoke:cloud-extensions` with
+`--require-ai-upstream-profile`.
 
 ## Secret Boundary
 

@@ -291,6 +291,10 @@ token / cookie / token file path を保存しない。通常の deploy smoke は
 mount、platform-side session auth、Cloud extension catalog、AI Gateway、
 Cloudflare compatibility envelope、および Cloudflare Workers script の
 `PUT -> GET -> DELETE` lifecycle を確認する。
+AI Gateway status が `workers_ai_fallback` の場合、基礎の managed AI は
+動作しているが、DeepSeek / Z.AI GLM / Gemini / OpenAI などの外部 upstream
+provider はまだ設定されていない。外部 provider を Cloud の提供機能として
+告知する release では `--require-ai-upstream-profile` を付ける。
 Cloudflare Workers script materialization がまだ 501 の場合、script は `status: "passed"` でも
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
@@ -316,6 +320,15 @@ bun run smoke:cloud-extensions -- \
   --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \
   --require-compat-materialization \
   --require-provider-e2e \
+  --json
+
+# GA strict + external AI upstream claim:
+bun run smoke:cloud-extensions -- \
+  --url https://app.takosumi.com \
+  --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \
+  --require-compat-materialization \
+  --require-provider-e2e \
+  --require-ai-upstream-profile \
   --json
 ```
 
