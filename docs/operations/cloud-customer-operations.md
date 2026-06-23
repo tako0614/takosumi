@@ -32,6 +32,11 @@ GA requires these customer operations to be true in production:
 Customer onboarding starts from `https://takosumi.com` or a product install
 link from Takos.
 
+Until GA, customer onboarding is closed access. The official Cloud origins
+accept only the verified Google account `shoutatomiyama0614@gmail.com`; all
+other Google accounts are rejected after OAuth callback and any existing session
+outside that allowlist is cleared.
+
 1. Open the external install link. The platform must preserve `git`, `ref`,
    `path`, and allowed `var.*` query parameters into `/new`.
 2. Sign in with Google. GitHub OAuth is not a GA sign-in provider.

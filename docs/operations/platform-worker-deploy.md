@@ -200,6 +200,13 @@ origin、authorized redirect URI には `https://<platform-origin>/sign-in/callb
 backend completion endpoint で、外部 OAuth provider の redirect target にはしない。
 Stripe、passkey。
 
+Pre-GA の公式 Cloud origin (`https://app-staging.takosumi.com` /
+`https://app.takosumi.com`) は、コード側で
+`shoutatomiyama0614@gmail.com` の verified Google account だけに固定する。
+`TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST="*"` や別メールの env を入れても
+公式 Cloud では解除されない。self-host / local-substrate の operator origin
+だけが `TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST` を operator policy として使える。
+
 Google OAuth の非 secret 値は operator-private realized config の `[vars]` にだけ入れる:
 
 ```toml
