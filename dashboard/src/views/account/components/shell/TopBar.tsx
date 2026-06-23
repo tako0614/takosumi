@@ -2,7 +2,7 @@
  * TopBar: [Workspace switcher] ......... [bell + needs-attention badge] [UserMenu].
  *
  * The bell badge counts unseen needs-attention events (run failures / drift /
- * revoked connections) across every Space, via the cached feed loader in
+ * revoked connections) for the current Workspace, via the cached feed loader in
  * lib/notifications.ts (TTL-cached because each view mounts its own shell).
  * Opening /notifications marks the feed seen, which clears the badge reactively
  * through the shared `seenVersion` signal.
@@ -12,6 +12,7 @@ import { createMemo, createResource, Show } from "solid-js";
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import SpaceSwitcher from "./SpaceSwitcher.tsx";
+import { currentSpaceId } from "../../../../lib/space-state.ts";
 import {
   loadFeedForBadge,
   seenVersion,
@@ -20,7 +21,10 @@ import {
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
-  const [feed] = createResource(loadFeedForBadge);
+  const [feed] = createResource(
+    () => currentSpaceId() || null,
+    async (spaceId) => (spaceId ? loadFeedForBadge(spaceId) : []),
+  );
   const badge = createMemo(() => {
     seenVersion(); // re-derive when the seen marker moves
     const list = feed();

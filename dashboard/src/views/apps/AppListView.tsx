@@ -44,9 +44,12 @@ function Inner() {
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
 
   const [installations] = createResource(spaceId, listInstallations);
+  const visibleInstallations = createMemo(() =>
+    (installations() ?? []).filter(isVisibleServiceInstallation),
+  );
 
   // Launch URL per app, from its current Deployment's public outputs.
-  const [launchUrls] = createResource(installations, async (list) => {
+  const [launchUrls] = createResource(visibleInstallations, async (list) => {
     const map = new Map<string, string>();
     await Promise.all(
       list
@@ -70,7 +73,7 @@ function Inner() {
 
   /** Services currently needing attention (error / stale under either model). */
   const attentionCount = createMemo(
-    () => (installations() ?? []).filter(needsAttention).length,
+    () => visibleInstallations().filter(needsAttention).length,
   );
   const createFirstWorkspace = createAction(async (): Promise<Space> => {
     const space = await createSpace({
@@ -85,7 +88,7 @@ function Inner() {
   });
 
   const showAddServiceAction = createMemo(() => {
-    const list = installations();
+    const list = visibleInstallations();
     return Boolean(list && list.length > 0);
   });
 
@@ -141,27 +144,27 @@ function Inner() {
             </Toast>
           </Match>
           <Match when={installations()}>
-            {(list) => (
-              <>
-                <Show
-                  when={list().length === 0}
-                  fallback={
-                    <ServiceList
-                      installations={list()}
-                      launchUrls={launchUrls() ?? new Map()}
-                      openDetail={openDetail}
-                    />
-                  }
-                >
-                  <WorkspaceStartPanel />
-                </Show>
-              </>
-            )}
+            <Show
+              when={visibleInstallations().length === 0}
+              fallback={
+                <ServiceList
+                  installations={visibleInstallations()}
+                  launchUrls={launchUrls() ?? new Map()}
+                  openDetail={openDetail}
+                />
+              }
+            >
+              <WorkspaceStartPanel />
+            </Show>
           </Match>
         </Switch>
       </Show>
     </AppShell>
   );
+}
+
+function isVisibleServiceInstallation(inst: Installation): boolean {
+  return inst.status !== "destroyed";
 }
 
 function NoWorkspaceStartPanel(props: {

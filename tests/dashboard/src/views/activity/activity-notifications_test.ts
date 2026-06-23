@@ -18,6 +18,17 @@ const notificationsSource = readFileSync(
   ),
   "utf8",
 );
+const topBarSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../../dashboard/src/views/account/components/shell/TopBar.tsx",
+  ),
+  "utf8",
+);
+const notificationsLibSource = readFileSync(
+  resolve(import.meta.dir, "../../../../../dashboard/src/lib/notifications.ts"),
+  "utf8",
+);
 
 describe("History and notifications", () => {
   test("keeps raw audit identifiers inside nested debug details", () => {
@@ -65,5 +76,22 @@ describe("History and notifications", () => {
     expect(ja["notif.viewRaw"]).not.toContain("サポート");
     expect(en["notif.event.recorded"]).toBe("Recorded activity");
     expect(ja["notif.event.recorded"]).toBe("記録された操作");
+  });
+
+  test("topbar badge stays scoped to the current Workspace instead of fanning out", () => {
+    expect(topBarSource).toContain("currentSpaceId");
+    expect(topBarSource).toContain("loadFeedForBadge(spaceId)");
+    expect(notificationsLibSource).toContain(
+      "export async function loadFeedForBadge",
+    );
+    expect(notificationsLibSource).toContain(
+      "badgeCache.spaceId === spaceId",
+    );
+    expect(notificationsLibSource).toContain(
+      "const events = await listActivity(spaceId, NOTIF_PER_SPACE_LIMIT)",
+    );
+    expect(notificationsLibSource).not.toContain(
+      "const spaces = await listSpaces()",
+    );
   });
 });

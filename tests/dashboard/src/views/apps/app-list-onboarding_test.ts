@@ -18,7 +18,9 @@ const appViewsCssSource = readFileSync(
 describe("AppListView Workspace starter", () => {
   test("keeps first-run home focused on choosing a service, not a deploy procedure", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
-    expect(appListSource).toContain("when={list().length === 0}");
+    expect(appListSource).toContain(
+      "when={visibleInstallations().length === 0}",
+    );
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
@@ -34,6 +36,9 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).not.toContain("function ServiceLauncherHeader");
     expect(appListSource).not.toContain("<ServiceLauncherHeader");
     expect(appListSource).toContain("<ServiceList");
+    expect(appListSource).toContain("function isVisibleServiceInstallation");
+    expect(appListSource).toContain('inst.status !== "destroyed"');
+    expect(appListSource).toContain("visibleInstallations()");
     expect(appListSource).toContain('class="av-service-grid"');
     expect(appListSource).toContain('class="av-service-card"');
     expect(appListSource).not.toContain('t("apps.summary.title")');
