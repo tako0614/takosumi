@@ -277,6 +277,10 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
       environment: "preview",
       snapshotId: snapshot.id,
       vars: { region: "ap-northeast-1" },
+      outputAllowlist: {
+        endpoint: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string" },
+      },
       providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
     },
   );
@@ -301,6 +305,13 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   const installation = await store.getInstallation(result.installation.id);
   expect(installation?.sourceId).toBeUndefined();
   expect(installation?.compatibilityReportId).toBeDefined();
+  const installConfig = await installations.getInstallConfig(
+    result.installConfigId,
+  );
+  expect(installConfig.outputAllowlist).toEqual({
+    endpoint: { from: "url", type: "url", required: true },
+    worker_name: { from: "worker_name", type: "string" },
+  });
 });
 
 test("deployUpload marks a new upload Installation error when orchestration throws", async () => {
@@ -508,10 +519,18 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
       environment: "preview",
       snapshotId: second.id,
       vars: { changed: "yes" },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+      },
     },
   );
   expect(r2.created).toBe(false);
   expect(r2.installation.id).toBe(r1.installation.id);
+  const config = await installations.getInstallConfig(r2.installConfigId);
+  expect(config.variableMapping).toEqual({ changed: "yes" });
+  expect(config.outputAllowlist).toEqual({
+    url: { from: "url", type: "url", required: true },
+  });
 });
 
 test("deployUpload rejects provider env bindings without envId before persistence", async () => {
