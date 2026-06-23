@@ -24,12 +24,12 @@ describe("dashboard catalog", () => {
     );
   });
 
-  test("the example web app starter is browser-openable after apply", () => {
+  test("the primary web app starter is browser-openable after apply", () => {
     const hello = catalogEntries().find(
       (entry) => entry.templateId === "cloudflare-hello-worker",
     );
     expect(hello).toBeDefined();
-    expect(hello?.surface).toBe("example");
+    expect(hello?.surface).toBe("service");
     expect(hello?.description.en.toLowerCase()).toContain("public url");
     expect(
       hello?.inputs.map((field) => [field.name, field.required]),
@@ -44,7 +44,7 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("catalog keeps hostable services first and examples out of the primary path", () => {
+  test("catalog keeps Cloud-compatible hostable services first and Pages as an example", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
@@ -55,15 +55,44 @@ describe("dashboard catalog", () => {
       services
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
-    ).toEqual(["cloudflare-static-site"]);
+    ).toEqual(["cloudflare-hello-worker"]);
     expect(
       buildingBlocks
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
     ).toEqual(["cloudflare-r2-storage", "aws-s3-storage"]);
     expect(examples.map((entry) => entry.templateId)).toEqual([
-      "cloudflare-hello-worker",
+      "cloudflare-static-site",
     ]);
+  });
+
+  test("primary catalog services stay inside the Cloudflare compat MVP surface", () => {
+    const compatMvpResourceTypes = new Set([
+      "cloudflare_workers_script",
+      "cloudflare_workers_script_subdomain",
+      "cloudflare_workers_route",
+      "cloudflare_workers_kv_namespace",
+      "cloudflare_r2_bucket",
+      "cloudflare_d1_database",
+    ]);
+    const seededConfigs = officialInstallConfigs();
+    for (const entry of catalogEntries().filter(
+      (catalogEntry) => catalogEntry.surface === "service",
+    )) {
+      const config = seededConfigs.find(
+        (seeded) => seeded.id === entry.installConfigId,
+      );
+      const template = defaultTemplateRegistry.require(
+        config!.templateBinding!.templateId,
+        config!.templateBinding!.templateVersion,
+      );
+      expect(
+        template.policy.allowedResourceTypes.every((resourceType) =>
+          compatMvpResourceTypes.has(resourceType),
+        ),
+        entry.templateId,
+      ).toBe(true);
+    }
   });
 
   test("visible cards resolve to seeded official template configs", () => {
