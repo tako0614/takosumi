@@ -54,6 +54,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareAccountIdSource: "env" | "file" | "arg";
   readonly cloudflareWorkersSubdomain: string;
   readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
+  readonly cloudflareConnectionMode: "guided" | "generic-env";
   readonly space: string;
   readonly appName: string;
   readonly environment: string;
@@ -83,6 +84,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly scratchSpaceId: string;
   readonly capsuleModule: "cloudflare-hello-worker";
   readonly credentialPath: "space_scoped_provider_connection";
+  readonly providerConnectionMode: "guided" | "generic-env";
   readonly steps: readonly string[];
   readonly appName: string;
   readonly environment: string;
@@ -119,6 +121,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareAccountIdSource: "env" | "file" | "arg";
     readonly cloudflareAccountIdDigest: string;
     readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
+    readonly cloudflareConnectionMode: "guided" | "generic-env";
     readonly sourceMode: "upload" | "git";
     readonly capsuleDir?: string;
     readonly sourceGitUrlDigest?: string;
@@ -144,6 +147,7 @@ interface CliArgs {
   readonly cloudflareAccountIdFile?: string;
   readonly cloudflareWorkersSubdomain?: string;
   readonly cloudflareWorkersSubdomainFile?: string;
+  readonly cloudflareConnectionMode?: string;
   readonly space?: string;
   readonly workspace?: string;
   readonly spaceDisplayName?: string;
@@ -354,6 +358,10 @@ export async function resolveOptions(
     label: "Cloudflare API token",
     dryRun: args.dryRun === true,
   });
+  const cloudflareConnectionMode = parseCloudflareConnectionMode(
+    args.cloudflareConnectionMode ??
+      env.TAKOSUMI_SMOKE_CLOUDFLARE_CONNECTION_MODE,
+  );
   const rawSourceGitUrl =
     args.sourceGitUrl ?? env.TAKOSUMI_SMOKE_SOURCE_GIT_URL;
   const sourceGitUrl =
@@ -381,6 +389,7 @@ export async function resolveOptions(
     cloudflareAccountIdSource: cloudflareAccountId.source,
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
+    cloudflareConnectionMode,
     space,
     appName: args.appName ?? defaultAppName(),
     environment: args.environment ?? defaultSmokeEnvironment(url),
@@ -428,6 +437,7 @@ export function dryRunResult(
     scratchSpaceId: options.space,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
+    providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     appName: options.appName,
@@ -597,6 +607,7 @@ export async function runPlatformControlPlaneSmoke(
       scratchSpaceId: spaceId,
       capsuleModule: "cloudflare-hello-worker",
       credentialPath: "space_scoped_provider_connection",
+      providerConnectionMode: options.cloudflareConnectionMode,
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
       appName: options.appName,
@@ -726,6 +737,7 @@ function failedResult(
     scratchSpaceId: input.spaceId,
     capsuleModule: "cloudflare-hello-worker",
     credentialPath: "space_scoped_provider_connection",
+    providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     appName: options.appName,
@@ -858,13 +870,27 @@ async function createSpaceCloudflareConnection(
     token: options.accountSessionToken,
     method: "POST",
     path: `${API_PREFIX}/connections`,
-    body: {
-      spaceId,
-      provider: "cloudflare",
-      displayName,
-      scopeHints: { accountId: options.cloudflareAccountId },
-      values: { CLOUDFLARE_API_TOKEN: options.cloudflareApiToken },
-    },
+    body:
+      options.cloudflareConnectionMode === "generic-env"
+        ? {
+            spaceId,
+            provider: "cloudflare",
+            kind: "generic_env_provider",
+            credentialDriver: "generic_env",
+            displayName,
+            scopeHints: { accountId: options.cloudflareAccountId },
+            values: {
+              CLOUDFLARE_API_TOKEN: options.cloudflareApiToken,
+              CLOUDFLARE_ACCOUNT_ID: options.cloudflareAccountId,
+            },
+          }
+        : {
+            spaceId,
+            provider: "cloudflare",
+            displayName,
+            scopeHints: { accountId: options.cloudflareAccountId },
+            values: { CLOUDFLARE_API_TOKEN: options.cloudflareApiToken },
+          },
   });
   const id = response.connection?.id;
   if (!id) {
@@ -1955,6 +1981,18 @@ function normalizeBaseUrl(value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+function parseCloudflareConnectionMode(
+  value: string | undefined,
+): "guided" | "generic-env" {
+  if (value === undefined || value.trim() === "" || value === "guided") {
+    return "guided";
+  }
+  if (value === "generic-env") return "generic-env";
+  throw new Error(
+    "--cloudflare-connection-mode must be guided or generic-env",
+  );
+}
+
 function normalizeSmokeSourceGitUrl(value: string): string {
   const url = new URL(value);
   if (url.username || url.password) {
@@ -1977,6 +2015,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareAccountIdSource: "env" | "file" | "arg";
   readonly cloudflareAccountIdDigest: string;
   readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
+  readonly cloudflareConnectionMode: "guided" | "generic-env";
   readonly sourceMode: "upload" | "git";
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
@@ -1989,6 +2028,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
     cloudflareAccountIdDigest: sha256(options.cloudflareAccountId),
     cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
+    cloudflareConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     ...(options.sourceMode === "upload"
       ? { capsuleDir: options.capsuleDir }
@@ -2031,11 +2071,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredSteps(
   options?: Pick<
     PlatformControlPlaneSmokeOptions,
-    "backupRestoreRehearsal" | "keepConnection" | "sourceMode"
+    | "backupRestoreRehearsal"
+    | "keepConnection"
+    | "sourceMode"
+    | "cloudflareConnectionMode"
   >,
 ): readonly string[] {
   const steps = [
     "spaceScopedProviderConnection",
+    ...(options?.cloudflareConnectionMode === "generic-env"
+      ? ["genericEnvProviderConnection"]
+      : []),
     "connectionVerified",
     ...(options?.sourceMode === "git" ? ["sourceRegistered"] : []),
     ...(options?.sourceMode === "git" ? ["sourceSynced"] : []),
@@ -2076,6 +2122,7 @@ async function writeResult(
   console.log(`${label} ${result.kind}`);
   console.log(`service: ${result.serviceUrl}`);
   console.log(`workspace: ${result.scratchSpaceId}`);
+  console.log(`provider connection: ${result.providerConnectionMode}`);
   console.log(`source mode: ${result.sourceMode}`);
   console.log(`capsule: ${result.capsuleModule}`);
   console.log(`app: ${result.appName}`);
@@ -2162,8 +2209,40 @@ async function runSelfTest(): Promise<void> {
   if (result.sourceMode !== "upload") {
     throw new Error("self-test default source mode is not upload");
   }
+  if (result.providerConnectionMode !== "guided") {
+    throw new Error("self-test default Provider Connection mode is not guided");
+  }
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
+  }
+  const genericEnvOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      cloudflareConnectionMode: "generic-env",
+    },
+    {},
+  );
+  const genericEnvResult = dryRunResult(genericEnvOptions);
+  const serializedGenericEnv = JSON.stringify(genericEnvResult);
+  if (genericEnvResult.providerConnectionMode !== "generic-env") {
+    throw new Error("self-test did not enable generic-env connection mode");
+  }
+  if (!genericEnvResult.steps.includes("genericEnvProviderConnection")) {
+    throw new Error("generic-env self-test result is missing connection step");
+  }
+  if (
+    serializedGenericEnv.includes("cloudflare-token") ||
+    serializedGenericEnv.includes("cloudflare-account-id")
+  ) {
+    throw new Error("generic-env self-test leaked secret file names");
   }
   const gitOptions = await resolveOptions(
     {
@@ -2336,6 +2415,7 @@ Options:
   --environment <name>                            default inferred from --url
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
+  --cloudflare-connection-mode <guided|generic-env> default guided; generic-env proves the explicit env-name Provider Connection path
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
   --source-ref <ref>                              Git ref for --source-git-url, default main
