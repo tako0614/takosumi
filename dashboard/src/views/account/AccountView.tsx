@@ -171,7 +171,7 @@ function Inner(props: { readonly session: SessionRecord }) {
             <div class="wc-stack-sm">
               <div>
                 <p class="tg-card-title">{t("account.language.title")}</p>
-                <div class="wc-form-actions">
+                <div class="wc-form-actions tg-segmented">
                   <Button
                     variant={locale() === "ja" ? "primary" : "secondary"}
                     type="button"
@@ -190,7 +190,7 @@ function Inner(props: { readonly session: SessionRecord }) {
               </div>
               <div>
                 <p class="tg-card-title">{t("account.theme.title")}</p>
-                <div class="wc-form-actions">
+                <div class="wc-form-actions tg-segmented">
                   {(["system", "light", "dark"] as const).map((theme) => (
                     <Button
                       variant={

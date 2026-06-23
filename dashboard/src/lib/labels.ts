@@ -52,6 +52,15 @@ const POLICY: Record<string, MessageKey> = {
 };
 export const policyStatusLabel = (status?: string) => label(POLICY, status);
 
+/** Run diagnostic severity (info/warning/error) — keeps raw English out of the UI. */
+const DIAGNOSTIC_SEVERITY: Record<string, MessageKey> = {
+  info: "run.diag.severity.info",
+  warning: "run.diag.severity.warning",
+  error: "run.diag.severity.error",
+};
+export const diagnosticSeverityLabel = (severity?: string) =>
+  label(DIAGNOSTIC_SEVERITY, severity);
+
 /** Legacy deployment evidence status retained for current compatibility views. */
 const DEPLOYMENT: Record<string, MessageKey> = {
   active: "status.deployment.active",

@@ -129,7 +129,7 @@
 .wc-conn-name {
   font-weight: 700;
   font-family: var(--tg-font-display);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 .wc-conn-meta {
   display: flex;

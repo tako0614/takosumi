@@ -8,14 +8,7 @@
  * CODES) — no invented prices, formulas, or messages.
  */
 import "../../styles/wave-c.css";
-import {
-  createMemo,
-  createResource,
-  For,
-  Match,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -213,10 +206,12 @@ function NotificationRow(props: { entry: FeedEntry }) {
         </Show>
         <p class="wc-notif-foot">
           <span>@{props.entry.spaceHandle}</span>
-          <span aria-hidden="true">·</span>
-          <time datetime={props.entry.event.createdAt}>
-            {relativeTime(props.entry.event.createdAt)}
-          </time>
+          <Show when={props.entry.event.createdAt}>
+            <span aria-hidden="true">·</span>
+            <time datetime={props.entry.event.createdAt}>
+              {relativeTime(props.entry.event.createdAt)}
+            </time>
+          </Show>
         </p>
       </div>
     </li>

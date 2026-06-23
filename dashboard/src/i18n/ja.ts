@@ -153,7 +153,7 @@ export const ja = {
   "status.connection.expired": "期限切れ",
   "status.connection.error": "エラー",
   "status.providerConnection.ready": "利用できます",
-  "status.providerConnection.needs_setup": "確認が必要",
+  "status.providerConnection.needs_setup": "未確認",
   "status.providerConnection.expired": "期限切れ",
   "status.providerConnection.blocked": "利用停止",
 
@@ -177,7 +177,7 @@ export const ja = {
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",
   "apps.updated": "更新: {date}",
-  "apps.reviewChanges": "更新を確認",
+  "apps.reviewChanges": "変更を確認",
   "apps.start.aria": "最初のサービス",
   "apps.start.kicker": "まだサービスがありません",
   "apps.start.titleEmpty": "サービスを追加して始める",
@@ -315,7 +315,9 @@ export const ja = {
   "run.cost.capacityBlocked":
     "このワークスペースではこの操作を実行できません。",
   "run.cost.billingCta": "お支払いを開く",
-  "run.cost.operatorHelp": "このワークスペースではまだこの操作を実行できません。",
+  "run.cost.operatorHelp":
+    "オーナーがワークスペースの使用量・上限を見直すと、この操作を実行できます。",
+  "run.cost.quotaCta": "使用量 / 上限を確認",
   "run.changes.title": "変更される内容",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
@@ -332,6 +334,10 @@ export const ja = {
   "run.resources.address": "アドレス",
   "run.resources.type": "種別",
   "run.resources.scope": "対象範囲",
+  "run.scope.cloudflareAccount": "Cloudflare アカウント {id}",
+  "run.scope.cloudflareZone": "Cloudflare ゾーン {id}",
+  "run.scope.awsAccount": "AWS アカウント {id}",
+  "run.scope.awsRegion": "AWS リージョン {region}",
   "run.details.title": "参照情報",
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
@@ -361,6 +367,9 @@ export const ja = {
   "run.connections.empty": "クラウドアカウントの確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
+  "run.diag.severity.error": "エラー",
+  "run.diag.severity.warning": "警告",
+  "run.diag.severity.info": "情報",
   "run.diagnostics.failed":
     "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
   "run.audit.title": "活動記録",
@@ -383,7 +392,8 @@ export const ja = {
   "new.subtitle": "おすすめから選ぶか、リンクを貼って追加します。",
   "new.store.aria": "おすすめサービス",
   "new.store.title": "何をホストしますか？",
-  "new.store.subtitle": "おすすめを選ぶと、必要な項目だけ入力して始められます。",
+  "new.store.subtitle":
+    "おすすめを選ぶと、必要な項目だけ入力して始められます。",
   "new.store.blocksTitle": "保存先と部品",
   "new.store.examplesTitle": "サンプル",
   "new.store.empty.title": "追加できるサービスがありません",
@@ -467,6 +477,8 @@ export const ja = {
   "new.deeplink.invalidBody":
     "安全な HTTPS リンクではないか、ブラウザで開けない情報が含まれています。おすすめから選ぶか、別のリンクを貼り付けてください。",
   "new.compat.check": "追加を始める",
+  "new.installCta": "サービスを追加",
+  "new.installing": "追加中...",
   "new.compat.recheck": "もう一度確認",
   "new.compat.checking": "準備中...",
   "new.progress.title": "サービスを準備しています",
@@ -481,6 +493,8 @@ export const ja = {
   "new.compat.auto": "自動調整して追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
+  "new.compat.diagnostic.technicalNote":
+    "技術的な詳細です。対応が必要な場合は、表示された内容を確認してください。",
   "new.compat.patchHelp":
     "表示された内容を確認してください。アプリ側の修正が必要な場合と、クラウドアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
@@ -498,7 +512,7 @@ export const ja = {
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認する",
-  "new.proceedHint": "先に「追加を始める」を押してください。",
+  "new.proceedHint": "先に「サービスを追加」を押してください。",
   "new.existing.title": "このサービスは既に追加されています",
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
@@ -511,6 +525,8 @@ export const ja = {
   "new.providers.missingTitle": "クラウドアカウントの設定が必要です",
   "new.providers.missingBody": "クラウドアカウントを設定すると続けられます。",
   "new.providers.setupMissing": "必要なクラウドアカウントを設定",
+  "new.providers.returnNote":
+    "クラウドアカウントを接続すると、この追加の続きに戻ります。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
@@ -596,6 +612,7 @@ export const ja = {
   "conn.providerConnections.provider": "サービス",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
+  "conn.expiresAt": "期限: {date}",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
@@ -643,8 +660,29 @@ export const ja = {
   "conn.provider.hcloud.label": "Hetzner Cloud",
   "conn.provider.hcloud.token.label": "API トークン",
   "conn.provider.hcloud.token.placeholder": "Hetzner API トークンを貼り付け",
-  "conn.provider.s3.label": "S3 互換ストレージ",
+  "conn.provider.s3.label": "Cloudflare R2 / S3 互換ストレージ",
   "conn.provider.s3.endpoint.label": "S3 エンドポイント URL",
+  "conn.provider.aws.guide.step1": "IAM のユーザー画面を開きます。",
+  "conn.provider.aws.guide.step2":
+    "デプロイ専用ユーザーを作成または選択し、最小権限のアクセスキーを作成します。",
+  "conn.provider.aws.guide.step3":
+    "取得した値とリージョンを下の欄に貼り付けます。",
+  "conn.provider.gcp.guide.step1":
+    "Google Cloud のサービスアカウント画面を開きます。",
+  "conn.provider.gcp.guide.step2":
+    "サービスアカウントを作成し、JSON 鍵を作成・ダウンロードします。",
+  "conn.provider.gcp.guide.step3":
+    "JSON とプロジェクト ID を下の欄に貼り付けます。",
+  "conn.provider.hcloud.guide.step1": "Hetzner Cloud Console を開きます。",
+  "conn.provider.hcloud.guide.step2":
+    "プロジェクト → Security → API Tokens で Read & Write のトークンを作成します。",
+  "conn.provider.hcloud.guide.step3":
+    "発行されたトークンを下の欄に貼り付けます。",
+  "conn.provider.s3.guide.step1": "R2 の API トークン画面を開きます。",
+  "conn.provider.s3.guide.step2":
+    "S3 互換のアクセスキー ID とシークレットアクセスキーを作成します。",
+  "conn.provider.s3.guide.step3":
+    "アクセスキーとエンドポイント URL を下の欄に貼り付けます。",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
   "conn.guided.oauth": "{provider} で自動接続",
   "conn.guided.stepsSummary": "アクセストークンで接続",

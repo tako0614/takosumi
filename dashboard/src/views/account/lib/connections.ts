@@ -47,6 +47,17 @@ export interface ProviderDescriptor {
    */
   readonly tokenHelper?: ProviderTokenHelper;
   /**
+   * Optional, additive setup guide for multi-field providers (no single-token
+   * paste). It deep-links to the provider's own credential page and lists
+   * plain-language steps ABOVE the field form, without hiding any field — so
+   * AWS/GCP/etc. keep every input visible while still removing the "where do I
+   * get this?" wall. Distinct from `tokenHelper`, which is the single-token path.
+   */
+  readonly setupGuide?: {
+    readonly url: string;
+    readonly steps: readonly string[];
+  };
+  /**
    * Whether a real third-party OAuth helper MIGHT be available for this
    * provider (operator-gated). The screen probes the backend before showing an
    * OAuth button; this only marks which providers are worth probing.
@@ -79,6 +90,20 @@ export const CLOUDFLARE_CREATE_TOKEN_URL =
     ]),
     name: "Takosumi deploy",
   }).toString();
+
+/**
+ * Deep-links to each provider's OWN credential-creation page for the additive
+ * setup guide. These open the provider's site in a new tab; we never see the
+ * dashboard credentials — the user creates the key/token there and pastes the
+ * result back into the field form. Unknown query/hash is harmless, so a format
+ * change degrades to the provider's plain page, never a broken link.
+ */
+const AWS_CREATE_KEY_URL = "https://console.aws.amazon.com/iam/home#/users";
+const GCP_SERVICE_ACCOUNTS_URL =
+  "https://console.cloud.google.com/iam-admin/serviceaccounts";
+const HCLOUD_CONSOLE_URL = "https://console.hetzner.cloud/";
+const R2_API_TOKENS_URL =
+  "https://dash.cloudflare.com/?to=/:account/r2/api-tokens";
 
 /**
  * Guided providers + their credential field sets. Cloudflare has a helper link;
@@ -132,6 +157,16 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     get label() {
       return providerCopy("conn.provider.aws.label");
     },
+    get setupGuide() {
+      return {
+        url: AWS_CREATE_KEY_URL,
+        steps: [
+          providerCopy("conn.provider.aws.guide.step1"),
+          providerCopy("conn.provider.aws.guide.step2"),
+          providerCopy("conn.provider.aws.guide.step3"),
+        ],
+      };
+    },
     get fields() {
       return [
         {
@@ -174,6 +209,16 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     get label() {
       return providerCopy("conn.provider.gcp.label");
     },
+    get setupGuide() {
+      return {
+        url: GCP_SERVICE_ACCOUNTS_URL,
+        steps: [
+          providerCopy("conn.provider.gcp.guide.step1"),
+          providerCopy("conn.provider.gcp.guide.step2"),
+          providerCopy("conn.provider.gcp.guide.step3"),
+        ],
+      };
+    },
     get fields() {
       return [
         {
@@ -200,6 +245,16 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     get label() {
       return providerCopy("conn.provider.hcloud.label");
     },
+    get setupGuide() {
+      return {
+        url: HCLOUD_CONSOLE_URL,
+        steps: [
+          providerCopy("conn.provider.hcloud.guide.step1"),
+          providerCopy("conn.provider.hcloud.guide.step2"),
+          providerCopy("conn.provider.hcloud.guide.step3"),
+        ],
+      };
+    },
     get fields() {
       return [
         {
@@ -216,6 +271,16 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
     provider: "s3-compatible",
     get label() {
       return providerCopy("conn.provider.s3.label");
+    },
+    get setupGuide() {
+      return {
+        url: R2_API_TOKENS_URL,
+        steps: [
+          providerCopy("conn.provider.s3.guide.step1"),
+          providerCopy("conn.provider.s3.guide.step2"),
+          providerCopy("conn.provider.s3.guide.step3"),
+        ],
+      };
     },
     get fields() {
       return [
