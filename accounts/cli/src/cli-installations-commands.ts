@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import {
   type TakosumiSubject,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  takosumiAccountsInstallationPlanRunsPath,
   takosumiAccountsInstallationExportPath,
   takosumiAccountsInstallationMaterializePath,
   takosumiAccountsInstallationPath,
@@ -10,6 +11,7 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import {
   installationsExportHelpText,
+  installationsImportApplyHelpText,
   installationsImportPlanHelpText,
   installationsInspectHelpText,
   installationsListHelpText,
@@ -18,6 +20,7 @@ import {
   installationsUninstallHelpText,
 } from "./cli-help.ts";
 import {
+  type InstallationImportPlan,
   parseAccountsInstallationExportBundleInput,
   planInstallationImport,
 } from "@takosjp/takosumi-accounts-service";
@@ -381,65 +384,255 @@ export async function runInstallationsImportPlan(
     io.stdout(installationsImportPlanHelpText());
     return 0;
   }
+  try {
+    const plan = await buildInstallationImportPlanFromOptions(options);
+    await writeOrPrintJson({
+      value: plan,
+      outFile: optionalStringOption(options, "outFile"),
+      successMessage: "Wrote installation import plan",
+      io,
+    });
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+export async function runInstallationsImportApply(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const options = parseOptions(args);
+  if (options.help) {
+    io.stdout(installationsImportApplyHelpText());
+    return 0;
+  }
+  try {
+    const plan = await loadInstallationImportPlan(options);
+    const planRunResponse = await requestAccountsApi({
+      method: "POST",
+      path: takosumiAccountsInstallationPlanRunsPath(),
+      body: importPlanRecord(
+        plan.deployControlPlanRequest,
+        "deployControlPlanRequest",
+      ),
+      options,
+    });
+    const planRun = importPlanRecord(planRunResponse, "PlanRun response");
+    const publicPlanRun = importPlanRecord(planRun.planRun, "planRun");
+    const planRunStatus = stringField(publicPlanRun, "status", "planRun");
+    if (planRunStatus !== "succeeded") {
+      throw new Error(
+        `target PlanRun ${stringField(publicPlanRun, "id", "planRun")} is ${planRunStatus}; import-apply requires a succeeded reviewed plan`,
+      );
+    }
+    const expected = importPlanRecord(planRun.expected, "expected");
+    assertApplyExpectedGuard(expected);
+    const projectionRequest = projectionCreateRequestFromImportPlan({
+      plan,
+      expected,
+      planRunId: stringField(publicPlanRun, "id", "planRun"),
+    });
+    const projectionResponse = await requestAccountsApi({
+      method: "POST",
+      path: TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+      body: projectionRequest,
+      idempotencyKey: installationIdempotencyKey(options),
+      options,
+    });
+    const result = {
+      kind: "takosumi.accounts.installation-import-apply-result@v1",
+      importPlanKind: plan.kind,
+      targetIssuer: plan.targetIssuer,
+      sourceIssuer: plan.sourceIssuer,
+      planRunId: projectionRequest.planRunId,
+      projectionRequest,
+      planRun: planRunResponse,
+      projection: projectionResponse,
+    };
+    if (
+      booleanOption(options, "json") ||
+      optionalStringOption(options, "outFile")
+    ) {
+      await writeOrPrintJson({
+        value: result,
+        outFile: optionalStringOption(options, "outFile"),
+        successMessage: "Wrote installation import apply result",
+        io,
+      });
+      return 0;
+    }
+    const projection = importPlanRecord(projectionResponse, "projection");
+    const installation = isRecord(projection.installation)
+      ? projection.installation
+      : undefined;
+    io.stdout(
+      [
+        "Installation import apply submitted",
+        `  planRunId: ${String(projectionRequest.planRunId)}`,
+        ...(installation && typeof installation.id === "string"
+          ? [`  installationId: ${installation.id}`]
+          : []),
+      ].join("\n"),
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+async function loadInstallationImportPlan(
+  options: Record<string, string | boolean>,
+): Promise<InstallationImportPlan> {
+  const planFile = optionalStringOption(options, "planFile");
+  if (planFile) {
+    return parseInstallationImportPlan(
+      parseJsonFile(await readFile(planFile, "utf8"), planFile),
+    );
+  }
+  return await buildInstallationImportPlanFromOptions(options);
+}
+
+async function buildInstallationImportPlanFromOptions(
+  options: Record<string, string | boolean>,
+): Promise<InstallationImportPlan> {
   const bundleFile = optionalStringOption(options, "bundleFile");
   const targetIssuer = optionalStringOption(options, "targetIssuer");
   const targetAccountId = optionalStringOption(options, "targetAccount");
   const targetSpaceId = optionalStringOption(options, "targetSpace");
   const createdBySubject = optionalStringOption(options, "createdBySubject");
   if (!bundleFile) {
-    io.stderr("--bundle-file is required");
-    return 2;
+    throw new Error("--bundle-file is required");
   }
   if (!targetIssuer) {
-    io.stderr("--target-issuer is required");
-    return 2;
+    throw new Error("--target-issuer is required");
   }
   if (!targetAccountId) {
-    io.stderr("--target-account is required");
-    return 2;
+    throw new Error("--target-account is required");
   }
   if (!targetSpaceId) {
-    io.stderr("--target-space is required");
-    return 2;
+    throw new Error("--target-space is required");
   }
   if (!createdBySubject || !createdBySubject.startsWith("tsub_")) {
-    io.stderr("--created-by-subject must be a tsub_ subject");
-    return 2;
+    throw new Error("--created-by-subject must be a tsub_ subject");
   }
   const mode = optionalStringOption(options, "mode") ?? "self-hosted";
   if (mode !== "self-hosted" && mode !== "dedicated") {
-    io.stderr("--mode must be self-hosted or dedicated");
-    return 2;
+    throw new Error("--mode must be self-hosted or dedicated");
   }
-  try {
-    const bundle = parseAccountsInstallationExportBundleInput(
-      parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
+  const bundle = parseAccountsInstallationExportBundleInput(
+    parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
+  );
+  return planInstallationImport({
+    bundle,
+    targetIssuer,
+    targetAccountId,
+    targetSpaceId,
+    createdBySubject: createdBySubject as TakosumiSubject,
+    targetInstallationId: optionalStringOption(options, "targetInstallationId"),
+    mode,
+  });
+}
+
+function projectionCreateRequestFromImportPlan(input: {
+  plan: InstallationImportPlan;
+  expected: Record<string, unknown>;
+  planRunId: string;
+}): Record<string, unknown> {
+  const template = importPlanRecord(
+    input.plan.accountsProjectionRequestTemplate ?? input.plan.request,
+    "accountsProjectionRequestTemplate",
+  );
+  const request: Record<string, unknown> = {
+    ...template,
+    planRunId: input.planRunId,
+    expected: input.expected,
+  };
+  delete request.installationId;
+  const source = importPlanRecord(request.source, "accounts projection source");
+  if (!stringValue(source.url) && stringValue(source.gitUrl)) {
+    request.source = { ...source, url: stringValue(source.gitUrl) };
+  }
+  return request;
+}
+
+function parseInstallationImportPlan(value: unknown): InstallationImportPlan {
+  const record = importPlanRecord(value, "installation import plan");
+  if (record.kind !== "takosumi.accounts.installation-import-plan@v1") {
+    throw new Error(
+      "installation import plan kind must be takosumi.accounts.installation-import-plan@v1",
     );
-    const plan = planInstallationImport({
-      bundle,
-      targetIssuer,
-      targetAccountId,
-      targetSpaceId,
-      createdBySubject: createdBySubject as TakosumiSubject,
-      targetInstallationId: optionalStringOption(
-        options,
-        "targetInstallationId",
-      ),
-      mode,
-    });
-    const output = `${JSON.stringify(plan, null, 2)}\n`;
-    const outFile = optionalStringOption(options, "outFile");
-    if (outFile) {
-      await writeFile(outFile, output);
-      io.stdout(`Wrote installation import plan to ${outFile}`);
-    } else {
-      io.stdout(output.trimEnd());
-    }
-    return 0;
-  } catch (error) {
-    io.stderr(error instanceof Error ? error.message : String(error));
-    return 1;
   }
+  if (!isRecord(record.deployControlPlanRequest)) {
+    throw new Error(
+      "installation import plan requires deployControlPlanRequest",
+    );
+  }
+  if (!isRecord(record.accountsProjectionRequestTemplate)) {
+    throw new Error(
+      "installation import plan requires accountsProjectionRequestTemplate",
+    );
+  }
+  return record as unknown as InstallationImportPlan;
+}
+
+function assertApplyExpectedGuard(expected: Record<string, unknown>): void {
+  for (const key of [
+    "planRunId",
+    "runnerProfileId",
+    "sourceDigest",
+    "variablesDigest",
+    "policyDecisionDigest",
+    "planDigest",
+    "planArtifactDigest",
+  ]) {
+    stringField(expected, key, "expected");
+  }
+}
+
+function importPlanRecord(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const field = stringValue(value[key]);
+  if (!field) throw new Error(`${label}.${key} is required`);
+  return field;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function writeOrPrintJson(input: {
+  value: unknown;
+  outFile?: string;
+  successMessage: string;
+  io: CliIo;
+}): Promise<void> {
+  const output = `${JSON.stringify(input.value, null, 2)}\n`;
+  if (input.outFile) {
+    await writeFile(input.outFile, output);
+    input.io.stdout(`${input.successMessage} to ${input.outFile}`);
+    return;
+  }
+  input.io.stdout(output.trimEnd());
 }
 
 function parseJsonFile(text: string, file: string): unknown {

@@ -236,7 +236,8 @@ or sample-data verification evidence.
 
 To prepare a self-host restore without reopening the retired public import
 route, extract `takos-export/bundle.json` from the archive or use the decrypted
-Cloudflare/R2 export JSON document, then generate the target request:
+Cloudflare/R2 export JSON document, then generate the target PlanRun request
+and Accounts projection create template:
 
 ```bash
 bun run cli -- internal installations import-plan \
@@ -249,9 +250,29 @@ bun run cli -- internal installations import-plan \
   --out-file import-plan.json
 ```
 
-The generated plan is review input for the deploy-control restore/apply flow;
-it is not a network import and does not by itself satisfy clean-import or
-post-import-login readiness evidence.
+The generated plan is review input. It is not a network import and does not by
+itself satisfy clean-import or post-import-login readiness evidence.
+
+To execute the clean import path on a target that has an Accounts bearer with
+write access to the target Space, run:
+
+```bash
+bun run cli -- internal installations import-apply \
+  --plan-file import-plan.json \
+  --accounts-url https://selfhost.example.com \
+  --token "$TAKOSUMI_ACCOUNTS_TOKEN" \
+  --idempotency-key import-$(date +%s) \
+  --json \
+  --out-file import-apply-result.json
+```
+
+`import-apply` creates a target PlanRun through
+`/v1/installation-projections/plan-runs`, requires that reviewed plan to be
+`succeeded`, then creates the target Accounts projection through
+`/v1/installation-projections` with the reviewed expected guard. It does not
+call the retired `/v1/installation-projections/import` route, and it must not be
+recorded as post-import-login or sample-data verification until the restored
+target has been opened and checked.
 
 ## Escalation Matrix
 

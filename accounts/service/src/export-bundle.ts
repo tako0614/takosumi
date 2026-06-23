@@ -152,6 +152,11 @@ export interface InstallationImportPlan {
   readonly bundleKind: typeof TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND;
   readonly sourceIssuer: string | null;
   readonly targetIssuer: string;
+  readonly target?: {
+    readonly requestedInstallationId?: string;
+  };
+  readonly deployControlPlanRequest: JsonObject;
+  readonly accountsProjectionRequestTemplate: JsonObject;
   readonly request: JsonObject;
 }
 
@@ -277,69 +282,85 @@ export function planInstallationImport(
   const sourceIssuer = input.bundle.oidcClient
     ? normalizeIssuer(input.bundle.oidcClient.issuerUrl)
     : null;
-  const targetInstallationId =
-    input.targetInstallationId ?? input.bundle.installation.installationId;
+  const targetInstallationId = input.targetInstallationId;
   const rewrite = (value: unknown): unknown =>
     sourceIssuer ? rewriteIssuer(value, sourceIssuer, targetIssuer) : value;
   const oidcClient = input.bundle.oidcClient;
+  const sourceRequest: JsonObject = {
+    kind: "git",
+    url: input.bundle.source.gitUrl,
+    gitUrl: input.bundle.source.gitUrl,
+    ref: input.bundle.source.ref,
+    commit: input.bundle.source.commit,
+    planDigest: input.bundle.source.planDigest,
+    artifactDigest: input.bundle.source.artifactDigest,
+  };
+  const deployControlPlanRequest: JsonObject = {
+    spaceId: input.targetSpaceId,
+    source: {
+      kind: "git",
+      url: input.bundle.source.gitUrl,
+      ref: input.bundle.source.ref,
+      commit: input.bundle.source.commit,
+    },
+  };
+  const accountsProjectionRequestTemplate: JsonObject = {
+    accountId: input.targetAccountId,
+    spaceId: input.targetSpaceId,
+    appId: input.bundle.installation.appId,
+    source: sourceRequest,
+    mode: input.mode ?? "self-hosted",
+    status: "installing",
+    createdBySubject: input.createdBySubject,
+    serviceBindings: input.bundle.serviceBindings.map((serviceBinding) => ({
+      name: serviceBinding.name,
+      kind: serviceBinding.kind,
+      configRef: importServiceBindingTemplateRef({
+        serviceBinding: serviceBinding.name,
+        kind: serviceBinding.kind,
+      }),
+      declaration: {
+        exportTemplate: rewrite(serviceBinding.template),
+        sourceServiceBindingId: serviceBinding.serviceBindingId,
+      },
+    })),
+    serviceGrants: input.bundle.serviceGrants
+      .filter((serviceGrant) => !serviceGrant.revokedAt)
+      .map((serviceGrant) => ({
+        capability: serviceGrant.capability,
+        scope: redactPublicRecord(serviceGrant.scope),
+        declaration: {
+          sourceServiceGrantId: serviceGrant.serviceGrantId,
+        },
+      })),
+    ...(oidcClient
+      ? {
+          oidcClients: [
+            {
+              serviceBinding: oidcClient.serviceBinding,
+              servicePath: oidcServicePath(oidcClient),
+              issuerUrl: targetIssuer,
+              redirectUris: rewrite(oidcClient.redirectUris),
+              allowedScopes: oidcClient.allowedScopes,
+              subjectMode: oidcClient.subjectMode,
+              tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
+            },
+          ],
+        }
+      : {}),
+  };
 
   return {
     kind: "takosumi.accounts.installation-import-plan@v1",
     bundleKind: TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
     sourceIssuer,
     targetIssuer,
-    request: {
-      installationId: targetInstallationId,
-      accountId: input.targetAccountId,
-      spaceId: input.targetSpaceId,
-      appId: input.bundle.installation.appId,
-      source: {
-        gitUrl: input.bundle.source.gitUrl,
-        ref: input.bundle.source.ref,
-        commit: input.bundle.source.commit,
-        planDigest: input.bundle.source.planDigest,
-        artifactDigest: input.bundle.source.artifactDigest,
-      },
-      mode: input.mode ?? "self-hosted",
-      status: "installing",
-      createdBySubject: input.createdBySubject,
-      serviceBindings: input.bundle.serviceBindings.map((serviceBinding) => ({
-        serviceBindingId: `bind_${targetInstallationId}_${serviceBinding.name}`,
-        name: serviceBinding.name,
-        kind: serviceBinding.kind,
-        configRef: importServiceBindingTemplateRef({
-          installationId: targetInstallationId,
-          serviceBinding: serviceBinding.name,
-          kind: serviceBinding.kind,
-        }),
-        declaration: {
-          exportTemplate: rewrite(serviceBinding.template),
-          sourceServiceBindingId: serviceBinding.serviceBindingId,
-        },
-      })),
-      serviceGrants: input.bundle.serviceGrants
-        .filter((serviceGrant) => !serviceGrant.revokedAt)
-        .map((serviceGrant) => ({
-          serviceGrantId: serviceGrant.serviceGrantId,
-          capability: serviceGrant.capability,
-          scope: redactPublicRecord(serviceGrant.scope),
-        })),
-      ...(oidcClient
-        ? {
-            oidcClients: [
-              {
-                serviceBinding: oidcClient.serviceBinding,
-                servicePath: oidcServicePath(oidcClient),
-                issuerUrl: targetIssuer,
-                redirectUris: rewrite(oidcClient.redirectUris),
-                allowedScopes: oidcClient.allowedScopes,
-                subjectMode: oidcClient.subjectMode,
-                tokenEndpointAuthMethod: oidcClient.tokenEndpointAuthMethod,
-              },
-            ],
-          }
-        : {}),
-    },
+    ...(targetInstallationId
+      ? { target: { requestedInstallationId: targetInstallationId } }
+      : {}),
+    deployControlPlanRequest,
+    accountsProjectionRequestTemplate,
+    request: accountsProjectionRequestTemplate,
   };
 }
 
@@ -410,13 +431,10 @@ function rewriteIssuerString(
 }
 
 function importServiceBindingTemplateRef(input: {
-  installationId: string;
   serviceBinding: string;
   kind: ServiceBindingMaterialKind;
 }): string {
-  return `takosumi-import://installations/${encodeURIComponent(
-    input.installationId,
-  )}/service-bindings/${encodeURIComponent(input.serviceBinding)}/${encodeURIComponent(
+  return `takosumi-import://service-bindings/${encodeURIComponent(input.serviceBinding)}/${encodeURIComponent(
     input.kind,
   )}`;
 }

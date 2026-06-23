@@ -12,6 +12,7 @@ import {
 import { runConnections } from "./cli-connections-commands.ts";
 import {
   runInstallationsExport,
+  runInstallationsImportApply,
   runInstallationsImportPlan,
   runInstallationsInspect,
   runInstallationsList,
@@ -207,6 +208,9 @@ async function runInternalInstallations(
   }
   if (command === "import-plan") {
     return await runInstallationsImportPlan(rest, io);
+  }
+  if (command === "import-apply") {
+    return await runInstallationsImportApply(rest, io);
   }
   io.stderr(`Unknown internal installations command: ${args.join(" ")}`);
   return 2;

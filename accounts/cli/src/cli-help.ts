@@ -744,8 +744,8 @@ export function installationsImportPlanHelpText(): string {
     "takosumi internal installations import-plan",
     "",
     "Reads a takos-export/bundle.json payload or a Cloudflare/R2 export JSON",
-    "document and prints the target Accounts projection request that a",
-    "deploy-control restore/apply flow can review.",
+    "document and prints the target deploy-control PlanRun request plus the",
+    "Accounts projection create template that import-apply can execute.",
     "This does not call the retired public import route.",
     "",
     "Options:",
@@ -756,6 +756,32 @@ export function installationsImportPlanHelpText(): string {
     "  --created-by-subject <tsub_...>",
     "  --target-installation-id <installation-id>",
     "  --mode <self-hosted|dedicated>",
+    "  --out-file <path>",
+    "  --json",
+  ].join("\n");
+}
+
+export function installationsImportApplyHelpText(): string {
+  return [
+    "takosumi internal installations import-apply",
+    "",
+    "Applies an installation import through the target Accounts/deploy-control",
+    "flow: create target PlanRun, require it to be succeeded, then create the",
+    "Accounts projection using the reviewed expected guard.",
+    "This does not call the retired public import route.",
+    "",
+    "Options:",
+    "  --plan-file <import-plan.json>",
+    "  --bundle-file <takos-export/bundle.json>",
+    "  --target-issuer <https://self-host.example>",
+    "  --target-account <account-id>",
+    "  --target-space <space-id>",
+    "  --created-by-subject <tsub_...>",
+    "  --target-installation-id <review-only-installation-id>",
+    "  --mode <self-hosted|dedicated>",
+    "  --idempotency-key <key>",
+    "  --accounts-url <url>",
+    "  --token <accounts-write-bearer>",
     "  --out-file <path>",
     "  --json",
   ].join("\n");
