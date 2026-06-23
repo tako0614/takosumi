@@ -508,7 +508,7 @@ function renderGenericOutputsTf(
     assertOutputPath(spec.from);
     return [
       `output ${hclString(name)} {`,
-      `  value = module.app.${spec.from}`,
+      `  value = try(module.app.${spec.from}, "")`,
       "}",
     ].join("\n");
   });

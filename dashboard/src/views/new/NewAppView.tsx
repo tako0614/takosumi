@@ -349,6 +349,8 @@ function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
   return 2;
 }
 
+const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
+
 function catalogDefaultInputValue(
   entry: CatalogEntry,
   field: CatalogInputField,
@@ -592,6 +594,13 @@ function Inner() {
     catalogEntries().filter((entry) => entry.surface === "example"),
   );
   const defaultGitInstallConfig = () =>
+    configList().find(
+      (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    ) ??
+    configList().find(
+      (config) =>
+        config.sourceKind === "generic_capsule" && config.spaceId === undefined,
+    ) ??
     configList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
     const list = configList();
