@@ -2,6 +2,7 @@ import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
+import { Encrypter } from "age-encryption";
 import {
   type AccountsHandler,
   type AccountsJsonWebKey,
@@ -1157,10 +1158,9 @@ export function createR2InstallationExportWorker(options: {
         "Cloudflare R2 metadata export does not include tenant data; use a substrate export worker for data-bearing export",
       );
     }
-    if (input.request.encryption.method !== "none") {
-      throw new Error(
-        "Cloudflare R2 metadata export does not support archive encryption; use a substrate export worker for encrypted archives",
-      );
+    const encrypted = input.request.encryption.method === "age";
+    if (encrypted && input.request.encryption.recipients.length === 0) {
+      throw new Error("Cloudflare R2 metadata export requires age recipients");
     }
 
     const now = options.now?.() ?? new Date();
@@ -1168,6 +1168,7 @@ export function createR2InstallationExportWorker(options: {
     const objectKey = r2ExportObjectKey(
       input.installation.installationId,
       input.operationId,
+      encrypted,
     );
     const document = {
       kind: "takosumi.accounts.cloudflare-r2-installation-export@v1",
@@ -1177,11 +1178,22 @@ export function createR2InstallationExportWorker(options: {
       request: input.request,
       bundle: input.bundle,
     };
+    const clearBody = new TextEncoder().encode(
+      `${JSON.stringify(document, null, 2)}\n`,
+    );
+    const body = encrypted
+      ? await encryptR2ExportBody(clearBody, input.request.encryption.recipients)
+      : clearBody;
+    const archiveDigest = await sha256HexBytes(body);
     await options.bucket.put(
       objectKey,
-      `${JSON.stringify(document, null, 2)}\n`,
+      body,
       {
-        httpMetadata: { contentType: "application/json; charset=utf-8" },
+        httpMetadata: {
+          contentType: encrypted
+            ? "application/vnd.age"
+            : "application/json; charset=utf-8",
+        },
         customMetadata: {
           installationId: input.installation.installationId,
           accountId: input.installation.accountId,
@@ -1190,6 +1202,7 @@ export function createR2InstallationExportWorker(options: {
           format: input.request.format,
           encryption: input.request.encryption.method,
           dataIncluded: "false",
+          archiveDigest,
         },
       },
     );
@@ -1201,6 +1214,7 @@ export function createR2InstallationExportWorker(options: {
         secret: options.downloadSecret,
       }),
       downloadExpiresAt,
+      archiveDigest,
     };
   };
 }
@@ -1315,12 +1329,13 @@ function safeDecodeURIComponent(
 function r2ExportObjectKey(
   installationId: string,
   operationId: string,
+  encrypted = false,
 ): string {
   return [
     "installation-exports",
     objectKeySegment(installationId),
     objectKeySegment(operationId),
-    "takos-export.json",
+    encrypted ? "takos-export.json.age" : "takos-export.json",
   ].join("/");
 }
 
@@ -1363,6 +1378,24 @@ async function r2ExportDownloadSignature(input: {
     encoder.encode(`${input.objectKey}\n${input.expiresAtMs}`),
   );
   return base64UrlEncode(new Uint8Array(signature));
+}
+
+async function encryptR2ExportBody(
+  bytes: Uint8Array,
+  recipients: readonly string[],
+): Promise<Uint8Array> {
+  const encrypter = new Encrypter();
+  for (const recipient of recipients) {
+    encrypter.addRecipient(recipient);
+  }
+  return await encrypter.encrypt(bytes);
+}
+
+async function sha256HexBytes(value: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value));
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

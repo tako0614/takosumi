@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import {
+  Decrypter,
+  generateIdentity,
+  identityToRecipient,
+} from "age-encryption";
 import { test } from "bun:test";
 import {
   type CloudflareWorkerEnv,
@@ -453,6 +458,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     /^https:\/\/accounts\.example\/__takosumi\/exports\//,
   );
   assert.equal(result.downloadExpiresAt, "2999-05-17T00:01:00.000Z");
+  assert.match(result.archiveDigest ?? "", /^sha256:[0-9a-f]{64}$/);
 
   const worker = createCloudflareWorker();
   const response = await worker.fetch(
@@ -705,6 +711,85 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   );
 });
 
+test("Cloudflare Accounts Worker writes age-encrypted metadata exports to R2", async () => {
+  const identity = await generateIdentity();
+  const recipient = await identityToRecipient(identity);
+  const bucket = new MemoryR2Bucket();
+  const exportWorker = createR2InstallationExportWorker({
+    bucket,
+    downloadBaseUrl: "https://accounts.example",
+    downloadSecret: "download-secret",
+    ttlMs: 60_000,
+    now: () => new Date("2999-05-17T00:00:00.000Z"),
+  });
+  const installation = sampleInstallation();
+  const bundle = buildInstallationExportBundle({ installation });
+
+  const result = await exportWorker({
+    installation,
+    operationId: "op_export_age",
+    request: {
+      includeData: false,
+      format: "bundle",
+      encryption: { method: "age", recipients: [recipient] },
+      scope: { secrets: "templates-only" },
+    },
+    bundle,
+  });
+
+  assert.equal(
+    bucket.puts[0]?.key,
+    "installation-exports/inst_export/op_export_age/takos-export.json.age",
+  );
+  assert.equal(
+    bucket.puts[0]?.options?.httpMetadata?.contentType,
+    "application/vnd.age",
+  );
+  assert.match(result.archiveDigest ?? "", /^sha256:[0-9a-f]{64}$/);
+  assert.equal(
+    bucket.puts[0]?.options?.customMetadata?.archiveDigest,
+    result.archiveDigest,
+  );
+  assert.equal(
+    new TextDecoder().decode(bucket.puts[0]?.body ?? new Uint8Array()).includes(
+      "takosumi.accounts.cloudflare-r2-installation-export@v1",
+    ),
+    false,
+    "age ciphertext must not include plaintext JSON markers",
+  );
+
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request(result.downloadUrl),
+    createEnv(new InitOnlyD1Database(), {
+      TAKOSUMI_ACCOUNTS_EXPORTS: bucket,
+      TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET: "download-secret",
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/vnd.age");
+
+  const decrypter = new Decrypter();
+  decrypter.addIdentity(identity);
+  const plaintext = await decrypter.decrypt(
+    new Uint8Array(await response.arrayBuffer()),
+    "text",
+  );
+  const document = JSON.parse(plaintext) as {
+    kind?: string;
+    operationId?: string;
+    request?: { encryption?: { method?: string } };
+    bundle?: { installation?: { installationId?: string } };
+  };
+  assert.equal(
+    document.kind,
+    "takosumi.accounts.cloudflare-r2-installation-export@v1",
+  );
+  assert.equal(document.operationId, "op_export_age");
+  assert.equal(document.request?.encryption?.method, "age");
+  assert.equal(document.bundle?.installation?.installationId, "inst_export");
+});
+
 test("Cloudflare R2 metadata export refuses data-bearing archive modes", async () => {
   const exportWorker = createR2InstallationExportWorker({
     bucket: new MemoryR2Bucket(),
@@ -727,19 +812,6 @@ test("Cloudflare R2 metadata export refuses data-bearing archive modes", async (
       bundle,
     });
   }, /does not include tenant data/);
-  await assert.rejects(async () => {
-    await exportWorker({
-      installation,
-      operationId: "op_export_age",
-      request: {
-        includeData: false,
-        format: "bundle",
-        encryption: { method: "age", recipients: ["age1example"] },
-        scope: {},
-      },
-      bundle,
-    });
-  }, /does not support archive encryption/);
 });
 
 test("Cloudflare R2 metadata export rejects non-HTTPS public download bases", () => {
@@ -1700,13 +1772,13 @@ function sampleInstallation(): InstallationRecord {
 class MemoryR2Bucket implements R2Bucket {
   readonly puts: {
     readonly key: string;
-    readonly body: string;
+    readonly body: Uint8Array;
     readonly options?: R2PutOptions;
   }[] = [];
   readonly #objects = new Map<
     string,
     {
-      readonly body: string;
+      readonly body: Uint8Array;
       readonly options?: R2PutOptions;
     }
   >();
@@ -1716,18 +1788,24 @@ class MemoryR2Bucket implements R2Bucket {
     value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream,
     options?: R2PutOptions,
   ): Promise<unknown> {
-    if (typeof value !== "string") {
-      throw new TypeError("test R2 bucket expects string bodies");
+    if (value instanceof Blob || value instanceof ReadableStream) {
+      throw new TypeError("test R2 bucket expects eager bodies");
     }
-    this.puts.push({ key, body: value, options });
-    this.#objects.set(key, { body: value, options });
+    const body =
+      typeof value === "string"
+        ? new TextEncoder().encode(value)
+        : value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    this.puts.push({ key, body, options });
+    this.#objects.set(key, { body, options });
     return Promise.resolve({});
   }
 
   get(key: string): Promise<R2ObjectBody | null> {
     const object = this.#objects.get(key);
     if (!object) return Promise.resolve(null);
-    const bytes = new TextEncoder().encode(object.body);
+    const bytes = new Uint8Array(object.body);
     return Promise.resolve({
       body: new ReadableStream({
         start(controller) {
