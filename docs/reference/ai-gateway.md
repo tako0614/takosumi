@@ -56,11 +56,22 @@ OpenAI-compatible routes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`        | forwards chat completions to an upstream |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`  | forwards embeddings to an upstream       |
 
-The request bearer must be a current `takosumi.ai.gateway` runtime service
-token for the Capsule projection. Tokens are rotated through a Cloud-only
-operator projection route. That route is intentionally not documented as a
-stable Takosumi OSS customer API while the public model migrates to Workspace /
-Project / Capsule / StateVersion / Output terminology.
+Runtime calls should use a current `takosumi.ai.gateway` Service Graph service
+token as `Authorization: Bearer <taksrv_...>`. The platform worker introspects
+that token with the Cloud extension confidential client, verifies the
+`ai.model` capability plus the endpoint scope, strips the raw bearer token, and
+forwards only a sanitized request to the closed AI Gateway worker. Failed auth
+or insufficient-scope requests are forwarded without raw account/session/service
+credentials and without the pre-authenticated header, so the downstream worker
+fails closed without seeing the original credential.
+Operator/dashboard sessions and Takosumi personal access tokens are accepted
+only for owner/operator smoke and diagnostics; deployed Capsule runtimes should
+not receive account sessions, PATs, or upstream provider keys.
+
+Tokens are rotated through the installation Service Graph service projection.
+That route is intentionally not documented as a stable Takosumi OSS customer
+API while the public model migrates to Workspace / Project / Capsule /
+StateVersion / Output terminology.
 
 Body:
 

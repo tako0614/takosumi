@@ -39,6 +39,10 @@ import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
+import {
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL,
+} from "@takosjp/takosumi-accounts-contract";
 
 export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
 
@@ -993,6 +997,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
     await requestWithPlatformCloudExtensionAuthContext(
       request,
       env,
+      route,
       sessionVerifier,
     ),
   );
@@ -1006,6 +1011,7 @@ export interface PlatformCloudExtensionSessionContext {
 export type PlatformCloudExtensionSessionVerifier = (
   request: Request,
   env: CloudflareWorkerEnv,
+  route?: PlatformCloudExtensionRoute,
 ) => Promise<PlatformCloudExtensionSessionContext>;
 
 const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
@@ -1020,13 +1026,16 @@ const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
 export async function requestWithPlatformCloudExtensionAuthContext(
   request: Request,
   env: CloudflareWorkerEnv,
+  route?: PlatformCloudExtensionRoute,
   sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
 ): Promise<Request> {
-  const session = await sessionVerifier(request, env);
-  if (!session.authenticated) return request;
+  const session = await sessionVerifier(request, env, route);
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
+  }
+  if (!session.authenticated) {
+    return clonePlatformCloudExtensionRequest(request, headers);
   }
   headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
   if (session.subject) {
@@ -1035,13 +1044,40 @@ export async function requestWithPlatformCloudExtensionAuthContext(
       safeCloudExtensionHeaderValue(session.subject),
     );
   }
-  return new Request(request, { headers });
+  return clonePlatformCloudExtensionRequest(request, headers);
+}
+
+function clonePlatformCloudExtensionRequest(
+  request: Request,
+  headers: Headers,
+): Request {
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body:
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : request.body,
+    redirect: request.redirect,
+  });
 }
 
 export async function verifyPlatformCloudExtensionSession(
   request: Request,
   env: CloudflareWorkerEnv,
+  route?: PlatformCloudExtensionRoute,
 ): Promise<PlatformCloudExtensionSessionContext> {
+  const serviceToken = platformCloudExtensionServiceAccessToken(request);
+  if (serviceToken && route) {
+    const serviceSession = await verifyPlatformCloudExtensionServiceAccessToken(
+      request,
+      env,
+      serviceToken,
+      route,
+    );
+    if (serviceSession.authenticated) return serviceSession;
+  }
+
   const patToken = platformCloudExtensionPersonalAccessToken(request);
   if (patToken) {
     const patSession = await verifyPlatformCloudExtensionPersonalAccessToken(
@@ -1071,6 +1107,67 @@ export async function verifyPlatformCloudExtensionSession(
     return typeof subject === "string" && subject.length > 0
       ? { authenticated: true, subject }
       : { authenticated: false };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
+export async function verifyPlatformCloudExtensionServiceAccessToken(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  token: string,
+  route: PlatformCloudExtensionRoute,
+  introspectFetch: PlatformCloudExtensionIntrospectFetch = defaultPlatformCloudExtensionIntrospectFetch,
+): Promise<PlatformCloudExtensionSessionContext> {
+  const requiredScopes = platformCloudExtensionServiceTokenRequiredScopes(
+    request,
+    route,
+  );
+  if (!requiredScopes) return { authenticated: false };
+  const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
+  const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return { authenticated: false };
+  try {
+    const response = await introspectFetch(
+      new Request(new URL("/oauth/introspect", request.url), {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          token,
+          client_id: clientId,
+          client_secret: clientSecret,
+        }),
+      }),
+      env,
+    );
+    if (!response.ok) return { authenticated: false };
+    const body = await response.json().catch(() => undefined);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return { authenticated: false };
+    }
+    const record = body as Record<string, unknown>;
+    if (record.active !== true) return { authenticated: false };
+    if (
+      record.client_id !==
+      `service-graph-service:${TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY}`
+    ) {
+      return { authenticated: false };
+    }
+    const scope = typeof record.scope === "string" ? record.scope : "";
+    if (
+      !requiredScopes.every((required) =>
+        platformCloudExtensionScopeIncludes(scope, required),
+      )
+    ) {
+      return { authenticated: false };
+    }
+    const subject = record.sub;
+    return typeof subject === "string" && subject.length > 0
+      ? { authenticated: true, subject }
+      : { authenticated: true };
   } catch {
     return { authenticated: false };
   }
@@ -1140,14 +1237,60 @@ function platformCloudExtensionPersonalAccessToken(
   return token?.startsWith("takpat_") ? token : undefined;
 }
 
+function platformCloudExtensionServiceAccessToken(
+  request: Request,
+): string | undefined {
+  const token = bearerValue(request.headers.get("authorization"));
+  return token?.startsWith("taksrv_") ? token : undefined;
+}
+
 function bearerValue(authorization: string | null): string | undefined {
   const match = authorization?.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || undefined;
 }
 
 function platformCloudExtensionScopesAllowAccess(scope: string): boolean {
-  const scopes = new Set(scope.split(/\s+/u).filter(Boolean));
-  return scopes.has("read") || scopes.has("write") || scopes.has("admin");
+  return ["read", "write", "admin"].some((required) =>
+    platformCloudExtensionScopeIncludes(scope, required),
+  );
+}
+
+function platformCloudExtensionScopeIncludes(
+  scope: string,
+  required: string,
+): boolean {
+  return scope.split(/\s+/u).filter(Boolean).includes(required);
+}
+
+function platformCloudExtensionServiceTokenRequiredScopes(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+): readonly string[] | undefined {
+  if (route.id !== "ai.openai_compatible.v1") return undefined;
+  const url = new URL(request.url);
+  const path = url.pathname;
+  if (request.method === "GET") {
+    if (
+      path === `${AI_GATEWAY_BASE_PATH}/models` ||
+      path === `${AI_GATEWAY_BASE_PATH}/__takosumi/status`
+    ) {
+      return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.models.read"];
+    }
+    return undefined;
+  }
+  if (
+    request.method === "POST" &&
+    path === `${AI_GATEWAY_BASE_PATH}/chat/completions`
+  ) {
+    return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.chat"];
+  }
+  if (
+    request.method === "POST" &&
+    path === `${AI_GATEWAY_BASE_PATH}/embeddings`
+  ) {
+    return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.embeddings"];
+  }
+  return undefined;
 }
 
 function sessionMirrorHeaders(request: Request): Headers | undefined {
