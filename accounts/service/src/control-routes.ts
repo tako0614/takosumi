@@ -79,6 +79,7 @@ import type {
   DependencyVisibility,
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import { defaultCapsuleOutputAllowlist } from "../../../core/domains/installations/official_seed.ts";
 import {
   decodeCursor,
   type Page,
@@ -2337,6 +2338,7 @@ async function createInstallation(
       spaceId,
       name: `${name}-config`,
       variableMapping: { ...baseConfig.variableMapping, ...vars },
+      outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
     });
@@ -2350,6 +2352,17 @@ async function createInstallation(
     installConfigId: resolvedInstallConfigId,
   });
   return jsonStatus({ installation: publicInstallation(installation) }, 201);
+}
+
+function scopedCloneOutputAllowlist(
+  baseConfig: InstallConfig,
+): InstallConfig["outputAllowlist"] {
+  if (Object.keys(baseConfig.outputAllowlist).length > 0) {
+    return baseConfig.outputAllowlist;
+  }
+  return baseConfig.sourceKind === "generic_capsule"
+    ? defaultCapsuleOutputAllowlist()
+    : baseConfig.outputAllowlist;
 }
 
 async function createRestoreRun(

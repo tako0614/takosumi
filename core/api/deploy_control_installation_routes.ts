@@ -30,6 +30,7 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
+import { defaultCapsuleOutputAllowlist } from "../domains/installations/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
@@ -651,9 +652,21 @@ async function createScopedInstallConfigWithVariables(input: {
     spaceId: input.spaceId,
     name: `${input.installationName}-config`,
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
+    outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,
     updatedAt: now,
   });
+}
+
+function scopedCloneOutputAllowlist(
+  baseConfig: InstallConfig,
+): InstallConfig["outputAllowlist"] {
+  if (Object.keys(baseConfig.outputAllowlist).length > 0) {
+    return baseConfig.outputAllowlist;
+  }
+  return baseConfig.sourceKind === "generic_capsule"
+    ? defaultCapsuleOutputAllowlist()
+    : baseConfig.outputAllowlist;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

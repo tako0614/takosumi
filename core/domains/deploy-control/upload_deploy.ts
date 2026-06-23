@@ -28,6 +28,7 @@ import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { InstallationsService } from "../installations/mod.ts";
+import { defaultCapsuleOutputAllowlist } from "../installations/official_seed.ts";
 import { validateInstallationProviderEnvBindings } from "../connections/mod.ts";
 
 const DEFAULT_ENVIRONMENT = "production";
@@ -218,9 +219,23 @@ async function refreshInstallConfigVars(
   await deps.installations.putInstallConfig({
     ...existing,
     variableMapping: { ...(vars ?? {}) },
-    ...(outputAllowlist !== undefined ? { outputAllowlist } : {}),
+    outputAllowlist: refreshedOutputAllowlist(existing, outputAllowlist),
     updatedAt: now().toISOString(),
   });
+}
+
+function refreshedOutputAllowlist(
+  existing: InstallConfig,
+  outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
+): InstallConfig["outputAllowlist"] {
+  if (outputAllowlist !== undefined) return outputAllowlist;
+  if (
+    existing.sourceKind === "generic_capsule" &&
+    Object.keys(existing.outputAllowlist).length === 0
+  ) {
+    return defaultCapsuleOutputAllowlist();
+  }
+  return existing.outputAllowlist;
 }
 
 function buildDefaultInstallConfig(input: {
@@ -248,7 +263,7 @@ function buildDefaultInstallConfig(input: {
       allowAliasInjection: true,
     },
     variableMapping: { ...(input.vars ?? {}) },
-    outputAllowlist: input.outputAllowlist ?? {},
+    outputAllowlist: input.outputAllowlist ?? defaultCapsuleOutputAllowlist(),
     policy: {},
     createdAt: nowIso,
     updatedAt: nowIso,

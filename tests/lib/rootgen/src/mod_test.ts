@@ -469,8 +469,12 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   );
   expect(files["main.tf"]).toContain("cloudflare = cloudflare.main");
   expect(files["main.tf"]).toContain("aws = aws.archive");
-  expect(files["outputs.tf"]).toContain("value = module.app.public_url");
-  expect(files["outputs.tf"]).toContain("value = module.app.metadata.hostname");
+  expect(files["outputs.tf"]).toContain(
+    "value = try(module.app.public_url, \"\")",
+  );
+  expect(files["outputs.tf"]).toContain(
+    "value = try(module.app.metadata.hostname, \"\")",
+  );
 });
 
 test("generateGenericCapsuleRoot does not materialize generic env provider blocks", () => {

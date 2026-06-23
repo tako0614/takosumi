@@ -2302,10 +2302,15 @@ test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped 
     id: string;
     spaceId: string;
     variableMapping: Record<string, unknown>;
+    outputAllowlist: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.spaceId).toEqual("space_a");
   expect(config.variableMapping).toEqual({ project_name: "takos-space-a" });
+  expect(config.outputAllowlist).toEqual({
+    url: { from: "url", type: "url" },
+    worker_name: { from: "worker_name", type: "string" },
+  });
   const createCall = operations.calls.createInstallation?.[0] as {
     installConfigId: string;
   };

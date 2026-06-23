@@ -131,6 +131,9 @@ export function projectOutputAllowlistSpaceOutputs(
       }
       continue;
     }
+    if (entry.value === "" && !spec.required) {
+      continue;
+    }
     if (!outputValueMatchesType(entry.value, spec.type)) {
       throw new OpenTofuControllerError(
         "failed_precondition",

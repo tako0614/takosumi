@@ -73,6 +73,7 @@ async function seedInstallConfig(
     id: "cfg_test00000001",
     spaceId,
     name: "test-module",
+    sourceKind: "generic_capsule",
     installType: "opentofu_module",
     trustLevel: "space",
     variableMapping: {},
@@ -227,6 +228,10 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
   expect(config.variableMapping).toEqual({
     project_name: "takos-vars",
     cloudflare: {},
+  });
+  expect(config.outputAllowlist).toEqual({
+    url: { from: "url", type: "url" },
+    worker_name: { from: "worker_name", type: "string" },
   });
 });
 
