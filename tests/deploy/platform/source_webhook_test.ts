@@ -5,6 +5,7 @@ import {
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
   handlePlatformCloudExtensionRequest,
+  handlePlatformCloudExtensionRouteRequest,
   handlePlatformCloudflareCompatRequest,
   handlePlatformAiGatewayRequest,
   handlePlatformMetricsDashboardRequest,
@@ -632,6 +633,61 @@ test("AI Gateway route delegates through the platform worker fetch registry", as
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ object: "list", data: [] });
   expect(forwarded).toEqual(["https://app.takosumi.com/gateway/ai/v1/models"]);
+});
+
+test("Cloud-only extension routes receive platform auth context without raw session material", async () => {
+  const forwarded: {
+    authorization: string | null;
+    cookie: string | null;
+    session: string | null;
+    authenticated: string | null;
+    subject: string | null;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      headers: {
+        authorization: "Bearer sess_secret",
+        cookie: "takosumi_session=sess_cookie",
+        "x-takosumi-account-session": "sess_header",
+      },
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            authorization: request.headers.get("authorization"),
+            cookie: request.headers.get("cookie"),
+            session: request.headers.get("x-takosumi-account-session"),
+            authenticated: request.headers.get(
+              "x-takosumi-cloud-authenticated",
+            ),
+            subject: request.headers.get("x-takosumi-cloud-subject"),
+          });
+          return Response.json({ object: "list", data: [] });
+        },
+      },
+    } as never,
+    {
+      id: "ai.openai_compatible.v1",
+      kind: "ai_gateway",
+      basePath: "/gateway/ai/v1",
+      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+    },
+    async () => ({
+      authenticated: true,
+      subject: "tsub_cloud_extension_smoke",
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(forwarded).toEqual([
+    {
+      authorization: null,
+      cookie: null,
+      session: null,
+      authenticated: "1",
+      subject: "tsub_cloud_extension_smoke",
+    },
+  ]);
 });
 
 test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud extension binding", async () => {

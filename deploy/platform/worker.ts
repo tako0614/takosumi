@@ -684,10 +684,102 @@ export async function handlePlatformCloudExtensionRouteRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier =
+    verifyPlatformCloudExtensionSession,
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
-  return await binding.fetch(request);
+  return await binding.fetch(
+    await requestWithPlatformCloudExtensionAuthContext(
+      request,
+      env,
+      sessionVerifier,
+    ),
+  );
+}
+
+export interface PlatformCloudExtensionSessionContext {
+  readonly authenticated: boolean;
+  readonly subject?: string;
+}
+
+export type PlatformCloudExtensionSessionVerifier = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+) => Promise<PlatformCloudExtensionSessionContext>;
+
+const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
+  "x-takosumi-cloud-authenticated";
+const PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER = "x-takosumi-cloud-subject";
+const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
+  "authorization",
+  "cookie",
+  "x-takosumi-account-session",
+] as const;
+
+export async function requestWithPlatformCloudExtensionAuthContext(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier =
+    verifyPlatformCloudExtensionSession,
+): Promise<Request> {
+  const session = await sessionVerifier(request, env);
+  if (!session.authenticated) return request;
+  const headers = new Headers(request.headers);
+  for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
+    headers.delete(header);
+  }
+  headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
+  if (session.subject) {
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
+      safeCloudExtensionHeaderValue(session.subject),
+    );
+  }
+  return new Request(request, { headers });
+}
+
+export async function verifyPlatformCloudExtensionSession(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<PlatformCloudExtensionSessionContext> {
+  const headers = sessionMirrorHeaders(request);
+  if (!headers) return { authenticated: false };
+  try {
+    const response = await accountsWorker.fetch(
+      new Request(new URL("/v1/account/session/me", request.url), {
+        method: "GET",
+        headers,
+      }),
+      env,
+    );
+    if (!response.ok) return { authenticated: false };
+    const body = await response.json().catch(() => undefined);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return { authenticated: false };
+    }
+    const subject = (body as Record<string, unknown>).subject;
+    return typeof subject === "string" && subject.length > 0
+      ? { authenticated: true, subject }
+      : { authenticated: false };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
+function sessionMirrorHeaders(request: Request): Headers | undefined {
+  const headers = new Headers({ accept: "application/json" });
+  const authorization = request.headers.get("authorization");
+  const sessionHeader = request.headers.get("x-takosumi-account-session");
+  const cookie = request.headers.get("cookie");
+  if (authorization) headers.set("authorization", authorization);
+  if (sessionHeader) headers.set("x-takosumi-account-session", sessionHeader);
+  if (cookie) headers.set("cookie", cookie);
+  return authorization || sessionHeader || cookie ? headers : undefined;
+}
+
+function safeCloudExtensionHeaderValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/gu, "");
 }
 
 export function isCloudOnlyAiGatewayPath(pathname: string): boolean {
