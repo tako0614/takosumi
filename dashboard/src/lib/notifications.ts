@@ -3,21 +3,17 @@
  *
  * The friendly notifications page reads the Activity trail for every Workspace
  * the visitor belongs to, merged newest-first. The TopBar bell badge stays
- * scoped to the current Workspace so routine navigation does not fan out one
- * activity request per Workspace.
+ * scoped to the current Workspace's service state and lives in TopBar.
  *
  * Honesty contract (inherited from the original feed): only values the backend
  * already recorded as public-safe Activity metadata are surfaced — no invented
  * prices, formulas, or messages.
  */
-import { createSignal } from "solid-js";
 import { type ActivityEvent, listActivity, type Space } from "./control-api.ts";
 
 /** Max events fetched per Space and rendered in the merged feed. */
 export const NOTIF_PER_SPACE_LIMIT = 50;
 export const NOTIF_FEED_LIMIT = 60;
-
-const SEEN_KEY = "tg_notif_seen_at";
 
 /** An ActivityEvent plus the Space it came from (for cross-Space labelling). */
 export interface FeedEntry {
@@ -50,69 +46,4 @@ export async function loadNotificationFeed(
       (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),
     )
     .slice(0, NOTIF_FEED_LIMIT);
-}
-
-/**
- * Cached feed for the TopBar bell badge. The shell remounts on every route
- * change (each view owns its own <AppShell>), so the badge must not repeat the
- * current Workspace activity request on every navigation. The notifications PAGE
- * always loads fresh via `loadNotificationFeed` and then refreshes this cache
- * through `markSeen`.
- */
-const BADGE_TTL_MS = 60_000;
-let badgeCache:
-  | { at: number; spaceId: string; feed: readonly FeedEntry[] }
-  | null = null;
-
-export async function loadFeedForBadge(
-  spaceId: string,
-): Promise<readonly FeedEntry[]> {
-  if (
-    badgeCache &&
-    badgeCache.spaceId === spaceId &&
-    Date.now() - badgeCache.at < BADGE_TTL_MS
-  ) {
-    return badgeCache.feed;
-  }
-  const events = await listActivity(spaceId, NOTIF_PER_SPACE_LIMIT);
-  const feed = events.map((event) => ({
-    event,
-    spaceHandle: "",
-  }));
-  badgeCache = { at: Date.now(), spaceId, feed };
-  return feed;
-}
-
-/**
- * Bumped whenever the seen marker changes so an already-mounted bell badge
- * clears reactively when the visitor opens the notifications page.
- */
-const [seenVersion, setSeenVersion] = createSignal(0);
-export { seenVersion };
-
-/** When the visitor last opened the notifications page (epoch ms, 0 = never). */
-export function lastSeenAt(): number {
-  if (typeof localStorage === "undefined") return 0;
-  const raw = localStorage.getItem(SEEN_KEY);
-  const value = raw ? Number(raw) : 0;
-  return Number.isFinite(value) ? value : 0;
-}
-
-/** Mark the feed as seen now (called when the notifications page mounts). */
-export function markSeen(_feed?: readonly FeedEntry[]): void {
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(SEEN_KEY, String(Date.now()));
-  }
-  badgeCache = null;
-  setSeenVersion((v) => v + 1);
-}
-
-/** Unseen needs-attention count for the bell badge. */
-export function unseenFailureCount(feed: readonly FeedEntry[]): number {
-  const seen = lastSeenAt();
-  return feed.filter(
-    (entry) =>
-      isFailureAction(entry.event.action) &&
-      Date.parse(entry.event.createdAt) > seen,
-  ).length;
 }

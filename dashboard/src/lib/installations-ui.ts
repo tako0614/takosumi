@@ -27,6 +27,13 @@ export function needsAttention(inst: {
   return status === "error" || status === "stale";
 }
 
+/** True when the Installation belongs in the primary service launcher. */
+export function isVisibleServiceInstallation(inst: {
+  readonly status: string;
+}): boolean {
+  return inst.status !== "destroyed";
+}
+
 /** True for a string value that looks like an http(s) address worth linking. */
 export function isUrlString(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value.trim());

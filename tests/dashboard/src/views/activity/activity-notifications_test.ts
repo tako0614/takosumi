@@ -78,20 +78,16 @@ describe("History and notifications", () => {
     expect(ja["notif.event.recorded"]).toBe("記録された操作");
   });
 
-  test("topbar badge stays scoped to the current Workspace instead of fanning out", () => {
+  test("topbar badge counts current Workspace services needing attention", () => {
     expect(topBarSource).toContain("currentSpaceId");
-    expect(topBarSource).toContain("loadFeedForBadge(spaceId)");
-    expect(notificationsLibSource).toContain(
-      "export async function loadFeedForBadge",
-    );
-    expect(notificationsLibSource).toContain(
-      "badgeCache.spaceId === spaceId",
-    );
-    expect(notificationsLibSource).toContain(
-      "const events = await listActivity(spaceId, NOTIF_PER_SPACE_LIMIT)",
-    );
+    expect(topBarSource).toContain("listInstallations(spaceId)");
+    expect(topBarSource).toContain("isVisibleServiceInstallation(inst)");
+    expect(topBarSource).toContain("needsAttention(inst)");
+    expect(topBarSource).not.toContain("loadNotificationFeed");
+    expect(topBarSource).not.toContain("listSpaces");
     expect(notificationsLibSource).not.toContain(
       "const spaces = await listSpaces()",
     );
+    expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
   });
 });
