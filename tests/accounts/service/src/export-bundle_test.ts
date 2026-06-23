@@ -122,9 +122,10 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
     createdBySubject: "tsub_target",
   });
   const request = plan.request as {
-    installationId: string;
+    installationId?: string;
     accountId: string;
     spaceId: string;
+    source: { url: string; gitUrl: string; ref: string; commit: string };
     mode: string;
     oidcClients: readonly Record<string, unknown>[];
     serviceBindings: readonly {
@@ -137,17 +138,32 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
 
   expect(plan.sourceIssuer).toEqual(sourceIssuer);
   expect(plan.targetIssuer).toEqual(targetIssuer);
-  expect(request.installationId).toEqual("inst_target");
+  expect(plan.target?.requestedInstallationId).toEqual("inst_target");
+  expect(plan.deployControlPlanRequest).toEqual({
+    spaceId: "space_target",
+    source: {
+      kind: "git",
+      url: "https://github.com/takos/takos",
+      ref: "v1.2.3",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+    },
+  });
+  expect(request.installationId).toEqual(undefined);
   expect(request.accountId).toEqual("acct_target");
   expect(request.spaceId).toEqual("space_target");
+  expect(request.source.url).toEqual("https://github.com/takos/takos");
+  expect(request.source.gitUrl).toEqual("https://github.com/takos/takos");
   expect(request.mode).toEqual("self-hosted");
   expect(request.oidcClients[0].issuerUrl).toEqual(targetIssuer);
   expect(request.oidcClients[0].serviceBinding).toEqual("auth");
   expect(request.oidcClients[0].servicePath).toEqual("takosumi.identity.oidc");
   expect(!("namespacePath" in request.oidcClients[0])).toBeTruthy();
   expect(request.serviceGrants.map((grant) => grant.serviceGrantId)).toEqual([
-    "grant_threads",
+    undefined,
   ]);
+  expect(request.serviceGrants[0].declaration).toEqual({
+    sourceServiceGrantId: "grant_threads",
+  });
   expect(request.serviceGrants[0].scope).toEqual({
     pathPrefix: "threads/",
     apiKey: "[REDACTED]",
@@ -246,7 +262,9 @@ test("installation export bundle input parser accepts Cloudflare R2 export docum
     bundle,
   });
 
-  expect(parsed.kind).toEqual(TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND);
+  expect(parsed.kind).toEqual(
+    TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+  );
   expect(parsed.installation.installationId).toEqual(
     bundle.installation.installationId,
   );

@@ -7483,10 +7483,24 @@ test("internal installations import-plan emits a target restore request", async 
     expect(plan.kind).toEqual("takosumi.accounts.installation-import-plan@v1");
     expect(plan.sourceIssuer).toEqual("https://accounts.source.test");
     expect(plan.targetIssuer).toEqual("https://selfhost.example.test");
-    expect(plan.request.installationId).toEqual("inst_target");
+    expect(plan.target.requestedInstallationId).toEqual("inst_target");
+    expect(plan.deployControlPlanRequest).toEqual({
+      spaceId: "space_target",
+      source: {
+        kind: "git",
+        url: "https://github.com/takos/takos",
+        ref: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+    expect(plan.request.installationId).toEqual(undefined);
     expect(plan.request.accountId).toEqual("acct_target");
     expect(plan.request.spaceId).toEqual("space_target");
     expect(plan.request.mode).toEqual("self-hosted");
+    expect(plan.request.source.url).toEqual("https://github.com/takos/takos");
+    expect(plan.request.source.gitUrl).toEqual(
+      "https://github.com/takos/takos",
+    );
     expect(plan.request.oidcClients[0].issuerUrl).toEqual(
       "https://selfhost.example.test",
     );
@@ -7495,6 +7509,9 @@ test("internal installations import-plan emits a target restore request", async 
     ]);
     expect(JSON.stringify(plan)).not.toContain("sk-secret-from-source");
     expect(plan.request.serviceGrants[0].scope.apiKey).toEqual("[REDACTED]");
+    expect(plan.request.serviceGrants[0].declaration).toEqual({
+      sourceServiceGrantId: "grant_threads",
+    });
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(bundleFile);
@@ -7578,10 +7595,168 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
     expect(stderr).toEqual([]);
     const plan = JSON.parse(stdout.join("\n"));
     expect(plan.kind).toEqual("takosumi.accounts.installation-import-plan@v1");
-    expect(plan.request.installationId).toEqual("inst_source");
+    expect(plan.request.installationId).toEqual(undefined);
+    expect(plan.deployControlPlanRequest.source.url).toEqual(
+      "https://github.com/takos/takos",
+    );
     expect(plan.request.accountId).toEqual("acct_target");
     expect(plan.request.spaceId).toEqual("space_target");
     expect(plan.request.mode).toEqual("self-hosted");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await removePath(bundleFile);
+  }
+});
+
+test("internal installations import-apply creates a target plan and projection", async () => {
+  const bundleFile = await makeTempFile({ suffix: ".json" });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    const url = new URL(request.url);
+    if (url.pathname === "/v1/installation-projections/plan-runs") {
+      return Promise.resolve(
+        Response.json(
+          {
+            kind: "takosumi.deploy-control.plan-run@v1",
+            planRunId: "plan_import",
+            planRun: {
+              id: "plan_import",
+              status: "succeeded",
+            },
+            expected: {
+              planRunId: "plan_import",
+              runnerProfileId: "runner_default",
+              sourceDigest: "sha256:source",
+              variablesDigest: "sha256:variables",
+              policyDecisionDigest: "sha256:policy",
+              planDigest: "sha256:plan",
+              planArtifactDigest: "sha256:artifact",
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+            },
+          },
+          { status: 201 },
+        ),
+      );
+    }
+    if (url.pathname === "/v1/installation-projections") {
+      return Promise.resolve(
+        Response.json(
+          {
+            status: "ready",
+            installation: {
+              id: "inst_target_canonical",
+              spaceId: "space_target",
+            },
+          },
+          { status: 202 },
+        ),
+      );
+    }
+    return Promise.reject(
+      new Error(`unexpected import-apply request: ${request.url}`),
+    );
+  }) as typeof fetch;
+  await writeTextFile(
+    bundleFile,
+    JSON.stringify({
+      kind: "takosumi.accounts.installation-export-bundle@v1",
+      version: "v1",
+      exportedAt: "2026-06-23T13:00:00.000Z",
+      installation: {
+        installationId: "inst_source",
+        accountId: "acct_source",
+        spaceId: "space_source",
+        appId: "takos.chat",
+        billingAccountId: null,
+        mode: "dedicated",
+        status: "exported",
+      },
+      source: {
+        gitUrl: "https://github.com/takos/takos",
+        ref: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        planDigest: "sha256:app",
+        artifactDigest: null,
+      },
+      runtimeTarget: null,
+      oidcClient: null,
+      serviceBindings: [],
+      serviceGrants: [],
+      events: [],
+    }),
+  );
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "import-apply",
+        "--bundle-file",
+        bundleFile,
+        "--target-issuer",
+        "https://selfhost.example.test",
+        "--target-account",
+        "acct_target",
+        "--target-space",
+        "space_target",
+        "--created-by-subject",
+        "tsub_target",
+        "--accounts-url",
+        "https://accounts.target.test",
+        "--token",
+        "takpat_write",
+        "--idempotency-key",
+        "idem-import-apply",
+        "--json",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/v1/installation-projections/plan-runs",
+      "/v1/installation-projections",
+    ]);
+    expect(requests[0]?.headers.get("authorization")).toEqual(
+      "Bearer takpat_write",
+    );
+    expect(requests[1]?.headers.get("idempotency-key")).toEqual(
+      "idem-import-apply",
+    );
+    expect(await requests[0]?.json()).toEqual({
+      spaceId: "space_target",
+      source: {
+        kind: "git",
+        url: "https://github.com/takos/takos",
+        ref: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+    const projectionRequest = await requests[1]?.json();
+    expect(projectionRequest.installationId).toEqual(undefined);
+    expect(projectionRequest.planRunId).toEqual("plan_import");
+    expect(projectionRequest.expected.planArtifactDigest).toEqual(
+      "sha256:artifact",
+    );
+    expect(projectionRequest.source.url).toEqual(
+      "https://github.com/takos/takos",
+    );
+    const result = JSON.parse(stdout.join("\n"));
+    expect(result.kind).toEqual(
+      "takosumi.accounts.installation-import-apply-result@v1",
+    );
+    expect(result.planRunId).toEqual("plan_import");
+    expect(result.projection.installation.id).toEqual("inst_target_canonical");
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(bundleFile);

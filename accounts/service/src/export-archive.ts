@@ -576,8 +576,10 @@ target Space, then let the target account plane create its Installation
 projection from that deploy-control ledger entry. The account-plane import
 route is fail-closed until it is wired to that restore flow. Operators may use
 \`takosumi internal installations import-plan --bundle-file takos-export/bundle.json\`
-to prepare review input for that flow; the archive intentionally does not
-depend on a public install CLI command.
+to prepare review input or
+\`takosumi internal installations import-apply --bundle-file takos-export/bundle.json\`
+to run the target PlanRun + projection-create flow. The archive intentionally
+does not depend on a public install CLI command.
 
 Source commit: \`${bundle.source.commit}\`
 Plan digest digest: \`${bundle.source.planDigest}\`
