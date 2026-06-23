@@ -149,7 +149,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.connection.expired": "Expired",
   "status.connection.error": "Error",
   "status.providerConnection.ready": "Ready",
-  "status.providerConnection.needs_setup": "Needs verification",
+  "status.providerConnection.needs_setup": "Not verified yet",
   "status.providerConnection.expired": "Expired",
   "status.providerConnection.blocked": "Blocked",
 
@@ -173,7 +173,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
   "apps.updated": "Updated: {date}",
-  "apps.reviewChanges": "Review update",
+  "apps.reviewChanges": "Review changes",
   "apps.start.aria": "First service",
   "apps.start.kicker": "No services yet",
   "apps.start.titleEmpty": "Add a service to start",
@@ -311,7 +311,9 @@ export const en: Record<keyof typeof ja, string> = {
     "This workspace is short by about {n} capacity units, so this cannot run.",
   "run.cost.capacityBlocked": "This workspace cannot run this action.",
   "run.cost.billingCta": "Open billing",
-  "run.cost.operatorHelp": "This workspace is not ready for this action yet.",
+  "run.cost.operatorHelp":
+    "An owner can review this workspace's usage and limits to enable it.",
+  "run.cost.quotaCta": "Review usage / quota",
   "run.changes.title": "What will change",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
@@ -328,6 +330,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.resources.address": "Address",
   "run.resources.type": "Type",
   "run.resources.scope": "Scope",
+  "run.scope.cloudflareAccount": "Cloudflare account {id}",
+  "run.scope.cloudflareZone": "Cloudflare zone {id}",
+  "run.scope.awsAccount": "AWS account {id}",
+  "run.scope.awsRegion": "AWS {region}",
   "run.details.title": "Reference info",
   "run.details.runId": "Execution ID",
   "run.details.type": "Type",
@@ -357,6 +363,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.connections.empty": "No cloud account review info.",
   "run.diagnostics.title": "Diagnostics",
   "run.diagnostics.empty": "No diagnostics.",
+  "run.diag.severity.error": "Error",
+  "run.diag.severity.warning": "Warning",
+  "run.diag.severity.info": "Info",
   "run.diagnostics.failed":
     "This did not finish. Open details only when you need troubleshooting information.",
   "run.audit.title": "Activity record",
@@ -461,6 +470,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.deeplink.invalidBody":
     "The link is not a safe HTTPS link, or it includes information this browser cannot open. Choose a starter or paste another link.",
   "new.compat.check": "Start adding",
+  "new.installCta": "Add service",
+  "new.installing": "Adding...",
   "new.compat.recheck": "Check again",
   "new.compat.checking": "Preparing...",
   "new.progress.title": "Preparing the service",
@@ -476,6 +487,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.auto": "Can be added with automatic adjustments",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
+  "new.compat.diagnostic.technicalNote":
+    "Technical detail. If action is needed, review the content shown.",
   "new.compat.patchHelp":
     "Review the items above. Some issues require app changes, while others can be resolved by setting up the required cloud account.",
   "new.compat.summary.providerCredentials":
@@ -493,7 +506,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
   "new.proceed": "Review and add",
-  "new.proceedHint": "Use “Start adding” first.",
+  "new.proceedHint": "Use “Add service” first.",
   "new.existing.title": "This service is already added",
   "new.existing.body":
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
@@ -506,6 +519,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.providers.missingTitle": "A cloud account is required",
   "new.providers.missingBody": "Set up the cloud account to continue.",
   "new.providers.setupMissing": "Set up required cloud account",
+  "new.providers.returnNote":
+    "After you connect a cloud account, you return here to finish adding.",
   "new.step.technical": "Detailed progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch content",
@@ -588,6 +603,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.providerConnections.provider": "Service",
   "conn.providerConnections.name": "Name",
   "conn.providerConnections.status": "Status",
+  "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.return.title": "Continue adding {name}",
@@ -633,8 +649,29 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.provider.hcloud.label": "Hetzner Cloud",
   "conn.provider.hcloud.token.label": "API token",
   "conn.provider.hcloud.token.placeholder": "Paste the Hetzner API token",
-  "conn.provider.s3.label": "S3-compatible storage",
+  "conn.provider.s3.label": "Cloudflare R2 / S3-compatible storage",
   "conn.provider.s3.endpoint.label": "S3 endpoint URL",
+  "conn.provider.aws.guide.step1": "Open the IAM users page.",
+  "conn.provider.aws.guide.step2":
+    "Create or select a dedicated deploy user, then create a least-privileged access key.",
+  "conn.provider.aws.guide.step3":
+    "Paste those values and your region into the fields below.",
+  "conn.provider.gcp.guide.step1":
+    "Open the Google Cloud service accounts page.",
+  "conn.provider.gcp.guide.step2":
+    "Create a service account, then create and download a JSON key.",
+  "conn.provider.gcp.guide.step3":
+    "Paste the JSON and project ID into the fields below.",
+  "conn.provider.hcloud.guide.step1": "Open the Hetzner Cloud Console.",
+  "conn.provider.hcloud.guide.step2":
+    "Under Project → Security → API Tokens, create a Read & Write token.",
+  "conn.provider.hcloud.guide.step3":
+    "Paste the issued token into the field below.",
+  "conn.provider.s3.guide.step1": "Open the R2 API tokens page.",
+  "conn.provider.s3.guide.step2":
+    "Create an S3-compatible access key ID and secret access key.",
+  "conn.provider.s3.guide.step3":
+    "Paste the access key and endpoint URL into the fields below.",
   "conn.guided.openProvider": "Open {provider} access page",
   "conn.guided.oauth": "Connect automatically with {provider}",
   "conn.guided.stepsSummary": "Use an access token instead",

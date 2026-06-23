@@ -98,7 +98,9 @@ describe("AppListView Workspace starter", () => {
     expect(appListSource).toContain('t("apps.noOpenLink")');
     expect(appListSource).toContain('t("apps.viewDetails")');
     expect(appListSource).toContain('t("apps.updated"');
-    expect(appListSource).toContain("formatDateTime(inst.updatedAt)");
+    // Launcher tiles show a friendly relative time ("3分前"), not a raw
+    // absolute timestamp — app-like, not an ops-console field.
+    expect(appListSource).toContain("relativeTime(inst.updatedAt)");
     expect(appListSource).not.toContain("window.open");
   });
 });

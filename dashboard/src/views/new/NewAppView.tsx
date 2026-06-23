@@ -142,6 +142,13 @@ type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
   readonly installConfigId: string;
 };
 type CatalogInputField = CatalogEntry["inputs"][number];
+type CatalogInstallConfig = InstallConfig & {
+  readonly catalog: NonNullable<InstallConfig["catalog"]> & {
+    readonly source: NonNullable<
+      NonNullable<InstallConfig["catalog"]>["source"]
+    >;
+  };
+};
 
 function CatalogCard(props: {
   readonly entry: CatalogEntry;
@@ -347,6 +354,36 @@ function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
   if (surface === "service") return 0;
   if (surface === "building_block") return 1;
   return 2;
+}
+
+function catalogConfigKey(config: CatalogInstallConfig): string {
+  if (config.catalog.templateId) return `template:${config.catalog.templateId}`;
+  const source = config.catalog.source;
+  return `source:${source.git}#${source.ref}:${source.path}`;
+}
+
+function catalogConfigPriority(config: CatalogInstallConfig): number {
+  if (config.spaceId === undefined || config.id.startsWith("cfg-official-")) {
+    return 0;
+  }
+  return 1;
+}
+
+function dedupeCatalogConfigs(
+  configs: readonly CatalogInstallConfig[],
+): readonly CatalogInstallConfig[] {
+  const byKey = new Map<string, CatalogInstallConfig>();
+  for (const config of configs) {
+    const key = catalogConfigKey(config);
+    const current = byKey.get(key);
+    if (
+      !current ||
+      catalogConfigPriority(config) < catalogConfigPriority(current)
+    ) {
+      byKey.set(key, config);
+    }
+  }
+  return [...byKey.values()];
 }
 
 const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
@@ -560,14 +597,11 @@ function Inner() {
     () => configs() ?? [],
   );
   const catalogEntries = createMemo<readonly CatalogEntry[]>(() =>
-    configList()
-      .filter(
-        (
-          config,
-        ): config is InstallConfig & {
-          readonly catalog: NonNullable<InstallConfig["catalog"]>;
-        } => Boolean(config.catalog?.source),
-      )
+    dedupeCatalogConfigs(
+      configList().filter((config): config is CatalogInstallConfig =>
+        Boolean(config.catalog?.source),
+      ),
+    )
       .map((config) => ({
         id: config.catalog.templateId ?? config.id,
         installConfigId: config.id,
@@ -1282,6 +1316,29 @@ function Inner() {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
   };
+
+  /**
+   * Single install action. Folds the old two-step (check → confirm) into one:
+   * run the compatibility check when needed, stop only on a real blocker (compat
+   * level not runnable, or a missing/unselected cloud account) so the inline
+   * panels can explain it — otherwise continue straight through to create + plan.
+   */
+  const submitInstall = async () => {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    if (!compatibility()) {
+      await runCompatibilityCheck();
+      // The check failed or could not resolve a result; its own error is shown.
+      if (!compatibility()) return;
+    }
+    // Blockers render inline from compatibility state (compat result panel /
+    // cloud-account callout). Stop here so the user can resolve them first.
+    if (!canContinue()) return;
+    await runFlow();
+  };
   const findExistingInstallation = async (
     space: string,
     installationName: string,
@@ -1846,7 +1903,8 @@ function Inner() {
                   </ul>
                   <Show
                     when={
-                      showSecondaryCatalog() && buildingBlockCatalog().length > 0
+                      showSecondaryCatalog() &&
+                      buildingBlockCatalog().length > 0
                     }
                   >
                     <details class="wb-disclosure av-catalog-more">
@@ -1929,9 +1987,7 @@ function Inner() {
                 class="wb-install-form wb-install-source-form"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!compatibility()) void runCompatibilityCheck();
-                  else if (canContinue()) void runFlow();
-                  else setError(proceedBlocker());
+                  void submitInstall();
                 }}
               >
                 <Show when={!usingSelectedService()}>
@@ -2206,6 +2262,13 @@ function Inner() {
                                       <li
                                         class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
                                       >
+                                        <Show when={display.technical}>
+                                          <span class="wb-diagnostic-tech muted">
+                                            {t(
+                                              "new.compat.diagnostic.technicalNote",
+                                            )}{" "}
+                                          </span>
+                                        </Show>
                                         {display.message}
                                         <Show when={display.detail}>
                                           {(detail) => (
@@ -2321,45 +2384,40 @@ function Inner() {
                         >
                           {t("new.providers.setupMissing")}
                         </Button>
+                        <p class="muted">{t("new.providers.returnNote")}</p>
                       </div>
                     </Show>
                   </section>
                 </Show>
 
                 <div class="wb-form-actions">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    busy={checkingCompatibility() || busy()}
+                    disabled={
+                      checkingCompatibility() ||
+                      busy() ||
+                      (compatibility() !== null && !canContinue())
+                    }
+                  >
+                    {checkingCompatibility()
+                      ? t("new.compat.checking")
+                      : busy()
+                        ? t("new.installing")
+                        : t("new.installCta")}
+                  </Button>
                   <Show
-                    when={compatibility()}
-                    fallback={
-                      <Button
-                        variant="primary"
-                        type="submit"
-                        busy={checkingCompatibility()}
-                        disabled={checkingCompatibility() || busy()}
-                      >
-                        {checkingCompatibility()
-                          ? t("new.compat.checking")
-                          : t("new.compat.check")}
-                      </Button>
+                    when={
+                      compatibility() && !checkingCompatibility() && !busy()
                     }
                   >
                     <Button
                       variant="secondary"
                       type="button"
-                      busy={checkingCompatibility()}
-                      disabled={checkingCompatibility() || busy()}
                       onClick={() => void runCompatibilityCheck()}
                     >
-                      {checkingCompatibility()
-                        ? t("new.compat.checking")
-                        : t("new.compat.recheck")}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      type="submit"
-                      busy={busy()}
-                      disabled={busy() || !canContinue()}
-                    >
-                      {t("new.proceed")}
+                      {t("new.compat.recheck")}
                     </Button>
                   </Show>
                   <Show when={syncRequired() && !busy()}>
