@@ -208,8 +208,8 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
-# Optional (AI Gateway; set one secret per profile apiKeyEnv):
-#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  upstream model provider key
+# Optional (AI Gateway; set one secret per openai_compatible profile apiKeyEnv; workers_ai_binding uses [ai]):
+#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  upstream OpenAI-compatible provider key
 # Optional (billing; set both when hosted billing is enabled):
 #   TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY / _WEBHOOK_SECRET
 # Optional (upstream OAuth provider):

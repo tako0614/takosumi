@@ -88,12 +88,34 @@ service that only needs model listing or chat completions.
 
 The closed Takosumi Cloud AI Gateway service reads upstream profiles from
 `TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. Each profile
-names the env/secret that contains the upstream key. The OSS platform worker
-does not parse this config or forward model requests by itself.
+is either an OpenAI-compatible HTTPS upstream that names the env/secret
+containing its upstream key, or a Cloudflare Workers AI binding profile that
+uses the Cloudflare Worker `AI` binding and therefore has no upstream key. The
+OSS platform worker does not parse this config or forward model requests by
+itself.
 
 ```json
 [
   {
+    "type": "workers_ai_binding",
+    "id": "workers-ai",
+    "provider": "workers_ai",
+    "models": [
+      {
+        "publicModel": "workers-ai/llama-3.1-8b-instruct-fast",
+        "upstreamModel": "@cf/meta/llama-3.1-8b-instruct-fast",
+        "endpoints": ["chat.completions"],
+        "default": true
+      },
+      {
+        "publicModel": "workers-ai/bge-base-en-v1.5",
+        "upstreamModel": "@cf/baai/bge-base-en-v1.5",
+        "endpoints": ["embeddings"]
+      }
+    ]
+  },
+  {
+    "type": "openai_compatible",
     "id": "deepseek",
     "provider": "deepseek",
     "baseUrl": "https://provider.example/v1",
@@ -108,6 +130,7 @@ does not parse this config or forward model requests by itself.
     ]
   },
   {
+    "type": "openai_compatible",
     "id": "glm",
     "provider": "zai",
     "baseUrl": "https://provider.example/v1",
@@ -121,6 +144,7 @@ does not parse this config or forward model requests by itself.
     ]
   },
   {
+    "type": "openai_compatible",
     "id": "gemini-compatible",
     "provider": "gemini",
     "baseUrl": "https://provider.example/v1",
@@ -139,7 +163,12 @@ does not parse this config or forward model requests by itself.
 
 Rules:
 
-- `baseUrl` must be an HTTPS OpenAI-compatible base URL. Local HTTP is rejected unless
+- `type` defaults to `openai_compatible` for existing profiles.
+- `openai_compatible` profiles must set `baseUrl` and `apiKeyEnv`.
+- `workers_ai_binding` profiles must not set `baseUrl`, `apiKeyEnv`,
+  `apiKeyHeader`, or static `headers`; they run through the Worker `AI`
+  binding configured on the closed Cloud worker.
+- `baseUrl` for `openai_compatible` profiles must be an HTTPS OpenAI-compatible base URL. Local HTTP is rejected unless
   `TAKOSUMI_AI_GATEWAY_ALLOW_LOCAL_HTTP=1` is set for tests.
 - Literal local/private/link-local/metadata IP upstreams and reserved internal DNS suffixes such as `.internal`,
   `.local`, `.home.arpa`, and `.lan` are rejected by default. The Worker cannot synchronously prove every public DNS
@@ -155,18 +184,22 @@ Rules:
   rejected. Put only public display/protocol metadata there.
 - public model aliases are stable Takosumi-facing names and do not have to equal provider-native model ids.
 
-Provider examples such as DeepSeek, Z.AI GLM, Gemini, OpenAI, Workers AI, or any OpenAI-compatible host are all the
-same gateway mechanism: configure a profile, map public aliases to upstream model ids, and keep the upstream key behind
-`apiKeyEnv`.
+Provider examples such as DeepSeek, Z.AI GLM, Gemini, OpenAI, or any OpenAI-compatible host use
+`type: "openai_compatible"`: configure a profile, map public aliases to
+upstream model ids, and keep the upstream key behind `apiKeyEnv`. Cloudflare
+Workers AI uses `type: "workers_ai_binding"` when Takosumi Cloud calls the
+Worker `AI` binding directly without issuing or storing a REST API token.
 
 `GET /gateway/ai/v1/__takosumi/status` returns only public readiness
 metadata. It reports whether the gateway is using `configured_upstreams` or
 `workers_ai_fallback`, the public providers/model aliases, and whether the
 Workers AI fallback binding exists. It never returns upstream keys, `apiKeyEnv`
 names, raw `Authorization` material, or service-binding names. Takosumi Cloud
-GA smoke may pass in fallback mode for the base managed AI capability, but any
-launch claim that includes DeepSeek, Z.AI/GLM, Gemini, OpenAI, or another
-external upstream must run `smoke:cloud-extensions` with
+GA smoke may pass in fallback mode for the base managed AI capability, but a
+production Cloud AI Gateway should configure at least one explicit profile.
+Any launch claim that includes DeepSeek, Z.AI/GLM, Gemini, OpenAI, or another
+external upstream must use `type: "openai_compatible"` with a real upstream key
+behind `apiKeyEnv` and run `smoke:cloud-extensions` with
 `--require-ai-upstream-profile`.
 
 ## Secret Boundary

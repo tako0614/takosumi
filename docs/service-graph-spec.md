@@ -255,15 +255,18 @@ The service token scope is `ai.model` plus one or more endpoint scopes:
 
 Operator upstream provider keys stay in operator secrets/env vars referenced by
 the closed Takosumi Cloud AI Gateway service's
-`TAKOSUMI_AI_GATEWAY_PROFILES` config. A profile declares public model aliases
-and the env var name that contains the upstream key (`apiKeyEnv`); it must not
-contain the key value itself, including through static upstream `headers`.
+`TAKOSUMI_AI_GATEWAY_PROFILES` config. An `openai_compatible` profile declares
+public model aliases and the env var name that contains the upstream key
+(`apiKeyEnv`); it must not contain the key value itself, including through
+static upstream `headers`. A `workers_ai_binding` profile instead uses the
+Cloud-only Worker `AI` binding directly and must not declare `baseUrl`,
+`apiKeyEnv`, `apiKeyHeader`, or static upstream headers.
 Model alias `metadata` is returned by `GET /gateway/ai/v1/models`, so it is public display/protocol metadata only:
 secret-shaped keys, bearer-token strings, API keys, credential URLs, and password-bearing values are invalid profile
 config.
-At request time the gateway maps the public model alias to the provider-native model id, injects the upstream key,
-forwards the call, and returns only safe response headers. The rotated Service Graph service token is the only key
-projected to an installed service.
+At request time the gateway maps the public model alias to the provider-native model id, injects the upstream key for
+OpenAI-compatible profiles or calls the Workers AI binding for Workers AI profiles, and returns only safe response
+headers. The rotated Service Graph service token is the only key projected to an installed service.
 
 ### 5.2 Takos Runtime Profile
 
