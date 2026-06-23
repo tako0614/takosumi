@@ -288,11 +288,14 @@ operator-bearer hardening gate without printing the bearer token. Use
 
 Cloud-only extension worker smoke は account session token を使うが、証跡には
 token / cookie / token file path を保存しない。通常の deploy smoke は endpoint
-mount、platform-side session auth、AI Gateway、Cloudflare compatibility envelope、
-および Cloudflare Workers script の `PUT -> GET -> DELETE` lifecycle を確認する。
+mount、platform-side session auth、Cloud extension catalog、AI Gateway、
+Cloudflare compatibility envelope、および Cloudflare Workers script の
+`PUT -> GET -> DELETE` lifecycle を確認する。
 Cloudflare Workers script materialization がまだ 501 の場合、script は `status: "passed"` でも
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
-GA 判定では `--require-compat-materialization` を必ず付け、501 を失敗にする。
+GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
+を必ず付け、501 と OpenTofu provider の `init -> plan -> apply -> destroy`
+不成立を失敗にする。
 
 ```bash
 cd takosumi
@@ -312,6 +315,7 @@ bun run smoke:cloud-extensions -- \
   --url https://app.takosumi.com \
   --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \
   --require-compat-materialization \
+  --require-provider-e2e \
   --json
 ```
 

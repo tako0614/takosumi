@@ -21,6 +21,11 @@ const CLOUDFLARE_COMPAT_SMOKE_SCRIPT = "takosumi-smoke";
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${CLOUDFLARE_COMPAT_SMOKE_SCRIPT}`;
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
   "export default { fetch() { return new Response('takosumi smoke'); } };";
+const CLOUD_EXTENSION_CATALOG_PATH = "/__takosumi/cloud/extensions";
+const REQUIRED_CLOUD_EXTENSION_IDS = [
+  "ai.openai_compatible.v1",
+  "provider.cloudflare.client_v4",
+] as const;
 
 type FetchLike = typeof fetch;
 type AuthTokenKind = "session" | "pat";
@@ -190,6 +195,18 @@ export async function runCloudExtensionSmoke(
   };
   const checks: CloudExtensionSmokeCheck[] = [
     await authTokenCheck(fetchImpl, options, authHeaders),
+    await requestCheck(fetchImpl, options, {
+      name: "cloudExtensionCatalog",
+      path: CLOUD_EXTENSION_CATALOG_PATH,
+      expected:
+        "platform Cloud extension catalog reports AI Gateway and Cloudflare compatibility as configured",
+      pass: (response, body) =>
+        response.status === 200 &&
+        REQUIRED_CLOUD_EXTENSION_IDS.every((id) =>
+          configuredCloudExtensionIds(body).includes(id),
+        ),
+      summarize: summarizeCloudExtensionCatalog,
+    }),
     await requestCheck(fetchImpl, options, {
       name: "aiModelsUnauth",
       path: "/gateway/ai/v1/models",
@@ -495,6 +512,10 @@ function cloudExtensionGaps(
   checks: readonly CloudExtensionSmokeCheck[],
 ): string[] {
   const gaps: string[] = [];
+  const catalog = checks.find((check) => check.name === "cloudExtensionCatalog");
+  if (catalog && !catalog.ok) {
+    gaps.push("cloud_extension_catalog_not_ready");
+  }
   const materialization = checks.find(
     (check) =>
       check.name === "cloudflareCompatScriptPutAuth" && check.status === 501,
@@ -644,6 +665,33 @@ function summarizeCloudflareEnvelope(body: unknown): Record<string, unknown> {
   };
 }
 
+function summarizeCloudExtensionCatalog(body: unknown): Record<string, unknown> {
+  const extensions = cloudExtensionCatalogItems(body);
+  const configuredIds = configuredCloudExtensionIds(body);
+  return {
+    kind: record(body).kind,
+    ids: extensions
+      .map((extension) => record(extension).id)
+      .filter((id): id is string => typeof id === "string"),
+    configuredIds,
+    missingRequiredIds: REQUIRED_CLOUD_EXTENSION_IDS.filter(
+      (id) => !configuredIds.includes(id),
+    ),
+  };
+}
+
+function configuredCloudExtensionIds(body: unknown): string[] {
+  return cloudExtensionCatalogItems(body)
+    .filter((extension) => record(extension).configured === true)
+    .map((extension) => record(extension).id)
+    .filter((id): id is string => typeof id === "string");
+}
+
+function cloudExtensionCatalogItems(body: unknown): unknown[] {
+  const extensions = record(body).extensions;
+  return Array.isArray(extensions) ? extensions : [];
+}
+
 function modelIds(body: unknown): string[] {
   const data = record(body).data;
   if (!Array.isArray(data)) return [];
@@ -765,6 +813,9 @@ async function runSelfTest(): Promise<void> {
     if (parsed.pathname === "/v1/account/session/me") {
       return jsonResponse({ subject: "tsub_selftest" }, 200);
     }
+    if (parsed.pathname === CLOUD_EXTENSION_CATALOG_PATH) {
+      return cloudExtensionCatalogResponse(true);
+    }
     if (
       parsed.pathname === "/gateway/ai/v1/models" &&
       !authHeaderPresent(init)
@@ -852,6 +903,9 @@ function jsonResponseForSelfTest(
   if (url.pathname === "/v1/account/session/me") {
     return jsonResponse({ subject: "tsub_selftest" }, 200);
   }
+  if (url.pathname === CLOUD_EXTENSION_CATALOG_PATH) {
+    return cloudExtensionCatalogResponse(true);
+  }
   if (url.pathname === "/gateway/ai/v1/models" && !authHeaderPresent(init)) {
     return openAiResponse("unauthorized", 401);
   }
@@ -914,6 +968,16 @@ function cloudflareResponse(
     },
     status,
   );
+}
+
+function cloudExtensionCatalogResponse(configured: boolean): Response {
+  return jsonResponse({
+    kind: "takosumi.platform-cloud-extensions@v1",
+    extensions: REQUIRED_CLOUD_EXTENSION_IDS.map((id) => ({
+      id,
+      configured,
+    })),
+  });
 }
 
 function printHelp(): void {

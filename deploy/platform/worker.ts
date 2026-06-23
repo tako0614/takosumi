@@ -114,6 +114,9 @@ export default {
       );
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
+    if (isPlatformCloudExtensionCatalogPath(url.pathname)) {
+      return handlePlatformCloudExtensionCatalogRequest(request, url, env);
+    }
     const cloudExtensionResponse = await handlePlatformCloudExtensionRequest(
       request,
       env,
@@ -832,6 +835,9 @@ export interface PlatformCloudExtensionRoute {
   readonly basePath: `/${string}`;
   readonly bindingName: string;
   readonly provider?: string;
+  readonly protocol: string;
+  readonly capabilities: readonly string[];
+  readonly smokeChecks: readonly string[];
 }
 
 const AI_GATEWAY_BASE_PATH = "/gateway/ai/v1";
@@ -844,6 +850,9 @@ export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRou
       kind: "ai_gateway",
       basePath: AI_GATEWAY_BASE_PATH,
       bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+      protocol: "openai-compatible",
+      capabilities: ["models", "chat.completions", "embeddings"],
+      smokeChecks: ["aiModelsAuth", "aiChatAuth", "aiEmbeddingsAuth"],
     },
     {
       id: "provider.cloudflare.client_v4",
@@ -851,14 +860,104 @@ export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRou
       provider: "cloudflare",
       basePath: CLOUDFLARE_COMPAT_BASE_PATH,
       bindingName: "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
+      protocol: "cloudflare-v4",
+      capabilities: [
+        "user.tokens.verify",
+        "accounts.list",
+        "workers.scripts",
+        "workers.routes",
+        "kv.namespaces",
+        "r2.buckets",
+        "d1.databases",
+      ],
+      smokeChecks: [
+        "cloudflareCompatVerifyAuth",
+        "cloudflareCompatAccountsAuth",
+        "cloudflareCompatScriptsListAuth",
+        "cloudflareCompatScriptPutAuth",
+        "cloudflareCompatProviderE2E",
+      ],
     },
   ] as const;
+
+export const PLATFORM_CLOUD_EXTENSION_CATALOG_PATH =
+  "/__takosumi/cloud/extensions" as const;
+
+export interface PlatformCloudExtensionCatalogItem {
+  readonly id: string;
+  readonly kind: PlatformCloudExtensionKind;
+  readonly provider?: string;
+  readonly protocol: string;
+  readonly basePath: `/${string}`;
+  readonly configured: boolean;
+  readonly capabilities: readonly string[];
+  readonly smokeChecks: readonly string[];
+}
+
+export interface PlatformCloudExtensionCatalog {
+  readonly kind: "takosumi.platform-cloud-extensions@v1";
+  readonly generatedAt: string;
+  readonly serviceUrl: string;
+  readonly extensions: readonly PlatformCloudExtensionCatalogItem[];
+  readonly summary: {
+    readonly total: number;
+    readonly configured: number;
+    readonly missing: number;
+  };
+}
 
 export function matchPlatformCloudExtensionRoute(
   pathname: string,
   routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
 ): PlatformCloudExtensionRoute | undefined {
   return routes.find((route) => pathIsUnderBase(pathname, route.basePath));
+}
+
+export function isPlatformCloudExtensionCatalogPath(pathname: string): boolean {
+  return pathname === PLATFORM_CLOUD_EXTENSION_CATALOG_PATH;
+}
+
+export function platformCloudExtensionCatalog(
+  env: CloudflareWorkerEnv,
+  origin: string,
+  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
+): PlatformCloudExtensionCatalog {
+  const extensions = routes.map((route) => ({
+    id: route.id,
+    kind: route.kind,
+    ...(route.provider ? { provider: route.provider } : {}),
+    protocol: route.protocol,
+    basePath: route.basePath,
+    configured: platformCloudExtensionBinding(env, route.bindingName) !== undefined,
+    capabilities: route.capabilities,
+    smokeChecks: route.smokeChecks,
+  }));
+  const configured = extensions.filter((extension) => extension.configured).length;
+  return {
+    kind: "takosumi.platform-cloud-extensions@v1",
+    generatedAt: new Date().toISOString(),
+    serviceUrl: origin,
+    extensions,
+    summary: {
+      total: extensions.length,
+      configured,
+      missing: extensions.length - configured,
+    },
+  };
+}
+
+export function handlePlatformCloudExtensionCatalogRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
+): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  return Response.json(platformCloudExtensionCatalog(env, url.origin, routes), {
+    headers: { "cache-control": "no-store" },
+  });
 }
 
 export async function handlePlatformCloudExtensionRequest(
