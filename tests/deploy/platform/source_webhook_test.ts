@@ -786,9 +786,12 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
     contentType: string | null;
   }[] = [];
   const context = await verifyPlatformCloudExtensionPersonalAccessToken(
-    new Request("https://app.takosumi.com/compat/cloudflare/client/v4/accounts", {
-      headers: { authorization: "Bearer takpat_cloud_provider" },
-    }),
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts",
+      {
+        headers: { authorization: "Bearer takpat_cloud_provider" },
+      },
+    ),
     {
       TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
@@ -822,7 +825,9 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
   expect(introspectionRequests[0]?.body).toContain(
     "client_id=takosumi-cloud-extensions",
   );
-  expect(introspectionRequests[0]?.body).toContain("token=takpat_cloud_provider");
+  expect(introspectionRequests[0]?.body).toContain(
+    "token=takpat_cloud_provider",
+  );
 });
 
 test("Cloud-only extension personal access token auth fails closed", async () => {
@@ -978,6 +983,7 @@ test("Cloud-only extension catalog reports configured public capabilities withou
     true,
     true,
   ]);
+  expect(catalog.extensions[0]?.smokeChecks).toContain("aiGatewayStatus");
   const serialized = JSON.stringify(catalog);
   expect(serialized).not.toContain("TAKOSUMI_CLOUD_AI_GATEWAY");
   expect(serialized).not.toContain("TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT");

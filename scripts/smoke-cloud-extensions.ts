@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import { TAKOSUMI_AI_GATEWAY_STATUS_PATH } from "../contract/ai-gateway.ts";
 
 export const CLOUD_EXTENSION_SMOKE_KIND =
   "takosumi.cloud-extension-smoke@v1" as const;
@@ -22,7 +23,6 @@ const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accoun
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
   "export default { fetch() { return new Response('takosumi smoke'); } };";
 const CLOUD_EXTENSION_CATALOG_PATH = "/__takosumi/cloud/extensions";
-const AI_GATEWAY_STATUS_PATH = "/gateway/ai/v1/__takosumi/status";
 const REQUIRED_CLOUD_EXTENSION_IDS = [
   "ai.openai_compatible.v1",
   "provider.cloudflare.client_v4",
@@ -237,7 +237,7 @@ export async function runCloudExtensionSmoke(
     }),
     await requestCheck(fetchImpl, options, {
       name: "aiGatewayStatus",
-      path: AI_GATEWAY_STATUS_PATH,
+      path: TAKOSUMI_AI_GATEWAY_STATUS_PATH,
       expected: options.requireAiUpstreamProfile
         ? "authenticated AI Gateway status reports at least one configured upstream profile"
         : "authenticated AI Gateway status reports configured upstreams or the explicit Workers AI fallback",
@@ -907,7 +907,7 @@ async function runSelfTest(): Promise<void> {
         data: [{ id: "takosumi/default", object: "model" }],
       });
     }
-    if (parsed.pathname === AI_GATEWAY_STATUS_PATH) {
+    if (parsed.pathname === TAKOSUMI_AI_GATEWAY_STATUS_PATH) {
       return aiGatewayStatusResponse("workers_ai_fallback");
     }
     if (parsed.pathname === "/gateway/ai/v1/chat/completions") {
@@ -997,7 +997,7 @@ function jsonResponseForSelfTest(
       data: [{ id: "takosumi/default", object: "model" }],
     });
   }
-  if (url.pathname === AI_GATEWAY_STATUS_PATH) {
+  if (url.pathname === TAKOSUMI_AI_GATEWAY_STATUS_PATH) {
     return aiGatewayStatusResponse("workers_ai_fallback");
   }
   if (url.pathname === "/gateway/ai/v1/chat/completions") {

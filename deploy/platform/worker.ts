@@ -423,7 +423,8 @@ function escapeHtml(value: string): string {
 
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 const RUNTIME_CELL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX = "/internal/platform/runtime-cells/";
+const INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX =
+  "/internal/platform/runtime-cells/";
 const INTERNAL_PLATFORM_RUNTIME_CELL_DRILL_SUFFIX = "/drill";
 const INTERNAL_PLATFORM_SPACE_PREFIX = "/internal/platform/spaces/";
 const INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX = "/billing";
@@ -503,9 +504,8 @@ async function runPlatformRuntimeCellDrill(input: {
   const requestedAt = new Date().toISOString();
   const drillId = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const agentId = `agent_drill_${input.runtimeCellId}_${drillId}`;
-  const workPrefix = input.action === "drain"
-    ? "runtime_drain"
-    : "runtime_evac";
+  const workPrefix =
+    input.action === "drain" ? "runtime_drain" : "runtime_evac";
   const workId = `${workPrefix}_${input.runtimeCellId}_${drillId}`;
   await input.registry.register({
     agentId,
@@ -852,7 +852,12 @@ export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRou
       bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
       protocol: "openai-compatible",
       capabilities: ["models", "chat.completions", "embeddings"],
-      smokeChecks: ["aiModelsAuth", "aiChatAuth", "aiEmbeddingsAuth"],
+      smokeChecks: [
+        "aiModelsAuth",
+        "aiGatewayStatus",
+        "aiChatAuth",
+        "aiEmbeddingsAuth",
+      ],
     },
     {
       id: "provider.cloudflare.client_v4",
@@ -928,11 +933,14 @@ export function platformCloudExtensionCatalog(
     ...(route.provider ? { provider: route.provider } : {}),
     protocol: route.protocol,
     basePath: route.basePath,
-    configured: platformCloudExtensionBinding(env, route.bindingName) !== undefined,
+    configured:
+      platformCloudExtensionBinding(env, route.bindingName) !== undefined,
     capabilities: route.capabilities,
     smokeChecks: route.smokeChecks,
   }));
-  const configured = extensions.filter((extension) => extension.configured).length;
+  const configured = extensions.filter(
+    (extension) => extension.configured,
+  ).length;
   return {
     kind: "takosumi.platform-cloud-extensions@v1",
     generatedAt: new Date().toISOString(),
@@ -977,8 +985,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
-  sessionVerifier: PlatformCloudExtensionSessionVerifier =
-    verifyPlatformCloudExtensionSession,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
@@ -1013,8 +1020,7 @@ const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
 export async function requestWithPlatformCloudExtensionAuthContext(
   request: Request,
   env: CloudflareWorkerEnv,
-  sessionVerifier: PlatformCloudExtensionSessionVerifier =
-    verifyPlatformCloudExtensionSession,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
 ): Promise<Request> {
   const session = await sessionVerifier(request, env);
   if (!session.authenticated) return request;
@@ -1079,8 +1085,7 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
   request: Request,
   env: CloudflareWorkerEnv,
   token: string,
-  introspectFetch: PlatformCloudExtensionIntrospectFetch =
-    defaultPlatformCloudExtensionIntrospectFetch,
+  introspectFetch: PlatformCloudExtensionIntrospectFetch = defaultPlatformCloudExtensionIntrospectFetch,
 ): Promise<PlatformCloudExtensionSessionContext> {
   const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
   const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;

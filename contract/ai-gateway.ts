@@ -2,6 +2,7 @@ import type { JsonObject } from "./types.ts";
 
 export const TAKOSUMI_AI_GATEWAY_BASE_PATH = "/gateway/ai/v1";
 export const TAKOSUMI_AI_GATEWAY_MODELS_PATH = `${TAKOSUMI_AI_GATEWAY_BASE_PATH}/models`;
+export const TAKOSUMI_AI_GATEWAY_STATUS_PATH = `${TAKOSUMI_AI_GATEWAY_BASE_PATH}/__takosumi/status`;
 export const TAKOSUMI_AI_GATEWAY_CHAT_COMPLETIONS_PATH = `${TAKOSUMI_AI_GATEWAY_BASE_PATH}/chat/completions`;
 export const TAKOSUMI_AI_GATEWAY_EMBEDDINGS_PATH = `${TAKOSUMI_AI_GATEWAY_BASE_PATH}/embeddings`;
 
@@ -20,6 +21,12 @@ export type TakosumiAiGatewayEndpoint =
   | "models"
   | "chat.completions"
   | "embeddings";
+
+export type TakosumiAiGatewayRoute = TakosumiAiGatewayEndpoint | "status";
+
+export type TakosumiAiGatewayRuntimeMode =
+  | "configured_upstreams"
+  | "workers_ai_fallback";
 
 export type TakosumiAiGatewayProvider =
   | "openai"
@@ -84,6 +91,39 @@ export interface TakosumiAiGatewayModelListItem {
   readonly metadata?: JsonObject;
 }
 
+export interface TakosumiAiGatewayStatusResponse {
+  readonly kind: "takosumi.ai-gateway-status@v1";
+  readonly mode: TakosumiAiGatewayRuntimeMode;
+  readonly defaultModel: string;
+  readonly endpoints: readonly TakosumiAiGatewayRoute[];
+  readonly summary: {
+    readonly profileCount: number;
+    readonly publicModelCount: number;
+    readonly providers: readonly TakosumiAiGatewayProvider[];
+  };
+  readonly upstreamProfiles: readonly {
+    readonly id: string;
+    readonly provider: TakosumiAiGatewayProvider;
+    readonly endpointOrigin: string;
+    readonly modelCount: number;
+    readonly publicModels: readonly {
+      readonly publicModel: string;
+      readonly endpoints: readonly TakosumiAiGatewayEndpoint[];
+      readonly default?: boolean;
+      readonly contextWindow?: number;
+      readonly maxOutputTokens?: number;
+      readonly billingClass?: string;
+      readonly metadata?: JsonObject;
+    }[];
+  }[];
+  readonly workersAiFallback: {
+    readonly enabled: boolean;
+    readonly aiBindingConfigured: boolean;
+    readonly chatModel: string;
+    readonly embeddingModel: string;
+  };
+}
+
 export interface TakosumiAiGatewayErrorResponse {
   readonly error: {
     readonly message: string;
@@ -93,11 +133,13 @@ export interface TakosumiAiGatewayErrorResponse {
 }
 
 export function takosumiAiGatewayPath(
-  endpoint: TakosumiAiGatewayEndpoint,
+  endpoint: TakosumiAiGatewayRoute,
 ): string {
   switch (endpoint) {
     case "models":
       return TAKOSUMI_AI_GATEWAY_MODELS_PATH;
+    case "status":
+      return TAKOSUMI_AI_GATEWAY_STATUS_PATH;
     case "chat.completions":
       return TAKOSUMI_AI_GATEWAY_CHAT_COMPLETIONS_PATH;
     case "embeddings":
