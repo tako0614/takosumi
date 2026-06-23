@@ -1,13 +1,13 @@
 /*
- * shell.css — app chrome for the Takosumi dashboard: a single top bar over a
- * full-width content well (no sidebar / mobile tabs — navigation lives in the
- * top bar and the profile menu), the user menu, and the auth (sign-in) page.
+ * shell.css — app chrome for the Takosumi dashboard: the app shell grid
+ * (sidebar + main), the sidebar primary nav, the top bar, the user menu, the
+ * mobile bottom tabs, and the auth (sign-in) page.
  */
 
-/* ===== App shell ===== */
+/* ===== App shell grid ===== */
 .app-shell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--tg-sidebar-w) 1fr;
   min-height: 100svh;
   font-family: var(--tg-font-body);
   background: var(--tg-bg);
@@ -22,6 +22,11 @@
 .app-shell a:hover {
   color: var(--tg-accent);
 }
+.app-shell-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .app-shell-content {
   position: relative;
   flex: 1;
@@ -29,6 +34,97 @@
   max-width: var(--tg-content-max);
   width: 100%;
   margin: 0 auto;
+}
+
+/* ===== Sidebar (primary nav) ===== */
+.sidebar {
+  background: var(--tg-bg-elev);
+  border-right: 1px solid var(--tg-line);
+  display: flex;
+  flex-direction: column;
+  padding: var(--tg-s-4) var(--tg-s-3);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.sidebar-brand {
+  padding: var(--tg-s-1) var(--tg-s-3) var(--tg-s-4);
+}
+.sidebar-context-label {
+  display: block;
+  margin-top: var(--tg-s-1);
+  padding-left: var(--tg-s-1);
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sidebar-workspace {
+  padding: 0 var(--tg-s-1) var(--tg-s-4);
+}
+.sidebar-workspace .topbar-space,
+.sidebar-workspace .topbar-space-select {
+  width: 100%;
+  max-width: none;
+}
+.sidebar-link-back {
+  margin-bottom: var(--tg-s-3);
+  color: var(--tg-fg-subtle);
+}
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+}
+.sidebar-section-label {
+  padding: 0 var(--tg-s-3) var(--tg-s-2);
+  color: var(--tg-fg-subtle);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  min-height: 40px;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 550;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+.sidebar-link svg {
+  flex: none;
+  opacity: 0.85;
+}
+.sidebar-link:hover {
+  background: color-mix(in srgb, var(--tg-fg) 6%, transparent);
+  color: var(--tg-fg);
+}
+.sidebar-link.active {
+  background: color-mix(in srgb, var(--tg-fg) 8%, transparent);
+  color: var(--tg-fg);
+  font-weight: 650;
+}
+.sidebar-link.active svg {
+  color: var(--tg-accent);
+  opacity: 1;
+}
+.sidebar-link.active:hover {
+  background: color-mix(in srgb, var(--tg-fg) 10%, transparent);
+  color: var(--tg-fg);
+}
+.sidebar-link-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
 }
 
 /* ===== Topbar ===== */
@@ -168,14 +264,6 @@
   border-bottom: 1px solid var(--tg-line);
   margin-bottom: var(--tg-s-2);
 }
-.user-menu-workspace {
-  padding: 0 var(--tg-s-2) var(--tg-s-2);
-}
-.user-menu-workspace .topbar-space,
-.user-menu-workspace .topbar-space-select {
-  width: 100%;
-  max-width: none;
-}
 .user-menu-divider {
   height: 1px;
   background: var(--tg-line);
@@ -247,7 +335,17 @@
   border-color: var(--tg-accent);
   background: color-mix(in srgb, var(--tg-accent) 18%, transparent);
 }
+/* ===== Mobile bottom tabs ===== */
+.mobile-tabs {
+  display: none;
+}
 @media (max-width: 880px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    display: none;
+  }
   .topbar {
     height: auto;
     min-height: var(--tg-topbar-h);
@@ -259,7 +357,48 @@
   }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)
-      calc(var(--tg-s-4) + env(safe-area-inset-bottom, 0px));
+      calc(
+        var(--tg-mobile-tab-h) + var(--tg-s-4) + env(safe-area-inset-bottom, 0px)
+      );
+  }
+  .mobile-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    min-height: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: var(--tg-bg-elev);
+    border-top: 1px solid var(--tg-line);
+    z-index: 40;
+  }
+  .mobile-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--tg-fg-muted);
+    font-size: 0.68rem;
+    line-height: 1.1;
+    text-decoration: none;
+    min-width: 0;
+    padding: 0 2px;
+  }
+  .mobile-tab svg {
+    flex: none;
+  }
+  .mobile-tab span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-tab.active {
+    color: var(--tg-accent-text);
+    background: var(--tg-accent-soft);
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -159,58 +159,67 @@
   transition: transform var(--tg-dur) var(--tg-ease);
 }
 .av-tile:hover {
-  transform: translateY(-2px);
+  transform: translateY(-3px);
 }
 .av-tile:hover .av-tile-icon {
-  border-color: var(--tg-line-strong);
-  box-shadow: var(--tg-shadow-card-hover);
-  color: var(--tg-fg);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.22),
+    0 16px 26px -8px color-mix(in srgb, var(--app-c2, #000) 65%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
 }
 .av-tile:focus-visible {
   outline: none;
 }
 .av-tile:focus-visible .av-tile-icon {
-  border-color: var(--tg-accent);
-  box-shadow: var(--tg-ring);
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 3px;
 }
+/* A real, glossy app icon: vivid per-service gradient fill, white glyph, a top
+ * highlight + colored cast shadow for depth. This is what makes the grid read
+ * as a home screen of apps rather than a list of monochrome squares. */
 .av-tile-icon {
   position: relative;
   flex: none;
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: var(--tg-r-xl);
-  background: var(--tg-bg-elev);
-  border: 1px solid var(--tg-line);
-  box-shadow: var(--tg-shadow-xs);
-  color: var(--tg-fg-muted);
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
+  background: linear-gradient(
+    145deg,
+    var(--app-c1, var(--tg-bg-elev)),
+    var(--app-c2, var(--tg-bg-elev))
+  );
+  color: #fff;
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.16),
+    0 8px 16px -6px color-mix(in srgb, var(--app-c2, #000) 55%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
   transition:
-    color var(--tg-dur) var(--tg-ease),
-    border-color var(--tg-dur) var(--tg-ease),
+    transform var(--tg-dur) var(--tg-ease),
     box-shadow var(--tg-dur) var(--tg-ease);
 }
 .av-tile-icon svg {
   width: 28px;
   height: 28px;
-}
-.av-tile-icon-attention {
-  border-color: color-mix(in srgb, var(--tg-warn) 45%, var(--tg-line));
+  stroke-width: 2.1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
 }
 .av-tile-dot {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 14px;
-  height: 14px;
+  top: -3px;
+  right: -3px;
+  width: 15px;
+  height: 15px;
   border-radius: var(--tg-r-full);
   background: var(--tg-warn);
-  border: 2px solid var(--tg-bg);
+  border: 2.5px solid var(--tg-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .av-tile-name {
   max-width: 100%;
   font-size: var(--tg-fs-sm);
-  font-weight: 550;
+  font-weight: 600;
   line-height: 1.3;
   color: var(--tg-fg);
   display: -webkit-box;
@@ -220,16 +229,20 @@
   overflow-wrap: anywhere;
 }
 .av-tile-skel {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--tg-r-xl);
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
 }
-/* trailing "add service" tile: a dashed-outline icon, no fill */
+/* trailing "add service" tile: a quiet dashed placeholder, clearly not an app */
 .av-tile-add .av-tile-icon {
   background: transparent;
-  border-style: dashed;
+  border: 1.5px dashed var(--tg-line-strong);
   box-shadow: none;
   color: var(--tg-fg-subtle);
+}
+.av-tile-add .av-tile-icon svg {
+  filter: none;
+  stroke-width: 2;
 }
 .av-tile-add .av-tile-name {
   color: var(--tg-fg-muted);

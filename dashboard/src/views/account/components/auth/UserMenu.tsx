@@ -4,16 +4,7 @@
  */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import {
-  Clock3,
-  CreditCard,
-  HelpCircle,
-  LogOut,
-  Plug,
-  Settings,
-  UserCircle2,
-} from "lucide-solid";
-import SpaceSwitcher from "../shell/SpaceSwitcher.tsx";
+import { Clock3, HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
   readSession,
@@ -26,10 +17,7 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../../../lib/theme.ts";
-import {
-  dashboardDocsHref,
-  isTakosumiCloudRuntime,
-} from "../../../../lib/deployment-brand.ts";
+import { dashboardDocsHref } from "../../../../lib/deployment-brand.ts";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -90,25 +78,8 @@ export default function UserMenu() {
               {(email) => <div class="user-menu-sub">{email()}</div>}
             </Show>
           </div>
-          <div class="user-menu-workspace" onClick={(e) => e.stopPropagation()}>
-            <SpaceSwitcher />
-          </div>
           <a class="user-menu-item" href="/runs" onClick={() => setOpen(false)}>
             <Clock3 size={16} /> {t("nav.runs")}
-          </a>
-          <a
-            class="user-menu-item"
-            href="/connections"
-            onClick={() => setOpen(false)}
-          >
-            <Plug size={16} /> {t("nav.connections")}
-          </a>
-          <a
-            class="user-menu-item"
-            href="/advanced/workspace"
-            onClick={() => setOpen(false)}
-          >
-            <Settings size={16} /> {t("nav.spaceSettings")}
           </a>
           <div class="user-menu-divider" />
           <a
@@ -118,15 +89,6 @@ export default function UserMenu() {
           >
             <UserCircle2 size={16} /> {t("nav.account")}
           </a>
-          <Show when={isTakosumiCloudRuntime()}>
-            <a
-              class="user-menu-item"
-              href="/billing"
-              onClick={() => setOpen(false)}
-            >
-              <CreditCard size={16} /> {t("nav.billing")}
-            </a>
-          </Show>
           <a
             class="user-menu-item"
             href={dashboardDocsHref()}
