@@ -15,6 +15,12 @@ import process from "node:process";
 export const CLOUD_EXTENSION_SMOKE_KIND =
   "takosumi.cloud-extension-smoke@v1" as const;
 
+const CLOUDFLARE_COMPAT_ACCOUNT_ID = "ts_acc_takosumi_cloud";
+const CLOUDFLARE_COMPAT_SMOKE_SCRIPT = "takosumi-smoke";
+const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${CLOUDFLARE_COMPAT_SMOKE_SCRIPT}`;
+const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
+  "export default { fetch() { return new Response('takosumi smoke'); } };";
+
 type FetchLike = typeof fetch;
 
 export interface CloudExtensionSmokeOptions {
@@ -111,8 +117,7 @@ export async function resolveOptions(
       sessionTokenSource: "file",
       outFile: args.outFile,
       json: args.json === true,
-      requireCompatMaterialization:
-        args.requireCompatMaterialization === true,
+      requireCompatMaterialization: args.requireCompatMaterialization === true,
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
       cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -130,8 +135,7 @@ export async function resolveOptions(
     sessionTokenSource: "env",
     outFile: args.outFile,
     json: args.json === true,
-    requireCompatMaterialization:
-      args.requireCompatMaterialization === true,
+    requireCompatMaterialization: args.requireCompatMaterialization === true,
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
     cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -182,8 +186,7 @@ export async function runCloudExtensionSmoke(
       expected: "authenticated AI model listing includes takosumi/default",
       headers: authHeaders,
       pass: (response, body) =>
-        response.status === 200 &&
-        modelIds(body).includes("takosumi/default"),
+        response.status === 200 && modelIds(body).includes("takosumi/default"),
       summarize: (body) => ({ modelIds: modelIds(body) }),
     }),
     await requestCheck(fetchImpl, options, {
@@ -200,7 +203,8 @@ export async function runCloudExtensionSmoke(
         response.status === 200 && choicesCount(body) > 0,
       summarize: (body) => ({
         choiceCount: choicesCount(body),
-        model: typeof record(body).model === "string" ? record(body).model : null,
+        model:
+          typeof record(body).model === "string" ? record(body).model : null,
       }),
     }),
     await requestCheck(fetchImpl, options, {
@@ -214,7 +218,8 @@ export async function runCloudExtensionSmoke(
         response.status === 200 && embeddingsCount(body) > 0,
       summarize: (body) => ({
         embeddingCount: embeddingsCount(body),
-        model: typeof record(body).model === "string" ? record(body).model : null,
+        model:
+          typeof record(body).model === "string" ? record(body).model : null,
       }),
     }),
     await requestCheck(fetchImpl, options, {
@@ -244,8 +249,9 @@ export async function runCloudExtensionSmoke(
     }),
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatScriptsListAuth",
-      path: "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/workers/scripts",
-      expected: "authenticated Cloudflare Workers scripts list compatibility succeeds",
+      path: `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts`,
+      expected:
+        "authenticated Cloudflare Workers scripts list compatibility succeeds",
       headers: authHeaders,
       pass: (response, body) =>
         response.status === 200 &&
@@ -254,11 +260,55 @@ export async function runCloudExtensionSmoke(
       summarize: summarizeCloudflareEnvelope,
     }),
     await requestCheck(fetchImpl, options, {
-      name: "cloudflareCompatScriptMaterializationAuth",
-      path: "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/workers/scripts/takosumi-smoke",
+      name: "cloudflareCompatScriptPutAuth",
+      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      method: "PUT",
       expected: options.requireCompatMaterialization
-        ? "Cloudflare Workers script materialization is implemented"
-        : "Cloudflare Workers script materialization is either implemented or explicitly fail-closed",
+        ? "Cloudflare Workers script materialization accepts a script upload"
+        : "Cloudflare Workers script materialization upload is either implemented or explicitly fail-closed",
+      headers: { ...authHeaders, "content-type": "application/javascript" },
+      bodyText: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY,
+      pass: (response, body) => {
+        if (
+          (response.status === 200 || response.status === 201) &&
+          record(body).success === true
+        ) {
+          return true;
+        }
+        return (
+          !options.requireCompatMaterialization &&
+          response.status === 501 &&
+          record(body).success === false
+        );
+      },
+      summarize: summarizeCloudflareEnvelope,
+    }),
+    await requestCheck(fetchImpl, options, {
+      name: "cloudflareCompatScriptGetAuth",
+      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      expected: options.requireCompatMaterialization
+        ? "Cloudflare Workers script materialization can read the uploaded script"
+        : "Cloudflare Workers script materialization read is either implemented or explicitly fail-closed",
+      headers: authHeaders,
+      pass: (response, body) => {
+        if (response.status === 200 && record(body).success === true) {
+          return true;
+        }
+        return (
+          !options.requireCompatMaterialization &&
+          response.status === 501 &&
+          record(body).success === false
+        );
+      },
+      summarize: summarizeCloudflareEnvelope,
+    }),
+    await requestCheck(fetchImpl, options, {
+      name: "cloudflareCompatScriptDeleteAuth",
+      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      method: "DELETE",
+      expected: options.requireCompatMaterialization
+        ? "Cloudflare Workers script materialization cleanup succeeds"
+        : "Cloudflare Workers script materialization cleanup is either implemented or explicitly fail-closed",
       headers: authHeaders,
       pass: (response, body) => {
         if (response.status === 200 && record(body).success === true) {
@@ -312,6 +362,7 @@ interface RequestCheckInput {
   readonly expected: string;
   readonly headers?: Record<string, string>;
   readonly body?: unknown;
+  readonly bodyText?: string;
   readonly pass: (response: Response, body: unknown) => boolean;
   readonly summarize: (body: unknown) => Record<string, unknown>;
 }
@@ -325,7 +376,9 @@ async function requestCheck(
   const response = await fetchImpl(`${options.url}${input.path}`, {
     method,
     headers: input.headers,
-    body: input.body === undefined ? undefined : JSON.stringify(input.body),
+    body:
+      input.bodyText ??
+      (input.body === undefined ? undefined : JSON.stringify(input.body)),
   });
   const body = await readJson(response);
   return {
@@ -344,9 +397,10 @@ function cloudExtensionGaps(
 ): string[] {
   const gaps: string[] = [];
   const materialization = checks.find(
-    (check) => check.name === "cloudflareCompatScriptMaterializationAuth",
+    (check) =>
+      check.name === "cloudflareCompatScriptPutAuth" && check.status === 501,
   );
-  if (materialization?.status === 501) {
+  if (materialization) {
     gaps.push("cloudflare_compat_materialization_not_enabled");
   }
   return gaps;
@@ -526,7 +580,9 @@ async function runSelfTest(): Promise<void> {
     return cloudflareResponse(false, null, 501, [9001]);
   });
   if (result.status !== "passed") {
-    throw new Error("self-test expected pass when compat materialization is optional");
+    throw new Error(
+      "self-test expected pass when compat materialization is optional",
+    );
   }
   if (result.gaReady) {
     throw new Error("self-test should report gaReady=false for compat stub");
@@ -535,8 +591,14 @@ async function runSelfTest(): Promise<void> {
   if (serialized.includes("sess_super_secret_value")) {
     throw new Error("self-test leaked session token in evidence result");
   }
-  if (!calls.some((call) => call.authorization === "Bearer sess_super_secret_value")) {
-    throw new Error("self-test did not send bearer token to authenticated routes");
+  if (
+    !calls.some(
+      (call) => call.authorization === "Bearer sess_super_secret_value",
+    )
+  ) {
+    throw new Error(
+      "self-test did not send bearer token to authenticated routes",
+    );
   }
   const strict = await runCloudExtensionSmoke(
     { ...options, requireCompatMaterialization: true },
@@ -562,7 +624,10 @@ function authHeaderPresent(init: RequestInit | undefined): boolean {
   );
 }
 
-function jsonResponseForSelfTest(url: URL, init: RequestInit | undefined): Response {
+function jsonResponseForSelfTest(
+  url: URL,
+  init: RequestInit | undefined,
+): Response {
   if (url.pathname === "/v1/account/session/me") {
     return jsonResponse({ subject: "tsub_selftest" }, 200);
   }
@@ -607,7 +672,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function openAiResponse(code: string, status: number): Response {
-  return jsonResponse({ error: { code, type: "invalid_request_error" } }, status);
+  return jsonResponse(
+    { error: { code, type: "invalid_request_error" } },
+    status,
+  );
 }
 
 function cloudflareResponse(
