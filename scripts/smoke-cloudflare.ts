@@ -21,8 +21,8 @@
  *
  * Run:  bun run smoke:cloudflare
  *
- * Exit 0 = the real apply→verify→destroy→verify loop passed; non-zero = a real
- * integration failure a GA must not ship with.
+ * Exit 0 = the real plan→apply→verify→destroy→verify loop passed; non-zero =
+ * a real integration failure a GA must not ship with.
  */
 import { mkdtempSync, rmSync, copyFileSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +35,7 @@ const MODULE_TF = join(
   "../providers/cloudflare/modules/cloudflare-r2-storage/module/main.tf",
 );
 const CF_API = "https://api.cloudflare.com/client/v4";
+const PLAN_FILE = "tfplan";
 
 function loadDotEnvSmoke(): void {
   const path = join(HERE, "../.env.smoke");
@@ -122,7 +123,12 @@ async function main(): Promise<void> {
   let applied = false;
   try {
     await tofu(["init", "-no-color", "-input=false"], work, env);
-    await tofu(["apply", "-no-color", "-input=false", "-auto-approve", ...vars], work, env);
+    await tofu(
+      ["plan", "-no-color", "-input=false", `-out=${PLAN_FILE}`, ...vars],
+      work,
+      env,
+    );
+    await tofu(["apply", "-no-color", "-input=false", PLAN_FILE], work, env);
     applied = true;
 
     console.log("\n▶ verifying the bucket exists via the Cloudflare API…");
@@ -151,7 +157,9 @@ async function main(): Promise<void> {
     console.error(`\n✗ Cloudflare smoke FAILED in ${((Date.now() - started) / 1000).toFixed(1)}s`);
     return;
   }
-  console.log(`\n✓ Cloudflare smoke PASSED in ${((Date.now() - started) / 1000).toFixed(1)}s — real apply/verify/destroy loop works`);
+  console.log(
+    `\n✓ Cloudflare smoke PASSED in ${((Date.now() - started) / 1000).toFixed(1)}s — real plan/apply/verify/destroy loop works`,
+  );
 }
 
 await main();
