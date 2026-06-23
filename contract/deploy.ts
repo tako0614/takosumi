@@ -15,7 +15,10 @@
  * credentials; the deploy request never carries credential material.
  */
 
-import type { PublicInstallation } from "./installations.ts";
+import type {
+  OutputAllowlistEntry,
+  PublicInstallation,
+} from "./installations.ts";
 import type { InstallationProviderConnectionBindings } from "./connections.ts";
 import type { InstallationProviderEnvBindings } from "./provider-envs.ts";
 import type { PublicRun, Run } from "./runs.ts";
@@ -33,7 +36,9 @@ export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
  * `snapshotId` is an upload-origin {@link SourceSnapshot} previously created via
  * `SPACE_UPLOADS_PATH`. `vars` becomes the InstallConfig variable mapping
  * (string values only; secret material never travels here — providers are bound
- * through Provider Connections). `providerConnections` binds required OpenTofu
+ * through Provider Connections). `outputAllowlist` is an explicit, service-side
+ * projection contract for non-secret OpenTofu outputs; omitted means no public
+ * outputs are projected. `providerConnections` binds required OpenTofu
  * providers to public Provider Connection identifiers before planning; it never
  * carries credential values.
  * `planOnly` stops after the plan Run. `autoApprove` is accepted for
@@ -47,6 +52,7 @@ export interface DeployRequest {
   readonly environment?: string;
   readonly snapshotId: string;
   readonly vars?: Readonly<Record<string, string>>;
+  readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerConnections?: InstallationProviderConnectionBindings;
   readonly planOnly?: boolean;
   readonly autoApprove?: boolean;

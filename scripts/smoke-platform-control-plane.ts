@@ -920,6 +920,10 @@ async function deploySnapshot(
         appName: options.appName,
         workersSubdomain: options.cloudflareWorkersSubdomain,
       },
+      outputAllowlist: {
+        worker_name: { from: "worker_name", type: "string", required: true },
+        url: { from: "url", type: "url", required: true },
+      },
       providerConnections: [
         {
           provider: "cloudflare",
@@ -1284,10 +1288,14 @@ async function assertDeploymentLedger(
   });
   const installation = installationResponse.installation;
   if (!installation) {
-    throw new Error("installation ledger response did not include installation");
+    throw new Error(
+      "installation ledger response did not include installation",
+    );
   }
   if (installation.id !== input.installationId) {
-    throw new Error("installation ledger returned an unexpected installation id");
+    throw new Error(
+      "installation ledger returned an unexpected installation id",
+    );
   }
   if (installation.spaceId !== input.spaceId) {
     throw new Error("installation ledger returned an unexpected Workspace id");
@@ -1361,26 +1369,33 @@ async function assertDeploymentLedger(
     !Number.isInteger(deployment.stateGeneration) ||
     deployment.stateGeneration !== currentStateGeneration
   ) {
-    throw new Error("deployment ledger state generation did not match installation");
+    throw new Error(
+      "deployment ledger state generation did not match installation",
+    );
   }
   const stateGeneration = deployment.stateGeneration;
   const outputsPublic = deployment.outputsPublic;
   if (!isRecord(outputsPublic)) {
     throw new Error("deployment ledger did not expose outputsPublic");
   }
-  if (
-    outputsPublic.worker_name !== undefined &&
-    outputsPublic.worker_name !== options.appName
-  ) {
-    throw new Error("deployment outputsPublic.worker_name did not match appName");
+  if (outputsPublic.worker_name !== options.appName) {
+    throw new Error(
+      "deployment outputsPublic.worker_name did not match appName",
+    );
   }
-  if (
-    outputsPublic.url !== undefined &&
-    outputsPublic.url !== publicWorkerUrl(options)
-  ) {
-    throw new Error("deployment outputsPublic.url did not match public Worker URL");
+  if (outputsPublic.url !== publicWorkerUrl(options)) {
+    throw new Error(
+      "deployment outputsPublic.url did not match public Worker URL",
+    );
   }
   const publicOutputNames = Object.keys(outputsPublic).sort();
+  for (const required of ["url", "worker_name"]) {
+    if (!publicOutputNames.includes(required)) {
+      throw new Error(
+        `deployment outputsPublic did not include required output ${required}`,
+      );
+    }
+  }
   return {
     installationStatus: installation.status,
     deploymentId,
@@ -1800,9 +1815,7 @@ async function runSelfTest(): Promise<void> {
   );
   const result = dryRunResult(options);
   const serialized = JSON.stringify(result);
-  const tempRoot = await mkdtemp(
-    resolve(tmpdir(), "takosumi-platform-smoke-"),
-  );
+  const tempRoot = await mkdtemp(resolve(tmpdir(), "takosumi-platform-smoke-"));
   try {
     const outFile = resolve(tempRoot, "nested/smoke.json");
     await writeResultFile(outFile, result);

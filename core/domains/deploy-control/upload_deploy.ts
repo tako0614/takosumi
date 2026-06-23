@@ -83,13 +83,20 @@ export async function deployUpload(
     }
     installConfigId = installation.installConfigId;
     // Re-deploy: refresh the variable mapping from the new request vars.
-    await refreshInstallConfigVars(deps, installConfigId, request.vars, now);
+    await refreshInstallConfigVars(
+      deps,
+      installConfigId,
+      request.vars,
+      request.outputAllowlist,
+      now,
+    );
   } else {
     const config = buildDefaultInstallConfig({
       id: newId("icfg"),
       spaceId: request.spaceId,
       name: request.name,
       vars: request.vars,
+      outputAllowlist: request.outputAllowlist,
       now,
     });
     await deps.installations.putInstallConfig(config);
@@ -204,12 +211,14 @@ async function refreshInstallConfigVars(
   deps: DeployUploadDependencies,
   installConfigId: string,
   vars: Readonly<Record<string, string>> | undefined,
+  outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
   now: () => Date,
 ): Promise<void> {
   const existing = await deps.installations.getInstallConfig(installConfigId);
   await deps.installations.putInstallConfig({
     ...existing,
     variableMapping: { ...(vars ?? {}) },
+    ...(outputAllowlist !== undefined ? { outputAllowlist } : {}),
     updatedAt: now().toISOString(),
   });
 }
@@ -219,6 +228,9 @@ function buildDefaultInstallConfig(input: {
   readonly spaceId: string;
   readonly name: string;
   readonly vars: Readonly<Record<string, string>> | undefined;
+  readonly outputAllowlist:
+    | InternalDeployRequest["outputAllowlist"]
+    | undefined;
   readonly now: () => Date;
 }): InstallConfig {
   const nowIso = input.now().toISOString();
@@ -236,7 +248,7 @@ function buildDefaultInstallConfig(input: {
       allowAliasInjection: true,
     },
     variableMapping: { ...(input.vars ?? {}) },
-    outputAllowlist: {},
+    outputAllowlist: input.outputAllowlist ?? {},
     policy: {},
     createdAt: nowIso,
     updatedAt: nowIso,
