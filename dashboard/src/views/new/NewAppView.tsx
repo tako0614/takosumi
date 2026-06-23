@@ -1282,6 +1282,7 @@ function Inner() {
     return (
       installations.find(
         (installation) =>
+          installation.status !== "destroyed" &&
           installation.name === installationName &&
           installation.environment === environment,
       ) ?? null
