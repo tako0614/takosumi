@@ -94,7 +94,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
     configs
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined),
-  ).toEqual([90, 30, 20, 40]);
+  ).toEqual([10, 30, 90, 40]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -109,8 +109,14 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(hello?.catalog?.inputs.map((input) => input.name)).toContain(
     "workersSubdomain",
   );
-  expect(hello?.catalog?.name.ja).toContain("Webアプリ");
-  expect(hello?.catalog?.surface).toBe("example");
+  expect(hello?.catalog?.name.ja).toBe("Webアプリを公開");
+  expect(hello?.catalog?.surface).toBe("service");
+
+  const site = configs.find(
+    (config) => config.catalog?.templateId === "cloudflare-static-site",
+  );
+  expect(site?.catalog?.surface).toBe("example");
+  expect(site?.catalog?.name.en).toBe("Create a Pages site");
 
   const hidden = configs.find((config) => config.name === "core");
   expect(hidden?.catalog).toBeUndefined();

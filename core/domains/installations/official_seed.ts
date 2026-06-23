@@ -102,16 +102,16 @@ interface OfficialCatalogSpec {
 const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   "cloudflare-hello-worker": {
     sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
-    order: 90,
-    surface: "example",
+    order: 10,
+    surface: "service",
     kind: "worker",
     provider: "cloudflare",
     suggestedName: "web-app",
     badge: text("Webアプリ", "Web app"),
-    name: text("小さなWebアプリを公開", "Deploy a tiny web app"),
+    name: text("Webアプリを公開", "Publish a web app"),
     description: text(
-      "すぐ開ける小さなWebアプリと公開URLを作ります。",
-      "Creates a tiny browser-openable web app with a public URL.",
+      "ブラウザで開けるWebアプリと公開URLを用意します。",
+      "Creates a browser-openable web app with a public URL.",
     ),
     inputs: [
       {
@@ -201,16 +201,16 @@ const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   },
   "cloudflare-static-site": {
     sourcePath: "providers/cloudflare/modules/cloudflare-static-site/module",
-    order: 20,
-    surface: "service",
+    order: 90,
+    surface: "example",
     kind: "site",
     provider: "cloudflare",
     suggestedName: "website",
-    badge: text("Webサイト", "Website"),
-    name: text("Webサイトを公開", "Publish a website"),
+    badge: text("Pages", "Pages"),
+    name: text("Pagesサイトを作成", "Create a Pages site"),
     description: text(
-      "HTMLや画像を置いて公開できるWebサイトを用意します。",
-      "Creates a website for publishing HTML and assets.",
+      "Cloudflare Pages projectを作る取得元付きサイトの例です。",
+      "Example source-backed site that creates a Cloudflare Pages project.",
     ),
     inputs: [
       {
