@@ -886,6 +886,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.plans.none": "No plans are offered right now.",
   "billing.plans.nonRefundable":
     "Credits are final — purchases are non-refundable.",
+  "billing.plans.disabled":
+    "Purchases are not open for this workspace right now. The operator will enable billing when it is ready.",
   "billing.plans.subscribe": "Choose this plan",
   "billing.plans.perMonth": "{n} credits per month",
   "billing.packs.title": "Credit packs",
