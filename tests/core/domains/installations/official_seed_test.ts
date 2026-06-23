@@ -27,6 +27,10 @@ test("officialInstallConfigs seeds the generic Capsule default + first-party tem
   expect(generic?.sourceKind).toBe("generic_capsule");
   expect(generic?.templateBinding).toBeUndefined();
   expect(generic?.trustLevel).toBe("trusted");
+  expect(generic?.outputAllowlist).toEqual({
+    url: { from: "url", type: "string" },
+    worker_name: { from: "worker_name", type: "string" },
+  });
   for (const config of configs) {
     expect(config.spaceId).toBeUndefined();
     expect(config.createdAt).toBe("2026-06-06T00:00:00.000Z");
