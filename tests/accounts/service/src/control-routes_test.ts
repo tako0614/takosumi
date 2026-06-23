@@ -3569,6 +3569,48 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
   expect(text).not.toContain("SNOWFLAKE_PASSWORD");
 });
 
+test("Connections create: honors explicit generic env for guided providers", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "cloudflare",
+      kind: "generic_env_provider",
+      credentialDriver: "generic_env",
+      values: {
+        CLOUDFLARE_API_TOKEN: "cf-secret-token",
+        CLOUDFLARE_ACCOUNT_ID: "acct",
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    scope?: string;
+    values?: Record<string, string>;
+  };
+  expect(passed.provider).toEqual("cloudflare");
+  expect(passed.kind).toEqual("generic_env_provider");
+  expect(passed.credentialDriver).toEqual("generic_env");
+  expect(passed.scope).toEqual("space");
+
+  const text = await response!.text();
+  expect(text).not.toContain("cf-secret-token");
+});
+
 test("Connections create: requires spaceId and values", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

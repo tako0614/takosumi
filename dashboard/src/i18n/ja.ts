@@ -37,9 +37,11 @@ export const ja = {
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "サービス",
+  "nav.apps": "アプリ",
+  "nav.services": "サービス",
   "nav.add": "追加",
   "nav.runs": "更新履歴",
-  "nav.connections": "クラウドアカウント",
+  "nav.connections": "Provider アクセス",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
   "nav.manage": "管理",
@@ -170,7 +172,7 @@ export const ja = {
   "op.generic": "操作",
 
   // --- Service list (home) --------------------------------------------------
-  "apps.title": "サービス",
+  "apps.title": "アプリ",
   "apps.subtitle": "追加したサービスを開けます。",
   "apps.add": "サービスを追加",
   "apps.attention": "要対応が {n} 件あります",
@@ -187,6 +189,18 @@ export const ja = {
   "apps.start.bodyEmpty": "おすすめから選ぶか、リンクを貼って追加します。",
   "apps.start.optionCatalog": "追加する",
   "apps.start.optionCatalogSub": "おすすめやリンクから追加できます。",
+  "apps.empty.aria": "アプリがありません",
+  "apps.empty.kicker": "まだアプリがありません",
+  "apps.empty.title": "開けるアプリがありません",
+  "apps.empty.body":
+    "アプリ画面を宣言したサービスがまだありません。サービス一覧から状態を確認できます。",
+  "apps.empty.viewServices": "サービス一覧を見る",
+
+  // --- Service list (/services) --------------------------------------------
+  "services.title": "サービス",
+  "services.subtitle": "すべてのサービスと状態。選ぶと詳細へ。",
+  "services.empty.title": "まだサービスがありません",
+  "services.empty.body": "サービスを追加するとここに表示されます。",
 
   // --- Service detail ------------------------------------------------------
   "app.installationSub": "サービス",
@@ -244,21 +258,20 @@ export const ja = {
   "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
-  "app.bindings.title": "クラウドアカウント",
+  "app.bindings.title": "Provider アクセス",
   "app.bindings.subtitle":
-    "このサービスが使えるクラウドアカウントです。通常は変更不要です。",
-  "app.bindings.none": "クラウドアカウントは紐づいていません。",
-  "app.bindings.editAdvanced": "クラウドアカウントの割り当てを変更",
-  "app.bindings.add": "クラウドアカウントを追加",
-  "app.bindings.providerPlaceholder": "クラウドサービス",
+    "このサービスが使える Provider credential です。通常は変更不要です。",
+  "app.bindings.none": "Provider アクセスは紐づいていません。",
+  "app.bindings.editAdvanced": "Provider アクセスの割り当てを変更",
+  "app.bindings.add": "Provider アクセスを追加",
+  "app.bindings.providerPlaceholder": "Provider",
   "app.bindings.aliasPlaceholder": "対象名（任意）",
-  "app.bindings.selectConnection": "クラウドアカウントを選択",
+  "app.bindings.selectConnection": "Provider アクセスを選択",
   "app.bindings.technicalTarget": "技術的な対象",
   "app.bindings.remove": "削除",
-  "app.bindings.errorProvider":
-    "{index} 行目のクラウドサービスを入力してください。",
+  "app.bindings.errorProvider": "{index} 行目の Provider を入力してください。",
   "app.bindings.errorConnection":
-    "{provider} の利用可能なクラウドアカウントを選択してください。",
+    "{provider} の利用可能な Provider アクセスを選択してください。",
   "app.settings.removeTitle": "このサービスを削除しますか？",
   "app.settings.removeBody":
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
@@ -357,17 +370,17 @@ export const ja = {
   "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
-  "run.connections.title": "クラウドアカウント",
-  "run.connections.reviewTitle": "クラウドアカウントの確認が必要です",
+  "run.connections.title": "Provider アクセス",
+  "run.connections.reviewTitle": "Provider アクセスの確認が必要です",
   "run.connections.reviewBody":
-    "続行する前に確認が必要なクラウドアカウントがあります。非公開の値は表示しません。",
-  "run.connections.provider": "クラウドサービス",
-  "run.connections.connection": "クラウドアカウント",
+    "続行する前に確認が必要な Provider アクセスがあります。非公開の値は表示しません。",
+  "run.connections.provider": "Provider",
+  "run.connections.connection": "アクセス",
   "run.connections.status": "状態",
   "run.connections.statusResolved": "利用できます",
-  "run.connections.statusMissing": "アカウントが必要",
+  "run.connections.statusMissing": "アクセスが必要",
   "run.connections.statusBlocked": "ポリシーで停止",
-  "run.connections.empty": "クラウドアカウントの確認情報はありません。",
+  "run.connections.empty": "Provider アクセスの確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
   "run.diag.severity.error": "エラー",
@@ -400,7 +413,7 @@ export const ja = {
   "new.store.empty.title": "追加できるサービスがありません",
   "new.store.empty.message": "リンクから追加できます。",
   "new.advancedImport.open": "その他のリンクから追加",
-  "new.advancedImport.close": "一覧に戻る",
+  "new.advancedImport.close": "おすすめから選ぶ",
   "new.advancedImport.title": "リンクから追加",
   "new.advancedImport.subtitle": "インストールリンクを貼り付けて追加します。",
   "new.selection.subtitle":
@@ -465,7 +478,7 @@ export const ja = {
   "new.vars.errorNameRequired":
     "変数名を入力するか、空の行を削除してください。",
   "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力値として渡せません。非公開の値はクラウドアカウントから渡してください。",
+    "「{name}」はリンク/入力値として渡せません。非公開の値は Provider アクセスから渡してください。",
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
@@ -496,7 +509,7 @@ export const ja = {
   "new.compat.diagnostic.technicalNote":
     "技術的な詳細です。対応が必要な場合は、表示された内容を確認してください。",
   "new.compat.patchHelp":
-    "表示された内容を確認してください。アプリ側の修正が必要な場合と、クラウドアカウントの設定で進められる場合があります。",
+    "表示された内容を確認してください。アプリ側の修正が必要な場合と、Provider アクセスの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.reviewRequired":
@@ -504,11 +517,11 @@ export const ja = {
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、{provider} のクラウドアカウントからデプロイ時だけ渡してください。値を外してアカウントを接続すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、{provider} の Provider アクセスからデプロイ時だけ渡してください。値を外してアクセスを接続すると続行できます。",
   "new.compat.issue.providerLift.message":
-    "{provider} のアカウント設定は、非公開値を外せば安全な実行用設定として扱えます。",
+    "{provider} の Provider 設定は、非公開値を外せば安全な実行用設定として扱えます。",
   "new.compat.issue.lockfile.message":
-    "利用するクラウドサービスの固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
+    "利用する Provider の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認する",
@@ -517,16 +530,16 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "使うクラウドアカウント",
+  "new.providers.title": "使う Provider アクセス",
   "new.providers.alias": "対象: {alias}",
-  "new.providers.selectConnection": "クラウドアカウントを選択",
+  "new.providers.selectConnection": "Provider アクセスを選択",
   "new.providers.errorConnection":
-    "{provider} の利用可能なクラウドアカウントを選択してください。",
-  "new.providers.missingTitle": "クラウドアカウントの設定が必要です",
-  "new.providers.missingBody": "クラウドアカウントを設定すると続けられます。",
-  "new.providers.setupMissing": "必要なクラウドアカウントを設定",
+    "{provider} の利用可能な Provider アクセスを選択してください。",
+  "new.providers.missingTitle": "Provider アクセスの設定が必要です",
+  "new.providers.missingBody": "Provider アクセスを設定すると続けられます。",
+  "new.providers.setupMissing": "必要な Provider アクセスを設定",
   "new.providers.returnNote":
-    "クラウドアカウントを接続すると、この追加の続きに戻ります。",
+    "Provider アクセスを接続すると、この追加の続きに戻ります。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
@@ -607,8 +620,8 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "このチームがホスト先として使うクラウドアカウントを接続します。",
-  "conn.providerConnections.title": "クラウドアカウント",
+    "このチームがホスト先として使う Provider アクセスを接続します。",
+  "conn.providerConnections.title": "Provider アクセス",
   "conn.providerConnections.provider": "サービス",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
@@ -617,18 +630,18 @@ export const ja = {
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
   "conn.return.subtitle":
-    "クラウドアカウントを保存してから、サービス追加の続きに戻ります。",
+    "Provider アクセスを保存してから、サービス追加の続きに戻ります。",
   "conn.return.cta": "サービス追加に戻る",
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest":
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
-  "conn.add.title": "クラウドアカウントを接続",
-  "conn.add.open": "クラウドアカウントを追加",
+  "conn.add.title": "Provider アクセスを接続",
+  "conn.add.open": "Provider アクセスを追加",
   "conn.add.close": "閉じる",
-  "conn.add.provider": "クラウドサービス",
-  "conn.add.genericEnvOption": "カスタムサービス",
+  "conn.add.provider": "Provider",
+  "conn.add.genericEnvOption": "任意の OpenTofu provider",
   "conn.add.optionalSettings": "このアカウントに名前をつける",
   "conn.add.displayName": "アカウント名",
   "conn.add.displayNamePlaceholder": "任意の名前",
@@ -691,37 +704,33 @@ export const ja = {
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "アカウントを保存",
   "conn.guided.connecting": "接続中...",
-  "conn.custom.summary": "その他のOpenTofu provider",
-  "conn.custom.body": "一覧にないサービスのアクセス情報を保存します。",
-  "conn.custom.use": "カスタムサービスを追加",
-  "conn.custom.back": "クラウドサービスに戻る",
+  "conn.custom.back": "案内付き Provider を使う",
   "conn.advanced.summary": "アクセス情報を入力",
   "conn.advanced.register": "アクセス情報を保存",
   "conn.register": "アカウントを保存",
   "conn.registering": "保存中...",
-  "conn.genericEnv.providerName": "OpenTofu provider",
+  "conn.genericEnv.option": "任意の OpenTofu provider",
+  "conn.genericEnv.providerName": "Provider source",
   "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
-  "conn.genericEnv.envName": "環境変数名",
+  "conn.genericEnv.envName": "env 名",
   "conn.genericEnv.envNamePlaceholder": "SNOWFLAKE_PASSWORD",
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "値を追加",
   "conn.genericEnv.providerRequired": "OpenTofu provider を入力してください。",
-  "conn.genericEnv.cloudflareGuided":
-    "Cloudflare は上のプロバイダから登録してください（専用フローがあります）。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
-  "conn.error.invalidProvider": "クラウドサービスが不正です。",
+  "conn.error.invalidProvider": "Provider が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "クラウドアカウントはまだありません",
+  "conn.empty.title": "Provider アクセスはまだありません",
   "conn.empty.message":
-    "サービスがクラウドを使うときに、必要なアカウントを追加します。",
+    "サービスが Provider credential を必要とするときに追加します。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
     "このアカウントはまだ利用できません（状態: {status}）。",
-  "conn.remove.confirmTitle": "クラウドアカウントを削除",
+  "conn.remove.confirmTitle": "Provider アクセスを削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
 
@@ -806,11 +815,11 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated": "クラウドアカウント「{provider}」を追加しました",
-  "notif.event.connCreatedGeneric": "クラウドアカウントを追加しました",
+  "notif.event.connCreated": "Provider アクセス「{provider}」を追加しました",
+  "notif.event.connCreatedGeneric": "Provider アクセスを追加しました",
   "notif.event.connRevoked":
-    "クラウドアカウント「{provider}」が無効になりました",
-  "notif.event.connRevokedGeneric": "クラウドアカウントが無効になりました",
+    "Provider アクセス「{provider}」が無効になりました",
+  "notif.event.connRevokedGeneric": "Provider アクセスが無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
   "notif.event.depCreated": "サービス間の連携を追加しました",
   "notif.event.depDeleted": "サービス間の連携を解除しました",

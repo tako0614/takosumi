@@ -531,18 +531,38 @@ function validManifest(): any {
       },
       providerCatalog: {
         evidenceRef:
-          "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-catalog.md",
+          "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
         evidenceDigest:
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Production Provider Catalog returned only own-key provider metadata and no Cloud-only Gateway or secret projection.",
+          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only Gateway or secret projection.",
         providers: [
-          { id: "aws", ownershipOptions: ["own_key"] },
-          { id: "cloudflare", ownershipOptions: ["own_key"] },
-          { id: "gcp", ownershipOptions: ["own_key"] },
-          { id: "github", ownershipOptions: ["own_key"] },
-          { id: "kubernetes", ownershipOptions: ["own_key"] },
+          {
+            id: "aws",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "cloudflare",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "gcp",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "github",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
+          {
+            id: "kubernetes",
+            connectionModes: ["provider_connection"],
+            genericEnvSupported: true,
+          },
         ],
         cloudOnlyGatewayProjectionReturned: false,
         secretValuesReturned: false,

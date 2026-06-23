@@ -41,12 +41,11 @@ export interface CapsuleCompatibilityAnalyzer {
   ): Promise<CapsuleCompatibilityAnalysis>;
 }
 
-// The provider runtime-allowlist seed. The cloudflare + aws entries derive from
-// the @takosumi/providers registry (single source of truth for their OpenTofu
-// provider addresses) in both fully-qualified and short `<ns>/<name>` forms;
-// random + tls are benign local-material helper providers the registry does not
-// manage, so they stay as explicit allowlist literals.
-function defaultAllowedProviders(): ReadonlySet<string> {
+// First-class Provider Connection recipe seed. This is deliberately not the
+// provider boundary: catalog entries give guided setup, while generic-env
+// Provider Connections let any normal OpenTofu provider source run when the
+// runner / mirror / egress policy permits it.
+function defaultGuidedProviderSources(): ReadonlySet<string> {
   const seed = new Set<string>();
   for (const id of ["cloudflare", "aws"]) {
     for (const address of providerById(id)?.providerAddresses ?? []) {
@@ -61,7 +60,7 @@ function defaultAllowedProviders(): ReadonlySet<string> {
   return seed;
 }
 
-const DEFAULT_ALLOWED_PROVIDERS = defaultAllowedProviders();
+const DEFAULT_GUIDED_PROVIDER_SOURCES = defaultGuidedProviderSources();
 
 // Default instance-wide resource-type allowlist (Core Specification §29 policy
 // layer "resource-type allowlist"). The managed Takosumi default deliberately
@@ -101,6 +100,14 @@ const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
   "aws_s3_bucket_public_access_block",
   "random_id",
   "tls_private_key",
+]);
+
+const DEFAULT_DENIED_RESOURCE_TYPES = new Set([
+  "cloudflare_dns_record",
+  "cloudflare_workers_route",
+  "cloudflare_zone",
+  "cloudflare_account",
+  "cloudflare_account_member",
 ]);
 
 const DEFAULT_ALLOWED_DATA_SOURCE_TYPES = new Set(["terraform_remote_state"]);
@@ -164,6 +171,7 @@ export function analyzeOpenTofuCapsuleFiles(
   }
 
   const providerAllowlist = allowedProviderSet(input.policy);
+  const explicitProviderAllowlist = explicitAllowedProviderSet(input.policy);
   const resourceAllowlist = allowedSet(
     DEFAULT_ALLOWED_RESOURCE_TYPES,
     input.policy?.allowedResourceTypes,
@@ -212,7 +220,18 @@ export function analyzeOpenTofuCapsuleFiles(
         code: "provider_not_allowed",
         message: `Provider ${provider.source} is not allowed by policy.`,
         suggestion:
-          "Use an allowed provider or update the Space/InstallConfig provider policy.",
+          "Use a fully qualified OpenTofu provider source such as namespace/name or registry.opentofu.org/namespace/name.",
+      });
+    } else if (
+      !isGuidedProviderSource(provider.source) &&
+      !providerInSet(provider.source, explicitProviderAllowlist)
+    ) {
+      findings.push({
+        severity: "info",
+        code: "generic_provider_connection_required",
+        message: `Provider ${provider.source} will use an explicit Provider Connection.`,
+        suggestion:
+          "Create a Provider Connection with the env/file names documented by that OpenTofu provider.",
       });
     }
   }
@@ -582,7 +601,7 @@ function collectResources(
     .map(([type, count]) => ({
       type,
       count,
-      allowed: allowedResources.has(type),
+      allowed: resourceTypeAllowed(type, allowedResources),
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 }
@@ -720,10 +739,54 @@ function providerAllowed(
   source: string,
   allowedProviders: ReadonlySet<string>,
 ): boolean {
+  return (
+    providerInSet(source, allowedProviders) ||
+    isQualifiedProviderSource(source) ||
+    isQualifiedProviderSource(
+      source.startsWith("registry.opentofu.org/")
+        ? source
+        : `registry.opentofu.org/${source}`,
+    )
+  );
+}
+
+function providerInSet(
+  source: string,
+  providers: ReadonlySet<string>,
+): boolean {
   const normalized = source.startsWith("registry.opentofu.org/")
     ? source
     : `registry.opentofu.org/${source}`;
-  return allowedProviders.has(source) || allowedProviders.has(normalized);
+  return providers.has(source) || providers.has(normalized);
+}
+
+function isGuidedProviderSource(source: string): boolean {
+  const normalized = source.startsWith("registry.opentofu.org/")
+    ? source
+    : `registry.opentofu.org/${source}`;
+  return (
+    DEFAULT_GUIDED_PROVIDER_SOURCES.has(source) ||
+    DEFAULT_GUIDED_PROVIDER_SOURCES.has(normalized)
+  );
+}
+
+function isQualifiedProviderSource(source: string): boolean {
+  const body = source.startsWith("registry.opentofu.org/")
+    ? source.slice("registry.opentofu.org/".length)
+    : source;
+  const parts = body.split("/");
+  return (
+    parts.length === 2 &&
+    parts.every((part) => /^[a-z0-9][a-z0-9_-]*$/i.test(part))
+  );
+}
+
+function resourceTypeAllowed(
+  type: string,
+  allowedResources: ReadonlySet<string>,
+): boolean {
+  if (allowedResources.has(type)) return true;
+  return !DEFAULT_DENIED_RESOURCE_TYPES.has(type);
 }
 
 function allowedSet(
@@ -737,9 +800,25 @@ function allowedSet(
 function allowedProviderSet(
   policy: PolicyConfig | undefined,
 ): ReadonlySet<string> {
-  if (policy?.allowedProviders === undefined) return DEFAULT_ALLOWED_PROVIDERS;
-  const providers = new Set(DEFAULT_ALLOWED_PROVIDERS);
+  if (policy?.allowedProviders === undefined)
+    return DEFAULT_GUIDED_PROVIDER_SOURCES;
+  const providers = new Set(DEFAULT_GUIDED_PROVIDER_SOURCES);
   for (const provider of policy.allowedProviders) {
+    providers.add(provider);
+    providers.add(
+      provider.startsWith("registry.opentofu.org/")
+        ? provider
+        : `registry.opentofu.org/${provider}`,
+    );
+  }
+  return providers;
+}
+
+function explicitAllowedProviderSet(
+  policy: PolicyConfig | undefined,
+): ReadonlySet<string> {
+  const providers = new Set<string>();
+  for (const provider of policy?.allowedProviders ?? []) {
     providers.add(provider);
     providers.add(
       provider.startsWith("registry.opentofu.org/")

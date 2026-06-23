@@ -3481,6 +3481,10 @@ async function createControlConnection(
   const requestedKind = stringValue(body.kind);
   const sourceGitKind =
     requestedKind === "source_git_https_token" ? requestedKind : undefined;
+  const requestedCredentialDriver = stringValue(body.credentialDriver);
+  const requestedGenericEnv =
+    requestedKind === "generic_env_provider" ||
+    requestedCredentialDriver === "generic_env";
   const provider = sourceGitKind
     ? sourceGitKind
     : (stringValue(body.provider) ?? "cloudflare");
@@ -3508,20 +3512,24 @@ async function createControlConnection(
     provider: normalizedProvider,
     credentialDriver: sourceGitKind
       ? "static_secret"
-      : normalizedProvider === "cloudflare"
-        ? "cloudflare_api_token"
-        : normalizedProvider === "google"
-          ? "gcp_service_account_json"
-          : "generic_env",
+      : requestedGenericEnv
+        ? "generic_env"
+        : normalizedProvider === "cloudflare"
+          ? "cloudflare_api_token"
+          : normalizedProvider === "google"
+            ? "gcp_service_account_json"
+            : "generic_env",
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.
     kind: sourceGitKind
       ? sourceGitKind
-      : normalizedProvider === "cloudflare"
-        ? "cloudflare_api_token"
-        : normalizedProvider === "google"
-          ? "gcp_service_account_json"
-          : "generic_env_provider",
+      : requestedGenericEnv
+        ? "generic_env_provider"
+        : normalizedProvider === "cloudflare"
+          ? "cloudflare_api_token"
+          : normalizedProvider === "google"
+            ? "gcp_service_account_json"
+            : "generic_env_provider",
     authMethod: "static_secret",
     // Force Space scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
