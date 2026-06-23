@@ -353,6 +353,36 @@ test("POST /internal/v1/connections/generic-env-provider registers an own-key Pr
   expect(payload.connection.envNames).toEqual(["GITHUB_TOKEN"]);
 });
 
+test("POST /internal/v1/connections/generic-env-provider registers an arbitrary OpenTofu provider recipe", async () => {
+  const app = await makeApp();
+  const provider = "registry.opentofu.org/snowflake-labs/snowflake";
+  const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: SPACE_ID,
+      provider,
+      displayName: "Snowflake",
+      values: {
+        SNOWFLAKE_ACCOUNT: "account",
+        SNOWFLAKE_USER: "user",
+        SNOWFLAKE_PASSWORD: "snowflake-secret",
+      },
+    }),
+  });
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("snowflake-secret");
+  const payload = JSON.parse(text);
+  expect(payload.connection.provider).toBe(provider);
+  expect(payload.connection.kind).toBe("generic_env_provider");
+  expect(payload.connection.envNames).toEqual([
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_USER",
+  ]);
+});
+
 test("POST /internal/v1/connections/generic-env-provider rejects operator scope", async () => {
   const app = await makeApp();
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {

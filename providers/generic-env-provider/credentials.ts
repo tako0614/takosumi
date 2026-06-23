@@ -2,9 +2,11 @@
  * Secret-backed generic-env provider connection driver (provider-agnostic).
  *
  * A generic-env provider Connection (`kind: "generic_env_provider"`) carries
- * write-only provider env values for arbitrary OpenTofu providers. There is no
- * per-provider arg mapping: each declared variable is passed straight through
- * to the generated root as `TF_VAR_<name>`.
+ * write-only provider env values for arbitrary OpenTofu providers. Known
+ * providers can still use built-in env allowlists; unknown providers use the
+ * connection's own `envNames` as the declared recipe. There is no per-provider
+ * arg mapping: each declared variable is passed straight through to the
+ * generated root as `TF_VAR_<name>`.
  *
  * This driver is the extracted, self-contained form of the vault's
  * `#mintCustomProviderVariables` logic. The crypto / secret-opening stays in
@@ -78,12 +80,12 @@ export function mintGenericEnvProviderVariables(
       `generic-env provider connection ${connection.id} must be Space-scoped`,
     );
   }
-  if (!providerEnvRule(connection.provider)) {
-    throw new GenericEnvProviderDriverError(
-      `generic-env provider connection ${connection.id} provider ${connection.provider} has no explicit env allowlist`,
-    );
-  }
-  const allowed = new Set(allowedEnvNamesForProvider(connection.provider));
+  const rule = providerEnvRule(connection.provider);
+  const allowed = new Set(
+    rule
+      ? allowedEnvNamesForProvider(connection.provider)
+      : connection.envNames,
+  );
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(values)) {
     if (typeof value !== "string") continue;

@@ -1718,6 +1718,8 @@ export async function listProviderConnections(
 export async function createConnection(input: {
   readonly spaceId: string;
   readonly provider: string;
+  readonly kind?: string;
+  readonly credentialDriver?: string;
   readonly displayName?: string;
   readonly scopeHints?: ConnectionScopeHints;
   readonly values: Readonly<Record<string, string>>;
@@ -1729,6 +1731,10 @@ export async function createConnection(input: {
       body: {
         spaceId: input.spaceId,
         provider: input.provider,
+        ...(input.kind ? { kind: input.kind } : {}),
+        ...(input.credentialDriver
+          ? { credentialDriver: input.credentialDriver }
+          : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
         ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         values: input.values,

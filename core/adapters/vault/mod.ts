@@ -370,10 +370,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         ? validateGenericEnvProviderInput(input)
         : undefined;
     const rule = providerEnvRule(input.provider);
-    if (!rule) {
+    if (!rule && !genericEnvRegistration) {
       throw new ConnectionVaultError(
         "failed_precondition",
-        `generic-env provider ${input.provider} has no explicit env allowlist`,
+        `provider ${input.provider} has no built-in Credential Recipe; use a generic_env_provider Connection with explicit env names`,
       );
     }
     let values = genericEnvRegistration?.values ?? input.values;
@@ -390,7 +390,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (isGcpServiceAccountJsonRegistration(input)) {
       values = normalizeGcpServiceAccountJsonValues(input, values);
     }
-    const allowed = new Set(allowedEnvNamesForProvider(input.provider));
     const envNames = genericEnvRegistration?.envNames ?? Object.keys(values);
     if (envNames.length === 0) {
       throw new ConnectionVaultError(
@@ -398,6 +397,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "values must supply at least one env name",
       );
     }
+    const allowed = new Set(
+      rule
+        ? allowedEnvNamesForProvider(input.provider)
+        : genericEnvRegistration?.envNames ?? [],
+    );
     for (const envName of envNames) {
       if (!allowed.has(envName)) {
         throw new ConnectionVaultError(
@@ -412,7 +416,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         );
       }
     }
-    if (!requiredEnvGroupsSatisfied(input.provider, envNames)) {
+    if (rule && !requiredEnvGroupsSatisfied(input.provider, envNames)) {
       throw new ConnectionVaultError(
         "invalid_argument",
         `provider ${input.provider} requires one of these env-name groups`,
@@ -699,13 +703,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const env: Record<string, string> = {};
     const evidence: ProviderCredentialMintEvidence[] = [];
     for (const provider of providers) {
-      const rule = providerEnvRule(provider);
-      if (!rule) {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          `unknown provider ${provider}`,
-        );
-      }
       const match = selectConnectionForProvider(
         connections,
         provider,

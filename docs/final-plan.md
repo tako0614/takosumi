@@ -206,6 +206,11 @@ OpenStack:    terraform-provider-openstack/openstack
 S3-compatible: hashicorp/aws with endpoint override
 ```
 
+This list is not a product boundary. It is a set of first-class recipes and UI
+helpers. Any OpenTofu/Terraform provider can be used when an operator runner
+profile permits the provider source and egress, and the user registers a
+Provider Connection with explicit env/file names.
+
 Takosumi manages the control plane around those providers:
 
 ```text
@@ -439,13 +444,14 @@ connections:
     values:
       project_id: my-project
 
-  generic-api:
-    provider: generic-env
+  snowflake-main:
+    provider: registry.opentofu.org/snowflake-labs/snowflake
     auth_type: env
     secrets:
-      CUSTOM_API_TOKEN: sec_custom_api_token
+      SNOWFLAKE_PASSWORD: sec_snowflake_password
     values:
-      CUSTOM_ENDPOINT: https://api.example.com
+      SNOWFLAKE_ACCOUNT: example
+      SNOWFLAKE_USER: takosumi_runner
 ```
 
 ## 6. Credential Recipe
@@ -525,20 +531,26 @@ auth_modes:
         from_value: project_id
 ```
 
-Generic env:
+Declared env recipe for an arbitrary provider:
 
 ```yaml
-id: generic-env
+id: declared-env
+terraform_source: registry.opentofu.org/snowflake-labs/snowflake
 
 auth_modes:
   env:
     env:
-      "*":
-        from_user_defined: true
+      SNOWFLAKE_ACCOUNT:
+        from_value: account
+      SNOWFLAKE_USER:
+        from_value: user
+      SNOWFLAKE_PASSWORD:
+        from_secret: password
 ```
 
-Generic env is required so unsupported providers remain usable without waiting
-for Takosumi to add first-class recipe UI.
+Built-in recipes are convenience, validation, and guided UI. They are not a
+provider allowlist. For unsupported providers, the explicit env names on a
+generic-env Provider Connection become the run-local Credential Recipe.
 
 ## 7. Provider Binding
 
@@ -1254,12 +1266,8 @@ secret cleanup
 ### Phase 3: Provider Connection / Credential Recipe
 
 ```text
-Cloudflare recipe
-AWS recipe
-GCP recipe
-Hetzner recipe
-S3-compatible recipe
-Generic env recipe
+first-class recipes for Cloudflare, AWS, GCP, Hetzner, and S3-compatible
+declared-env recipe for arbitrary OpenTofu providers
 connection API
 connection UI
 secret encryption

@@ -9,11 +9,17 @@
  *     names a Connection supplies and computes the cloud partition under which
  *     the secret blob is sealed.
  *
- * A provider is identified either by its short name (e.g. `"cloudflare"`) or by
- * its full OpenTofu registry path (e.g. `"registry.opentofu.org/cloudflare/cloudflare"`
- * or `"cloudflare/cloudflare"`). The `match` RegExp matches the registry-path
+ * A known provider is identified either by its short name (e.g. `"cloudflare"`)
+ * or by its full OpenTofu registry path (e.g.
+ * `"registry.opentofu.org/cloudflare/cloudflare"` or
+ * `"cloudflare/cloudflare"`). The `match` RegExp matches the registry-path
  * form (anchored on the `<namespace>/<type>` tail); `shortName` matches the
  * short form. Both forms resolve to the same rule.
+ *
+ * Unknown providers are still valid Takosumi providers when carried by a
+ * `generic_env_provider` Connection: the user-declared env names on that
+ * Connection become the run-local Credential Recipe. This table is therefore a
+ * catalog of built-in recipes, not a global provider allowlist.
  *
  * IMPORTANT (runner container isolation): this module is imported by
  * `runner/entrypoint.ts`, which is copied into the OpenTofu runner container image.
@@ -51,6 +57,13 @@ export interface ProviderCredentialEnvRule {
    * satisfied. An empty list means "any single configured env name suffices".
    */
   readonly requiredGroups: readonly (readonly string[])[];
+}
+
+/** Uppercase environment-variable identifier rule (`FOO`, `FOO_BAR`, `_BAR`). */
+export const PROVIDER_ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+
+export function isProviderEnvName(value: string): boolean {
+  return PROVIDER_ENV_NAME_PATTERN.test(value);
 }
 
 /**
@@ -228,14 +241,22 @@ export function providerMatches(provider: string, rule: string): boolean {
  * (`registry.opentofu.org/cloudflare/cloudflare`) through this env-rule table.
  * Unlike {@link providerMatches} this is symmetric — used by the Vault credential
  * mint and ProviderConnection resolution, which must key the same way regardless
- * of argument order. Returns `false` when either side is an
- * unknown provider that is not an exact string match.
+ * of argument order. Unknown providers still compare equal when they are the
+ * same default-registry source written as `registry.opentofu.org/ns/name` and
+ * `ns/name`; bare local names never widen to arbitrary namespaces.
  */
 export function sameProviderFamily(left: string, right: string): boolean {
   if (left === right) return true;
   const lrule = providerEnvRule(left);
   const rrule = providerEnvRule(right);
-  return lrule !== undefined && lrule === rrule;
+  if (lrule !== undefined && lrule === rrule) return true;
+  const leftDefaultRegistry = defaultRegistryProviderIdentity(left);
+  const rightDefaultRegistry = defaultRegistryProviderIdentity(right);
+  return (
+    leftDefaultRegistry !== undefined &&
+    rightDefaultRegistry !== undefined &&
+    leftDefaultRegistry === rightDefaultRegistry
+  );
 }
 
 /**
@@ -346,4 +367,18 @@ export function providerCredentialArgs(
   const rule = providerEnvRule(provider);
   if (!rule) return [];
   return PROVIDER_CREDENTIAL_ARG_MAP[rule.shortName] ?? [];
+}
+
+const DEFAULT_OPENTOFU_REGISTRY = "registry.opentofu.org/";
+const REGISTRY_SOURCE_PATTERN =
+  /^(?:(?:[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u;
+
+function defaultRegistryProviderIdentity(
+  provider: string,
+): string | undefined {
+  const normalized = provider.trim();
+  if (!REGISTRY_SOURCE_PATTERN.test(normalized)) return undefined;
+  return normalized.startsWith(DEFAULT_OPENTOFU_REGISTRY)
+    ? normalized.slice(DEFAULT_OPENTOFU_REGISTRY.length)
+    : normalized;
 }

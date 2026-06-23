@@ -111,7 +111,7 @@ test("register rejects unknown env names and unsatisfied required groups", async
   ]);
 });
 
-test("register rejects unknown generic-env providers and non-static authMethod", async () => {
+test("register rejects unknown providers without a declared generic-env recipe and non-static authMethod", async () => {
   const { vault } = makeVault();
   await expect(
     vault.register({
@@ -120,7 +120,28 @@ test("register rejects unknown generic-env providers and non-static authMethod",
       authMethod: "static_secret",
       values: { X: "y" },
     }),
-  ).rejects.toThrow(/has no explicit env allowlist/);
+  ).rejects.toThrow(/has no built-in Credential Recipe/);
+
+  const generic = await vault.register({
+    spaceId: "space_1",
+    provider: "registry.opentofu.org/snowflake-labs/snowflake",
+    kind: "generic_env_provider",
+    credentialDriver: "generic_env",
+    authMethod: "static_secret",
+    values: {
+      SNOWFLAKE_ACCOUNT: "test-account",
+      SNOWFLAKE_USER: "test-user",
+      SNOWFLAKE_PASSWORD: "secret",
+    },
+  });
+  expect(generic.provider).toBe(
+    "registry.opentofu.org/snowflake-labs/snowflake",
+  );
+  expect(generic.envNames).toEqual([
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_USER",
+  ]);
 
   await expect(
     vault.register({

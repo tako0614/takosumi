@@ -9,6 +9,7 @@ import {
   providerEnvRule,
   requiredEnvGroupsForProvider,
   requiredEnvGroupsSatisfied,
+  sameProviderFamily,
 } from "../../contract/provider-env-rules.ts";
 
 test("providerEnvRule resolves short name and registry-path forms", () => {
@@ -22,6 +23,30 @@ test("providerEnvRule resolves short name and registry-path forms", () => {
   expect(providerEnvRule("gcp")).toBe(google!);
   expect(providerEnvRule("unknown-provider")).toBeUndefined();
   expect(providerEnvRule("")).toBeUndefined();
+});
+
+test("sameProviderFamily matches arbitrary default-registry sources by registry identity", () => {
+  expect(
+    sameProviderFamily(
+      "registry.opentofu.org/vercel/vercel",
+      "vercel/vercel",
+    ),
+  ).toBe(true);
+  expect(
+    sameProviderFamily(
+      "registry.opentofu.org/snowflake-labs/snowflake",
+      "snowflake-labs/snowflake",
+    ),
+  ).toBe(true);
+  expect(sameProviderFamily("snowflake", "snowflake-labs/snowflake")).toBe(
+    false,
+  );
+  expect(
+    sameProviderFamily(
+      "registry.terraform.io/hashicorp/random",
+      "hashicorp/random",
+    ),
+  ).toBe(false);
 });
 
 test("allowedEnvNamesForProvider returns the sorted env-name set", () => {
