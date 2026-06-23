@@ -140,6 +140,19 @@ describe("/new flow guidance", () => {
     expect(ja["new.providers.alias"]).toBe("対象: {alias}");
   });
 
+  test("opens normal /new on the catalog while explicit links use the Git flow", () => {
+    expect(newAppViewSource).toContain("function initialAddTab");
+    expect(newAppViewSource).toContain("if (hasPrefill) return \"git\"");
+    expect(newAppViewSource).toContain('params.get("mode") === "link"');
+    expect(newAppViewSource).toContain(': "catalog"');
+    expect(newAppViewSource).toContain(
+      "initialAddTab(initialSearch, Boolean(prefill))",
+    );
+    expect(newAppViewSource).not.toContain(
+      'createSignal<"catalog" | "git">("git")',
+    );
+  });
+
   test("catalog exposes multiple runnable service choices backed by official configs", () => {
     const officialSeedSource = readFileSync(
       resolve(

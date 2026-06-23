@@ -1,6 +1,6 @@
 /**
- * Add a service (`/new`) — install link / Git source first, starter catalog
- * second, one underlying flow.
+ * Add a service (`/new`) — starter catalog first for normal users, explicit
+ * install links / Git sources second, one underlying flow.
  *
  * Three entry shapes, identical install path:
  *   - Link/source import: the primary path for app install links or raw Git
@@ -502,6 +502,15 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
+function initialAddTab(
+  search: string,
+  hasPrefill: boolean,
+): "catalog" | "git" {
+  if (hasPrefill) return "git";
+  const params = new URLSearchParams(search);
+  return params.get("mode") === "link" ? "git" : "catalog";
+}
+
 function Inner() {
   const navigate = useNavigate();
 
@@ -510,19 +519,21 @@ function Inner() {
   // forwards the query here, and the parser seeds the Git form. A link only
   // PRE-FILLS — the visitor still confirms in this client (compatibility
   // check, then the explicit add button).
+  const initialSearch = typeof location === "undefined" ? "" : location.search;
   const prefill =
     typeof location === "undefined"
       ? undefined
-      : parseInstallPrefill(location.search);
+      : parseInstallPrefill(initialSearch);
   const installPrefillRejected =
     typeof location !== "undefined" &&
     !prefill &&
-    hasInstallPrefillParams(location.search);
+    hasInstallPrefillParams(initialSearch);
 
-  // The install-link / Git URL form is the primary path: manual paste, and the
-  // landing spot for an external `/install?git=…` redirect (which pre-fills it).
-  // The curated catalog is a secondary "pick a starter" option behind it.
-  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">("git");
+  // Normal `/new` opens the catalog. Explicit link mode and external
+  // `/install?git=…` redirects open the Git-backed flow with the source visible.
+  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
+    initialAddTab(initialSearch, Boolean(prefill)),
+  );
   const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
     null,
   );
