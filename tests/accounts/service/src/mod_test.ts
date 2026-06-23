@@ -3215,6 +3215,65 @@ test("accounts handler accepts the pre-GA email allowlist only when Google verif
   );
 });
 
+test("accounts handler rejects allowlisted upstream OAuth emails when Google does not verify them", async () => {
+  const store = new InMemoryAccountsStore();
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://oauth2.googleapis.com/token") {
+      return Response.json({ access_token: "google-token" });
+    }
+    if (request.url === "https://openidconnect.googleapis.com/v1/userinfo") {
+      return Response.json({
+        sub: "google-subject-unverified",
+        name: "Unverified User",
+        email: "shoutatomiyama0614@gmail.com",
+        email_verified: false,
+      });
+    }
+    return new Response("unexpected request", { status: 500 });
+  };
+  const handler = createAccountsHandler({
+    store,
+    loginEmailAllowlist: { emails: ["shoutatomiyama0614@gmail.com"] },
+    upstreamOAuth: {
+      subjectSecret: "subject-secret",
+      sessionTtlMs: 60_000,
+      fetch: fetchImpl,
+      providers: [
+        {
+          providerId: "google",
+          clientId: "google-client",
+          clientSecret: "google-secret",
+          redirectUri:
+            "https://accounts.example.test/v1/auth/upstream/callback",
+        },
+      ],
+    },
+  });
+
+  const authorizeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/upstream/authorize?provider=google&state=state-google",
+    ),
+  );
+  const serverState = upstreamStateFromAuthorizeResponse(authorizeResponse);
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test/v1/auth/upstream/callback?provider=google&code=code-1&state=${serverState}`,
+      {
+        headers: { cookie: authorizeResponse.headers.get("set-cookie") ?? "" },
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(403);
+  expect((await response.json()).error).toEqual("access_denied");
+  expect(
+    store.findAccountByVerifiedEmail("shoutatomiyama0614@gmail.com"),
+  ).toEqual(undefined);
+  expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
+});
+
 function extractSessionCookieForTest(response: Response): string | null {
   const setCookieEntries = response.headers.getSetCookie?.() ?? [];
   if (setCookieEntries.length === 0) {
@@ -3638,6 +3697,81 @@ test("accounts handler registers passkey credentials and authenticates assertion
     "tsub_account",
   );
   expect(store.findPasskeyCredential("credential-1")?.signCount).toEqual(1);
+});
+
+test("accounts handler rejects passkey authentication outside the pre-GA email allowlist", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_blocked",
+    email: "blocked@example.test",
+    emailVerified: true,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const enrolled = await createSignedAssertion({
+    challenge: "ignored-during-seed",
+    origin: "https://accounts.example.test",
+    rpId: "accounts.example.test",
+    signCount: 0,
+  });
+  store.savePasskeyCredential({
+    credentialId: "credential-blocked",
+    subject: "tsub_blocked",
+    publicKeyJwk: enrolled.publicKeyJwk,
+    signCount: 0,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  const handler = createAccountsHandler({
+    store,
+    loginEmailAllowlist: { emails: ["shoutatomiyama0614@gmail.com"] },
+    passkeys: {
+      rpId: "accounts.example.test",
+      rpName: "Takosumi Accounts",
+      origin: "https://accounts.example.test",
+      sessionTtlMs: 60_000,
+    },
+  });
+
+  const authenticationOptionsResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/passkeys/authenticate/options",
+      {
+        method: "POST",
+        body: JSON.stringify({ subject: "tsub_blocked" }),
+      },
+    ),
+  );
+  expect(authenticationOptionsResponse.status).toEqual(200);
+  const authenticationOptions = await authenticationOptionsResponse.json();
+  const serverAuthChallenge = authenticationOptions.challenge as string;
+  const assertion = await createSignedAssertionWithKey({
+    challenge: serverAuthChallenge,
+    origin: "https://accounts.example.test",
+    rpId: "accounts.example.test",
+    signCount: 1,
+    keyPair: enrolled.keyPair,
+  });
+
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/auth/passkeys/authenticate/complete",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          credentialId: "credential-blocked",
+          expectedChallenge: serverAuthChallenge,
+          authenticatorData: base64UrlEncodeBytes(assertion.authenticatorData),
+          clientDataJSON: base64UrlEncodeBytes(assertion.clientDataJSON),
+          signature: base64UrlEncodeBytes(assertion.signature),
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(403);
+  expect((await response.json()).error.code).toEqual("login_not_allowed");
+  expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
 });
 
 test("passkey register/complete fails closed when ceremony fields are omitted", async () => {
