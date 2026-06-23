@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import {
   launchReadinessMigrateFinalModelHelpText,
+  launchReadinessOidcAccountSecurityEvidenceHelpText,
   launchReadinessProductionTopologyMergeHelpText,
   launchReadinessProductionTopologyPreflightHelpText,
   launchReadinessProductionTopologyTemplateHelpText,
@@ -11,8 +12,10 @@ import {
 } from "./cli-help.ts";
 import {
   booleanOption,
+  optionalIntegerOption,
   optionalStringOption,
   parseOptions,
+  validateHttpUrl,
 } from "./cli-options.ts";
 import {
   buildPlatformReadinessPublicSummary,
@@ -33,7 +36,14 @@ import {
   validatePlatformReadinessDocument,
   validateProductionTopologyDocument,
 } from "./cli-platform-readiness.ts";
+import { canonicalJson, isRecord, sha256Hex } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
+
+const oidcAccountSecurityEvidenceTypes = [
+  "key-rotation-drill",
+  "client-secret-rotation",
+  "audit-event",
+] as const;
 
 export async function runLaunchReadinessValidate(
   args: string[],
@@ -145,6 +155,132 @@ export async function runLaunchReadinessPublicSummary(
   return 0;
 }
 
+export async function runLaunchReadinessOidcAccountSecurityEvidence(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const options = parseOptions(args);
+  if (options.help) {
+    io.stdout(launchReadinessOidcAccountSecurityEvidenceHelpText());
+    return 0;
+  }
+
+  try {
+    const file = requiredStringOption(options, "file");
+    const out = optionalStringOption(options, "out");
+    const issuer = normalizedHttpsIssuer(
+      requiredStringOption(options, "issuer"),
+    );
+    const keyId = requiredStringOption(options, "keyId");
+    const previousKeyId = requiredStringOption(options, "previousKeyId");
+    if (previousKeyId === keyId) {
+      throw new TypeError("--previous-key-id must differ from --key-id");
+    }
+    const rotationRunId = requiredStringOption(options, "rotationRunId");
+    const clientId = requiredStringOption(options, "clientId");
+    const oldSecretId = requiredStringOption(options, "oldSecretId");
+    const newSecretId = requiredStringOption(options, "newSecretId");
+    if (oldSecretId === newSecretId) {
+      throw new TypeError("--old-secret-id must differ from --new-secret-id");
+    }
+    const overlapWindowSeconds =
+      optionalIntegerOption(options, "overlapWindowSeconds") ??
+      missingNumberOption("overlap-window-seconds");
+    const revocationEventId = requiredStringOption(
+      options,
+      "revocationEventId",
+    );
+    const auditEventId = requiredStringOption(options, "auditEventId");
+    const auditSubject = requiredStringOption(options, "auditSubject");
+    const owner = requiredStringOption(options, "owner");
+    const reviewer = requiredStringOption(options, "reviewer");
+    if (owner.trim().toLowerCase() === reviewer.trim().toLowerCase()) {
+      throw new TypeError("--reviewer must differ from --owner");
+    }
+    const environment =
+      optionalStringOption(options, "environment") ?? "production";
+    if (environment !== "production" && environment !== "staging") {
+      throw new TypeError("--environment must be production or staging");
+    }
+    const completedAt =
+      optionalStringOption(options, "completedAt") ?? new Date().toISOString();
+    assertIsoTimestamp(completedAt, "--completed-at");
+    const refPrefix =
+      optionalStringOption(options, "refPrefix") ??
+      `vault://platform-readiness/${rotationRunId}/domains/oidc-account-security`;
+    assertConcreteEvidenceRefPrefix(refPrefix, "--ref-prefix");
+
+    const jwks = await loadJwks({
+      issuer,
+      jwksFile: optionalStringOption(options, "jwksFile"),
+    });
+    const jwksKeyIds = keyIdsFromJwks(jwks);
+    if (!jwksKeyIds.includes(keyId)) {
+      throw new TypeError(
+        `JWKS does not contain --key-id ${keyId}; found ${jwksKeyIds.join(", ") || "no kid values"}`,
+      );
+    }
+    if (!jwksKeyIds.includes(previousKeyId)) {
+      throw new TypeError(
+        `JWKS does not contain --previous-key-id ${previousKeyId}; overlap JWKS must publish old and new keys`,
+      );
+    }
+    const overlapJwksDigest = `sha256:${await sha256Hex(canonicalJson(jwks))}`;
+
+    const document = JSON.parse(await readFile(file, "utf8"));
+    const updatedDocument = mergeOidcAccountSecurityEvidence(document, {
+      auditEventId,
+      auditSubject,
+      clientId,
+      completedAt,
+      environment,
+      issuer,
+      jwksKeyIds,
+      keyId,
+      newSecretId,
+      oldSecretId,
+      overlapJwksDigest,
+      overlapWindowSeconds,
+      owner,
+      previousKeyId,
+      refPrefix,
+      reviewer,
+      revocationEventId,
+      rotationRunId,
+    });
+    if (out) {
+      await writeFile(out, `${JSON.stringify(updatedDocument, null, 2)}\n`);
+    }
+    const report = validatePlatformReadinessDocument(updatedDocument);
+    const oidcGap = report.gapDetails?.find(
+      (gap) => gap.scope === "domains" && gap.id === "oidc-account-security",
+    );
+    const oidcReady = oidcGap === undefined;
+    const output = {
+      kind: "takosumi.oidc-account-security-readiness-evidence@v1",
+      issuer,
+      keyId,
+      previousKeyId,
+      overlapJwksDigest,
+      jwksKeyIds,
+      oidcReady,
+      ...(oidcGap ? { oidcGap } : {}),
+      ...(out ? { out } : { document: updatedDocument }),
+    };
+    if (booleanOption(options, "json") || !out) {
+      io.stdout(JSON.stringify(output, null, 2));
+    } else if (oidcReady) {
+      io.stdout(`Updated ${out}; oidc-account-security evidence is complete.`);
+    } else {
+      io.stdout(`Updated ${out}; oidc-account-security evidence is incomplete.`);
+    }
+    return oidcReady ? 0 : 1;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return error instanceof TypeError ? 2 : 1;
+  }
+}
+
 async function runLaunchReadinessPublicSummaryValidate(
   args: string[],
   io: CliIo,
@@ -193,6 +329,217 @@ async function runLaunchReadinessPublicSummaryValidate(
     );
   }
   return report.valid ? 0 : 1;
+}
+
+function mergeOidcAccountSecurityEvidence(
+  document: unknown,
+  input: {
+    auditEventId: string;
+    auditSubject: string;
+    clientId: string;
+    completedAt: string;
+    environment: string;
+    issuer: string;
+    jwksKeyIds: readonly string[];
+    keyId: string;
+    newSecretId: string;
+    oldSecretId: string;
+    overlapJwksDigest: string;
+    overlapWindowSeconds: number;
+    owner: string;
+    previousKeyId: string;
+    refPrefix: string;
+    reviewer: string;
+    revocationEventId: string;
+    rotationRunId: string;
+  },
+): Record<string, unknown> {
+  if (!isRecord(document)) {
+    throw new TypeError("readiness document must be a JSON object");
+  }
+  if (!Array.isArray(document.domains)) {
+    throw new TypeError("readiness document domains must be an array");
+  }
+  const domains = document.domains.map((entry: unknown) => {
+    if (!isRecord(entry) || entry.id !== "oidc-account-security") return entry;
+    const existingEvidence = Array.isArray(entry.evidence)
+      ? entry.evidence.filter(
+          (item: unknown) =>
+            !isRecord(item) || !isOidcAccountSecurityEvidenceType(item.type),
+        )
+      : [];
+    return {
+      ...entry,
+      status: "passed",
+      owner: input.owner,
+      reviewer: input.reviewer,
+      environment: input.environment,
+      completedAt: input.completedAt,
+      evidence: [
+        ...existingEvidence,
+        {
+          type: "key-rotation-drill",
+          ref: `${input.refPrefix}/key-rotation-drill`,
+          summary:
+            "OIDC signing key rotation overlap was verified against the hosted issuer JWKS.",
+          private: true,
+          publicSummary:
+            "OIDC signing key rotation was verified against the hosted issuer JWKS.",
+          rotationRunId: input.rotationRunId,
+          keyId: input.keyId,
+          previousKeyId: input.previousKeyId,
+          issuer: input.issuer,
+          overlapJwksDigest: input.overlapJwksDigest,
+          jwksKeyIds: input.jwksKeyIds,
+        },
+        {
+          type: "client-secret-rotation",
+          ref: `${input.refPrefix}/client-secret-rotation`,
+          summary:
+            "Upstream OAuth client secret rotation and old-secret revocation were recorded.",
+          private: true,
+          publicSummary:
+            "Upstream OAuth client secret rotation and revocation were recorded.",
+          rotationRunId: input.rotationRunId,
+          clientId: input.clientId,
+          oldSecretId: input.oldSecretId,
+          newSecretId: input.newSecretId,
+          overlapWindowSeconds: input.overlapWindowSeconds,
+          revocationEventId: input.revocationEventId,
+        },
+        {
+          type: "audit-event",
+          ref: `${input.refPrefix}/audit-event`,
+          summary:
+            "OIDC account-security rotation was recorded in the operator audit log.",
+          private: true,
+          publicSummary:
+            "OIDC account-security rotation was recorded in the operator audit log.",
+          auditEventId: input.auditEventId,
+          subject: input.auditSubject,
+        },
+      ],
+    };
+  });
+  if (
+    !domains.some(
+      (entry: unknown) => isRecord(entry) && entry.id === "oidc-account-security",
+    )
+  ) {
+    throw new TypeError(
+      "readiness document is missing domains.oidc-account-security",
+    );
+  }
+  return { ...document, domains };
+}
+
+function isOidcAccountSecurityEvidenceType(
+  value: unknown,
+): value is (typeof oidcAccountSecurityEvidenceTypes)[number] {
+  return (
+    typeof value === "string" &&
+    oidcAccountSecurityEvidenceTypes.includes(
+      value as (typeof oidcAccountSecurityEvidenceTypes)[number],
+    )
+  );
+}
+
+async function loadJwks(input: {
+  issuer: string;
+  jwksFile?: string;
+}): Promise<Record<string, unknown>> {
+  if (input.jwksFile) {
+    const value = JSON.parse(await readFile(input.jwksFile, "utf8"));
+    if (!isRecord(value)) throw new TypeError("--jwks-file must be a JSON object");
+    return value;
+  }
+  const discoveryUrl = `${input.issuer}/.well-known/openid-configuration`;
+  const discovery = await fetchJsonObject(discoveryUrl, "OIDC discovery");
+  if (discovery.issuer !== input.issuer) {
+    throw new TypeError("OIDC discovery issuer does not match --issuer");
+  }
+  const jwksUri = typeof discovery.jwks_uri === "string"
+    ? discovery.jwks_uri
+    : null;
+  if (!jwksUri) throw new TypeError("OIDC discovery is missing jwks_uri");
+  return await fetchJsonObject(jwksUri, "OIDC JWKS");
+}
+
+async function fetchJsonObject(
+  url: string,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new TypeError(`${label} request failed: HTTP ${response.status}`);
+  }
+  const value = await response.json();
+  if (!isRecord(value)) throw new TypeError(`${label} response must be an object`);
+  return value;
+}
+
+function keyIdsFromJwks(jwks: Record<string, unknown>): string[] {
+  const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
+  return keys
+    .map((entry) =>
+      isRecord(entry) && typeof entry.kid === "string" ? entry.kid : "",
+    )
+    .filter(Boolean)
+    .sort();
+}
+
+function requiredStringOption(
+  options: Record<string, string | boolean>,
+  key: string,
+): string {
+  const value = optionalStringOption(options, key);
+  if (!value) throw new TypeError(`--${kebabOption(key)} is required`);
+  return value;
+}
+
+function missingNumberOption(key: string): never {
+  throw new TypeError(`--${key} is required`);
+}
+
+function normalizedHttpsIssuer(value: string): string {
+  const validated = validateHttpUrl(value, "--issuer");
+  const url = new URL(validated);
+  if (url.protocol !== "https:") {
+    throw new TypeError("--issuer must be an https:// URL");
+  }
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/u, "");
+}
+
+function assertIsoTimestamp(value: string, label: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)) {
+    throw new TypeError(`${label} must be an ISO-8601 UTC timestamp`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.getTime() > Date.now() + 300000) {
+    throw new TypeError(`${label} must be a non-future ISO-8601 UTC timestamp`);
+  }
+}
+
+function assertConcreteEvidenceRefPrefix(value: string, label: string): void {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized.length === 0 ||
+    normalized.includes("<") ||
+    normalized.includes(">") ||
+    normalized.includes("placeholder") ||
+    normalized.includes("example.") ||
+    normalized.includes("todo") ||
+    normalized.includes("tbd")
+  ) {
+    throw new TypeError(`${label} must be a concrete private evidence ref`);
+  }
+}
+
+function kebabOption(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
 export function runLaunchReadinessTemplate(args: string[], io: CliIo): number {

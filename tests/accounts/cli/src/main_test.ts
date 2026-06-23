@@ -388,6 +388,9 @@ function structuredEvidenceFieldsForTest(
       return {
         rotationRunId: "key_rotation_rehearsal",
         keyId: "kid-rehearsal",
+        previousKeyId: "kid-rehearsal-before",
+        overlapJwksDigest:
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       };
     case "client-secret-rotation":
       return {
@@ -2068,6 +2071,192 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "recovery-refund-credit",
     ],
   });
+});
+
+test("launch-readiness oidc-account-security evidence merges verified JWKS evidence", async () => {
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const jwksFile = await makeTempFile({ suffix: ".json" });
+  const outFile = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun();
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry) =>
+    completePlatformReadinessEntry(entry, rehearsalRun.id),
+  );
+  const oidcSecurity = document.domains.find(
+    (entry) => entry.id === "oidc-account-security",
+  )!;
+  oidcSecurity.status = "blocked";
+  oidcSecurity.evidence = oidcSecurity.evidence.filter(
+    (entry) =>
+      ![
+        "key-rotation-drill",
+        "client-secret-rotation",
+        "audit-event",
+      ].includes(entry.type),
+  );
+
+  try {
+    await writeTextFile(readinessFile, JSON.stringify(document));
+    await writeTextFile(
+      jwksFile,
+      JSON.stringify({
+        keys: [
+          { kty: "EC", kid: "kid-before-2026", crv: "P-256" },
+          { kty: "EC", kid: "kid-rotated-2026", crv: "P-256" },
+        ],
+      }),
+    );
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      [
+        "launch-readiness",
+        "oidc-account-security",
+        "evidence",
+        "--file",
+        readinessFile,
+        "--out",
+        outFile,
+        "--issuer",
+        "https://app.takosumi.com",
+        "--jwks-file",
+        jwksFile,
+        "--key-id",
+        "kid-rotated-2026",
+        "--previous-key-id",
+        "kid-before-2026",
+        "--rotation-run-id",
+        "oidc-rotation-2026-06-23",
+        "--client-id",
+        "google-client-rotation",
+        "--old-secret-id",
+        "google-secret-before-2026",
+        "--new-secret-id",
+        "google-secret-after-2026",
+        "--overlap-window-seconds",
+        "600",
+        "--revocation-event-id",
+        "google-secret-revocation-2026",
+        "--audit-event-id",
+        "audit-oidc-rotation-2026",
+        "--audit-subject",
+        "operator-release-owner",
+        "--owner",
+        "ops",
+        "--reviewer",
+        "release-owner",
+        "--environment",
+        "staging",
+        "--completed-at",
+        "2026-05-12T01:00:00Z",
+        "--ref-prefix",
+        "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
+        "--json",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const result = JSON.parse(stdout.join("\n"));
+    expect(result.oidcReady).toEqual(true);
+    const updated = JSON.parse(await readFile(outFile, "utf8"));
+    const updatedOidc = updated.domains.find(
+      (entry: { id: string }) => entry.id === "oidc-account-security",
+    );
+    expect(updatedOidc.status).toEqual("passed");
+    expect(
+      updatedOidc.evidence.find(
+        (entry: { type: string }) => entry.type === "key-rotation-drill",
+      ).keyId,
+    ).toEqual("kid-rotated-2026");
+    const validateStdout: string[] = [];
+    const validateCode = await main(
+      ["launch-readiness", "validate", "--file", outFile, "--json"],
+      {
+        stdout: (line) => validateStdout.push(line),
+        stderr: () => undefined,
+      },
+    );
+    expect(validateCode).toEqual(0);
+    expect(JSON.parse(validateStdout.join("\n")).ready).toEqual(true);
+  } finally {
+    await removePath(readinessFile);
+    await removePath(jwksFile);
+    await removePath(outFile);
+  }
+});
+
+test("launch-readiness oidc-account-security evidence rejects missing JWKS kid", async () => {
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const jwksFile = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+
+  try {
+    await writeTextFile(readinessFile, JSON.stringify(document));
+    await writeTextFile(jwksFile, JSON.stringify({ keys: [{ kid: "other" }] }));
+    const stderr: string[] = [];
+    const code = await main(
+      [
+        "launch-readiness",
+        "oidc-account-security",
+        "evidence",
+        "--file",
+        readinessFile,
+        "--issuer",
+        "https://app.takosumi.com",
+        "--jwks-file",
+        jwksFile,
+        "--key-id",
+        "kid-rotated-2026",
+        "--previous-key-id",
+        "kid-before-2026",
+        "--rotation-run-id",
+        "oidc-rotation-2026-06-23",
+        "--client-id",
+        "google-client-rotation",
+        "--old-secret-id",
+        "google-secret-before-2026",
+        "--new-secret-id",
+        "google-secret-after-2026",
+        "--overlap-window-seconds",
+        "600",
+        "--revocation-event-id",
+        "google-secret-revocation-2026",
+        "--audit-event-id",
+        "audit-oidc-rotation-2026",
+        "--audit-subject",
+        "operator-release-owner",
+        "--owner",
+        "ops",
+        "--reviewer",
+        "release-owner",
+        "--completed-at",
+        "2026-05-12T01:00:00Z",
+        "--ref-prefix",
+        "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(2);
+    expect(stderr.join("\n")).toContain(
+      "JWKS does not contain --key-id kid-rotated-2026",
+    );
+  } finally {
+    await removePath(readinessFile);
+    await removePath(jwksFile);
+  }
 });
 
 test("launch-readiness migrate-final-model rewrites legacy evidence names without printing raw evidence", async () => {
