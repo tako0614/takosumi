@@ -49,9 +49,36 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
 
   expect(source).toContain("isTakosumiCloudRuntime");
   expect(source).toContain("<Show when={cloudBilling()}>");
+  expect(source).toContain("when={canStartCheckout()}");
+  expect(source).toContain(
+    'fallback={\n                    <p class="av-plan-policy av-plan-policy-disabled">',
+  );
   expect(source).toContain("listSpaceUsage");
   expect(source).toContain('"billing.usage.title"');
   expect(source).toContain('"billing.plans.title"');
   expect(source).toContain('"billing.portal"');
   expect(source).not.toContain("createResource(listBillingPlans)");
+});
+
+test("BillingTab hides purchase cards while billing is disabled", () => {
+  const source = readFileSync(sourcePath, "utf8");
+  const disabledFallbackIndex = source.indexOf(
+    'fallback={\n                    <p class="av-plan-policy av-plan-policy-disabled">',
+  );
+  const nonRefundableIndex = source.indexOf(
+    '<p class="muted av-plan-policy">\n                    {t("billing.plans.nonRefundable")}',
+  );
+  const subscriptionListIndex = source.indexOf(
+    "<Show when={subscriptions().length > 0}>",
+  );
+
+  expect(disabledFallbackIndex).toBeGreaterThan(0);
+  expect(nonRefundableIndex).toBeGreaterThan(disabledFallbackIndex);
+  expect(subscriptionListIndex).toBeGreaterThan(nonRefundableIndex);
+  expect(en["billing.plans.disabled"]).toBe(
+    "Purchases are not available for this workspace right now. Plans will appear here when checkout is open.",
+  );
+  expect(ja["billing.plans.disabled"]).toBe(
+    "現在、このワークスペースでは購入できません。購入が必要になった場合は、この画面にプランが表示されます。",
+  );
 });
