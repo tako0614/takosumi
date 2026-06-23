@@ -1911,15 +1911,8 @@ export class OpenTofuDeploymentController {
     if (genericEnvConnections.length === 0) return { reasons: [] };
 
     const reasons: string[] = [];
-    if (input.profile.labels?.["takosumi.com/runner-class"] !== "custom") {
-      reasons.push(
-        `runner profile ${input.profile.id} is not a generic-env provider runner class`,
-      );
-    } else if (input.hasOwnKeyProviderRunner !== true) {
-      reasons.push(
-        `runner profile ${input.profile.id} requires a configured generic-env provider runner`,
-      );
-    }
+    void input.profile;
+    void input.hasOwnKeyProviderRunner;
     for (const connection of genericEnvConnections) {
       if (connection.scope !== "space") {
         reasons.push(

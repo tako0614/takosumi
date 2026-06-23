@@ -202,6 +202,22 @@ export function createDefaultRunnerProfiles(
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("docker"),
     }),
+    defaultProviderRunnerProfile(now, {
+      id: "generic-opentofu-provider",
+      name: "Generic OpenTofu provider",
+      description:
+        "Operator-enabled runner profile for arbitrary OpenTofu providers using explicit generic-env Provider Connections.",
+      allowedProviders: ["*"],
+      credentialRefs: [],
+      labels: {
+        ...candidateRunnerProfileLabels(),
+        "takosumi.com/provider-surface": "generic",
+      },
+      networkPolicy: {
+        mode: "operator-managed",
+        allowedHosts: ["registry.opentofu.org"],
+      },
+    }),
   ];
 }
 

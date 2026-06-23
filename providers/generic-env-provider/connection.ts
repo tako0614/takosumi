@@ -2,11 +2,13 @@
  * Generic-env provider connection driver (registration-side validation).
  *
  * A generic-env provider Connection (`kind: "generic_env_provider"`) is a
- * Space-owned carrier of write-only provider env values. It is allowed only for
- * providers that have an explicit `provider-env-rules` entry; each submitted
- * env name must be in that provider allowlist, be a valid uppercase
- * environment-variable identifier, and carry a string value. The connection is
- * always Space-scoped (never operator-scoped).
+ * Space-owned carrier of write-only provider env values. When the provider has
+ * a built-in `provider-env-rules` recipe, each submitted env name must be in
+ * that provider allowlist. When the provider is unknown to Takosumi, the
+ * submitted env names themselves become the explicit per-Connection recipe. In
+ * both cases every env name must be a valid uppercase environment-variable
+ * identifier and every value must be a string. The connection is always
+ * Space-scoped (never operator-scoped).
  *
  * This is the extracted, self-contained form of the structural validation in
  * the vault's `#registerGenericEnvProvider`. The crypto / sealing / store
@@ -20,11 +22,9 @@
 import type { CreateConnectionRequest } from "takosumi-contract/connections";
 import {
   allowedEnvNamesForProvider,
+  isProviderEnvName,
   providerEnvRule,
 } from "takosumi-contract/provider-env-rules";
-
-/** Uppercase environment-variable identifier rule (`FOO`, `FOO_BAR`, `_BAR`). */
-const ENV_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 /**
  * Validation error for a generic-env provider registration. The `code` mirrors
@@ -69,12 +69,6 @@ export interface GenericEnvProviderRegistration {
 export function validateGenericEnvProviderRegistration(
   input: CreateConnectionRequest,
 ): GenericEnvProviderRegistration {
-  if (!providerEnvRule(input.provider)) {
-    throw new GenericEnvProviderConnectionError(
-      "failed_precondition",
-      `generic-env provider ${input.provider} has no explicit env allowlist`,
-    );
-  }
   if (!input.spaceId || input.scope === "operator") {
     throw new GenericEnvProviderConnectionError(
       "failed_precondition",
@@ -95,15 +89,18 @@ export function validateGenericEnvProviderRegistration(
       "values must supply at least one provider env name",
     );
   }
-  const allowed = new Set(allowedEnvNamesForProvider(input.provider));
+  const builtInRule = providerEnvRule(input.provider);
+  const allowed = builtInRule
+    ? new Set(allowedEnvNamesForProvider(input.provider))
+    : undefined;
   for (const name of envNames) {
-    if (!ENV_NAME_PATTERN.test(name)) {
+    if (!isProviderEnvName(name)) {
       throw new GenericEnvProviderConnectionError(
         "invalid_argument",
         `env name ${name} must be an uppercase environment variable name`,
       );
     }
-    if (!allowed.has(name)) {
+    if (allowed && !allowed.has(name)) {
       throw new GenericEnvProviderConnectionError(
         "invalid_argument",
         `env name ${name} is not allowed for provider ${input.provider}`,

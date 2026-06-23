@@ -46,6 +46,7 @@ test("includes multiple listed profiles in env order and excludes the rest", () 
   // Unlisted seeds are excluded entirely.
   expect(idsOf(enabled)).not.toContain("azure-provider-env-candidate");
   expect(idsOf(enabled)).not.toContain("docker-custom-example");
+  expect(idsOf(enabled)).not.toContain("generic-opentofu-provider");
 });
 
 test("trims whitespace and collapses duplicate ids (first wins)", () => {
@@ -69,6 +70,23 @@ test("gcp candidate can be explicitly enabled", () => {
     enabled[0]?.labels?.["takosumi.com/profile-enabled"],
   ).toEqual("true");
 });
+
+test("generic OpenTofu provider profile can be explicitly enabled", () => {
+  const enabled = resolveEnabledRunnerProfiles(
+    SEEDS,
+    "generic-opentofu-provider",
+  );
+  expect(idsOf(enabled)).toEqual(["generic-opentofu-provider"]);
+  expect(enabled[0]?.allowedProviders).toEqual(["*"]);
+  expect(enabled[0]?.requireCredentialRefs).toBe(false);
+  expect(enabled[0]?.labels?.["takosumi.com/provider-surface"]).toEqual(
+    "generic",
+  );
+  expect(
+    enabled[0]?.labels?.["takosumi.com/profile-enabled"],
+  ).toEqual("true");
+});
+
 
 test("merges takosumi.com/profile-enabled=true into every enabled profile", () => {
   const enabled = resolveEnabledRunnerProfiles(

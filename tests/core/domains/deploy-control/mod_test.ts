@@ -1188,6 +1188,7 @@ test("default runner profile seeds cover provider-env targets and future/custom 
     "github-provider-env-candidate",
     "digitalocean-provider-env-candidate",
     "docker-custom-example",
+    "generic-opentofu-provider",
   ]);
   expect(byId.get("azure-provider-env-candidate")?.allowedProviders).toEqual([
     "registry.opentofu.org/hashicorp/azurerm",
@@ -1208,6 +1209,17 @@ test("default runner profile seeds cover provider-env targets and future/custom 
   expect(byId.get("docker-custom-example")?.cloudflareContainer).toEqual(
     undefined,
   );
+  expect(byId.get("generic-opentofu-provider")?.allowedProviders).toEqual([
+    "*",
+  ]);
+  expect(byId.get("generic-opentofu-provider")?.requireCredentialRefs).toEqual(
+    false,
+  );
+  expect(
+    byId.get("generic-opentofu-provider")?.labels?.[
+      "takosumi.com/provider-surface"
+    ],
+  ).toEqual("generic");
   expect(
     byId.get("cloudflare-default")?.labels?.["takosumi.com/profile-state"],
   ).toEqual(undefined);
@@ -1219,6 +1231,7 @@ test("default runner profile seeds cover provider-env targets and future/custom 
     "azure-provider-env-candidate",
     "digitalocean-provider-env-candidate",
     "docker-custom-example",
+    "generic-opentofu-provider",
   ]) {
     expect(byId.get(id)?.labels?.["takosumi.com/profile-state"]).toEqual(
       "candidate",
@@ -1317,7 +1330,7 @@ test("operator-enabled candidate runner profiles can pass provider policy", asyn
   expect(planRun.policy.status).toEqual("passed");
 });
 
-test("generic-env providers require a generic-env runner class before dispatch", async () => {
+test("generic-env providers run on an ordinary runner profile when the provider is allowed", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const { store, request, installationId } = await seedUpdatableInstallation({
     requiredProviders: [provider],
@@ -1387,23 +1400,38 @@ test("generic-env providers require a generic-env runner class before dispatch",
     store,
     now: sequenceNow(41),
     newId: deterministicIds(),
-    runner: fakeRunner(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("vercel-template"),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [provider],
+          providerInstallation: [
+            {
+              provider,
+              mirrored: true,
+              installationMethod: "filesystem_mirror",
+              attested: true,
+              attestationMethod: "forced_filesystem_mirror_init",
+              mirrorPath:
+                "/opt/opentofu/provider-mirror/registry.opentofu.org/vercel/vercel",
+            },
+          ],
+        }),
+      apply: () => Promise.resolve({}),
+    },
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
   });
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain(
-    "is not a generic-env provider runner class",
-  );
-  expect(planRun.policy.reasons.join("\n")).not.toContain(
-    "requires a configured generic-env provider runner",
-  );
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.policy.status).toEqual("passed");
 });
 
-test("generic-env provider policy passes with a Space generic-env connection and generic-env runner class", async () => {
+test("generic-env provider policy also passes with a Space generic-env connection and custom runner class", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const { store, request, installationId } = await seedUpdatableInstallation({
     requiredProviders: [provider],

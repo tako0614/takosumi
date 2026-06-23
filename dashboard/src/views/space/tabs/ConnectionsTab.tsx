@@ -309,6 +309,8 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     const connection = await createConnection({
       spaceId: spaceId(),
       provider: name,
+      kind: "generic_env_provider",
+      credentialDriver: "generic_env",
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });

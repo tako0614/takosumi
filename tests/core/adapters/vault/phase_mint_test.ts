@@ -887,17 +887,28 @@ test("mintForInstallationProviderEnvBindings maps approved generic-env variables
   expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(true);
 });
 
-test("generic-env provider registration rejects providers without an explicit env allowlist", async () => {
-  const { vault } = makeVault();
-  await expect(
-    vault.register({
+test("generic-env provider registration accepts arbitrary providers with explicit env names", async () => {
+  const { store, vault } = makeVault();
+  const provider =
+    "registry.opentofu.org/not-a-real-provider/not-a-real-provider";
+  const conn = await markVerified(
+    store,
+    await vault.register({
       spaceId: "space_1",
-      provider: "registry.opentofu.org/not-a-real-provider/not-a-real-provider",
+      provider,
       authMethod: "static_secret",
       kind: "generic_env_provider",
       values: { NOT_A_REAL_PROVIDER_TOKEN: "secret" },
     }),
-  ).rejects.toThrow("has no explicit env allowlist");
+  );
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+    { provider: "not-a-real-provider/not-a-real-provider", connectionId: conn.id },
+  ]);
+
+  expect(bundle.env).toEqual({
+    TF_VAR_NOT_A_REAL_PROVIDER_TOKEN: "secret",
+  });
 });
 
 test("generic-env provider registration rejects env names outside the provider allowlist", async () => {

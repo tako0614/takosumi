@@ -111,13 +111,14 @@ connections:
       role_arn: arn:aws:iam::123456789012:role/takosumi
       region: ap-northeast-1
 
-  generic-env:
-    provider: generic-env
+  snowflake-main:
+    provider: registry.opentofu.org/snowflake-labs/snowflake
     auth_type: env
     secrets:
-      CUSTOM_API_TOKEN: sec_custom_token
+      SNOWFLAKE_PASSWORD: sec_snowflake_password
     values:
-      CUSTOM_ENDPOINT: https://api.example.com
+      SNOWFLAKE_ACCOUNT: example
+      SNOWFLAKE_USER: takosumi_runner
 ```
 
 Secrets are never written to Capsule source, generated `.tfvars`, state
@@ -189,15 +190,20 @@ auth_modes:
         from_value: project_id
 ```
 
-Generic env is required so unsupported providers can still run:
+Built-in CredentialRecipes are validation and guided-setup helpers, not the
+global provider boundary. Unsupported providers can still run through an
+explicit declared-env recipe:
 
 ```yaml
-id: generic-env
+id: declared-env
+terraform_source: registry.opentofu.org/snowflake-labs/snowflake
 env:
-  CUSTOM_API_TOKEN:
-    from_secret: token
-  CUSTOM_ENDPOINT:
-    from_value: endpoint
+  SNOWFLAKE_ACCOUNT:
+    from_value: account
+  SNOWFLAKE_USER:
+    from_value: user
+  SNOWFLAKE_PASSWORD:
+    from_secret: password
 ```
 
 ## Provider Binding
@@ -321,8 +327,8 @@ runner profiles, run-key minting, or managed resource backends.
    ProviderConnection, ProviderBinding, Secret, StateVersion, Output, Audit.
 2. Build runner: checkout, OpenTofu install/version selection, init, validate,
    plan, apply, destroy, log streaming, state capture, output capture, cleanup.
-3. Build Credential Recipes for Cloudflare, AWS, GCP, S3-compatible, and
-   generic env.
+3. Build built-in Credential Recipes for Cloudflare, AWS, GCP, S3-compatible,
+   plus declared-env recipes for arbitrary OpenTofu providers.
 4. Build state, output-to-input wiring, audit, and secret redaction.
 5. Build Web UI and CLI for projects, capsules, connections, runs, plans,
    applies, state, outputs, and logs.
