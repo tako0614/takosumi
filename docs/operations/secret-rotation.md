@@ -172,6 +172,53 @@ bulk helper を使う場合も、一時 JSON は `/tmp` など repo 外に作成
 即削除する。shell history、terminal transcript、PR comment に secret value を
 残さない。
 
+## OIDC Account-Security Readiness Evidence
+
+GA readiness の `oidc-account-security` は、OIDC conformance / rate-limit
+だけでは完了しない。operator は signing key rotation、upstream Google OAuth
+client secret rotation、audit event を private readiness evidence に記録する。
+
+Takosumi は secret value を表示しない。key rotation evidence は live issuer
+または capture 済み JWKS に新旧両方の `kid` が存在することを検証し、その
+JWKS digest を evidence に固定してから、既存 readiness JSON の
+`domains.oidc-account-security` だけを更新する。
+
+```bash
+curl -fsS https://app.takosumi.com/oauth/jwks \
+  > "$TAKOSUMI_PRIVATE/evidence/oidc-jwks-production.json"
+
+takosumi launch-readiness oidc-account-security evidence \
+  --file "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.json" \
+  --out "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.next.json" \
+  --issuer https://app.takosumi.com \
+  --jwks-file "$TAKOSUMI_PRIVATE/evidence/oidc-jwks-production.json" \
+  --key-id "$NEW_OIDC_KEY_ID" \
+  --previous-key-id "$OLD_OIDC_KEY_ID" \
+  --rotation-run-id "$OIDC_ROTATION_RUN_ID" \
+  --client-id "$GOOGLE_CLIENT_ID" \
+  --old-secret-id "$OLD_GOOGLE_SECRET_RECORD_ID" \
+  --new-secret-id "$NEW_GOOGLE_SECRET_RECORD_ID" \
+  --overlap-window-seconds 600 \
+  --revocation-event-id "$GOOGLE_SECRET_REVOCATION_EVENT_ID" \
+  --audit-event-id "$OPERATOR_AUDIT_EVENT_ID" \
+  --audit-subject "$OPERATOR_SUBJECT" \
+  --owner "$EVIDENCE_OWNER" \
+  --reviewer "$EVIDENCE_REVIEWER" \
+  --environment production \
+  --completed-at "$COMPLETED_AT" \
+  --ref-prefix "vault://platform-readiness/$OIDC_ROTATION_RUN_ID/domains/oidc-account-security" \
+  --json
+
+takosumi launch-readiness validate \
+  --file "$TAKOSUMI_PRIVATE/evidence/platform-readiness-production.next.json"
+```
+
+`--key-id` または `--previous-key-id` が overlap JWKS に存在しない場合、この
+helper は失敗する。Google client secret の actual value は入力しない。
+`old-secret-id` / `new-secret-id` / `revocation-event-id` は operator vault /
+Google admin console / audit ledger の private record ID であり、public summary
+へは出さない。
+
 ## Platform Worker Smoke
 
 Worker secret rotation 後は最低限以下を確認する:

@@ -414,6 +414,37 @@ export function launchReadinessPublicSummaryValidateHelpText(): string {
   ].join("\n");
 }
 
+export function launchReadinessOidcAccountSecurityEvidenceHelpText(): string {
+  return [
+    "takosumi launch-readiness oidc-account-security evidence",
+    "",
+    "Options:",
+    "  --file <path>                    Existing private readiness JSON",
+    "  --out <path>                     Write updated readiness JSON here",
+    "  --issuer <https-url>             Expected OIDC issuer",
+    "  --jwks-file <path>               Use captured JWKS JSON instead of live fetch",
+    "  --key-id <kid>                   New signing key id that must appear in JWKS",
+    "  --previous-key-id <kid>          Previous signing key id; must also appear in JWKS",
+    "  --rotation-run-id <id>           Operator key/client-secret rotation run id",
+    "  --client-id <id>                 Upstream OAuth client id",
+    "  --old-secret-id <id>             Operator-vault id of the old client secret",
+    "  --new-secret-id <id>             Operator-vault id of the new client secret",
+    "  --overlap-window-seconds <n>     Positive client-secret overlap window",
+    "  --revocation-event-id <id>       Upstream/client-secret revocation event id",
+    "  --audit-event-id <id>            Audit ledger event id for the rotation",
+    "  --audit-subject <subject>        Operator subject recorded in audit",
+    "  --owner <actor>                  Evidence owner",
+    "  --reviewer <actor>               Distinct reviewer",
+    "  --environment <env>              production or staging",
+    "  --completed-at <iso8601>         Completion timestamp",
+    "  --ref-prefix <ref>               Private evidence ref prefix",
+    "  --json",
+    "",
+    "Merges only the OIDC account-security evidence that can be tied to a",
+    "verified JWKS key id and operator-supplied rotation/audit records.",
+  ].join("\n");
+}
+
 export function launchReadinessTemplateHelpText(): string {
   return [
     "takosumi launch-readiness template",

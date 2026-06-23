@@ -21,6 +21,7 @@ import {
 } from "./cli-installations-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
+  runLaunchReadinessOidcAccountSecurityEvidence,
   runLaunchReadinessProductionTopologyMerge,
   runLaunchReadinessProductionTopologyPreflight,
   runLaunchReadinessProductionTopologyTemplate,
@@ -140,6 +141,16 @@ export async function main(
   }
   if (domain === "launch-readiness" && command === "migrate-final-model") {
     return await runLaunchReadinessMigrateFinalModel(rest, io);
+  }
+  if (
+    domain === "launch-readiness" &&
+    command === "oidc-account-security" &&
+    rest[0] === "evidence"
+  ) {
+    return await runLaunchReadinessOidcAccountSecurityEvidence(
+      rest.slice(1),
+      io,
+    );
   }
   if (
     domain === "launch-readiness" &&

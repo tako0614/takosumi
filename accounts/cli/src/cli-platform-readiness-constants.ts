@@ -386,7 +386,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["conformanceRunId", "issuer"],
   },
   "key-rotation-drill": {
-    fields: ["rotationRunId", "keyId"],
+    fields: ["rotationRunId", "keyId", "previousKeyId", "overlapJwksDigest"],
   },
   "client-secret-rotation": {
     fields: [
