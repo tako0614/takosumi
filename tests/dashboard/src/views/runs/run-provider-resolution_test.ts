@@ -144,4 +144,19 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.cost.billingCta"]).toContain("お支払い");
     expect(ja["run.cost.operatorHelp"]).toContain("ワークスペース");
   });
+
+  test("surfaces the deployed public app URL as the primary completion action", () => {
+    expect(runViewSource).toContain("listDeployments");
+    expect(runViewSource).toContain("launchUrlFromOutputs");
+    expect(runViewSource).toContain("completedRunLaunchUrl");
+    expect(runViewSource).toContain('t("apps.openApp")');
+    expect(runViewSource).toContain('target="_blank"');
+    expect(runViewSource).toContain('rel="noreferrer noopener"');
+    expect(runViewSource.indexOf('t("apps.openApp")')).toBeLessThan(
+      runViewSource.indexOf(
+        't("run.backToApp")',
+        runViewSource.indexOf('t("apps.openApp")'),
+      ),
+    );
+  });
 });
