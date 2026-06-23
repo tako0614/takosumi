@@ -37,6 +37,7 @@ import {
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
+import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
 
 export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
@@ -94,6 +95,15 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
+    }
+    if (isPlatformRuntimeCellDrillPath(url.pathname)) {
+      const response = await handlePlatformRuntimeCellDrillRequest(
+        request,
+        url,
+        env,
+        await runtimeAgentRegistryFor(env),
+      );
+      return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
     if (isOperatorBillingPath(url.pathname)) {
       const response = await handleOperatorBillingRequest(
@@ -409,10 +419,190 @@ function escapeHtml(value: string): string {
 }
 
 const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
+const RUNTIME_CELL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX = "/internal/platform/runtime-cells/";
+const INTERNAL_PLATFORM_RUNTIME_CELL_DRILL_SUFFIX = "/drill";
 const INTERNAL_PLATFORM_SPACE_PREFIX = "/internal/platform/spaces/";
 const INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX = "/billing";
 const INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX =
   "/subscription/change";
+
+async function runtimeAgentRegistryFor(
+  env: CloudflareWorkerEnv,
+): Promise<RuntimeAgentRegistry> {
+  const service = await cachedDeployControlService(
+    env as unknown as DeployControlEnv,
+  );
+  return service.context.adapters.runtimeAgent;
+}
+
+export type PlatformRuntimeCellDrillAction = "drain" | "evacuation";
+
+export interface PlatformRuntimeCellDrillResult {
+  readonly kind: "takosumi.platform-runtime-cell-drill@v1";
+  readonly action: PlatformRuntimeCellDrillAction;
+  readonly runtimeCellId: string;
+  readonly eventId?: string;
+  readonly evacuationRunId?: string;
+  readonly agentId: string;
+  readonly workId: string;
+  readonly status: "completed";
+  readonly requestedAt: string;
+  readonly completedAt: string;
+}
+
+export async function handlePlatformRuntimeCellDrillRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  registry: RuntimeAgentRegistry,
+): Promise<Response | undefined> {
+  const runtimeCellId = runtimeCellIdFromInternalPlatformPath(url.pathname);
+  if (runtimeCellId === undefined) return undefined;
+  if (request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
+  const body = await readJsonRecord(request);
+  if (!body.ok) return body.response;
+  const action = parsePlatformRuntimeCellDrillAction(body.value.action);
+  if (!action) {
+    return Response.json(
+      {
+        error: "invalid_request",
+        error_description: "action must be drain or evacuation",
+      },
+      { status: 400 },
+    );
+  }
+  const result = await runPlatformRuntimeCellDrill({
+    action,
+    runtimeCellId,
+    registry,
+    reason:
+      optionalString(body.value.reason) ??
+      "platform-readiness-shared-cell-runtime-drill",
+  });
+  return Response.json(result, { status: 200 });
+}
+
+export function isPlatformRuntimeCellDrillPath(pathname: string): boolean {
+  return runtimeCellIdFromInternalPlatformPath(pathname) !== undefined;
+}
+
+async function runPlatformRuntimeCellDrill(input: {
+  readonly action: PlatformRuntimeCellDrillAction;
+  readonly runtimeCellId: string;
+  readonly registry: RuntimeAgentRegistry;
+  readonly reason: string;
+}): Promise<PlatformRuntimeCellDrillResult> {
+  const requestedAt = new Date().toISOString();
+  const drillId = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+  const agentId = `agent_drill_${input.runtimeCellId}_${drillId}`;
+  const workPrefix = input.action === "drain"
+    ? "runtime_drain"
+    : "runtime_evac";
+  const workId = `${workPrefix}_${input.runtimeCellId}_${drillId}`;
+  await input.registry.register({
+    agentId,
+    provider: "operator-drill",
+    capabilities: {
+      providers: ["operator-drill"],
+      maxConcurrentLeases: 1,
+      labels: {
+        runtimeCellId: input.runtimeCellId,
+        drillAction: input.action,
+      },
+    },
+    metadata: {
+      runtimeCellId: input.runtimeCellId,
+      action: input.action,
+      reason: input.reason,
+      drillId,
+    },
+    heartbeatAt: requestedAt,
+  });
+  const work = await input.registry.enqueueWork({
+    workId,
+    kind: `runtime.cell.${input.action}.drill`,
+    provider: "operator-drill",
+    payload: {
+      runtimeCellId: input.runtimeCellId,
+      action: input.action,
+      reason: input.reason,
+    },
+    metadata: {
+      runtimeCellId: input.runtimeCellId,
+      action: input.action,
+      reason: input.reason,
+      drillId,
+    },
+    queuedAt: requestedAt,
+    idempotencyKey: workId,
+  });
+  const lease = await input.registry.leaseWork({
+    agentId,
+    now: requestedAt,
+  });
+  if (!lease || lease.workId !== work.id) {
+    throw new Error("runtime-cell drill work was not leased by scratch agent");
+  }
+  const completedAt = new Date().toISOString();
+  await input.registry.completeWork({
+    agentId,
+    leaseId: lease.id,
+    completedAt,
+    result: {
+      runtimeCellId: input.runtimeCellId,
+      action: input.action,
+      drillId,
+      status: "completed",
+    },
+  });
+  if (input.action === "drain") {
+    await input.registry.requestDrain(agentId, completedAt);
+  }
+  return {
+    kind: "takosumi.platform-runtime-cell-drill@v1",
+    action: input.action,
+    runtimeCellId: input.runtimeCellId,
+    ...(input.action === "drain"
+      ? { eventId: workId }
+      : { evacuationRunId: workId }),
+    agentId,
+    workId,
+    status: "completed",
+    requestedAt,
+    completedAt,
+  };
+}
+
+function runtimeCellIdFromInternalPlatformPath(
+  pathname: string,
+): string | undefined {
+  if (!pathname.startsWith(INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX)) {
+    return undefined;
+  }
+  if (!pathname.endsWith(INTERNAL_PLATFORM_RUNTIME_CELL_DRILL_SUFFIX)) {
+    return undefined;
+  }
+  const encoded = pathname.slice(
+    INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX.length,
+    pathname.length - INTERNAL_PLATFORM_RUNTIME_CELL_DRILL_SUFFIX.length,
+  );
+  if (!encoded || encoded.includes("/")) return undefined;
+  const runtimeCellId = decodeURIComponent(encoded);
+  return RUNTIME_CELL_ID_PATTERN.test(runtimeCellId)
+    ? runtimeCellId
+    : undefined;
+}
+
+function parsePlatformRuntimeCellDrillAction(
+  value: unknown,
+): PlatformRuntimeCellDrillAction | undefined {
+  return value === "drain" || value === "evacuation" ? value : undefined;
+}
 
 function isOperatorBillingPath(pathname: string): boolean {
   return (
@@ -624,6 +814,10 @@ function isBillingProvider(
   value: unknown,
 ): value is "stripe" | "manual" | "none" {
   return value === "stripe" || value === "manual" || value === "none";
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

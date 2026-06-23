@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/registry.ts";
 import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
@@ -10,6 +11,7 @@ import {
   handlePlatformAiGatewayRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
+  handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOidcMetricPath,
   matchPlatformCloudExtensionRoute,
@@ -551,6 +553,86 @@ test("operator billing route validates settings before mutation", async () => {
   );
   expect(response?.status).toBe(400);
   expect(subscriptionCalls).toHaveLength(0);
+});
+
+test("runtime-cell drill route is deploy-control bearer gated", async () => {
+  const registry = new InMemoryRuntimeAgentRegistry();
+  const url = new URL(
+    "https://app.takosumi.com/internal/platform/runtime-cells/platform-production-primary/drill",
+  );
+  const response = await handlePlatformRuntimeCellDrillRequest(
+    new Request(url, {
+      method: "POST",
+      body: JSON.stringify({ action: "drain" }),
+    }),
+    url,
+    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
+    registry,
+  );
+  expect(response?.status).toBe(401);
+  expect(await registry.listAgents()).toHaveLength(0);
+  expect(await registry.listWork()).toHaveLength(0);
+});
+
+test("runtime-cell drill route records drain and evacuation events", async () => {
+  const registry = new InMemoryRuntimeAgentRegistry();
+  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never;
+  const headers = {
+    authorization: "Bearer operator-secret",
+    "content-type": "application/json",
+  };
+
+  const drainUrl = new URL(
+    "https://app.takosumi.com/internal/platform/runtime-cells/platform-production-primary/drill",
+  );
+  const drain = await handlePlatformRuntimeCellDrillRequest(
+    new Request(drainUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ action: "drain", reason: "test-drain" }),
+    }),
+    drainUrl,
+    env,
+    registry,
+  );
+  expect(drain?.status).toBe(200);
+  const drainBody = await drain?.json();
+  expect(drainBody.kind).toBe("takosumi.platform-runtime-cell-drill@v1");
+  expect(drainBody.action).toBe("drain");
+  expect(drainBody.runtimeCellId).toBe("platform-production-primary");
+  expect(drainBody.eventId).toStartWith(
+    "runtime_drain_platform-production-primary_",
+  );
+  expect(drainBody.status).toBe("completed");
+  const drainAgent = await registry.getAgent(drainBody.agentId);
+  expect(drainAgent?.status).toBe("draining");
+  const drainWork = await registry.getWork(drainBody.workId);
+  expect(drainWork?.status).toBe("completed");
+  expect(drainWork?.metadata.runtimeCellId).toBe("platform-production-primary");
+
+  const evacuation = await handlePlatformRuntimeCellDrillRequest(
+    new Request(drainUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "evacuation",
+        reason: "test-evacuation",
+      }),
+    }),
+    drainUrl,
+    env,
+    registry,
+  );
+  expect(evacuation?.status).toBe(200);
+  const evacuationBody = await evacuation?.json();
+  expect(evacuationBody.action).toBe("evacuation");
+  expect(evacuationBody.evacuationRunId).toStartWith(
+    "runtime_evac_platform-production-primary_",
+  );
+  expect(evacuationBody.status).toBe("completed");
+  const evacuationWork = await registry.getWork(evacuationBody.workId);
+  expect(evacuationWork?.status).toBe("completed");
+  expect(evacuationWork?.result?.action).toBe("evacuation");
 });
 
 test("AI Gateway route stays unmounted without the Cloud extension binding", async () => {
