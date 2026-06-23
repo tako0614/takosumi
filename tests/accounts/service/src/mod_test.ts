@@ -10,6 +10,7 @@ import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
   TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS,
+  TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
   type TakosumiSubject,
   takosumiAccountsInstallationBillingUsageReportsPath,
@@ -19,6 +20,8 @@ import {
   takosumiAccountsInstallationPath,
   takosumiAccountsInstallationServiceRotateTokenPath,
   takosumiAccountsInstallationServicesPath,
+  takosumiAccountsPrivacyRequestCompletePath,
+  takosumiAccountsPrivacyRequestPath,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type AccountsInstallationExportBundle,
@@ -30,6 +33,7 @@ import {
   customOidcOAuthProvider,
   type DeployControlOperations,
   InMemorySharedCellWarmPool,
+  TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER,
 } from "../../../../accounts/service/src/mod.ts";
 import {
   installationEnvelope,
@@ -2772,6 +2776,205 @@ test("accounts handler requires session auth and valid scopes for personal acces
     }),
   );
   expect(invalidScopeResponse.status).toEqual(400);
+});
+
+test("accounts handler records privacy export requests for the signed-in account", async () => {
+  const store = new InMemoryAccountsStore();
+  const ownerSession = seedAccountSession(store, "tsub_privacy_owner");
+  const otherSession = seedAccountSession(store, "tsub_privacy_other");
+  const handler = createAccountsHandler({
+    store,
+    privacyOperationsToken: "privacy-ops-token",
+  });
+
+  const unauthenticatedResponse = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "export" }),
+      },
+    ),
+  );
+  expect(unauthenticatedResponse.status).toEqual(401);
+
+  const createResponse = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          ...accountSessionHeaders(ownerSession),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "export",
+          request_summary: "staging export rehearsal",
+        }),
+      },
+    ),
+  );
+  expect(createResponse.status).toEqual(201);
+  const created = await createResponse.json();
+  expect(String(created.request.request_id).startsWith("prq_")).toEqual(true);
+  expect(created.request.subject).toEqual("tsub_privacy_owner");
+  expect(created.request.kind).toEqual("export");
+  expect(created.request.status).toEqual("received");
+  expect(created.request.request_summary).toEqual("staging export rehearsal");
+  expect(
+    String(created.request.retention_record_id).startsWith(
+      "ret_tsub_privacy_owner_",
+    ),
+  ).toEqual(true);
+
+  const requestId = created.request.request_id as string;
+
+  const listResponse = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH}`,
+      { headers: accountSessionHeaders(ownerSession) },
+    ),
+  );
+  expect(listResponse.status).toEqual(200);
+  const listBody = await listResponse.json();
+  expect(
+    listBody.requests.map(
+      (request: { request_id: string }) => request.request_id,
+    ),
+  ).toEqual([requestId]);
+
+  const otherReadResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestPath(
+        requestId,
+      )}`,
+      { headers: accountSessionHeaders(otherSession) },
+    ),
+  );
+  expect(otherReadResponse.status).toEqual(404);
+
+  const invalidCompleteResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestCompletePath(
+        requestId,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER]: "privacy-ops-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "login_disabled" }),
+      },
+    ),
+  );
+  expect(invalidCompleteResponse.status).toEqual(400);
+
+  const customerCompleteResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestCompletePath(
+        requestId,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          ...accountSessionHeaders(ownerSession),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "exported" }),
+      },
+    ),
+  );
+  expect(customerCompleteResponse.status).toEqual(401);
+
+  const completeResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestCompletePath(
+        requestId,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER]: "privacy-ops-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          status: "exported",
+          export_ref: "run://exports/privacy-rehearsal",
+        }),
+      },
+    ),
+  );
+  expect(completeResponse.status).toEqual(200);
+  const completed = await completeResponse.json();
+  expect(completed.request.status).toEqual("exported");
+  expect(completed.request.export_ref).toEqual(
+    "run://exports/privacy-rehearsal",
+  );
+  expect(typeof completed.request.completed_at).toEqual("string");
+});
+
+test("accounts handler records privacy deletion requests with delete statuses", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_privacy_delete");
+  const handler = createAccountsHandler({
+    store,
+    privacyOperationsToken: "privacy-ops-token",
+  });
+
+  const createResponse = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          ...accountSessionHeaders(sessionId),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ kind: "delete" }),
+      },
+    ),
+  );
+  expect(createResponse.status).toEqual(201);
+  const created = await createResponse.json();
+
+  const invalidCompleteResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestCompletePath(
+        created.request.request_id,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER]: "privacy-ops-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "exported" }),
+      },
+    ),
+  );
+  expect(invalidCompleteResponse.status).toEqual(400);
+
+  const completeResponse = await handler(
+    new Request(
+      `https://accounts.example.test${takosumiAccountsPrivacyRequestCompletePath(
+        created.request.request_id,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER]: "privacy-ops-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "login_disabled" }),
+      },
+    ),
+  );
+  expect(completeResponse.status).toEqual(200);
+  expect((await completeResponse.json()).request.status).toEqual(
+    "login_disabled",
+  );
 });
 
 test("ephemeral accounts handler verifies PKCE S256 challenges", async () => {

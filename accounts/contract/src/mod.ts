@@ -13,6 +13,7 @@ export const TAKOSUMI_ACCOUNTS_USERINFO_PATH = "/oauth/userinfo";
 export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
 export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
+export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH = "/v1/privacy/requests";
 export const TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH =
   "/v1/billing/stripe/checkout";
 export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH = "/v1/billing/stripe/portal";
@@ -210,6 +211,51 @@ export interface TakosumiAccountsRevokePatResponse {
   token: TakosumiAccountsPatMetadata;
 }
 
+export type TakosumiAccountsPrivacyRequestKind = "export" | "delete";
+export type TakosumiAccountsPrivacyRequestStatus =
+  | "received"
+  | "processing"
+  | "exported"
+  | "login_disabled"
+  | "deleted"
+  | "rejected";
+
+export interface TakosumiAccountsPrivacyRequest {
+  request_id: string;
+  subject: TakosumiSubject;
+  kind: TakosumiAccountsPrivacyRequestKind;
+  status: TakosumiAccountsPrivacyRequestStatus;
+  retention_record_id: string;
+  policy_ref: string;
+  request_summary?: string;
+  export_ref?: string;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TakosumiAccountsCreatePrivacyRequestRequest {
+  kind: TakosumiAccountsPrivacyRequestKind;
+  request_summary?: string;
+}
+
+export interface TakosumiAccountsCompletePrivacyRequestRequest {
+  status: Extract<
+    TakosumiAccountsPrivacyRequestStatus,
+    "exported" | "login_disabled" | "deleted" | "rejected"
+  >;
+  export_ref?: string;
+  request_summary?: string;
+}
+
+export interface TakosumiAccountsPrivacyRequestResponse {
+  request: TakosumiAccountsPrivacyRequest;
+}
+
+export interface TakosumiAccountsListPrivacyRequestsResponse {
+  requests: readonly TakosumiAccountsPrivacyRequest[];
+}
+
 export function takosumiAccountsInstallationPlanRunsPath(): string {
   return TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH;
 }
@@ -221,6 +267,19 @@ export function takosumiAccountsAccountTokenRevokePath(
     tokenId,
     "tokenId",
   )}/revoke`;
+}
+
+export function takosumiAccountsPrivacyRequestPath(requestId: string): string {
+  return `${TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH}/${pathSegment(
+    requestId,
+    "requestId",
+  )}`;
+}
+
+export function takosumiAccountsPrivacyRequestCompletePath(
+  requestId: string,
+): string {
+  return `${takosumiAccountsPrivacyRequestPath(requestId)}/complete`;
 }
 
 export function takosumiAccountsInstallationPath(

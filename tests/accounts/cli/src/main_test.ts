@@ -6311,12 +6311,13 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(24);
+  expect(plan.migrations.length).toEqual(25);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
   );
   expect(plan.migrations[22].name).toEqual("023_account_email_verified.sql");
+  expect(plan.migrations[24].name).toEqual("025_privacy_requests.sql");
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
   expect(stdout.join("\n").includes("db.internal")).toEqual(false);
@@ -8613,6 +8614,7 @@ test("platform-secrets status compares local vault with remote names", async () 
     expect(output).toContain(
       "Missing generated: TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
     );
+    expect(output).toContain("TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN");
     expect(output).toContain("Missing required manual: none");
     expect(output).toContain("Remote only: REMOTE_ONLY_SECRET");
     expect(output).not.toContain("secret-one");
@@ -9061,6 +9063,7 @@ test("platform-secrets apply generates missing safe secrets and pushes value fil
     const pushedNames = commands.map((command) => command[4]).sort();
     expect(pushedNames).toEqual([
       "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
+      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
       "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
       "TAKOSUMI_SECRET_STORE_PASSPHRASE",
@@ -9093,7 +9096,7 @@ test("platform-secrets apply generates missing safe secrets and pushes value fil
     ).toEqual(0o600);
     const output = stdout.concat(stderr).join("\n");
     expect(output).toContain("Generated: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
-    expect(output).toContain("Pushed 4 platform secret(s)");
+    expect(output).toContain("Pushed 5 platform secret(s)");
     expect(output).not.toContain("protected-key");
     expect(output).not.toContain(generated.trim());
   } finally {
@@ -9135,6 +9138,7 @@ test("platform-secrets apply pushes optional metrics scrape token when present",
     const pushedNames = commands.map((command) => command[4]).sort();
     expect(pushedNames).toEqual([
       "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
+      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
       "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
       "TAKOSUMI_METRICS_SCRAPE_TOKEN",
@@ -9144,7 +9148,7 @@ test("platform-secrets apply pushes optional metrics scrape token when present",
       "metrics-token",
     );
     const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Pushed 5 platform secret(s)");
+    expect(output).toContain("Pushed 6 platform secret(s)");
     expect(output).not.toContain("metrics-token");
   } finally {
     await removePath(dir, { recursive: true });
@@ -9279,6 +9283,7 @@ test("platform-secrets apply can explicitly initialize missing protected secrets
       "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET",
       "TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET",
       "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
+      "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
       "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET",
       "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
@@ -9303,7 +9308,7 @@ test("platform-secrets apply can explicitly initialize missing protected secrets
     }
     const output = stdout.join("\n");
     expect(output).toContain("Generated: TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK");
-    expect(output).toContain("Pushed 10 platform secret(s)");
+    expect(output).toContain("Pushed 11 platform secret(s)");
     expect(output).not.toContain(privateJwk.d);
   } finally {
     await removePath(dir, { recursive: true });
@@ -9348,7 +9353,7 @@ test("platform-secrets apply local-only initializes the vault without wrangler",
     expect(
       await pathExists(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN")),
     ).toEqual(true);
-    expect(stdout.join("\n")).toContain("Initialized local vault with 10");
+    expect(stdout.join("\n")).toContain("Initialized local vault with 11");
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);

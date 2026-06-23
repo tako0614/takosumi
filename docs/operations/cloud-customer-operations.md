@@ -274,6 +274,43 @@ call the retired `/v1/installation-projections/import` route, and it must not be
 recorded as post-import-login or sample-data verification until the restored
 target has been opened and checked.
 
+## Privacy Request Ledger
+
+Customer export and deletion requests are recorded through the account-plane
+privacy request ledger. The ledger stores request state, retention references,
+and operator completion references only. It must not store raw personal data,
+support mailbox bodies, payment details, provider credentials, or export bundle
+contents.
+
+The customer-facing request API is session-authenticated:
+
+```text
+POST /v1/privacy/requests
+GET  /v1/privacy/requests
+GET  /v1/privacy/requests/:requestId
+```
+
+The completion API is operator-only and requires the configured privacy
+operations token in `x-takosumi-privacy-operations-token`:
+
+```text
+POST /v1/privacy/requests/:requestId/complete
+```
+
+`POST /v1/privacy/requests` accepts `kind: "export"` or `kind: "delete"` and
+returns a `prq_...` request id, a retention record id, and the active privacy
+policy reference. `complete` records the operational result:
+
+- export requests may complete as `exported` or `rejected`;
+- delete requests may complete as `login_disabled`, `deleted`, or `rejected`;
+- `export_ref` must point to an operator-controlled evidence reference, not to
+  a public download URL containing customer data.
+
+GA privacy evidence must include the privacy request id, the completion status,
+the retention record id, the policy reference, and the separate private evidence
+that proves export/import or deletion handling. The request ledger by itself is
+not proof that the data was exported, imported, or deleted.
+
 ## Escalation Matrix
 
 Takosumi Cloud support ownership is:
@@ -320,6 +357,7 @@ This runbook backs the `customer-operations` launch-readiness domain:
 - `admin-guide`: this document, section "Admin Guide".
 - `billing-faq`: this document, section "Billing FAQ".
 - `export-guide`: this document, section "Export Guide".
+- `privacy-request-ledger`: this document, section "Privacy Request Ledger".
 - `escalation-matrix`: this document, section "Escalation Matrix".
 - `suspension-delete-export-wording`: this document, section
   "Suspension, Delete, And Export Wording".

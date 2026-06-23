@@ -204,6 +204,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET               upstream OAuth subject mapping secret
 #   TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET launch-token pairwise secret
 #   TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET       R2 export download HMAC secret
+#   TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN     operator token for privacy request completion
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 # Optional release activation webhook:

@@ -342,6 +342,29 @@ export interface BillingUsageRecord {
   reportedAt: number;
 }
 
+export type PrivacyRequestKind = "export" | "delete";
+export type PrivacyRequestStatus =
+  | "received"
+  | "processing"
+  | "exported"
+  | "login_disabled"
+  | "deleted"
+  | "rejected";
+
+export interface PrivacyRequestRecord {
+  requestId: string;
+  subject: TakosumiSubject;
+  kind: PrivacyRequestKind;
+  status: PrivacyRequestStatus;
+  retentionRecordId: string;
+  policyRef: string;
+  requestSummary?: string;
+  exportRef?: string;
+  completedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface AccountsStore extends AppInstallationLedgerStore {
   saveAccount(record: TakosumiAccountRecord): void | Promise<void>;
   findAccount(
@@ -456,6 +479,16 @@ export interface AccountsStore extends AppInstallationLedgerStore {
   listBillingUsageRecordsForInstallation(
     installationId: string,
   ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
+  savePrivacyRequest(record: PrivacyRequestRecord): void | Promise<void>;
+  findPrivacyRequest(
+    requestId: string,
+  ):
+    | PrivacyRequestRecord
+    | undefined
+    | Promise<PrivacyRequestRecord | undefined>;
+  listPrivacyRequestsForSubject(
+    subject: TakosumiSubject,
+  ): readonly PrivacyRequestRecord[] | Promise<readonly PrivacyRequestRecord[]>;
   saveAuthorizationCode(
     code: string,
     record: AuthorizationCodeRecord,
@@ -699,6 +732,8 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #billingAccountsByStripeCustomerId = new Map<string, string>();
   readonly #billingWebhookEvents = new Map<string, BillingWebhookEventRecord>();
   readonly #billingUsageRecords = new Map<string, BillingUsageRecord>();
+  readonly #privacyRequests = new Map<string, PrivacyRequestRecord>();
+  readonly #privacyRequestsBySubject = new Map<TakosumiSubject, Set<string>>();
   readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
   readonly #accessTokens = new Map<string, TokenRecord>();
   readonly #refreshTokens = new Map<string, TokenRecord>();
@@ -1027,6 +1062,40 @@ export class InMemoryAccountsStore implements AccountsStore {
     return [...this.#billingUsageRecords.values()].filter(
       (record) => record.installationId === installationId,
     );
+  }
+
+  savePrivacyRequest(record: PrivacyRequestRecord): void {
+    const existing = this.#privacyRequests.get(record.requestId);
+    if (existing && existing.subject !== record.subject) {
+      throw new TypeError(
+        "privacy request id is already owned by another subject",
+      );
+    }
+    this.#privacyRequests.set(record.requestId, record);
+    const ids =
+      this.#privacyRequestsBySubject.get(record.subject) ?? new Set<string>();
+    ids.add(record.requestId);
+    this.#privacyRequestsBySubject.set(record.subject, ids);
+  }
+
+  findPrivacyRequest(requestId: string): PrivacyRequestRecord | undefined {
+    return this.#privacyRequests.get(requestId);
+  }
+
+  listPrivacyRequestsForSubject(
+    subject: TakosumiSubject,
+  ): readonly PrivacyRequestRecord[] {
+    const ids = this.#privacyRequestsBySubject.get(subject);
+    if (!ids) return [];
+    return [...ids]
+      .flatMap((id) => {
+        const record = this.#privacyRequests.get(id);
+        return record ? [record] : [];
+      })
+      .sort(
+        (a, b) =>
+          b.createdAt - a.createdAt || a.requestId.localeCompare(b.requestId),
+      );
   }
 
   saveAuthorizationCode(code: string, record: AuthorizationCodeRecord): void {

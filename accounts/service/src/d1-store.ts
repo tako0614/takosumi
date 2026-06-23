@@ -39,6 +39,7 @@ import type {
   OidcClientRecord,
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
+  PrivacyRequestRecord,
   RefreshChainPruneResult,
   TakosumiAccountRecord,
   TokenRecord,
@@ -644,6 +645,42 @@ export class D1AccountsStore implements AccountsStore {
     installationId: string,
   ): Promise<readonly BillingUsageRecord[]> {
     return this.#listByIndex("billing_usage_by_installation", installationId);
+  }
+
+  async savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
+    const existing = await this.findPrivacyRequest(record.requestId);
+    if (existing && existing.subject !== record.subject) {
+      throw new TypeError(
+        "privacy request id is already owned by another subject",
+      );
+    }
+    await this.#put("privacy_requests", record.requestId, record, [
+      {
+        name: "privacy_requests_by_subject",
+        key: record.subject,
+        sortKey: record.createdAt,
+      },
+    ]);
+  }
+
+  findPrivacyRequest(
+    requestId: string,
+  ): Promise<PrivacyRequestRecord | undefined> {
+    return this.#get("privacy_requests", requestId);
+  }
+
+  async listPrivacyRequestsForSubject(
+    subject: TakosumiSubject,
+  ): Promise<readonly PrivacyRequestRecord[]> {
+    return (
+      await this.#listByIndex<PrivacyRequestRecord>(
+        "privacy_requests_by_subject",
+        subject,
+      )
+    ).sort(
+      (a, b) =>
+        b.createdAt - a.createdAt || a.requestId.localeCompare(b.requestId),
+    );
   }
 
   saveAuthorizationCode(

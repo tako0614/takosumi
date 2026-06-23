@@ -176,6 +176,21 @@ test("service binding material migration does not restore retired app binding ta
   expect(migration).not.toContain("installation_v1.app_grants");
 });
 
+test("privacy request migration records export and deletion operations", async () => {
+  const migration = await readMigration("025_privacy_requests.sql");
+
+  expect(migration).toContain(
+    "CREATE TABLE IF NOT EXISTS accounts_v1.privacy_requests",
+  );
+  expect(migration).toContain("REFERENCES accounts_v1.accounts");
+  expect(migration).toContain("privacy_requests_kind_catalog_v1");
+  expect(migration).toContain("privacy_requests_status_catalog_v1");
+  expect(migration).toContain("'login_disabled'");
+  expect(migration).toContain("retention_record_id text NOT NULL");
+  expect(migration).toContain("privacy_requests_subject_idx");
+  expect(migration).toContain("privacy_requests_status_idx");
+});
+
 test("F7 event chain lock migration creates per-installation row lock", async () => {
   const migration = await readMigration("018_event_chain_lock.sql");
 

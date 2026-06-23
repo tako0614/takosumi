@@ -27,6 +27,7 @@ import type {
   OidcClientRecord,
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
+  PrivacyRequestRecord,
   TakosumiAccountRecord,
   TokenRecord,
   UpstreamIdentityRecord,
@@ -184,6 +185,20 @@ export interface BillingUsageRow {
   metadata: unknown;
   reported_by_subject: TakosumiSubject | null;
   reported_at: TimeValue;
+}
+
+export interface PrivacyRequestRow {
+  request_id: string;
+  subject: TakosumiSubject;
+  kind: PrivacyRequestRecord["kind"];
+  status: PrivacyRequestRecord["status"];
+  retention_record_id: string;
+  policy_ref: string;
+  request_summary: string | null;
+  export_ref: string | null;
+  completed_at: TimeValue | null;
+  created_at: TimeValue;
+  updated_at: TimeValue;
 }
 
 export interface AuthorizationCodeRow {
@@ -457,6 +472,24 @@ export function billingUsageFromRow(row: BillingUsageRow): BillingUsageRecord {
     metadata: objectJson(row.metadata),
     reportedBySubject: row.reported_by_subject ?? undefined,
     reportedAt: millis(row.reported_at),
+  };
+}
+
+export function privacyRequestFromRow(
+  row: PrivacyRequestRow,
+): PrivacyRequestRecord {
+  return {
+    requestId: row.request_id,
+    subject: row.subject,
+    kind: row.kind,
+    status: row.status,
+    retentionRecordId: row.retention_record_id,
+    policyRef: row.policy_ref,
+    requestSummary: optional(row.request_summary),
+    exportRef: optional(row.export_ref),
+    completedAt: optionalMillis(row.completed_at),
+    createdAt: millis(row.created_at),
+    updatedAt: millis(row.updated_at),
   };
 }
 
