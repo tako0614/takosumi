@@ -140,6 +140,19 @@ queue = "takosumi-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 
+# Cloud-only extension seams. The OSS platform worker only delegates these
+# paths through service bindings; the provider-compatible Gateway / AI runtime
+# behavior lives in closed Takosumi Cloud workers. Keep these placeholder names
+# in sync with `deploy/platform/worker.ts` and replace the `service` values in
+# the operator-private realized config.
+[[services]]
+binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
+service = "takosumi-cloud-ai-gateway"
+
+[[services]]
+binding = "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT"
+service = "takosumi-cloud-cloudflare-compat"
+
 # Scheduled source polling (Core Specification §6). Every 5 minutes the worker's
 # scheduled() handler scans active autoSync sources and enqueues a deduped
 # source_sync (the consumer ls-remotes and only snapshots when the ref moved).
