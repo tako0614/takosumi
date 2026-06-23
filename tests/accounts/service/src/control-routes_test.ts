@@ -1046,8 +1046,8 @@ test("anonymous control requests are 401 across the family", async () => {
     ["POST", "/api/v1/installations/inst_1/drift-check"],
     ["POST", "/api/v1/installations/inst_1/backups"],
     ["GET", "/api/v1/installations/inst_1/dependencies"],
-    ["GET", "/api/v1/install-configs"],
-    ["GET", "/api/v1/install-configs/cfg_default"],
+    ["GET", "/api/v1/capsule-configs"],
+    ["GET", "/api/v1/capsule-configs/cfg_default"],
     ["GET", "/api/v1/providers"],
     ["GET", "/api/v1/sources/src_x"],
     ["POST", "/api/v1/sources/src_x/compatibility-check"],
@@ -1058,7 +1058,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["POST", "/api/v1/runs/plan_1/cancel"],
     ["GET", "/api/v1/runs/plan_1/cost"],
     ["GET", "/api/v1/run-groups/rg_1"],
-    ["GET", "/api/v1/connections?spaceId=space_a"],
+    ["GET", "/api/v1/connections?workspaceId=space_a"],
     ["POST", "/api/v1/connections/conn_1/test"],
     ["POST", "/api/v1/connections/conn_1/revoke"],
     ["GET", "/api/v1/provider-connections"],
@@ -2042,7 +2042,7 @@ test("GET /api/v1/provider-connections rejects an inaccessible Space before disp
   });
   const { request: req, url } = request(
     "GET",
-    "/api/v1/provider-connections?spaceId=space_b",
+    "/api/v1/provider-connections?workspaceId=space_b",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2120,7 +2120,7 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
   });
   const { request: req, url } = request(
     "GET",
-    "/api/v1/provider-connections?spaceId=space_a",
+    "/api/v1/provider-connections?workspaceId=space_a",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2929,7 +2929,7 @@ test("DELETE /api/v1/dependencies/:id returns 204", async () => {
   expect(operations.calls.deleteDependency?.[0]).toEqual("dep_1");
 });
 
-test("GET /api/v1/install-configs merges official + scoped", async () => {
+test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2952,7 +2952,7 @@ test("GET /api/v1/install-configs merges official + scoped", async () => {
   };
   const { request: req, url } = request(
     "GET",
-    "/api/v1/install-configs?spaceId=space_a",
+    "/api/v1/capsule-configs?workspaceId=space_a",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -2974,7 +2974,7 @@ test("GET /api/v1/install-configs merges official + scoped", async () => {
   expect(body.installConfigs[0]?.installType).toBeUndefined();
   expect(body.installConfigs[0]?.templateBinding).toBeUndefined();
 
-  const get = request("GET", "/api/v1/install-configs/cfg_default", {
+  const get = request("GET", "/api/v1/capsule-configs/cfg_default", {
     cookie,
   });
   const getResp = await handleControlRoute({
@@ -2990,6 +2990,17 @@ test("GET /api/v1/install-configs merges official + scoped", async () => {
   };
   expect(getBody.installConfig.sourceKind).toEqual("generic_capsule");
   expect(getBody.installConfig.installType).toBeUndefined();
+
+  const legacy = request("GET", "/api/v1/install-configs?spaceId=space_a", {
+    cookie,
+  });
+  const legacyResp = await handleControlRoute({
+    request: legacy.request,
+    url: legacy.url,
+    store,
+    operations,
+  });
+  expect(legacyResp?.status).toEqual(200);
 });
 
 test("Sources: GET requires spaceId, POST + sync return 201", async () => {
@@ -3006,7 +3017,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   });
   expect(missingResp?.status).toEqual(400);
 
-  const list = request("GET", "/api/v1/sources?spaceId=space_a", {
+  const list = request("GET", "/api/v1/sources?workspaceId=space_a", {
     cookie,
   });
   const listResp = await handleControlRoute({
@@ -3362,7 +3373,7 @@ test("Connections: requires spaceId; provider-connections is Space-gated", async
   });
   expect(missingResp?.status).toEqual(400);
 
-  const scoped = request("GET", "/api/v1/connections?spaceId=space_a", {
+  const scoped = request("GET", "/api/v1/connections?workspaceId=space_a", {
     cookie,
   });
   const scopedResp = await handleControlRoute({
@@ -3387,7 +3398,7 @@ test("Connections: requires spaceId; provider-connections is Space-gated", async
 
   const defaults = request(
     "GET",
-    "/api/v1/provider-connections?spaceId=space_a",
+    "/api/v1/provider-connections?workspaceId=space_a",
     { cookie },
   );
   const defaultsResp = await handleControlRoute({
@@ -4088,7 +4099,7 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
   });
   const operations = fakeOperations();
 
-  const list = request("GET", "/api/v1/output-shares?spaceId=space_a", {
+  const list = request("GET", "/api/v1/output-shares?workspaceId=space_a", {
     cookie,
   });
   const listResp = await handleControlRoute({
