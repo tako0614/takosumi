@@ -347,12 +347,7 @@ export function parseLoginEmailAllowlist(
     env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST,
   );
   if (configured?.trim() === "*") return undefined;
-  const emails =
-    configured !== undefined
-      ? splitList(configured)
-      : isOfficialTakosumiCloudIssuer(issuer)
-        ? [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL]
-        : [];
+  const emails = configured !== undefined ? splitList(configured) : [];
   if (emails.length === 0) return undefined;
   return {
     emails,
