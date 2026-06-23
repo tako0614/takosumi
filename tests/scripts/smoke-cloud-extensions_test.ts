@@ -9,9 +9,11 @@ import {
 const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   url: "https://app.takosumi.test",
   sessionToken: "sess_test_secret_value",
+  authTokenKind: "session",
   sessionTokenSource: "file",
   json: true,
   requireCompatMaterialization: false,
+  requireProviderE2E: false,
 };
 
 test("cloud extension smoke records redacted pass with a materialization gap", async () => {
@@ -53,13 +55,25 @@ test("cloud extension smoke strict mode fails on compat materialization stub", a
 
 test("cloud extension smoke strict mode passes when compat lifecycle works", async () => {
   const result = await runCloudExtensionSmoke(
-    { ...BASE_OPTIONS, requireCompatMaterialization: true },
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireProviderE2E: true,
+    },
     async (url, init) =>
       responseForImplementedCompat(
         new URL(url).pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
       ),
+    async () => ({
+      status: 200,
+      ok: true,
+      summary: {
+        resource: "cloudflare_r2_bucket",
+        completedSteps: ["init", "plan", "apply", "destroy"],
+      },
+    }),
   );
 
   expect(result.status).toBe("passed");
@@ -71,6 +85,49 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
     )?.status,
   ).toBe(201);
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
+});
+
+test("cloud extension smoke supports PAT auth and provider E2E evidence", async () => {
+  const patOptions: CloudExtensionSmokeOptions = {
+    ...BASE_OPTIONS,
+    sessionToken: "takpat_test_secret_value",
+    authTokenKind: "pat",
+    requireCompatMaterialization: true,
+    requireProviderE2E: true,
+  };
+  const result = await runCloudExtensionSmoke(
+    patOptions,
+    async (url, init) =>
+      responseForImplementedCompat(
+        new URL(url).pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+      ),
+    async (options) => ({
+      status: 200,
+      ok: true,
+      summary: {
+        resource: "cloudflare_r2_bucket",
+        tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
+        completedSteps: ["init", "plan", "apply", "destroy"],
+      },
+    }),
+  );
+
+  expect(result.status).toBe("passed");
+  expect(result.gaReady).toBe(true);
+  expect(result.authTokenKind).toBe("pat");
+  expect(
+    result.checks.find((check) => check.name === "cloudExtensionPatAuth")?.ok,
+  ).toBe(true);
+  expect(
+    result.checks.find((check) => check.name === "cloudflareCompatProviderE2E")
+      ?.summary,
+  ).toMatchObject({
+    resource: "cloudflare_r2_bucket",
+    completedSteps: ["init", "plan", "apply", "destroy"],
+  });
+  expect(JSON.stringify(result)).not.toContain(patOptions.sessionToken);
 });
 
 function responseFor(pathname: string, authenticated: boolean): Response {
