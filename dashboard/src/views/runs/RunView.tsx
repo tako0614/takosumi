@@ -28,7 +28,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
-import { Activity } from "lucide-solid";
+import { Activity, ExternalLink } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -40,6 +40,7 @@ import {
   getRun,
   getRunCostInfo,
   getRunLogs,
+  listDeployments,
   listProviderConnections,
   planInstallation,
   type ProviderConnection,
@@ -59,6 +60,7 @@ import {
   inputNamesFromLogs,
   isTerminalRunStatus,
 } from "../../lib/run-logs.ts";
+import { launchUrlFromOutputs } from "../../lib/installations-ui.ts";
 import {
   diagnosticSeverityLabel,
   operationLabel,
@@ -525,6 +527,32 @@ function Inner() {
   const installationId = () => run.latest?.installationId ?? null;
   const [installation] = createResource(installationId, getInstallation);
   const appName = () => installation.latest?.name;
+  const appliedRunDeploymentKey = createMemo(() => {
+    const r = run.latest;
+    const id = installationId();
+    if (!id || !r || r.type !== "apply" || r.status !== "succeeded") {
+      return undefined;
+    }
+    return `${id}:${r.id}`;
+  });
+  const [deployments] = createResource(appliedRunDeploymentKey, async (key) => {
+    const [id] = key.split(":");
+    try {
+      return await listDeployments(id);
+    } catch {
+      return [];
+    }
+  });
+  const completedRunLaunchUrl = createMemo(() => {
+    const r = run.latest;
+    if (!r || r.type !== "apply" || r.status !== "succeeded") return undefined;
+    const rows = deployments() ?? [];
+    const deployment =
+      rows.find(
+        (row) => row.applyRunId === r.id && row.status !== "destroyed",
+      ) ?? rows.find((row) => row.status === "active");
+    return launchUrlFromOutputs(deployment?.outputsPublic ?? {});
+  });
 
   createEffect(() => {
     const r = run.latest;
@@ -976,12 +1004,29 @@ function Inner() {
                     }
                   >
                     {(id) => (
-                      <Button
-                        variant="primary"
-                        href={`/services/${encodeURIComponent(id())}`}
-                      >
-                        {t("run.backToApp")}
-                      </Button>
+                      <>
+                        <Show when={completedRunLaunchUrl()}>
+                          {(url) => (
+                            <Button
+                              variant="primary"
+                              href={url()}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              icon={<ExternalLink size={16} />}
+                            >
+                              {t("apps.openApp")}
+                            </Button>
+                          )}
+                        </Show>
+                        <Button
+                          variant={
+                            completedRunLaunchUrl() ? "secondary" : "primary"
+                          }
+                          href={`/services/${encodeURIComponent(id())}`}
+                        >
+                          {t("run.backToApp")}
+                        </Button>
+                      </>
                     )}
                   </Show>
                 </div>
