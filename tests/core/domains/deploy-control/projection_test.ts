@@ -67,3 +67,30 @@ test("output allowlist projection fails closed for required nested JSON secret m
     ),
   ).toThrow("cannot be projected");
 });
+
+test("output allowlist projection drops optional empty generated output shims", () => {
+  const outputs = {
+    url: {
+      sensitive: false,
+      value: "",
+    },
+    worker_name: {
+      sensitive: false,
+      value: "",
+    },
+  };
+
+  const allowlist = {
+    url: {
+      from: "url",
+      type: "url",
+    },
+    worker_name: {
+      from: "worker_name",
+      type: "string",
+    },
+  } as const;
+
+  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({});
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
+});

@@ -323,14 +323,14 @@ function defaultCapsuleInstallConfig(now: string): InstallConfig {
   };
 }
 
-function defaultCapsuleOutputAllowlist(): Readonly<
+export function defaultCapsuleOutputAllowlist(): Readonly<
   Record<string, OutputAllowlistEntry>
 > {
   return {
     // Plain Git URL installs are generic OpenTofu/Terraform Capsules. If a
     // module emits the common app-launch outputs, surface them without requiring
     // every arbitrary module to define them.
-    url: { from: "url", type: "string" },
+    url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
   };
 }

@@ -28,7 +28,7 @@ test("officialInstallConfigs seeds the generic Capsule default + first-party tem
   expect(generic?.templateBinding).toBeUndefined();
   expect(generic?.trustLevel).toBe("trusted");
   expect(generic?.outputAllowlist).toEqual({
-    url: { from: "url", type: "string" },
+    url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
   });
   for (const config of configs) {
