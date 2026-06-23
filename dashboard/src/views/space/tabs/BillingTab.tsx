@@ -22,6 +22,7 @@ import {
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
+import { setCurrentSpaceId } from "../../../lib/space-state.ts";
 import {
   getSpaceBilling,
   listBillingPlans,
@@ -30,6 +31,7 @@ import {
   type UsageEvent,
 } from "../../../lib/control-api.ts";
 import { rpc } from "../../account/lib/api.ts";
+import { consumeBillingReturnSearch } from "../../account/lib/billing-return.ts";
 import { readSession } from "../../account/lib/session.ts";
 import {
   formatDateTime,
@@ -102,19 +104,19 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     "success" | "cancelled" | null
   >(null);
   if (typeof window !== "undefined") {
-    const params = new URLSearchParams(window.location.search);
-    const result = params.get("checkout");
-    if (result === "success" || result === "cancelled") {
-      setCheckoutNotice(result);
+    const billingReturn = consumeBillingReturnSearch(window.location.search);
+    if (billingReturn.spaceId) {
+      setCurrentSpaceId(billingReturn.spaceId);
     }
-    if (params.has("checkout") || params.has("portal")) {
-      params.delete("checkout");
-      params.delete("portal");
-      const next = params.toString();
+    if (billingReturn.checkoutNotice) {
+      setCheckoutNotice(billingReturn.checkoutNotice);
+    }
+    if (billingReturn.changed) {
       window.history.replaceState(
         {},
         "",
-        window.location.pathname + (next ? `?${next}` : ""),
+        window.location.pathname +
+          (billingReturn.nextSearch ? `?${billingReturn.nextSearch}` : ""),
       );
     }
   }
