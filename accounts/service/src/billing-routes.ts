@@ -533,12 +533,7 @@ export function stripeInvoiceCreditReconciliationInput(payload: string):
     isRecord(event?.data) && isRecord(event.data.object)
       ? event.data.object
       : undefined;
-  const subscriptionDetails = isRecord(object?.subscription_details)
-    ? object.subscription_details
-    : undefined;
-  const metadata = isRecord(subscriptionDetails?.metadata)
-    ? subscriptionDetails.metadata
-    : undefined;
+  const metadata = invoiceSubscriptionMetadata(object);
   const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
   const credits = positiveIntegerValue(
     metadata?.credits ?? metadata?.takosumi_credits,
@@ -546,6 +541,24 @@ export function stripeInvoiceCreditReconciliationInput(payload: string):
   const stripeEventId = stringValue(event?.id);
   if (!spaceId || !credits || !stripeEventId) return undefined;
   return { spaceId, credits, stripeEventId };
+}
+
+function invoiceSubscriptionMetadata(
+  object: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const legacySubscriptionDetails = isRecord(object?.subscription_details)
+    ? object.subscription_details
+    : undefined;
+  if (isRecord(legacySubscriptionDetails?.metadata)) {
+    return legacySubscriptionDetails.metadata;
+  }
+  const parent = isRecord(object?.parent) ? object.parent : undefined;
+  const parentSubscriptionDetails = isRecord(parent?.subscription_details)
+    ? parent.subscription_details
+    : undefined;
+  return isRecord(parentSubscriptionDetails?.metadata)
+    ? parentSubscriptionDetails.metadata
+    : undefined;
 }
 
 function positiveIntegerValue(value: unknown): number | undefined {
