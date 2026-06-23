@@ -226,6 +226,25 @@ final `takos-export-<op>.tar.zst[.age]` artifact and should be copied into
 `encrypted-export.archiveDigest` evidence together with the operation id and
 age recipient.
 
+To prepare a self-host restore without reopening the retired public import
+route, extract `takos-export/bundle.json` from the archive and generate the
+target request:
+
+```bash
+bun run cli -- internal installations import-plan \
+  --bundle-file takos-export/bundle.json \
+  --target-issuer https://selfhost.example.com \
+  --target-account acct_target \
+  --target-space space_target \
+  --created-by-subject tsub_target \
+  --target-installation-id inst_target \
+  --out-file import-plan.json
+```
+
+The generated plan is review input for the deploy-control restore/apply flow;
+it is not a network import and does not by itself satisfy clean-import or
+post-import-login readiness evidence.
+
 ## Escalation Matrix
 
 Takosumi Cloud support ownership is:

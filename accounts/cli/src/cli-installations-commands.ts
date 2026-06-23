@@ -1,5 +1,7 @@
 import process from "node:process";
+import { readFile, writeFile } from "node:fs/promises";
 import {
+  type TakosumiSubject,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
   takosumiAccountsInstallationExportPath,
   takosumiAccountsInstallationMaterializePath,
@@ -8,12 +10,17 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import {
   installationsExportHelpText,
+  installationsImportPlanHelpText,
   installationsInspectHelpText,
   installationsListHelpText,
   installationsMaterializeHelpText,
   installationsStatusHelpText,
   installationsUninstallHelpText,
 } from "./cli-help.ts";
+import {
+  parseAccountsInstallationExportBundle,
+  planInstallationImport,
+} from "@takosjp/takosumi-accounts-service";
 import {
   booleanOption,
   commaSeparatedOption,
@@ -362,6 +369,84 @@ export async function runInstallationsExport(
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 1;
+  }
+}
+
+export async function runInstallationsImportPlan(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const options = parseOptions(args);
+  if (options.help) {
+    io.stdout(installationsImportPlanHelpText());
+    return 0;
+  }
+  const bundleFile = optionalStringOption(options, "bundleFile");
+  const targetIssuer = optionalStringOption(options, "targetIssuer");
+  const targetAccountId = optionalStringOption(options, "targetAccount");
+  const targetSpaceId = optionalStringOption(options, "targetSpace");
+  const createdBySubject = optionalStringOption(options, "createdBySubject");
+  if (!bundleFile) {
+    io.stderr("--bundle-file is required");
+    return 2;
+  }
+  if (!targetIssuer) {
+    io.stderr("--target-issuer is required");
+    return 2;
+  }
+  if (!targetAccountId) {
+    io.stderr("--target-account is required");
+    return 2;
+  }
+  if (!targetSpaceId) {
+    io.stderr("--target-space is required");
+    return 2;
+  }
+  if (!createdBySubject || !createdBySubject.startsWith("tsub_")) {
+    io.stderr("--created-by-subject must be a tsub_ subject");
+    return 2;
+  }
+  const mode = optionalStringOption(options, "mode") ?? "self-hosted";
+  if (mode !== "self-hosted" && mode !== "dedicated") {
+    io.stderr("--mode must be self-hosted or dedicated");
+    return 2;
+  }
+  try {
+    const bundle = parseAccountsInstallationExportBundle(
+      parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
+    );
+    const plan = planInstallationImport({
+      bundle,
+      targetIssuer,
+      targetAccountId,
+      targetSpaceId,
+      createdBySubject: createdBySubject as TakosumiSubject,
+      targetInstallationId: optionalStringOption(
+        options,
+        "targetInstallationId",
+      ),
+      mode,
+    });
+    const output = `${JSON.stringify(plan, null, 2)}\n`;
+    const outFile = optionalStringOption(options, "outFile");
+    if (outFile) {
+      await writeFile(outFile, output);
+      io.stdout(`Wrote installation import plan to ${outFile}`);
+    } else {
+      io.stdout(output.trimEnd());
+    }
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+function parseJsonFile(text: string, file: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${file} is not valid JSON`);
   }
 }
 
