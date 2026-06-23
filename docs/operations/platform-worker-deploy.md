@@ -117,6 +117,7 @@ staging / production の vault を先に作るだけなら `--local-only` を併
 必須 secret classes:
 
 - accounts OIDC signing keypair
+- optional public-only previous OIDC signing JWKS during key rotation overlap
 - pairwise subject / launch / export signing secrets
 - internal accounts/control-plane bearer or handshake token, when the realized
   platform build enables bearer-gated internal control routes

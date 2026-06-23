@@ -42,6 +42,7 @@ TAKOSUMI_ACCOUNTS_REDIRECT_URIS=https://app.example.com/oauth/callback
 # restart / under horizontal scale). Generate a P-256 ES256 JWK with a private
 # "d" coordinate; the two pairwise secrets are independent 64-char random strings.
 TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK={"kty":"EC","crv":"P-256","d":"...","x":"...","y":"..."}
+TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"previous-key","x":"...","y":"..."}]}
 TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET=replace-me-with-a-64-char-random-string
 TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET=replace-me-with-another-64-char-random-placeholder
 ```

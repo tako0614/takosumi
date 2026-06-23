@@ -185,13 +185,25 @@ test("Cloudflare Accounts Worker can use a stable OIDC signing key", async () =>
     true,
     ["sign", "verify"],
   );
+  const previousKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
   const privateJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+  const previousPublicJwk = await crypto.subtle.exportKey(
+    "jwk",
+    previousKeyPair.publicKey,
+  );
   const worker = createCloudflareWorker();
   const response = await worker.fetch(
     new Request("https://accounts.example/oauth/jwks"),
     createEnv(new InitOnlyD1Database(), {
       TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(privateJwk),
       TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "stable-key-1",
+      TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS: JSON.stringify({
+        keys: [{ ...previousPublicJwk, kid: "stable-key-previous" }],
+      }),
       TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET: "pairwise-secret",
       TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET: "launch-secret",
     }),
@@ -203,6 +215,30 @@ test("Cloudflare Accounts Worker can use a stable OIDC signing key", async () =>
   };
   assert.equal(jwks.keys?.[0]?.kid, "stable-key-1");
   assert.equal(jwks.keys?.[0]?.d, undefined);
+  assert.equal(jwks.keys?.[1]?.kid, "stable-key-previous");
+  assert.equal(jwks.keys?.[1]?.d, undefined);
+});
+
+test("Cloudflare Accounts Worker rejects private previous OIDC JWKS", async () => {
+  const worker = createCloudflareWorker();
+  const response = await worker.fetch(
+    new Request("https://accounts.example/oauth/jwks"),
+    createEnv(new InitOnlyD1Database(), {
+      TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS: JSON.stringify({
+        keys: [
+          {
+            kty: "EC",
+            crv: "P-256",
+            kid: "previous-private",
+            x: "x",
+            y: "y",
+            d: "must-not-be-present",
+          },
+        ],
+      }),
+    }),
+  );
+  assert.equal(response.status, 500);
 });
 
 test("Cloudflare Accounts Worker treats subject secret without upstream providers as disabled sign-in", async () => {

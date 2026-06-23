@@ -395,8 +395,13 @@ async function buildStableOidc(
     use: "sig",
     alg: "ES256",
   };
+  const previousPublicJwks = parsePreviousPublicJwks(
+    options.previousPublicJwksJson,
+    "TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS",
+    kid,
+  );
   return {
-    jwks: { keys: [publicJwk] },
+    jwks: { keys: [publicJwk, ...previousPublicJwks] },
     oidcFlow: {
       subject: options.subject ?? "tsub_node_postgres_seed",
       pairwiseSubjectSecret: options.oidcPairwiseSubjectSecret,
@@ -411,6 +416,66 @@ async function buildStableOidc(
       pairwiseSubjectSecret: options.launchTokenPairwiseSecret,
     },
   };
+}
+
+function parsePreviousPublicJwks(
+  raw: string | undefined,
+  label: string,
+  activeKid: string,
+): AccountsJsonWebKey[] {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  const keys = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.keys)
+      ? parsed.keys
+      : null;
+  if (!keys) {
+    throw new TypeError(`${label} must be a JWK Set object or JWK array`);
+  }
+  const seen = new Set([activeKid]);
+  return keys.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new TypeError(`${label}.keys[${index}] must be an object`);
+    }
+    if ("d" in entry) {
+      throw new TypeError(`${label}.keys[${index}] must be public only`);
+    }
+    const kid = optionalJwkString(entry.kid);
+    const kty = optionalJwkString(entry.kty);
+    const crv = optionalJwkString(entry.crv);
+    const x = optionalJwkString(entry.x);
+    const y = optionalJwkString(entry.y);
+    if (!kid || !kty || !crv || !x || !y) {
+      throw new TypeError(
+        `${label}.keys[${index}] requires kid, kty, crv, x, and y`,
+      );
+    }
+    if (kty !== "EC" || crv !== "P-256") {
+      throw new TypeError(`${label}.keys[${index}] must be an ES256 public JWK`);
+    }
+    if (seen.has(kid)) {
+      throw new TypeError(`${label}.keys[${index}] duplicates kid ${kid}`);
+    }
+    seen.add(kid);
+    return {
+      kty: "EC",
+      crv: "P-256",
+      x,
+      y,
+      kid,
+      use: "sig",
+      alg: "ES256",
+    };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalJwkString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**

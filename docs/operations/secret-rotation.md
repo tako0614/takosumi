@@ -183,6 +183,13 @@ Takosumi は secret value を表示しない。key rotation evidence は live is
 JWKS digest を evidence に固定してから、既存 readiness JSON の
 `domains.oidc-account-security` だけを更新する。
 
+OIDC signing key rotation では active private key を差し替え、overlap window
+の間だけ previous public key を
+`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` に入れる。署名は常に active key
+だけで行い、JWKS には active public key と previous public key を同時に公開する。
+overlap window と token/JWKS cache window が終わったら
+`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` を削除し、再度 deploy する。
+
 ```bash
 curl -fsS https://app.takosumi.com/oauth/jwks \
   > "$TAKOSUMI_PRIVATE/evidence/oidc-jwks-production.json"
