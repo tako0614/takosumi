@@ -408,21 +408,34 @@
 }
 .av-catalog-card {
   display: flex;
-  min-height: 220px;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--tg-s-3);
+  min-height: 132px;
+  width: 100%;
   padding: var(--tg-s-5);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--tg-shadow-xs);
   transition:
-    border-color 160ms ease,
-    background 160ms ease;
+    transform var(--tg-dur) var(--tg-ease),
+    border-color var(--tg-dur) var(--tg-ease),
+    box-shadow var(--tg-dur) var(--tg-ease);
 }
 .av-catalog-card:hover {
+  transform: translateY(-2px);
   border-color: var(--tg-line-strong);
-  background: color-mix(in srgb, var(--tg-fg) 3%, var(--tg-bg-elev));
+  box-shadow: var(--tg-shadow-card-hover);
+}
+.av-catalog-card:focus-visible {
+  outline: none;
+  border-color: var(--tg-accent);
+  box-shadow: var(--tg-ring);
 }
 .av-catalog-text {
   display: flex;
@@ -452,11 +465,6 @@
   font-size: var(--tg-fs-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-.av-catalog-src {
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-accent-text);
-  font-weight: 700;
 }
 .av-catalog-more {
   margin-top: var(--tg-s-1);
@@ -615,7 +623,7 @@ button.tg-tab {
   .av-catalog-card {
     min-height: 0;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: var(--tg-s-3);
     padding: var(--tg-s-3);
@@ -633,11 +641,6 @@ button.tg-tab {
 
   .av-catalog-desc {
     display: block;
-  }
-
-  .av-catalog-card .tg-btn {
-    flex: 0 0 auto;
-    min-width: 72px;
   }
 
   .av-service-setup {
@@ -668,18 +671,6 @@ button.tg-tab {
 
   .av-run-history-row .tg-btn {
     width: 100%;
-  }
-}
-
-@media (max-width: 520px) {
-  .av-catalog-card {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .av-catalog-card .tg-btn {
-    grid-column: 1 / -1;
-    width: 100%;
-    justify-content: center;
   }
 }
 

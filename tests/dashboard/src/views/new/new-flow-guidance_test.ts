@@ -72,7 +72,6 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('entry.surface === "building_block"');
     expect(newAppViewSource).toContain('entry.surface === "example"');
     expect(newAppViewSource).toContain('t("new.store.title")');
-    expect(newAppViewSource).toContain('t("new.store.subtitle")');
     expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
     expect(newAppViewSource).toContain('t("new.store.examplesTitle")');
     expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
@@ -113,8 +112,9 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
     expect(en).not.toHaveProperty("new.tab.catalog");
     expect(en).not.toHaveProperty("new.tab.git");
+    expect(en).not.toHaveProperty("new.catalog.select");
+    expect(en).not.toHaveProperty("new.store.subtitle");
     expect(en["new.store.title"]).toBe("What do you want to host?");
-    expect(en["new.store.subtitle"]).toContain("Pick a starter");
     expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
     expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
@@ -125,8 +125,9 @@ describe("/new flow guidance", () => {
     );
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
+    expect(ja).not.toHaveProperty("new.catalog.select");
+    expect(ja).not.toHaveProperty("new.store.subtitle");
     expect(ja["new.store.title"]).toBe("何をホストしますか？");
-    expect(ja["new.store.subtitle"]).toContain("おすすめを選ぶ");
     expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
     expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
