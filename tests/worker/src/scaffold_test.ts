@@ -53,6 +53,10 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   assert.match(wrangler, /TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF/);
   assert.match(wrangler, /TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF/);
   assert.match(wrangler, /TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF/);
+  assert.match(wrangler, /binding = "TAKOSUMI_CLOUD_AI_GATEWAY"/);
+  assert.match(wrangler, /service = "takosumi-cloud-ai-gateway"/);
+  assert.match(wrangler, /binding = "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT"/);
+  assert.match(wrangler, /service = "takosumi-cloud-cloudflare-compat"/);
   assert.match(worker, /\/internal\/platform\/hardening-gates/);
   assert.match(worker, /evaluateProductionHardeningGates/);
 });

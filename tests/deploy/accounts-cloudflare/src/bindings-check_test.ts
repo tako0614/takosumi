@@ -12,6 +12,7 @@ function fullEnv(): Record<string, unknown> {
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
     ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...REQUIRED_PLATFORM_BINDINGS.assets,
+    ...REQUIRED_PLATFORM_BINDINGS.cloudExtensions,
   ]) {
     env[name] = {}; // presence-only check; any non-null value passes.
   }
@@ -48,4 +49,21 @@ test("requireAssets:false allows an API-only deploy without ASSETS", () => {
   delete env.ASSETS;
   expect(checkPlatformBindings(env, { requireAssets: false }).ok).toBe(true);
   expect(checkPlatformBindings(env).missing).toEqual(["ASSETS"]);
+});
+
+test("Cloud-only extension bindings are optional unless explicitly required", () => {
+  const env = fullEnv();
+  delete env.TAKOSUMI_CLOUD_AI_GATEWAY;
+  delete env.TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT;
+
+  expect(checkPlatformBindings(env).ok).toBe(true);
+  expect(
+    checkPlatformBindings(env, { requireCloudExtensions: true }),
+  ).toEqual({
+    ok: false,
+    missing: [
+      "TAKOSUMI_CLOUD_AI_GATEWAY",
+      "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
+    ],
+  });
 });

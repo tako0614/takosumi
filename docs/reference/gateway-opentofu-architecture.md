@@ -61,6 +61,25 @@ If the service binding is absent, the route returns `404 { "error": "not
 found" }`. Adding `TAKOSUMI_AI_GATEWAY_PROFILES` or provider-looking env vars to
 the OSS platform worker must not activate a gateway by itself.
 
+The OSS reference `deploy/platform/wrangler.toml` declares placeholder service
+bindings so the operator-private realized config has an exact shape to copy:
+
+```toml
+[[services]]
+binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
+service = "takosumi-cloud-ai-gateway"
+
+[[services]]
+binding = "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT"
+service = "takosumi-cloud-cloudflare-compat"
+```
+
+Those `service` names are placeholders. Takosumi Cloud operators replace them
+with the actual closed extension Worker names in `takosumi-private/platform/wrangler.toml`.
+The `/readyz` baseline does not require these bindings, but GA evidence for AI
+Gateway or Cloudflare compatibility must prove the corresponding service binding
+exists and delegates to the closed Cloud worker.
+
 Future provider-compatible entry points such as AWS, GCP, or S3-compatible
 managed resources follow the same rule:
 

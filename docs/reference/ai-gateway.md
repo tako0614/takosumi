@@ -15,6 +15,20 @@ Cloud extension route registry used for provider-compatible Cloud-only
 gateways. Upstream profiles, provider keys, and request forwarding belong to
 the closed Takosumi Cloud deployment.
 
+The platform route is active only when the realized operator config binds the
+closed Cloud extension Worker:
+
+```toml
+[[services]]
+binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
+service = "takosumi-cloud-ai-gateway"
+```
+
+The `service` value above is the OSS reference placeholder. The production
+value belongs in `takosumi-private/platform/wrangler.toml`, alongside the
+closed Worker deployment. Without this binding, `/gateway/ai/v1/*` intentionally
+returns `404`.
+
 It is not an OpenTofu provider credential and it is not an OpenTofu output secret. OpenTofu provisions and deploys the
 service that will consume the model API; runtime model access is granted after deployment through
 `takosumi.ai.gateway`.
