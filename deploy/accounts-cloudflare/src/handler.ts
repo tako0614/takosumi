@@ -337,6 +337,12 @@ export function parseLoginEmailAllowlist(
   env: CloudflareWorkerEnv,
   issuer: string,
 ): LoginEmailAllowlist | undefined {
+  if (isOfficialTakosumiCloudIssuer(issuer)) {
+    return {
+      emails: [TAKOSUMI_CLOUD_PRE_GA_LOGIN_EMAIL],
+      requireVerifiedEmail: true,
+    };
+  }
   const configured = optionalString(
     env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST,
   );
@@ -360,7 +366,11 @@ export function parseLoginEmailAllowlist(
 function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
   try {
     const url = new URL(issuer);
-    return url.protocol === "https:" && url.hostname === "app.takosumi.com";
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "app.takosumi.com" ||
+        url.hostname === "app-staging.takosumi.com")
+    );
   } catch {
     return false;
   }

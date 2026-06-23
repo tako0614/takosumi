@@ -112,7 +112,12 @@ test("Cloudflare Accounts Worker parses env clients without a sidecar container"
   assert.equal((await response.json()).issuer, "https://issuer.example");
 });
 
-test("Cloudflare Accounts Worker defaults app.takosumi.com to the pre-GA login allowlist", () => {
+test("Cloudflare Accounts Worker enforces the pre-GA login allowlist for official Cloud", () => {
+  const expected = {
+    emails: ["shoutatomiyama0614@gmail.com"],
+    requireVerifiedEmail: true,
+  };
+
   assert.deepEqual(
     parseLoginEmailAllowlist(
       createEnv(new InitOnlyD1Database(), {
@@ -120,10 +125,38 @@ test("Cloudflare Accounts Worker defaults app.takosumi.com to the pre-GA login a
       }),
       "https://app.takosumi.com",
     ),
-    {
-      emails: ["shoutatomiyama0614@gmail.com"],
-      requireVerifiedEmail: true,
-    },
+    expected,
+  );
+  assert.deepEqual(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+      }),
+      "https://app-staging.takosumi.com",
+    ),
+    expected,
+  );
+  assert.deepEqual(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+        TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
+      }),
+      "https://app.takosumi.com",
+    ),
+    expected,
+  );
+  assert.deepEqual(
+    parseLoginEmailAllowlist(
+      createEnv(new InitOnlyD1Database(), {
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+        TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST:
+          "someone-else@example.test,shoutatomiyama0614@gmail.com",
+        TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED: "false",
+      }),
+      "https://app.takosumi.com",
+    ),
+    expected,
   );
   assert.equal(
     parseLoginEmailAllowlist(
@@ -137,10 +170,10 @@ test("Cloudflare Accounts Worker defaults app.takosumi.com to the pre-GA login a
   assert.equal(
     parseLoginEmailAllowlist(
       createEnv(new InitOnlyD1Database(), {
-        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.example.test",
         TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
       }),
-      "https://app.takosumi.com",
+      "https://accounts.example.test",
     ),
     undefined,
   );

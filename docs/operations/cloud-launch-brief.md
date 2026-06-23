@@ -38,6 +38,7 @@ The initial open scope is deliberately narrow:
 
 Out of scope for the first open gate:
 
+- public self-serve login before the code-enforced pre-GA allowlist is removed;
 - arbitrary managed Cloud resources without explicit coverage;
 - Cloudflare Compatibility Gateway public availability unless its provider and
   resource operation coverage has separate readiness evidence;
@@ -216,6 +217,10 @@ takosumi-cloud-starter
 This SKU means hosted Takosumi Cloud access with Google sign-in, one default
 Workspace, Git URL Capsule install, Provider Connection setup, hosted run
 history, state, outputs, and audit evidence.
+
+Until GA, hosted Takosumi Cloud login is restricted in code to the verified
+Google account `shoutatomiyama0614@gmail.com` on `app-staging.takosumi.com` and
+`app.takosumi.com`. Operator env cannot widen that official Cloud allowlist.
 
 It does not by itself mean paid enforcement, managed Cloud resources, or public
 compatibility gateway coverage.
