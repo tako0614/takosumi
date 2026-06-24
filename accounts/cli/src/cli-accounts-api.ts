@@ -132,6 +132,8 @@ export function installationStatusPatchBody(
   }
   const operationId = optionalStringOption(options, "operationId");
   if (operationId) body.operationId = operationId;
+  const preserveDigest = optionalStringOption(options, "preserveDigest");
+  if (preserveDigest) body.preserveDigest = preserveDigest;
   const runtimeTargetRecordId = optionalStringOption(
     options,
     "runtimeTargetRecordId",

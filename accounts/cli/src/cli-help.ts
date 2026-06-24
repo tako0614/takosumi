@@ -687,6 +687,7 @@ export function installationsStatusHelpText(): string {
     "  --mode <shared-cell|dedicated|self-hosted>",
     "  --operation <materialize|export>",
     "  --operation-id <op_...>",
+    "  --preserve-digest <sha256:...>",
     "  --runtime-target-record-id <id>",
     "  --runtime-target-type <shared-cell|dedicated|self-hosted>",
     "  --runtime-target-id <id>",

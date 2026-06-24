@@ -1116,15 +1116,13 @@ test("launch-readiness validate accepts zero caps for quota guard drills", async
   const quotaDomainEvidence = document.domains.find(
     (entry) => entry.id === "quota-abuse-spend-control",
   )!.evidence as Record<string, unknown>[];
-  quotaDomainEvidence.find(
-    (entry) => entry.type === "quota-spike-drill",
-  )!.cap = 0;
+  quotaDomainEvidence.find((entry) => entry.type === "quota-spike-drill")!.cap =
+    0;
   const quotaRehearsalEvidence = document.rehearsal.find(
     (entry) => entry.id === "quota-abuse-drill",
   )!.evidence as Record<string, unknown>[];
-  quotaRehearsalEvidence.find(
-    (entry) => entry.type === "quota-exceeded",
-  )!.cap = 0;
+  quotaRehearsalEvidence.find((entry) => entry.type === "quota-exceeded")!.cap =
+    0;
   await writeTextFile(file, JSON.stringify(document));
 
   try {
@@ -6986,6 +6984,8 @@ test("internal installations status sends operation completion metadata", async 
         "dedicated",
         "--operation-id",
         "op_materialize",
+        "--preserve-digest",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--runtime-target-record-id",
         "rtb_1",
         "--runtime-target-type",
@@ -7010,6 +7010,8 @@ test("internal installations status sends operation completion metadata", async 
       reason: "dedicated runtime ready",
       mode: "dedicated",
       operationId: "op_materialize",
+      preserveDigest:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       runtimeTarget: {
         runtimeTargetId: "rtb_1",
         targetType: "dedicated",
