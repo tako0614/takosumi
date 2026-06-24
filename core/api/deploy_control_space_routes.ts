@@ -21,6 +21,7 @@ import {
   TAKOSUMI_SPACE_ROUTE,
   TAKOSUMI_SPACES_ROUTE,
 } from "./deploy_control_route_paths.ts";
+import { stableJsonDigest } from "../adapters/source/digest.ts";
 
 const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
 
@@ -79,6 +80,7 @@ export function mountDeployControlSpaceRoutes(
 ): void {
   const { app, dependencies, deployControlBodyLimit } = ctx;
   const spaces = dependencies.spacesService;
+  const activity = dependencies.activityService;
 
   app.post(
     TAKOSUMI_SPACES_ROUTE,
@@ -194,6 +196,22 @@ export function mountDeployControlSpaceRoutes(
           );
         }
         const space = await spaces!.updateSpace(id, patch);
+        await activity?.record({
+          spaceId: id,
+          actorId: principal.actor,
+          action: "space.updated",
+          targetType: "space",
+          targetId: id,
+          metadata: {
+            fields: Object.keys(patch).sort(),
+            ...(patch.policy !== undefined
+              ? { policyDigest: await stableJsonDigest(patch.policy) }
+              : {}),
+            ...(patch.archived !== undefined
+              ? { archived: patch.archived }
+              : {}),
+          },
+        });
         return c.json({ space }, 200);
       },
     }),

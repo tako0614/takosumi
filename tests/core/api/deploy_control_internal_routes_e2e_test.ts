@@ -684,7 +684,8 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
 });
 
 test("space PATCH updates displayName (§30 MVP)", async () => {
-  const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+  const { app, installationId, store } =
+    await seedInstallationViaRoutes(fakeRunner());
   // Recover the space id via the public Installation read.
   const instRes = await app.request(
     `/internal/v1/installations/${installationId}`,
@@ -701,6 +702,14 @@ test("space PATCH updates displayName (§30 MVP)", async () => {
   });
   expect(patchRes.status).toEqual(200);
   expect((await patchRes.json()).space.displayName).toEqual("Acme Renamed");
+  const [activity] = await store.listActivityEvents(spaceId, { limit: 1 });
+  expect(activity).toMatchObject({
+    spaceId,
+    action: "space.updated",
+    targetType: "space",
+    targetId: spaceId,
+    metadata: { fields: ["displayName"] },
+  });
 
   // An unknown field is rejected (the allowlist is displayName-only for MVP).
   const badRes = await app.request(`/internal/v1/spaces/${spaceId}`, {
