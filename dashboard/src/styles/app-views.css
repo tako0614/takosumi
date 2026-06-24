@@ -472,15 +472,26 @@
 .av-store {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-6);
+  gap: var(--tg-s-5);
   width: min(100%, 1160px);
   margin: 0 auto var(--tg-s-6);
 }
 .av-store-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  align-items: start;
   gap: var(--tg-s-4);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--tg-accent-soft) 54%, transparent),
+      transparent 42%
+    ),
+    var(--tg-bg-elev);
+  box-shadow: var(--tg-shadow-xs);
 }
 .av-store-head {
   display: flex;
@@ -510,12 +521,17 @@
   font-size: var(--tg-fs-sm);
   line-height: 1.5;
 }
+.av-store-tools {
+  display: grid;
+  gap: var(--tg-s-3);
+  min-width: 0;
+}
 .av-store-search {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--tg-s-2);
-  width: min(100%, 680px);
+  width: 100%;
   min-height: 52px;
   padding: 0 var(--tg-s-4);
   border: 1px solid var(--tg-line);
@@ -620,25 +636,26 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
-  gap: var(--tg-s-4) var(--tg-s-3);
+  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
+  gap: var(--tg-s-3);
 }
 .av-catalog-card {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  justify-items: center;
-  min-height: 178px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  justify-items: stretch;
+  min-height: 132px;
   width: 100%;
   height: 100%;
-  gap: var(--tg-s-2);
-  padding: var(--tg-s-3);
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
   color: inherit;
   font: inherit;
-  text-align: center;
+  text-align: left;
   cursor: pointer;
   box-shadow: var(--tg-shadow-xs);
   transition:
@@ -647,30 +664,33 @@
     box-shadow var(--tg-dur) var(--tg-ease);
 }
 .av-catalog-action {
-  position: absolute;
-  top: var(--tg-s-2);
-  right: var(--tg-s-2);
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  min-height: 0;
-  padding: 0;
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tg-s-1);
+  width: auto;
+  min-width: 76px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 var(--tg-s-3);
   border: 1px solid color-mix(in srgb, var(--tg-accent) 36%, var(--tg-line));
-  border-radius: var(--tg-r-full);
+  border-radius: var(--tg-r-md);
   background: var(--tg-accent-soft);
   color: var(--tg-accent-text);
   flex: none;
+  font-size: var(--tg-fs-sm);
+  font-weight: 750;
 }
 .av-catalog-action span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+  position: static;
+  width: auto;
+  height: auto;
   padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
   border: 0;
 }
 .av-catalog-action svg {
@@ -718,17 +738,17 @@
 }
 .av-catalog-text {
   display: grid;
-  justify-items: center;
+  justify-items: start;
   gap: var(--tg-s-1);
   min-width: 0;
   width: 100%;
 }
 .av-catalog-meta {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: var(--tg-s-1);
-  order: 2;
+  order: 0;
 }
 .av-catalog-meta span {
   display: inline-flex;
@@ -747,9 +767,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 66px;
-  height: 66px;
-  border-radius: 18px;
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
   border: 0;
   flex: none;
   box-shadow:
@@ -758,13 +778,13 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 .av-catalog-icon svg {
-  width: 30px;
-  height: 30px;
+  width: 27px;
+  height: 27px;
   stroke-width: 2.1;
 }
 .av-catalog-name {
   font-weight: 700;
-  font-size: var(--tg-fs-sm);
+  font-size: var(--tg-fs-base);
   line-height: 1.28;
   overflow-wrap: anywhere;
   display: -webkit-box;
@@ -787,13 +807,13 @@
   margin-top: 0;
 }
 .av-catalog-grid-secondary {
-  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 }
 .av-add-flow {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--tg-s-4);
-  width: min(100%, 860px);
+  width: min(100%, 1040px);
   margin: 0 auto;
   align-items: start;
 }
@@ -896,10 +916,97 @@
   color: var(--tg-accent-fg);
 }
 .av-add-flow-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  align-items: start;
+  gap: var(--tg-s-4);
   min-width: 0;
 }
 .av-add-form {
   width: 100%;
+}
+.av-add-summary {
+  position: sticky;
+  top: calc(var(--tg-topbar-h) + var(--tg-s-4));
+  display: grid;
+  gap: var(--tg-s-3);
+  min-width: 0;
+}
+.av-add-summary-card {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
+  box-shadow: var(--tg-shadow-xs);
+}
+.av-add-summary-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--tg-s-3);
+  min-width: 0;
+}
+.av-add-summary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #2563eb, #0f766e);
+  color: #fff;
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.16),
+    0 10px 18px -10px currentcolor,
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.av-add-summary-kicker {
+  color: var(--tg-accent-text);
+  font-size: var(--tg-fs-xs);
+  font-weight: 750;
+}
+.av-add-summary h3 {
+  margin: 2px 0 0;
+  font-size: var(--tg-fs-lg);
+  line-height: 1.25;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+.av-add-summary p {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.45;
+}
+.av-add-summary-meta {
+  display: grid;
+  gap: var(--tg-s-2);
+  margin: 0;
+}
+.av-add-summary-meta div {
+  min-width: 0;
+  padding: var(--tg-s-2);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.av-add-summary-meta dt {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+}
+.av-add-summary-meta dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.av-add-technical {
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-elev);
 }
 .av-link-review {
   display: grid;
@@ -1034,6 +1141,7 @@ button.tg-tab {
   .av-store-hero {
     grid-template-columns: 1fr;
     gap: var(--tg-s-3);
+    padding: var(--tg-s-3);
   }
 
   .av-store-head h2 {
@@ -1045,21 +1153,22 @@ button.tg-tab {
   }
 
   .av-catalog-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: var(--tg-s-3);
   }
 
   .av-catalog-card {
-    min-height: 168px;
-    gap: var(--tg-s-2);
-    padding: var(--tg-s-3) var(--tg-s-2);
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 0;
+    gap: var(--tg-s-3);
+    padding: var(--tg-s-3);
   }
 
   .av-catalog-icon {
-    width: 56px;
-    height: 56px;
+    width: 48px;
+    height: 48px;
     flex: 0 0 auto;
-    border-radius: 16px;
+    border-radius: 14px;
   }
 
   .av-catalog-name {
@@ -1071,8 +1180,9 @@ button.tg-tab {
   }
 
   .av-catalog-action {
-    width: 28px;
-    height: 28px;
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 38px;
   }
 
   .av-store-section-head {
@@ -1128,6 +1238,26 @@ button.tg-tab {
 
   .av-add-flow-header .tg-btn {
     width: 100%;
+  }
+
+  .av-add-flow-body {
+    grid-template-columns: 1fr;
+  }
+
+  .av-add-summary {
+    position: static;
+    order: -1;
+  }
+
+  .av-add-summary-card {
+    display: none;
+  }
+
+  .wb-install-form.wb-install-source-form.av-add-form > .wb-form-actions {
+    position: static !important;
+    bottom: auto !important;
+    z-index: auto;
+    margin-top: var(--tg-s-3);
   }
 
   .av-add-flow-copy h2 {
