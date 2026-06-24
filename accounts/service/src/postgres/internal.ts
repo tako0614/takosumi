@@ -295,6 +295,7 @@ export interface AppInstallationRow {
   source_git_url: string;
   source_ref: string;
   source_commit: string;
+  source_path: string | null;
   plan_digest: string;
   artifact_digest: string | null;
   mode: InstallationRecord["mode"];
@@ -611,6 +612,7 @@ export function appInstallationFromRow(
     sourceGitUrl: row.source_git_url,
     sourceRef: row.source_ref,
     sourceCommit: row.source_commit,
+    sourcePath: optional(row.source_path),
     planDigest: row.plan_digest,
     artifactDigest: optional(row.artifact_digest),
     mode: row.mode,

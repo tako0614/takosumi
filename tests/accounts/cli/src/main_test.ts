@@ -6355,13 +6355,16 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(25);
+  expect(plan.migrations.length).toEqual(26);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
   );
   expect(plan.migrations[22].name).toEqual("023_account_email_verified.sql");
   expect(plan.migrations[24].name).toEqual("025_privacy_requests.sql");
+  expect(plan.migrations[25].name).toEqual(
+    "026_app_installation_source_path.sql",
+  );
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
   expect(stdout.join("\n").includes("db.internal")).toEqual(false);
@@ -7535,6 +7538,7 @@ test("internal installations import-plan emits a target restore request", async 
         gitUrl: "https://github.com/takos/takos",
         ref: "v1.2.3",
         commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "deploy/opentofu",
         planDigest: "sha256:app",
         artifactDigest: "sha256:compiled",
       },
@@ -7617,6 +7621,7 @@ test("internal installations import-plan emits a target restore request", async 
         url: "https://github.com/takos/takos",
         ref: "v1.2.3",
         commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "deploy/opentofu",
       },
     });
     expect(plan.request.installationId).toEqual(undefined);
@@ -7627,6 +7632,7 @@ test("internal installations import-plan emits a target restore request", async 
     expect(plan.request.source.gitUrl).toEqual(
       "https://github.com/takos/takos",
     );
+    expect(plan.request.source.path).toEqual("deploy/opentofu");
     expect(plan.request.oidcClients[0].issuerUrl).toEqual(
       "https://selfhost.example.test",
     );
@@ -7682,6 +7688,7 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
           gitUrl: "https://github.com/takos/takos",
           ref: "v1.2.3",
           commit: "0123456789abcdef0123456789abcdef01234567",
+          path: "deploy/opentofu",
           planDigest: "sha256:app",
           artifactDigest: null,
         },
@@ -7744,6 +7751,27 @@ test("internal installations import-apply creates a target plan and projection",
     const request = new Request(input, init);
     requests.push(request);
     const url = new URL(request.url);
+    if (url.pathname === "/api/v1/sources") {
+      return Promise.resolve(
+        Response.json({ source: { id: "src_import" } }, { status: 201 }),
+      );
+    }
+    if (url.pathname === "/api/v1/sources/src_import/sync") {
+      return Promise.resolve(
+        Response.json(
+          { run: { id: "ssr_import", status: "succeeded" } },
+          { status: 201 },
+        ),
+      );
+    }
+    if (url.pathname === "/api/v1/spaces/space_target/installations") {
+      return Promise.resolve(
+        Response.json(
+          { installation: { id: "inst_import_target" } },
+          { status: 201 },
+        ),
+      );
+    }
     if (url.pathname === "/v1/installation-projections/plan-runs") {
       return Promise.resolve(
         Response.json(
@@ -7806,6 +7834,7 @@ test("internal installations import-apply creates a target plan and projection",
         gitUrl: "https://github.com/takos/takos",
         ref: "v1.2.3",
         commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "deploy/opentofu",
         planDigest: "sha256:app",
         artifactDigest: null,
       },
@@ -7850,25 +7879,44 @@ test("internal installations import-apply creates a target plan and projection",
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/v1/sources",
+      "/api/v1/sources/src_import/sync",
+      "/api/v1/spaces/space_target/installations",
       "/v1/installation-projections/plan-runs",
       "/v1/installation-projections",
     ]);
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer takpat_write",
     );
-    expect(requests[1]?.headers.get("idempotency-key")).toEqual(
+    expect(requests[4]?.headers.get("idempotency-key")).toEqual(
       "idem-import-apply",
     );
     expect(await requests[0]?.json()).toEqual({
+      spaceId: "space_target",
+      name: "takos.chat-source",
+      url: "https://github.com/takos/takos",
+      defaultRef: "v1.2.3",
+      defaultPath: "deploy/opentofu",
+    });
+    expect(await requests[2]?.json()).toEqual({
+      name: "takos.chat-installation",
+      environment: "production",
+      sourceId: "src_import",
+      installConfigId: "cfg-default-opentofu-capsule",
+    });
+    expect(await requests[3]?.json()).toEqual({
       spaceId: "space_target",
       source: {
         kind: "git",
         url: "https://github.com/takos/takos",
         ref: "v1.2.3",
         commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "deploy/opentofu",
       },
+      installationId: "inst_import_target",
+      operation: "create",
     });
-    const projectionRequest = await requests[1]?.json();
+    const projectionRequest = await requests[4]?.json();
     expect(projectionRequest.installationId).toEqual(undefined);
     expect(projectionRequest.planRunId).toEqual("plan_import");
     expect(projectionRequest.expected.planArtifactDigest).toEqual(
@@ -7885,6 +7933,75 @@ test("internal installations import-apply creates a target plan and projection",
     expect(result.projection.installation.id).toEqual("inst_target_canonical");
   } finally {
     globalThis.fetch = originalFetch;
+    await removePath(bundleFile);
+  }
+});
+
+test("internal installations import-apply rejects metadata-only upload sources", async () => {
+  const bundleFile = await makeTempFile({ suffix: ".json" });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  await writeTextFile(
+    bundleFile,
+    JSON.stringify({
+      kind: "takosumi.accounts.installation-export-bundle@v1",
+      version: "v1",
+      exportedAt: "2026-06-23T13:00:00.000Z",
+      installation: {
+        installationId: "inst_source",
+        accountId: "acct_source",
+        spaceId: "space_source",
+        appId: "takos.chat",
+        billingAccountId: null,
+        mode: "dedicated",
+        status: "exported",
+      },
+      source: {
+        gitUrl: "https://uploads.takosumi.com/space_source",
+        ref: "upload",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        planDigest: "sha256:app",
+        artifactDigest: null,
+      },
+      runtimeTarget: null,
+      oidcClient: null,
+      serviceBindings: [],
+      serviceGrants: [],
+      events: [],
+    }),
+  );
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "import-apply",
+        "--bundle-file",
+        bundleFile,
+        "--target-issuer",
+        "https://selfhost.example.test",
+        "--target-account",
+        "acct_target",
+        "--target-space",
+        "space_target",
+        "--created-by-subject",
+        "tsub_target",
+        "--accounts-url",
+        "https://accounts.target.test",
+        "--token",
+        "takpat_write",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(1);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("metadata-only upload source");
+  } finally {
     await removePath(bundleFile);
   }
 });

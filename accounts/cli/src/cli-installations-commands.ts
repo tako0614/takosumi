@@ -64,6 +64,9 @@ const installationImportModes = [
   "self-hosted",
 ] as const;
 
+const DEFAULT_IMPORT_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
+const DEFAULT_IMPORT_ENVIRONMENT = "production";
+
 export async function runInstallationsList(
   args: string[],
   io: CliIo,
@@ -503,13 +506,15 @@ export async function runInstallationsImportApply(
   }
   try {
     const plan = await loadInstallationImportPlan(options);
+    const deployControlPlanRequest =
+      await targetDeployControlPlanRequestForImportApply({
+        plan,
+        options,
+      });
     const planRunResponse = await requestAccountsApi({
       method: "POST",
       path: takosumiAccountsInstallationPlanRunsPath(),
-      body: importPlanRecord(
-        plan.deployControlPlanRequest,
-        "deployControlPlanRequest",
-      ),
+      body: deployControlPlanRequest,
       options,
     });
     const planRun = importPlanRecord(planRunResponse, "PlanRun response");
@@ -574,6 +579,213 @@ export async function runInstallationsImportApply(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+async function targetDeployControlPlanRequestForImportApply(input: {
+  plan: InstallationImportPlan;
+  options: Record<string, string | boolean>;
+}): Promise<Record<string, unknown>> {
+  const request = {
+    ...importPlanRecord(
+      input.plan.deployControlPlanRequest,
+      "deployControlPlanRequest",
+    ),
+  };
+  if (stringValue(request.installationId)) {
+    return request;
+  }
+  const source = importPlanRecord(
+    request.source,
+    "deployControlPlanRequest.source",
+  );
+  const sourceUrl = stringField(
+    source,
+    "url",
+    "deployControlPlanRequest.source",
+  );
+  if (isTakosumiUploadSourceUrl(sourceUrl)) {
+    throw new Error(
+      "import-apply cannot restore a metadata-only upload source. " +
+        "Use a bundle whose source.gitUrl is a restorable Git URL, or provide " +
+        "a data-bearing export/archive restore flow before import-apply.",
+    );
+  }
+  const targetSpaceId = stringField(
+    request,
+    "spaceId",
+    "deployControlPlanRequest",
+  );
+  const sourceId = await createTargetSourceForImportApply({
+    plan: input.plan,
+    source,
+    targetSpaceId,
+    options: input.options,
+  });
+  const sourceSync = await requestAccountsApi({
+    method: "POST",
+    path: `/api/v1/sources/${encodeURIComponent(sourceId)}/sync`,
+    body: {},
+    options: input.options,
+  });
+  await waitForImportApplyRun({
+    run: importPlanRecord(sourceSync, "source sync response").run,
+    options: input.options,
+    label: "source sync",
+  });
+  const installationId = await createTargetInstallationForImportApply({
+    plan: input.plan,
+    sourceId,
+    targetSpaceId,
+    options: input.options,
+  });
+  return {
+    ...request,
+    installationId,
+    operation: "create",
+  };
+}
+
+async function createTargetSourceForImportApply(input: {
+  plan: InstallationImportPlan;
+  source: Record<string, unknown>;
+  targetSpaceId: string;
+  options: Record<string, string | boolean>;
+}): Promise<string> {
+  const sourceUrl = stringField(
+    input.source,
+    "url",
+    "deployControlPlanRequest.source",
+  );
+  const createSource = await requestAccountsApi({
+    method: "POST",
+    path: "/api/v1/sources",
+    body: {
+      spaceId: input.targetSpaceId,
+      name: importApplyName(input.plan, "source"),
+      url: sourceUrl,
+      ...(stringValue(input.source.ref)
+        ? { defaultRef: stringValue(input.source.ref) }
+        : {}),
+      ...(stringValue(input.source.path)
+        ? { defaultPath: stringValue(input.source.path) }
+        : stringValue(input.source.modulePath)
+          ? { defaultPath: stringValue(input.source.modulePath) }
+          : {}),
+    },
+    options: input.options,
+  });
+  const source = importPlanRecord(
+    importPlanRecord(createSource, "source create response").source,
+    "source",
+  );
+  return stringField(source, "id", "source");
+}
+
+async function createTargetInstallationForImportApply(input: {
+  plan: InstallationImportPlan;
+  sourceId: string;
+  targetSpaceId: string;
+  options: Record<string, string | boolean>;
+}): Promise<string> {
+  const installConfigId =
+    optionalStringOption(input.options, "installConfigId") ??
+    DEFAULT_IMPORT_INSTALL_CONFIG_ID;
+  const environment =
+    optionalStringOption(input.options, "environment") ??
+    DEFAULT_IMPORT_ENVIRONMENT;
+  const created = await requestAccountsApi({
+    method: "POST",
+    path: `/api/v1/spaces/${encodeURIComponent(input.targetSpaceId)}/installations`,
+    body: {
+      name: importApplyName(input.plan, "installation"),
+      environment,
+      sourceId: input.sourceId,
+      installConfigId,
+    },
+    options: input.options,
+  });
+  const installation = importPlanRecord(
+    importPlanRecord(created, "installation create response").installation,
+    "installation",
+  );
+  return stringField(installation, "id", "installation");
+}
+
+async function waitForImportApplyRun(input: {
+  run: unknown;
+  options: Record<string, string | boolean>;
+  label: string;
+}): Promise<Record<string, unknown>> {
+  let run = importPlanRecord(input.run, `${input.label} run`);
+  const initialStatus = stringValue(run.status);
+  if (initialStatus && isTerminalImportApplyRunStatus(initialStatus)) {
+    if (initialStatus !== "succeeded") {
+      throw new Error(
+        `${input.label} run ${stringField(run, "id", input.label)} is ${initialStatus}`,
+      );
+    }
+    return run;
+  }
+  const runId = stringField(run, "id", `${input.label} run`);
+  const timeoutMs =
+    (optionalNonNegativeIntegerOption(input.options, "waitTimeoutSeconds") ??
+      120) * 1000;
+  const intervalMs =
+    optionalNonNegativeIntegerOption(input.options, "waitIntervalMs") ?? 1000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    await sleep(intervalMs);
+    const response = await requestAccountsApi({
+      path: `/api/v1/runs/${encodeURIComponent(runId)}`,
+      options: input.options,
+    });
+    run = importPlanRecord(
+      importPlanRecord(response, `${input.label} run response`).run,
+      `${input.label} run`,
+    );
+    const status = stringValue(run.status);
+    if (status && isTerminalImportApplyRunStatus(status)) {
+      if (status !== "succeeded") {
+        throw new Error(`${input.label} run ${runId} is ${status}`);
+      }
+      return run;
+    }
+  }
+  throw new Error(`${input.label} run ${runId} did not finish before timeout`);
+}
+
+function isTerminalImportApplyRunStatus(status: string): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "canceled"
+  );
+}
+
+function importApplyName(
+  plan: InstallationImportPlan,
+  suffix: "source" | "installation",
+): string {
+  const request = importPlanRecord(
+    plan.accountsProjectionRequestTemplate ?? plan.request,
+    "accountsProjectionRequestTemplate",
+  );
+  const appId = stringValue(request.appId) ?? "imported-capsule";
+  return `${appId}-${suffix}`.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 80);
+}
+
+function isTakosumiUploadSourceUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.hostname === "uploads.takosumi.com";
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadInstallationImportPlan(

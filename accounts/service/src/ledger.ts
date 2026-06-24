@@ -91,6 +91,7 @@ export interface InstallationRecord {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
+  sourcePath?: string;
   planDigest: string;
   artifactDigest?: string;
   mode: AppInstallationMode;

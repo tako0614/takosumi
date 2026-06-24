@@ -97,6 +97,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
   expect(bundle.source.commit).toEqual(
     "0123456789abcdef0123456789abcdef01234567",
   );
+  expect(bundle.source.path).toEqual("deploy/opentofu");
   expect(bundle.installation.billingAccountId).toEqual("billing_source");
   expect(bundle.runtimeTarget?.runtimeTargetId).toEqual("rtb_source");
   expect(bundle.oidcClient?.issuerUrl).toEqual(sourceIssuer);
@@ -125,7 +126,13 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
     installationId?: string;
     accountId: string;
     spaceId: string;
-    source: { url: string; gitUrl: string; ref: string; commit: string };
+    source: {
+      url: string;
+      gitUrl: string;
+      ref: string;
+      commit: string;
+      path?: string;
+    };
     mode: string;
     oidcClients: readonly Record<string, unknown>[];
     serviceBindings: readonly {
@@ -146,6 +153,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
       url: "https://github.com/takos/takos",
       ref: "v1.2.3",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      path: "deploy/opentofu",
     },
   });
   expect(request.installationId).toEqual(undefined);
@@ -153,6 +161,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
   expect(request.spaceId).toEqual("space_target");
   expect(request.source.url).toEqual("https://github.com/takos/takos");
   expect(request.source.gitUrl).toEqual("https://github.com/takos/takos");
+  expect(request.source.path).toEqual("deploy/opentofu");
   expect(request.mode).toEqual("self-hosted");
   expect(request.oidcClients[0].issuerUrl).toEqual(targetIssuer);
   expect(request.oidcClients[0].serviceBinding).toEqual("auth");
@@ -1084,6 +1093,7 @@ function sampleExportBundle(sourceIssuer: string) {
       sourceGitUrl: "https://github.com/takos/takos",
       sourceRef: "v1.2.3",
       sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+      sourcePath: "deploy/opentofu",
       planDigest: "sha256:app",
       artifactDigest: "sha256:compiled",
       mode: "dedicated",

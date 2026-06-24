@@ -735,6 +735,7 @@ export function serializeAppInstallation(
       url: installation.sourceGitUrl,
       ref: installation.sourceRef,
       commit: installation.sourceCommit,
+      ...(installation.sourcePath ? { path: installation.sourcePath } : {}),
     },
     plan_digest: installation.planDigest,
     artifact_digest: installation.artifactDigest ?? null,
