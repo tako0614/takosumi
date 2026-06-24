@@ -499,6 +499,7 @@ export interface ControlPlaneOperations {
       patch: {
         readonly displayName?: string;
         readonly policy?: PolicyConfig;
+        readonly archived?: boolean;
       },
     ): Promise<Space>;
   };
@@ -1033,7 +1034,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         store,
         operations,
       });
-      return await listSpaces(operations, store, input.session.subject);
+      return await listSpaces(operations, store, input.session.subject, url);
     }
     if (method === "POST") {
       return await createSpace(request, operations, input.session.subject);
@@ -1070,7 +1071,13 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method === "GET")
         return json({ space: await operations.spaces.getSpace(spaceId) });
       if (method === "PATCH")
-        return await updateSpace(request, operations, spaceId);
+        return await updateSpace(
+          request,
+          operations,
+          store,
+          input.session.subject,
+          spaceId,
+        );
       return methodNotAllowed("GET, PATCH");
     }
     const leaf = segments[2];
@@ -1787,6 +1794,7 @@ async function listSpaces(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
+  url: URL,
 ): Promise<Response> {
   // Scope the read to the caller's own spaces instead of loading every tenant's
   // Space and filtering per row. This reproduces `canAccessSpace`'s accept set
@@ -1795,6 +1803,23 @@ async function listSpaces(
   //   (B) Spaces whose account is legally owned by the subject (the accounts
   //       ledger's `legalOwnerSubject`), fetched individually so we never read
   //       another tenant's Space.
+  const includeArchived = parseBooleanQuery(url, "includeArchived") === true;
+  const visible = (
+    await listSpacesForSession(operations, store, sessionSubject)
+  )
+    .filter((space) => includeArchived || !isArchivedSpace(space))
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
+  return json({ spaces: visible });
+}
+
+async function listSpacesForSession(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<readonly Space[]> {
   const byId = new Map<string, Space>();
   for (const space of await operations.spaces.listSpacesByOwner(
     sessionSubject,
@@ -1811,15 +1836,25 @@ async function listSpaces(
         await operations.spaces.getSpace(ledgerSpace.spaceId),
       );
     } catch {
-      // The deploy-control Space may not exist (or is mid-creation); skip it
-      // rather than failing the whole list.
+      // The deploy-control Space may not exist (or is mid-creation); skip it.
     }
   }
-  const visible = [...byId.values()].sort(
+  return [...byId.values()].sort(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
-  return json({ spaces: visible });
+}
+
+function isArchivedSpace(space: Space): boolean {
+  return typeof space.archivedAt === "string" && space.archivedAt.length > 0;
+}
+
+function parseBooleanQuery(url: URL, name: string): boolean | undefined {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === "") return undefined;
+  if (raw === "1" || raw === "true") return true;
+  if (raw === "0" || raw === "false") return false;
+  return undefined;
 }
 
 async function createSpace(
@@ -1851,6 +1886,8 @@ async function createSpace(
 async function updateSpace(
   request: Request,
   operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
   spaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
@@ -1858,6 +1895,7 @@ async function updateSpace(
   const patch: {
     displayName?: string;
     policy?: PolicyConfig;
+    archived?: boolean;
   } = {};
   if (body.displayName !== undefined) {
     const displayName = stringValue(body.displayName)?.trim();
@@ -1872,12 +1910,36 @@ async function updateSpace(
     }
     patch.policy = body.policy as PolicyConfig;
   }
-  if (patch.displayName === undefined && patch.policy === undefined) {
+  if (body.archived !== undefined) {
+    if (typeof body.archived !== "boolean") {
+      return errorJson("invalid_argument", "archived must be boolean", 400);
+    }
+    patch.archived = body.archived;
+  }
+  if (
+    patch.displayName === undefined &&
+    patch.policy === undefined &&
+    patch.archived === undefined
+  ) {
     return errorJson(
       "invalid_argument",
-      "displayName or policy is required",
+      "displayName, policy, or archived is required",
       400,
     );
+  }
+  if (patch.archived === true) {
+    const [target, spaces] = await Promise.all([
+      operations.spaces.getSpace(spaceId),
+      listSpacesForSession(operations, store, sessionSubject),
+    ]);
+    const activeSpaces = spaces.filter((space) => !isArchivedSpace(space));
+    if (!isArchivedSpace(target) && activeSpaces.length <= 1) {
+      return errorJson(
+        "failed_precondition",
+        "cannot archive the last active workspace",
+        409,
+      );
+    }
   }
   return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
 }

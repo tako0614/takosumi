@@ -2739,6 +2739,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         ownerUserId: { type: "string" },
         billingAccountId: { type: "string" },
         billingSettings: ref("BillingSettings"),
+        archivedAt: { type: "string", format: "date-time" },
         policy: { type: "object", additionalProperties: true },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
@@ -3218,6 +3219,7 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         displayName: { type: "string" },
         policy: { type: "object", additionalProperties: true },
+        archived: { type: "boolean" },
       },
       additionalProperties: false,
       minProperties: 1,

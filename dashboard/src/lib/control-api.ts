@@ -900,6 +900,13 @@ export async function listSpaces(): Promise<readonly Space[]> {
   return body.spaces ?? [];
 }
 
+export async function listSpacesIncludingArchived(): Promise<readonly Space[]> {
+  const body = await controlFetch<{ spaces?: readonly Space[] }>(
+    `${BASE}/workspaces${query({ includeArchived: "true" })}`,
+  );
+  return body.spaces ?? [];
+}
+
 export async function createSpace(input: {
   readonly handle: string;
   readonly displayName?: string;
@@ -928,6 +935,7 @@ export async function updateSpace(
   input: {
     readonly displayName?: string;
     readonly policy?: PolicyConfig;
+    readonly archived?: boolean;
   },
 ): Promise<Space> {
   const body = await controlFetch<{ space: Space }>(

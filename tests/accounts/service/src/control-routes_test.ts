@@ -139,7 +139,16 @@ function fakeOperations(
       },
       updateSpace: async (id, patch) => {
         record("updateSpace", id, patch);
-        return { ...space(id), ...patch, updatedAt: "2026-01-02T00:00:00Z" };
+        const baseSpace = space(id);
+        return {
+          ...baseSpace,
+          ...(patch.displayName ? { displayName: patch.displayName } : {}),
+          ...(patch.policy ? { policy: patch.policy } : {}),
+          ...(patch.archived === true
+            ? { archivedAt: "2026-01-02T00:00:00Z" }
+            : {}),
+          updatedAt: "2026-01-02T00:00:00Z",
+        };
       },
     },
     installations: {
@@ -960,6 +969,124 @@ test("GET /api/v1/workspaces aliases the final Workspace route", async () => {
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
   expect(operations.calls.listSpacesByOwner).toBeDefined();
+});
+
+test("GET /api/v1/workspaces hides archived Workspaces unless requested", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const active = {
+    id: "space_active",
+    handle: "active",
+    displayName: "Active",
+    type: "personal" as const,
+    ownerUserId: "tsub_ctrl",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const archived = {
+    ...active,
+    id: "space_e2e",
+    handle: "browser-e2e-production",
+    displayName: "Takosumi production browser E2E",
+    archivedAt: "2026-01-02T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    spaces: {
+      listSpacesByOwner: async () => [active, archived],
+    },
+  });
+
+  const hidden = request("GET", "/api/v1/workspaces", { cookie });
+  const hiddenResp = await handleControlRoute({
+    request: hidden.request,
+    url: hidden.url,
+    store,
+    operations,
+  });
+  expect(hiddenResp?.status).toEqual(200);
+  const hiddenBody = (await hiddenResp!.json()) as {
+    spaces: Array<{ id: string }>;
+  };
+  expect(hiddenBody.spaces.map((space) => space.id)).toEqual(["space_active"]);
+
+  const included = request("GET", "/api/v1/workspaces?includeArchived=true", {
+    cookie,
+  });
+  const includedResp = await handleControlRoute({
+    request: included.request,
+    url: included.url,
+    store,
+    operations,
+  });
+  expect(includedResp?.status).toEqual(200);
+  const includedBody = (await includedResp!.json()) as {
+    spaces: Array<{ id: string }>;
+  };
+  expect(includedBody.spaces.map((space) => space.id)).toEqual([
+    "space_active",
+    "space_e2e",
+  ]);
+});
+
+test("PATCH /api/v1/workspaces/:id archives a non-last Workspace", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const active = {
+    id: "space_active",
+    handle: "active",
+    displayName: "Active",
+    type: "personal" as const,
+    ownerUserId: "tsub_ctrl",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const target = {
+    ...active,
+    id: "space_target",
+    handle: "browser-e2e-production",
+  };
+  const operations = fakeOperations({
+    spaces: {
+      listSpacesByOwner: async () => [active, target],
+      getSpace: async (id) => (id === "space_target" ? target : active),
+    },
+  });
+  const { request: req, url } = request(
+    "PATCH",
+    "/api/v1/workspaces/space_target",
+    { cookie, body: { archived: true } },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    space: { id: string; archivedAt?: string };
+  };
+  expect(body.space.id).toEqual("space_target");
+  expect(body.space.archivedAt).toEqual("2026-01-02T00:00:00Z");
+  expect(operations.calls.updateSpace?.[1]).toEqual({ archived: true });
+});
+
+test("PATCH /api/v1/workspaces/:id rejects archiving the last active Workspace", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("PATCH", "/api/v1/workspaces/space_a", {
+    cookie,
+    body: { archived: true },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(409);
+  expect(operations.calls.updateSpace).toBeUndefined();
 });
 
 test("GET /api/v1/workspaces/:id/capsules aliases the final Capsule list route", async () => {
