@@ -32,11 +32,13 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import {
+  ArrowRight,
   Cloud,
   Download,
   Globe2,
   HardDrive,
   KeyRound,
+  Link2,
   Plus,
   Trash,
 } from "lucide-solid";
@@ -165,6 +167,32 @@ function CatalogCard(props: {
           <span class="av-catalog-desc">
             {props.entry.description[locale()]}
           </span>
+        </span>
+        <span class="av-catalog-action" aria-hidden="true">
+          <Plus size={16} />
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function ManualImportCard(props: { readonly onSelect: () => void }) {
+  return (
+    <li>
+      <button
+        type="button"
+        class="av-catalog-card av-catalog-card-manual"
+        onClick={props.onSelect}
+      >
+        <span class="av-catalog-icon" aria-hidden="true">
+          <Link2 size={20} />
+        </span>
+        <span class="av-catalog-text">
+          <span class="av-catalog-name">{t("new.manualCard.title")}</span>
+          <span class="av-catalog-desc">{t("new.manualCard.body")}</span>
+        </span>
+        <span class="av-catalog-action" aria-hidden="true">
+          <ArrowRight size={16} />
         </span>
       </button>
     </li>
@@ -1883,6 +1911,7 @@ function Inner() {
           <section class="av-store" aria-label={t("new.store.aria")}>
             <div class="av-store-head">
               <div>
+                <span class="av-store-kicker">{t("new.store.kicker")}</span>
                 <h2>{t("new.store.title")}</h2>
               </div>
             </div>
@@ -1922,6 +1951,7 @@ function Inner() {
                         />
                       )}
                     </For>
+                    <ManualImportCard onSelect={() => setActiveTab("git")} />
                   </ul>
                   <Show
                     when={
@@ -1963,44 +1993,55 @@ function Inner() {
                 </>
               </Match>
             </Switch>
-            <div class="av-manual-import">
-              <Button
-                variant="ghost"
-                size="sm"
-                type="button"
-                onClick={() => setActiveTab("git")}
-              >
-                {t("new.advancedImport.open")}
-              </Button>
-            </div>
           </section>
         </Show>
 
         <Show when={activeTab() === "git" || Boolean(gitUrl().trim())}>
           <section class="av-add-flow" aria-label={t("new.title")}>
             <div class="av-add-flow-header">
-              <div class="av-add-flow-icon" aria-hidden="true">
-                <Show
-                  when={selectedCatalogEntry()}
-                  fallback={<Download size={22} />}
-                >
-                  {(entry) => <CatalogIcon entry={entry()} />}
-                </Show>
+              <div class="av-add-flow-selected">
+                <div class="av-add-flow-icon" aria-hidden="true">
+                  <Show
+                    when={selectedCatalogEntry()}
+                    fallback={<Download size={22} />}
+                  >
+                    {(entry) => <CatalogIcon entry={entry()} />}
+                  </Show>
+                </div>
+                <div class="av-add-flow-copy">
+                  <span class="av-add-flow-kicker">
+                    {usingSelectedService()
+                      ? t("new.flow.selected")
+                      : t("new.flow.manual")}
+                  </span>
+                  <h2>
+                    {usingSelectedService()
+                      ? (selectedCatalogEntry()?.name[locale()] ??
+                        sourceSummaryTitle())
+                      : t("new.advancedImport.title")}
+                  </h2>
+                  <p>
+                    {usingSelectedService()
+                      ? (selectedCatalogEntry()?.description[locale()] ??
+                        t("new.selection.subtitle"))
+                      : t("new.advancedImport.subtitle")}
+                  </p>
+                </div>
               </div>
-              <div class="av-add-flow-copy">
-                <h2>
-                  {usingSelectedService()
-                    ? (selectedCatalogEntry()?.name[locale()] ??
-                      sourceSummaryTitle())
-                    : t("new.advancedImport.title")}
-                </h2>
-                <p>
-                  {usingSelectedService()
-                    ? (selectedCatalogEntry()?.description[locale()] ??
-                      t("new.selection.subtitle"))
-                    : t("new.advancedImport.subtitle")}
-                </p>
-              </div>
+              <ol class="av-add-guide" aria-label={t("new.flow.aria")}>
+                <li class="is-done">
+                  <span>1</span>
+                  {t("new.flow.stepSelect")}
+                </li>
+                <li class="is-current">
+                  <span>2</span>
+                  {t("new.flow.stepConfigure")}
+                </li>
+                <li>
+                  <span>3</span>
+                  {t("new.flow.stepReview")}
+                </li>
+              </ol>
               <Show when={activeTab() === "git" && !gitUrl().trim()}>
                 <Button
                   variant="ghost"
