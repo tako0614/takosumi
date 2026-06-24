@@ -72,7 +72,7 @@ import {
   type InstallConfig,
   listProviderConnections,
   listConnections,
-  listInstallConfigs,
+  listStarterCatalogInstallConfigs,
   planInstallation,
   putInstallationProviderConnectionSet,
   syncSource,
@@ -502,10 +502,7 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
-function initialAddTab(
-  search: string,
-  hasPrefill: boolean,
-): "catalog" | "git" {
+function initialAddTab(search: string, hasPrefill: boolean): "catalog" | "git" {
   if (hasPrefill) return "git";
   const params = new URLSearchParams(search);
   return params.get("mode") === "link" ? "git" : "catalog";
@@ -581,7 +578,7 @@ function Inner() {
   );
 
   const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [configs] = createResource(spaceId, listInstallConfigs);
+  const [configs] = createResource(spaceId, listStarterCatalogInstallConfigs);
   const [connections, { refetch: refetchConnections }] = createResource(
     spaceId,
     listConnections,
