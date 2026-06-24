@@ -140,6 +140,29 @@ test("POST /internal/v1/connections/cloudflare/token rejects an unknown body fie
   expect((await response.json()).error.code).toBe("invalid_argument");
 });
 
+test("POST /internal/v1/connections/cloudflare/token rejects credential files", async () => {
+  const app = await makeApp();
+  const response = await app.request(CF_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: SPACE_ID,
+      values: { CLOUDFLARE_API_TOKEN: "cf" },
+      files: [
+        {
+          path: "cloudflare.json",
+          content: '{"token":"file-secret"}',
+          envName: "CLOUDFLARE_CREDENTIALS_FILE",
+        },
+      ],
+    }),
+  });
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload.error.code).toBe("invalid_argument");
+  expect(payload.error.message).toContain("generic-env provider route");
+});
+
 test("POST /internal/v1/connections/cloudflare/token enforces space scope (403)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
@@ -357,6 +380,46 @@ test("POST /internal/v1/connections/generic-env-provider registers a secret-back
     "GITHUB_CUSTOM_ENDPOINT",
     "GITHUB_TOKEN",
   ]);
+});
+
+test("POST /internal/v1/connections/generic-env-provider registers env and file credentials", async () => {
+  const app = await makeApp();
+  const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      spaceId: SPACE_ID,
+      provider: "registry.opentofu.org/example/envfile",
+      displayName: "envfile",
+      values: {
+        GENERIC_API_TOKEN: "generic-secret-token",
+      },
+      files: [
+        {
+          path: "provider-credentials.json",
+          content: '{"token":"file-secret"}',
+          envName: "GENERIC_CREDENTIALS_FILE",
+          mode: 0o600,
+        },
+      ],
+    }),
+  });
+  expect(response.status).toBe(201);
+  const text = await response.text();
+  expect(text).not.toContain("generic-secret-token");
+  expect(text).not.toContain("file-secret");
+  const payload = JSON.parse(text);
+  expect(payload.connection.provider).toBe(
+    "registry.opentofu.org/example/envfile",
+  );
+  expect(payload.connection.kind).toBe("generic_env_provider");
+  expect(payload.connection.credentialDriver).toBe("generic_env");
+  expect(payload.connection.scope).toBe("space");
+  expect(payload.connection.envNames).toEqual([
+    "GENERIC_API_TOKEN",
+    "GENERIC_CREDENTIALS_FILE",
+  ]);
+  expect(payload.connection.fileEnvNames).toEqual(["GENERIC_CREDENTIALS_FILE"]);
 });
 
 test("POST /internal/v1/connections/generic-env-provider registers an arbitrary OpenTofu provider recipe", async () => {

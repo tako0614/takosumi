@@ -11,6 +11,7 @@ import type {
   ConnectionCredentialDriver,
   ConnectionKind,
   ConnectionScopeHints,
+  CreateConnectionFile,
   CreateConnectionRequest,
 } from "@takosumi/internal/deploy-control-api";
 import { providerForConnectionKind } from "@takosumi/providers";
@@ -54,7 +55,7 @@ import {
  * §30 connection-creation subroute body. The subroute fixes the
  * `provider` / `kind` / `authMethod`; the body carries only the Space binding,
  * display name, optional scope, optional non-secret scope hints, and the
- * write-only credential `values`.
+ * write-only credential `values` / generic-env credential `files`.
  */
 interface ConnectionSubrouteBody {
   readonly provider?: string;
@@ -64,6 +65,7 @@ interface ConnectionSubrouteBody {
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   readonly values: Readonly<Record<string, string>>;
+  readonly files?: readonly CreateConnectionFile[];
 }
 
 interface GcpImpersonationConnectionBody {
@@ -107,6 +109,7 @@ function buildGenericEnvProviderConnectionRequest(
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
     ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
     values: body.values,
+    ...(body.files ? { files: body.files } : {}),
   };
 }
 
@@ -122,6 +125,18 @@ function providerCredentialFields(
   };
 }
 
+function rejectCredentialFilesForFixedProvider(
+  body: ConnectionSubrouteBody,
+  routeName: string,
+): void {
+  if (body.files && body.files.length > 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `credential files are only accepted by the generic-env provider route; ${routeName} uses fixed credential values`,
+    );
+  }
+}
+
 /**
  * Builds a git-source Connection create request (§30 source subroutes). The
  * `source_git_ssh_key` kind REQUIRES `scopeHints.knownHostsEntry` so the runner
@@ -135,6 +150,7 @@ function buildSourceConnectionRequest(
     "source_git_https_token" | "source_git_ssh_key"
   >,
 ): CreateConnectionRequest {
+  rejectCredentialFilesForFixedProvider(body, kind);
   if (
     kind === "source_git_ssh_key" &&
     !nonEmptyString(body.scopeHints?.knownHostsEntry)
@@ -182,6 +198,7 @@ function providerIdentityForKind(kind: ConnectionKind): {
 function buildCloudflareConnectionRequest(
   body: ConnectionSubrouteBody,
 ): CreateConnectionRequest {
+  rejectCredentialFilesForFixedProvider(body, "cloudflare/token");
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     ...providerIdentityForKind("cloudflare_api_token"),
@@ -207,6 +224,7 @@ function buildCloudflareConnectionRequest(
 function buildAwsAssumeRoleConnectionRequest(
   body: ConnectionSubrouteBody,
 ): CreateConnectionRequest {
+  rejectCredentialFilesForFixedProvider(body, "aws/assume-role");
   const hints = body.scopeHints;
   if (!nonEmptyString(hints?.awsRoleArn)) {
     throw new OpenTofuControllerError(
@@ -272,6 +290,7 @@ function buildGcpImpersonationConnectionRequest(
 function buildGcpServiceAccountJsonConnectionRequest(
   body: ConnectionSubrouteBody,
 ): CreateConnectionRequest {
+  rejectCredentialFilesForFixedProvider(body, "gcp/service-account-json");
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     provider: "google",
@@ -348,7 +367,7 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       method: "POST",
       path: TAKOSUMI_CONNECTIONS_GENERIC_ENV_PROVIDER_ROUTE,
       summary:
-        "Registers a secret-backed Provider Connection through the generic-env provider route (values write-only).",
+        "Registers a secret-backed Provider Connection through the generic-env provider route (values/files write-only).",
       auth: "deploy-control-token",
       operationId: "createGenericEnvProviderConnection",
       openapi: {
