@@ -1109,6 +1109,119 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
   });
 });
 
+test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell env", async () => {
+  const d1 = new MemoryD1Database();
+  const store = new D1AccountsStore(d1);
+  registerSessionHashSaltConfig({ salt: "test-session-hash-salt" });
+  const sessionId = await seedD1AccountSession(store);
+  const operations = {
+    spaces: {
+      getSpace: async (id: string) => ({
+        id,
+        handle: id,
+        displayName: id,
+        type: "personal" as const,
+        ownerUserId: "tsub_route_export",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+    deployUpload: async (req: {
+      readonly spaceId: string;
+      readonly name: string;
+      readonly snapshotId: string;
+    }) => ({
+      installation: {
+        id: "inst_upload",
+        spaceId: req.spaceId,
+        name: req.name,
+        slug: req.name,
+        installConfigId: "cfg_upload",
+        environment: "production",
+        currentStateGeneration: 0,
+        status: "ready",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+      installConfigId: "cfg_upload",
+      run: {
+        id: "plan_upload",
+        spaceId: req.spaceId,
+        installationId: "inst_upload",
+        type: "plan",
+        status: "succeeded",
+        sourceSnapshotId: req.snapshotId,
+        planDigest: `sha256:${"d".repeat(64)}`,
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+      status: "planned",
+      created: true,
+    }),
+    getPlanRun: async (id: string) => ({
+      planRun: {
+        id,
+        spaceId: "space_route_export",
+        installationId: "inst_upload",
+        sourceSnapshotId: "snap_upload",
+        status: "succeeded",
+        operation: "create",
+        sourceDigest: `sha256:${"a".repeat(64)}`,
+        variablesDigest: `sha256:${"b".repeat(64)}`,
+        policyDecisionDigest: `sha256:${"c".repeat(64)}`,
+        policy: { status: "passed" },
+        planDigest: `sha256:${"d".repeat(64)}`,
+      },
+    }),
+    getSourceSnapshot: async (id: string) => ({
+      id,
+      origin: "upload",
+      spaceId: "space_route_export",
+      url: "upload://space_route_export",
+      ref: "upload",
+      resolvedCommit:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      path: ".",
+      archiveObjectKey: "spaces/space_route_export/uploads/snap/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`,
+      archiveSizeBytes: 128,
+      fetchedByRunId: "upload",
+      fetchedAt: "2026-01-01T00:00:00Z",
+    }),
+  };
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () =>
+      operations as unknown as ControlPlaneOperations,
+  });
+  const env = createEnv(d1, {
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
+    LOCAL_SUBSTRATE_TEST_BED: "1",
+    TAKOSUMI_RUNTIME_CELL_ID: "tokyo-cell-01",
+  });
+
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.test/api/v1/deploy", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_route_export",
+        name: "hello",
+        snapshotId: "snap_upload",
+        projectionMode: "shared-cell",
+      }),
+    }),
+    env,
+  );
+
+  assert.equal(response.status, 200, await response.clone().text());
+  const installation = await store.findAppInstallation("inst_upload");
+  assert.equal(installation?.mode, "shared-cell");
+  assert.equal(installation?.runtimeBindingId, "rtb_inst_upload_shared_cell");
+});
+
 test("Cloudflare Accounts Worker bridges billing redirect allowlist from env", async () => {
   const d1 = new MemoryD1Database();
   const worker = createCloudflareWorker({

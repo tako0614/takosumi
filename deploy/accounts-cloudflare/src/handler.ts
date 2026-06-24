@@ -33,6 +33,8 @@ import {
   type ServiceGraphMaterialResolverHttpOptions,
   type ServiceGraphRuntimeAvailability,
   type LoginEmailAllowlist,
+  sharedCellRuntimeBinding,
+  type SharedCellRuntimeAllocator,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -141,6 +143,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
   readonly TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL?: string;
   readonly TAKOSUMI_AI_GATEWAY_PROFILES?: string;
+  readonly TAKOSUMI_RUNTIME_CELL_ID?: string;
   readonly LOCAL_SUBSTRATE_TEST_BED?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID?: string;
@@ -469,6 +472,7 @@ async function buildAccountsHandler(
     ),
     billingCheckoutSmokeToken: billingCheckoutSmokeTokenFromEnv(env),
     materializeDrillToken: materializeDrillTokenFromEnv(env),
+    sharedCellRuntime: parseSharedCellRuntime(env),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,
     ),
@@ -502,6 +506,19 @@ function configureSessionHashSalt(env: CloudflareWorkerEnv): void {
   throw new TypeError(
     "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT must be set for the Cloudflare Worker account session store",
   );
+}
+
+function parseSharedCellRuntime(
+  env: CloudflareWorkerEnv,
+): SharedCellRuntimeAllocator | undefined {
+  const cellId = optionalString(env.TAKOSUMI_RUNTIME_CELL_ID);
+  if (!cellId) return undefined;
+  return (input) =>
+    sharedCellRuntimeBinding({
+      installationId: input.installationId,
+      cellId,
+      now: input.now,
+    });
 }
 
 interface SchemaMigrationRow {
