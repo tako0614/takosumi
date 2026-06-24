@@ -3030,8 +3030,13 @@ async function syncDeployControlProjectionStatusFromRun(input: {
   readonly store: AccountsStore;
   readonly run: Run;
 }): Promise<void> {
-  if (input.run.type !== "apply" || !input.run.installationId) return;
-  const requestedStatus = projectionStatusFromRunStatus(input.run.status);
+  if (
+    (input.run.type !== "apply" && input.run.type !== "destroy_apply") ||
+    !input.run.installationId
+  ) {
+    return;
+  }
+  const requestedStatus = projectionStatusFromRun(input.run);
   if (requestedStatus === "installing") return;
   const installation = await input.store.findAppInstallation(
     input.run.installationId,
@@ -3371,6 +3376,13 @@ function projectionStatusFromRunStatus(
     return "failed";
   }
   return "installing";
+}
+
+function projectionStatusFromRun(run: Run): AppInstallationStatus {
+  if (run.type === "destroy_apply" && run.status === "succeeded") {
+    return "suspended";
+  }
+  return projectionStatusFromRunStatus(run.status);
 }
 
 function nextProjectionStatus(

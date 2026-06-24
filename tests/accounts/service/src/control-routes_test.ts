@@ -2844,6 +2844,70 @@ test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", asyn
   expect(requestedRunId).toEqual("ssr_1");
 });
 
+test("GET /api/v1/runs/:id syncs succeeded destroy_apply runs into suspended projections", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveLedgerAccount({
+    accountId: "acct_destroy_sync",
+    legalOwnerSubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveSpace({
+    spaceId: "space_a",
+    accountId: "acct_destroy_sync",
+    kind: "personal",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_destroy_sync",
+    accountId: "acct_destroy_sync",
+    spaceId: "space_a",
+    appId: "destroy-sync",
+    sourceGitUrl: "https://github.com/example/destroy-sync",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"d".repeat(64)}`,
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const operations = fakeOperations({
+    getRun: async (id) =>
+      ({
+        id,
+        spaceId: "space_a",
+        installationId: "inst_destroy_sync",
+        type: "destroy_apply",
+        status: "succeeded",
+        sourceSnapshotId: "snap_destroy",
+        createdBy: "system",
+        createdAt: "2026-01-01T00:00:00Z",
+      }) as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>,
+  });
+  const { request: req, url } = request("GET", "/api/v1/runs/apply_destroy", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const projection = store.findAppInstallation("inst_destroy_sync");
+  expect(projection?.status).toEqual("suspended");
+  const events = store.listInstallationEvents("inst_destroy_sync");
+  expect(events.map((event) => event.eventType)).toContain(
+    "installation.status_changed",
+  );
+});
+
 test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
