@@ -41,7 +41,7 @@ export const ja = {
   "nav.services": "サービス",
   "nav.add": "追加",
   "nav.runs": "更新履歴",
-  "nav.connections": "クラウド接続",
+  "nav.connections": "接続",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
   "nav.manage": "管理",
@@ -258,20 +258,20 @@ export const ja = {
   "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
-  "app.bindings.title": "クラウド接続",
+  "app.bindings.title": "Provider 接続",
   "app.bindings.subtitle":
-    "このサービスがホスト先で使う認証情報です。通常は変更不要です。",
-  "app.bindings.none": "クラウド接続は紐づいていません。",
-  "app.bindings.editAdvanced": "クラウド接続の割り当てを変更",
-  "app.bindings.add": "クラウド接続を追加",
+    "このサービスがホスト先で使う provider 認証情報です。通常は変更不要です。",
+  "app.bindings.none": "Provider 接続は紐づいていません。",
+  "app.bindings.editAdvanced": "Provider 接続の割り当てを変更",
+  "app.bindings.add": "Provider 接続を追加",
   "app.bindings.providerPlaceholder": "Provider",
   "app.bindings.aliasPlaceholder": "対象名（任意）",
-  "app.bindings.selectConnection": "クラウド接続を選択",
+  "app.bindings.selectConnection": "Provider 接続を選択",
   "app.bindings.technicalTarget": "技術的な対象",
   "app.bindings.remove": "削除",
   "app.bindings.errorProvider": "{index} 行目の Provider を入力してください。",
   "app.bindings.errorConnection":
-    "{provider} の利用可能なクラウド接続を選択してください。",
+    "{provider} の利用可能な Provider 接続を選択してください。",
   "app.settings.removeTitle": "このサービスを削除しますか？",
   "app.settings.removeBody":
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
@@ -370,17 +370,17 @@ export const ja = {
   "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
-  "run.connections.title": "クラウド接続",
-  "run.connections.reviewTitle": "クラウド接続の確認が必要です",
+  "run.connections.title": "Provider 接続",
+  "run.connections.reviewTitle": "Provider 接続の確認が必要です",
   "run.connections.reviewBody":
-    "続行する前に確認が必要なクラウド接続があります。非公開の値は表示しません。",
+    "続行する前に確認が必要な Provider 接続があります。非公開の値は表示しません。",
   "run.connections.provider": "Provider",
   "run.connections.connection": "アクセス",
   "run.connections.status": "状態",
   "run.connections.statusResolved": "利用できます",
   "run.connections.statusMissing": "アクセスが必要",
   "run.connections.statusBlocked": "ポリシーで停止",
-  "run.connections.empty": "クラウド接続の確認情報はありません。",
+  "run.connections.empty": "Provider 接続の確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
   "run.diag.severity.error": "エラー",
@@ -478,7 +478,7 @@ export const ja = {
   "new.vars.errorNameRequired":
     "変数名を入力するか、空の行を削除してください。",
   "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力値として渡せません。非公開の値はクラウド接続から渡してください。",
+    "「{name}」はリンク/入力値として渡せません。非公開の値は Provider 接続から渡してください。",
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
@@ -509,7 +509,7 @@ export const ja = {
   "new.compat.diagnostic.technicalNote":
     "技術的な詳細です。対応が必要な場合は、表示された内容を確認してください。",
   "new.compat.patchHelp":
-    "表示された内容を確認してください。アプリ側の修正が必要な場合と、クラウド接続の設定で進められる場合があります。",
+    "表示された内容を確認してください。アプリ側の修正が必要な場合と、Provider 接続の設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.reviewRequired":
@@ -517,7 +517,7 @@ export const ja = {
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、{provider} のクラウド接続からデプロイ時だけ渡してください。値を外して接続すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、{provider} の Provider 接続からデプロイ時だけ渡してください。値を外して接続すると続行できます。",
   "new.compat.issue.providerLift.message":
     "{provider} の Provider 設定は、非公開値を外せば安全な実行用設定として扱えます。",
   "new.compat.issue.lockfile.message":
@@ -530,16 +530,16 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "使うクラウド接続",
+  "new.providers.title": "使う Provider 接続",
   "new.providers.alias": "対象: {alias}",
-  "new.providers.selectConnection": "クラウド接続を選択",
+  "new.providers.selectConnection": "Provider 接続を選択",
   "new.providers.errorConnection":
-    "{provider} の利用可能なクラウド接続を選択してください。",
-  "new.providers.missingTitle": "クラウド接続の設定が必要です",
-  "new.providers.missingBody": "クラウド接続を設定すると続けられます。",
-  "new.providers.setupMissing": "必要なクラウド接続を設定",
+    "{provider} の利用可能な Provider 接続を選択してください。",
+  "new.providers.missingTitle": "Provider 接続の設定が必要です",
+  "new.providers.missingBody": "Provider 接続を設定すると続けられます。",
+  "new.providers.setupMissing": "必要な Provider 接続を設定",
   "new.providers.returnNote":
-    "クラウド接続を保存すると、この追加の続きに戻ります。",
+    "Provider 接続を保存すると、この追加の続きに戻ります。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
@@ -626,9 +626,9 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "このチームがホスト先として使うクラウドアカウントを接続します。",
-  "conn.providerConnections.title": "クラウド接続",
-  "conn.providerConnections.provider": "サービス",
+    "このチームがサービスのホスト時に使う provider 認証情報を保存します。",
+  "conn.providerConnections.title": "Provider 接続",
+  "conn.providerConnections.provider": "Provider",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
   "conn.expiresAt": "期限: {date}",
@@ -636,20 +636,20 @@ export const ja = {
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
   "conn.return.subtitle":
-    "クラウド接続を保存してから、サービス追加の続きに戻ります。",
+    "Provider 接続を保存してから、サービス追加の続きに戻ります。",
   "conn.return.cta": "サービス追加に戻る",
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest":
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
-  "conn.add.title": "クラウド接続を追加",
-  "conn.add.open": "クラウド接続を追加",
+  "conn.add.title": "Provider 接続を追加",
+  "conn.add.open": "Provider 接続を追加",
   "conn.add.close": "閉じる",
   "conn.add.provider": "Provider",
   "conn.add.genericEnvOption": "任意の OpenTofu provider",
-  "conn.add.optionalSettings": "このアカウントに名前をつける",
-  "conn.add.displayName": "アカウント名",
+  "conn.add.optionalSettings": "この接続に名前をつける",
+  "conn.add.displayName": "接続名",
   "conn.add.displayNamePlaceholder": "任意の名前",
   "conn.provider.cloudflare.label": "Cloudflare",
   "conn.provider.cloudflare.helper.stepOpen":
@@ -708,12 +708,12 @@ export const ja = {
   "conn.guided.instructions": "手順を表示",
   "conn.guided.pasteLabel": "アクセストークン",
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
-  "conn.guided.connect": "アカウントを保存",
+  "conn.guided.connect": "接続を保存",
   "conn.guided.connecting": "接続中...",
   "conn.custom.back": "案内付き接続を使う",
   "conn.advanced.summary": "アクセス情報を入力",
   "conn.advanced.register": "アクセス情報を保存",
-  "conn.register": "アカウントを保存",
+  "conn.register": "接続を保存",
   "conn.registering": "保存中...",
   "conn.genericEnv.option": "任意の OpenTofu provider",
   "conn.genericEnv.providerName": "Provider source",
@@ -729,14 +729,14 @@ export const ja = {
   "conn.error.invalidProvider": "Provider が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "クラウド接続はまだありません",
+  "conn.empty.title": "Provider 接続はまだありません",
   "conn.empty.message":
-    "サービスがクラウドの認証情報を必要とするときに追加します。",
+    "サービスが provider 認証情報を必要とするときに追加します。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
     "このアカウントはまだ利用できません（状態: {status}）。",
-  "conn.remove.confirmTitle": "クラウド接続を削除",
+  "conn.remove.confirmTitle": "Provider 接続を削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
 
@@ -821,10 +821,10 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated": "クラウド接続「{provider}」を追加しました",
-  "notif.event.connCreatedGeneric": "クラウド接続を追加しました",
-  "notif.event.connRevoked": "クラウド接続「{provider}」が無効になりました",
-  "notif.event.connRevokedGeneric": "クラウド接続が無効になりました",
+  "notif.event.connCreated": "Provider 接続「{provider}」を追加しました",
+  "notif.event.connCreatedGeneric": "Provider 接続を追加しました",
+  "notif.event.connRevoked": "Provider 接続「{provider}」が無効になりました",
+  "notif.event.connRevokedGeneric": "Provider 接続が無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
   "notif.event.depCreated": "サービス間の連携を追加しました",
   "notif.event.depDeleted": "サービス間の連携を解除しました",
