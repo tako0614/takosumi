@@ -170,6 +170,7 @@ export const ALLOWED_KEYS: Record<
     "scopeHints",
     "expiresAt",
     "values",
+    "files",
   ]),
   connectionOAuthStart: new Set([
     "spaceId",

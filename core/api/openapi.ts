@@ -1582,10 +1582,40 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
         },
         scopeHints: ref("ConnectionScope"),
         envNames: { type: "array", items: { type: "string" } },
+        fileEnvNames: { type: "array", items: { type: "string" } },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
         verifiedAt: { type: "string", format: "date-time" },
         expiresAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    CreateConnectionFile: {
+      type: "object",
+      required: ["path", "content"],
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Relative credential file path to create in the runner sandbox.",
+        },
+        content: {
+          type: "string",
+          description:
+            "Write-only credential file content. Stored encrypted and never echoed.",
+        },
+        mode: {
+          type: "integer",
+          minimum: 0,
+          maximum: 511,
+          description:
+            "POSIX file mode for the generated credential file. Defaults to 0600.",
+        },
+        envName: {
+          type: "string",
+          description:
+            "Optional env var name whose value becomes the generated credential file path.",
+        },
       },
       additionalProperties: false,
     },
@@ -1632,6 +1662,12 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
           additionalProperties: { type: "string" },
           description:
             "Write-only credential values keyed by env name. Never echoed.",
+        },
+        files: {
+          type: "array",
+          items: ref("CreateConnectionFile"),
+          description:
+            "Write-only credential files for generic-env Provider Connections. File contents are never echoed.",
         },
       },
       additionalProperties: false,
@@ -1680,6 +1716,12 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
           additionalProperties: { type: "string" },
           description:
             "Write-only credential values keyed by env name. The subroute fixes provider, kind, and authMethod; values are never echoed.",
+        },
+        files: {
+          type: "array",
+          items: ref("CreateConnectionFile"),
+          description:
+            "Write-only credential files accepted by the generic-env provider subroute. Fixed provider subroutes reject credential files.",
         },
       },
       additionalProperties: false,
