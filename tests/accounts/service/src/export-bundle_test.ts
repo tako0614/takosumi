@@ -232,6 +232,23 @@ test("installation export bundle import plan rewrites only the exact source orig
   ]);
 });
 
+test("installation export bundle import plan can target shared-cell", () => {
+  const targetIssuer = "https://accounts.target.test";
+  const bundle = sampleExportBundle("https://accounts.source.test");
+
+  const plan = planInstallationImport({
+    bundle,
+    targetIssuer,
+    targetAccountId: "acct_target",
+    targetSpaceId: "space_target",
+    createdBySubject: "tsub_target",
+    mode: "shared-cell",
+  });
+
+  expect(plan.request.mode).toEqual("shared-cell");
+  expect(plan.accountsProjectionRequestTemplate.mode).toEqual("shared-cell");
+});
+
 test("installation export bundle parser accepts stored OIDC namespacePath", () => {
   const stored = JSON.parse(
     JSON.stringify(sampleExportBundle("https://accounts.source.test")),

@@ -1230,6 +1230,54 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
   ]);
 });
 
+test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBinding", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/deploy", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      name: "hello",
+      snapshotId: "snap_upload",
+      projectionMode: "shared-cell",
+    },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    sharedCellRuntime: async ({ installationId, now }) => ({
+      runtimeBindingId: `rtb_${installationId}_shared_cell`,
+      installationId,
+      mode: "shared-cell",
+      targetType: "shared-cell",
+      targetId: `shared-cell://tokyo-cell-01/namespaces/${installationId}`,
+      createdAt: now,
+      updatedAt: now,
+    }),
+  });
+
+  expect(response?.status).toEqual(200);
+  expect(operations.calls.deployUpload).toEqual([
+    {
+      spaceId: "space_a",
+      name: "hello",
+      snapshotId: "snap_upload",
+    },
+  ]);
+  const projection = await store.findAppInstallation("inst_upload");
+  expect(projection?.mode).toEqual("shared-cell");
+  expect(projection?.runtimeBindingId).toEqual("rtb_inst_upload_shared_cell");
+  const runtimeBinding = projection?.runtimeBindingId
+    ? await store.findRuntimeBinding(projection.runtimeBindingId)
+    : undefined;
+  expect(runtimeBinding?.targetId).toEqual(
+    "shared-cell://tokyo-cell-01/namespaces/inst_upload",
+  );
+});
+
 test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projection", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

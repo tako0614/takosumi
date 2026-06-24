@@ -144,7 +144,7 @@ export interface PlanInstallationImportInput {
   readonly targetSpaceId: string;
   readonly createdBySubject: TakosumiSubject;
   readonly targetInstallationId?: string;
-  readonly mode?: Extract<AppInstallationMode, "dedicated" | "self-hosted">;
+  readonly mode?: AppInstallationMode;
 }
 
 export interface InstallationImportPlan {

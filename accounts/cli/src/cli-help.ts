@@ -770,7 +770,7 @@ export function installationsImportPlanHelpText(): string {
     "  --target-space <space-id>",
     "  --created-by-subject <tsub_...>",
     "  --target-installation-id <installation-id>",
-    "  --mode <self-hosted|dedicated>",
+    "  --mode <shared-cell|dedicated|self-hosted>",
     "  --out-file <path>",
     "  --json",
   ].join("\n");
@@ -793,7 +793,7 @@ export function installationsImportApplyHelpText(): string {
     "  --target-space <space-id>",
     "  --created-by-subject <tsub_...>",
     "  --target-installation-id <review-only-installation-id>",
-    "  --mode <self-hosted|dedicated>",
+    "  --mode <shared-cell|dedicated|self-hosted>",
     "  --idempotency-key <key>",
     "  --accounts-url <url>",
     "  --token <accounts-write-bearer>",
