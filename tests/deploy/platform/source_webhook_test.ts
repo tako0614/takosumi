@@ -21,6 +21,7 @@ import {
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
+  PLATFORM_CLOUD_EXTENSION_ROUTES,
   pollAutoSyncSources,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
@@ -1093,14 +1094,14 @@ test("Cloud-only extension route matcher rejects near-prefixes and unregistered 
       "/compat/cloudflare/client/v40/accounts/virtual",
     ),
   ).toBe(undefined);
-  expect(matchPlatformCloudExtensionRoute("/compat/aws/v1/sts")).toBe(
+  expect(matchPlatformCloudExtensionRoute("/compat/not-registered/v1")).toBe(
     undefined,
   );
   expect(
     await handlePlatformCloudExtensionRequest(
-      new Request("https://app.takosumi.com/compat/aws/v1/sts"),
+      new Request("https://app.takosumi.com/compat/not-registered/v1"),
       {
-        TAKOSUMI_CLOUD_AWS_COMPAT: {
+        TAKOSUMI_CLOUD_NOT_REGISTERED: {
           fetch: async () => Response.json({ delegated: true }),
         },
       } as never,
@@ -1154,61 +1155,19 @@ test("Cloud-only extension catalog is a stable platform endpoint", async () => {
   expect(JSON.stringify(body)).not.toContain("bindingName");
 });
 
-test("Cloud-only extension routes are registry driven for future provider gateways", async () => {
-  const awsRoute = {
-    id: "provider.aws.v1",
-    kind: "provider_compat",
-    provider: "aws",
-    basePath: "/compat/aws/v1",
-    bindingName: "TAKOSUMI_CLOUD_AWS_COMPAT",
-    protocol: "aws-compatible",
-    capabilities: ["sts.get-caller-identity"],
-    smokeChecks: ["awsCompatStsAuth"],
-  } as const;
-  expect(
-    matchPlatformCloudExtensionRoute("/compat/aws/v1/sts", [awsRoute]),
-  ).toEqual(awsRoute);
-
-  const missing = await handlePlatformCloudExtensionRequest(
-    new Request("https://app.takosumi.com/compat/aws/v1/sts"),
-    {} as never,
-    [awsRoute],
-  );
-  expect(missing?.status).toBe(404);
-  expect(await missing?.json()).toEqual({ error: "not found" });
-
-  const forwarded: { url: string; authorization: string | null }[] = [];
-  const response = await handlePlatformCloudExtensionRequest(
-    new Request("https://app.takosumi.com/compat/aws/v1/sts", {
-      headers: { authorization: "Bearer aws-compat-token" },
-    }),
-    {
-      TAKOSUMI_CLOUD_AWS_COMPAT: {
-        fetch: async (request: Request) => {
-          forwarded.push({
-            url: request.url,
-            authorization: request.headers.get("authorization"),
-          });
-          return Response.json({
-            kind: "aws-compat-test",
-            delegated: true,
-          });
-        },
-      },
-    } as never,
-    [awsRoute],
-  );
-  expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({
-    kind: "aws-compat-test",
-    delegated: true,
-  });
-  expect(forwarded).toEqual([
-    {
-      url: "https://app.takosumi.com/compat/aws/v1/sts",
-      authorization: null,
-    },
+test("Cloud-only extension registry is limited to AI Gateway and Cloudflare compatibility", async () => {
+  expect(PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => route.id)).toEqual([
+    "ai.openai_compatible.v1",
+    "provider.cloudflare.client_v4",
   ]);
+  expect(
+    PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => route.basePath),
+  ).toEqual(["/gateway/ai/v1", "/compat/cloudflare/client/v4"]);
+  expect(
+    PLATFORM_CLOUD_EXTENSION_ROUTES.filter(
+      (route) => route.kind === "provider_compat",
+    ).map((route) => route.provider),
+  ).toEqual(["cloudflare"]);
 });
 
 test("scheduled poll continues past a failing source", async () => {

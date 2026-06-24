@@ -25,7 +25,7 @@ Takosumi OSS:
 
 Takosumi Cloud:
   closed official hosted Takosumi for Operators
-  + Cloud-only compatibility gateways
+  + Cloud-only compatibility gateways (Cloudflare / AI)
   + Cloud-only managed resources.
 ```
 
@@ -40,13 +40,13 @@ Only Cloud has compatibility gateways and managed resources.
 
 The normal Takosumi Cloud UI does not lead with internal control-plane nouns.
 
-| UI word | Meaning |
-| --- | --- |
-| Service | The app, worker, API, site, or storage you host |
-| Connection | The Cloudflare / AWS / GCP account Takosumi can use |
-| Changes | The plan / resource summary you review before deploy |
-| History | Who changed what and when |
-| Restore point | A state version you can recover from |
+| UI word       | Meaning                                              |
+| ------------- | ---------------------------------------------------- |
+| Service       | The app, worker, API, site, or storage you host      |
+| Connection    | The Cloudflare / AWS / GCP account Takosumi can use  |
+| Changes       | The plan / resource summary you review before deploy |
+| History       | Who changed what and when                            |
+| Restore point | A state version you can recover from                 |
 
 Technical details are still available in the [Model reference](./reference/model.md).
 
@@ -79,6 +79,12 @@ managed storage
 official billing/quota/usage
 official cloud backend
 ```
+
+Takosumi Cloud limits compatibility APIs to Cloudflare Compatibility Gateway
+and the OpenAI-compatible Takosumi AI Gateway for the current GA scope. Other
+providers should run through normal OpenTofu/Terraform providers plus
+ProviderConnection env/file injection, not through new provider-compatible
+gateway APIs.
 
 ## Next Documents
 

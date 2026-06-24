@@ -2,11 +2,11 @@
  * Secret-backed generic-env provider connection driver (provider-agnostic).
  *
  * A generic-env provider Connection (`kind: "generic_env_provider"`) carries
- * write-only provider env values for arbitrary OpenTofu providers. Known
- * providers can still use built-in env allowlists; unknown providers use the
- * connection's own `envNames` as the declared recipe. There is no per-provider
- * arg mapping: each declared variable is passed straight through to the runner
- * process under its real environment-variable name.
+ * write-only provider env values for arbitrary OpenTofu providers. The
+ * connection's own `envNames` is the declared recipe for known and unknown
+ * providers alike. There is no per-provider arg mapping: each declared variable
+ * is passed straight through to the runner process under its real
+ * environment-variable name.
  *
  * This driver is the extracted, self-contained form of the vault's
  * `#mintCustomProviderVariables` logic. The crypto / secret-opening stays in
@@ -23,10 +23,6 @@
  *     skipped (defensive — the open path already filters to strings).
  */
 import type { Connection } from "takosumi-contract/connections";
-import {
-  allowedEnvNamesForProvider,
-  providerEnvRule,
-} from "takosumi-contract/provider-env-rules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 
 /**
@@ -80,12 +76,7 @@ export function mintGenericEnvProviderVariables(
       `generic-env provider connection ${connection.id} must be Space-scoped`,
     );
   }
-  const rule = providerEnvRule(connection.provider);
-  const allowed = new Set(
-    rule
-      ? allowedEnvNamesForProvider(connection.provider)
-      : connection.envNames,
-  );
+  const allowed = new Set(connection.envNames);
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(values)) {
     if (typeof value !== "string") continue;

@@ -155,6 +155,7 @@ official quota
 official usage metering
 official support/admin
 Cloudflare Compatibility Gateway
+Takosumi AI Gateway
 Takosumi Edge Worker
 Takosumi Object Storage
 Takosumi App Database
@@ -549,11 +550,13 @@ auth_modes:
 ```
 
 Built-in recipes are convenience, validation, and guided UI. They are not a
-provider allowlist. For unsupported providers, the explicit env names on a
-generic-env Provider Connection become the run-local Credential Recipe and are
-injected into the runner process under those same env names. Runner/runtime
-reserved names (`PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, `TF_*`, and similar process
-control env) are rejected.
+provider allowlist. For any provider, including providers with guided recipes,
+the explicit env names on a generic-env Provider Connection become the
+run-local Credential Recipe and are injected into the runner process under
+those same env names. Env names must be upper-snake environment identifiers
+such as `SNOWFLAKE_PASSWORD`. Runner/runtime reserved names (`PATH`,
+`TAKOSUMI_*`, `OPENTOFU_*`, `TF_*`, and similar process control env) are
+rejected.
 
 ## 7. Provider Binding
 
@@ -805,6 +808,31 @@ provider_bindings:
 
 This connection type is not part of OSS Takosumi.
 
+## 12.1 AI Gateway
+
+Takosumi AI Gateway is also Takosumi Cloud-only and closed. It is an
+OpenAI-compatible runtime API for deployed Capsules, not an OpenTofu provider
+compatibility layer and not an OSS control-plane feature.
+
+Initial scope:
+
+```text
+GET  /gateway/ai/v1/models
+POST /gateway/ai/v1/chat/completions
+POST /gateway/ai/v1/embeddings
+```
+
+Takosumi Cloud may back those routes with Workers AI or OpenAI-compatible
+upstreams such as OpenAI, DeepSeek, Z.AI/GLM, Gemini-compatible endpoints, or
+other configured providers. Upstream provider keys stay in Takosumi Cloud
+operator secrets. Capsule runtimes receive only the gateway base URL and a
+rotated service token.
+
+For GA scope, compatibility APIs are limited to Cloudflare Compatibility
+Gateway and Takosumi AI Gateway. Other providers should be supported through
+normal OpenTofu/Terraform providers plus ProviderConnection generic env/file
+injection, not through new provider-compatible gateway APIs.
+
 ## 13. Takosumi Managed Resources
 
 Only Takosumi Cloud provides managed resources:
@@ -953,7 +981,7 @@ takosumi-cloud/
 
   gateway/
     cloudflare-compat/
-    s3-gateway/
+    ai-gateway/
 
   managed/
     edge-worker/
@@ -1270,7 +1298,8 @@ secret cleanup
 
 ```text
 first-class recipes for Cloudflare, AWS, GCP, Hetzner, and S3-compatible
-declared-env recipe for arbitrary OpenTofu providers
+declared-env recipe for arbitrary OpenTofu providers, including providers that
+also have guided recipes
 connection API
 connection UI
 secret encryption

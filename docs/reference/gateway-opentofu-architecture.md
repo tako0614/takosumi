@@ -30,7 +30,9 @@ The following belong to closed Takosumi Cloud:
 
 ```text
 Cloudflare Compatibility Gateway
-provider-compatible base_url endpoints
+Takosumi AI Gateway
+Cloudflare provider base_url endpoint
+OpenAI-compatible AI endpoint
 short-lived Cloud run keys
 virtual account/resource IDs
 Workers for Platforms backend integration
@@ -80,21 +82,16 @@ The `/readyz` baseline does not require these bindings, but GA evidence for AI
 Gateway or Cloudflare compatibility must prove the corresponding service binding
 exists and delegates to the closed Cloud worker.
 
-Future provider-compatible entry points such as AWS, GCP, or S3-compatible
-managed resources follow the same rule:
+The current compatibility API contract stops here: Cloudflare Compatibility
+Gateway and Takosumi AI Gateway. AWS, GCP, S3-compatible storage, Hetzner,
+Vultr, DigitalOcean, OpenStack, and other providers should be handled through
+normal OpenTofu/Terraform providers plus ProviderConnection / CredentialRecipe /
+ProviderBinding env-file injection. Takosumi OSS and Takosumi for Operators
+should not grow provider-compatible endpoints for those providers.
 
-```text
-1. implement the provider-compatible behavior in closed Takosumi Cloud
-2. bind that Cloud worker/service to the platform worker
-3. add one registry row with basePath + bindingName + provider id
-4. keep OSS ProviderConnection / CredentialRecipe / ProviderBinding unchanged
-```
-
-For example, an AWS compatibility experiment would be a Cloud-only extension
-such as `/compat/aws/v1/* -> TAKOSUMI_CLOUD_AWS_COMPAT`; it is not active unless
-Takosumi Cloud ships that closed binding. The OSS control plane still runs
-`hashicorp/aws` against the user's real AWS account through normal
-ProviderConnections.
+If Takosumi Cloud later wants another compatibility endpoint, it requires a new
+Cloud-only product spec and closed implementation. It must not be inferred from
+the OSS route seam or from adding env vars to the platform worker.
 
 The Cloudflare compatibility endpoint is the path a Cloud-only Provider
 Connection can put into the Cloudflare provider `base_url`:

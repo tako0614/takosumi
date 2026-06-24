@@ -904,7 +904,10 @@ test("generic-env provider registration accepts arbitrary providers with explici
   );
 
   const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "not-a-real-provider/not-a-real-provider", connectionId: conn.id },
+    {
+      provider: "not-a-real-provider/not-a-real-provider",
+      connectionId: conn.id,
+    },
   ]);
 
   expect(bundle.env).toEqual({
@@ -912,17 +915,66 @@ test("generic-env provider registration accepts arbitrary providers with explici
   });
 });
 
-test("generic-env provider registration rejects env names outside the provider allowlist", async () => {
-  const { vault } = makeVault();
-  await expect(
-    vault.register({
+test("generic-env provider registration accepts explicit env names for guided providers", async () => {
+  const { store, vault } = makeVault();
+  const conn = await markVerified(
+    store,
+    await vault.register({
       spaceId: "space_1",
       provider: "registry.opentofu.org/integrations/github",
       authMethod: "static_secret",
       kind: "generic_env_provider",
-      values: { GITHUB_TOKEN: "github-secret", VERCEL_API_TOKEN: "nope" },
+      values: {
+        GITHUB_TOKEN: "github-secret",
+        GITHUB_CUSTOM_ENDPOINT: "https://github.example.test",
+      },
     }),
-  ).rejects.toThrow("is not allowed for provider");
+  );
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/integrations/github",
+      connectionId: conn.id,
+    },
+  ]);
+
+  expect(bundle.env).toEqual({
+    GITHUB_CUSTOM_ENDPOINT: "https://github.example.test",
+    GITHUB_TOKEN: "github-secret",
+  });
+});
+
+test("generic-env provider registration passes raw env for root-mapped guided providers", async () => {
+  const { store, vault } = makeVault();
+  const conn = await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: {
+        CLOUDFLARE_API_TOKEN: "cf-secret-token",
+        CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
+      },
+    }),
+  );
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      alias: "main",
+      connectionId: conn.id,
+    },
+  ]);
+
+  expect(bundle.env).toEqual({
+    CLOUDFLARE_API_TOKEN: "cf-secret-token",
+    CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
+  });
+  expect(bundle.env.TF_VAR_cloudflare_main_api_token).toBeUndefined();
+  expect(bundle.providerCredentialEvidence[0]?.delivery).toBe("provider_env");
+  expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(false);
 });
 
 test("generic-env provider registration rejects runner-reserved env names", async () => {

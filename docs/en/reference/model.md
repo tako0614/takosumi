@@ -61,11 +61,12 @@ Takosumi injects the runtime env/files required by the selected
 ProviderConnection. The manifest should not contain secrets.
 
 Built-in Credential Recipes are guided setup shortcuts, not the provider
-boundary. A provider that is not in the catalog can still run when the user
-creates a ProviderConnection with the provider source from `required_providers`
-and the explicit environment variables documented by that provider. Those
-declared env names become the run-local CredentialRecipe, subject to runner
-policy, provider plugin policy, and egress policy.
+boundary. Any provider can use a generic-env ProviderConnection when the user
+declares the provider source from `required_providers` and the explicit
+environment variables documented by that provider. Those declared env names
+must be upper-snake environment identifiers such as `SNOWFLAKE_PASSWORD`; they
+become the run-local CredentialRecipe, subject to runner policy, provider plugin
+policy, and egress policy. Runner/runtime-reserved env names are rejected.
 
 ## Runner Policy
 
