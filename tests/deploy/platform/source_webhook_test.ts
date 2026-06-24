@@ -18,6 +18,7 @@ import {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
   platformCloudExtensionCatalog,
+  platformCloudExtensionRouteById,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
@@ -919,15 +920,8 @@ test("Cloud-only extension personal access token auth fails closed", async () =>
 
 test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async () => {
   const introspectionRequests: { body: string }[] = [];
-  const aiRoute = {
-    id: "ai.openai_compatible.v1",
-    kind: "ai_gateway",
-    basePath: "/gateway/ai/v1",
-    bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
-    protocol: "openai-compatible",
-    capabilities: ["models", "chat.completions", "embeddings"],
-    smokeChecks: ["aiModelsAuth", "aiGatewayStatus"],
-  } as const;
+  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!aiRoute) throw new Error("AI Gateway extension route is missing");
 
   const context = await verifyPlatformCloudExtensionServiceAccessToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
@@ -1168,6 +1162,30 @@ test("Cloud-only extension registry is limited to AI Gateway and Cloudflare comp
       (route) => route.kind === "provider_compat",
     ).map((route) => route.provider),
   ).toEqual(["cloudflare"]);
+  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  expect(aiRoute?.serviceAccess?.clientId).toBe(
+    "service-graph-service:takosumi.ai.gateway",
+  );
+  expect(
+    aiRoute?.serviceAccess?.rules.map((rule) => [
+      rule.method,
+      rule.path,
+      rule.scopes,
+    ]),
+  ).toEqual([
+    ["GET", "/gateway/ai/v1/models", ["ai.model", "ai.models.read"]],
+    [
+      "GET",
+      "/gateway/ai/v1/__takosumi/status",
+      ["ai.model", "ai.models.read"],
+    ],
+    ["POST", "/gateway/ai/v1/chat/completions", ["ai.model", "ai.chat"]],
+    ["POST", "/gateway/ai/v1/embeddings", ["ai.model", "ai.embeddings"]],
+  ]);
+  expect(
+    platformCloudExtensionRouteById("provider.cloudflare.client_v4")
+      ?.serviceAccess,
+  ).toBeUndefined();
 });
 
 test("scheduled poll continues past a failing source", async () => {

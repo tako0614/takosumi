@@ -40,9 +40,30 @@ import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
 import type { BillingSettings } from "takosumi-contract/billing";
 import {
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
-  TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL,
-} from "@takosjp/takosumi-accounts-contract";
+  AI_GATEWAY_BASE_PATH,
+  CLOUDFLARE_COMPAT_BASE_PATH,
+  isPlatformCloudExtensionCatalogPath,
+  matchPlatformCloudExtensionRoute,
+  pathIsUnderBase,
+  platformCloudExtensionRouteById,
+  platformCloudExtensionServiceTokenClientId,
+  platformCloudExtensionServiceTokenRequiredScopes,
+  PLATFORM_CLOUD_EXTENSION_ROUTES,
+  type PlatformCloudExtensionKind,
+  type PlatformCloudExtensionRoute,
+} from "./cloud_extensions.ts";
+export {
+  AI_GATEWAY_BASE_PATH,
+  CLOUDFLARE_COMPAT_BASE_PATH,
+  isPlatformCloudExtensionCatalogPath,
+  matchPlatformCloudExtensionRoute,
+  pathIsUnderBase,
+  PLATFORM_CLOUD_EXTENSION_CATALOG_PATH,
+  PLATFORM_CLOUD_EXTENSION_ROUTES,
+  platformCloudExtensionRouteById,
+  platformCloudExtensionServiceTokenClientId,
+  platformCloudExtensionServiceTokenRequiredScopes,
+} from "./cloud_extensions.ts";
 
 export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
 
@@ -831,67 +852,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export type PlatformCloudExtensionKind = "ai_gateway" | "provider_compat";
-
-export interface PlatformCloudExtensionRoute {
-  readonly id: string;
-  readonly kind: PlatformCloudExtensionKind;
-  readonly basePath: `/${string}`;
-  readonly bindingName: string;
-  readonly provider?: string;
-  readonly protocol: string;
-  readonly capabilities: readonly string[];
-  readonly smokeChecks: readonly string[];
-}
-
-const AI_GATEWAY_BASE_PATH = "/gateway/ai/v1";
-const CLOUDFLARE_COMPAT_BASE_PATH = "/compat/cloudflare/client/v4";
-
-export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRoute[] =
-  [
-    {
-      id: "ai.openai_compatible.v1",
-      kind: "ai_gateway",
-      basePath: AI_GATEWAY_BASE_PATH,
-      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
-      protocol: "openai-compatible",
-      capabilities: ["models", "chat.completions", "embeddings"],
-      smokeChecks: [
-        "aiModelsAuth",
-        "aiGatewayStatus",
-        "aiChatAuth",
-        "aiEmbeddingsAuth",
-      ],
-    },
-    {
-      id: "provider.cloudflare.client_v4",
-      kind: "provider_compat",
-      provider: "cloudflare",
-      basePath: CLOUDFLARE_COMPAT_BASE_PATH,
-      bindingName: "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
-      protocol: "cloudflare-v4",
-      capabilities: [
-        "user.tokens.verify",
-        "accounts.list",
-        "workers.scripts",
-        "workers.routes",
-        "kv.namespaces",
-        "r2.buckets",
-        "d1.databases",
-      ],
-      smokeChecks: [
-        "cloudflareCompatVerifyAuth",
-        "cloudflareCompatAccountsAuth",
-        "cloudflareCompatScriptsListAuth",
-        "cloudflareCompatScriptPutAuth",
-        "cloudflareCompatProviderE2E",
-      ],
-    },
-  ] as const;
-
-export const PLATFORM_CLOUD_EXTENSION_CATALOG_PATH =
-  "/__takosumi/cloud/extensions" as const;
-
 export interface PlatformCloudExtensionCatalogItem {
   readonly id: string;
   readonly kind: PlatformCloudExtensionKind;
@@ -913,18 +873,6 @@ export interface PlatformCloudExtensionCatalog {
     readonly configured: number;
     readonly missing: number;
   };
-}
-
-export function matchPlatformCloudExtensionRoute(
-  pathname: string,
-): PlatformCloudExtensionRoute | undefined {
-  return PLATFORM_CLOUD_EXTENSION_ROUTES.find((route) =>
-    pathIsUnderBase(pathname, route.basePath),
-  );
-}
-
-export function isPlatformCloudExtensionCatalogPath(pathname: string): boolean {
-  return pathname === PLATFORM_CLOUD_EXTENSION_CATALOG_PATH;
 }
 
 export function platformCloudExtensionCatalog(
@@ -1145,10 +1093,8 @@ export async function verifyPlatformCloudExtensionServiceAccessToken(
     }
     const record = body as Record<string, unknown>;
     if (record.active !== true) return { authenticated: false };
-    if (
-      record.client_id !==
-      `service-graph-service:${TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY}`
-    ) {
+    const expectedClientId = platformCloudExtensionServiceTokenClientId(route);
+    if (!expectedClientId || record.client_id !== expectedClientId) {
       return { authenticated: false };
     }
     const scope = typeof record.scope === "string" ? record.scope : "";
@@ -1257,37 +1203,6 @@ function platformCloudExtensionScopeIncludes(
   return scope.split(/\s+/u).filter(Boolean).includes(required);
 }
 
-function platformCloudExtensionServiceTokenRequiredScopes(
-  request: Request,
-  route: PlatformCloudExtensionRoute,
-): readonly string[] | undefined {
-  if (route.id !== "ai.openai_compatible.v1") return undefined;
-  const url = new URL(request.url);
-  const path = url.pathname;
-  if (request.method === "GET") {
-    if (
-      path === `${AI_GATEWAY_BASE_PATH}/models` ||
-      path === `${AI_GATEWAY_BASE_PATH}/__takosumi/status`
-    ) {
-      return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.models.read"];
-    }
-    return undefined;
-  }
-  if (
-    request.method === "POST" &&
-    path === `${AI_GATEWAY_BASE_PATH}/chat/completions`
-  ) {
-    return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.chat"];
-  }
-  if (
-    request.method === "POST" &&
-    path === `${AI_GATEWAY_BASE_PATH}/embeddings`
-  ) {
-    return [TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AI_MODEL, "ai.embeddings"];
-  }
-  return undefined;
-}
-
 function sessionMirrorHeaders(request: Request): Headers | undefined {
   const headers = new Headers({ accept: "application/json" });
   const authorization = request.headers.get("authorization");
@@ -1311,9 +1226,7 @@ export async function handlePlatformAiGatewayRequest(
   request: Request,
   env: CloudflareWorkerEnv,
 ): Promise<Response> {
-  const route = PLATFORM_CLOUD_EXTENSION_ROUTES.find(
-    (candidate) => candidate.id === "ai.openai_compatible.v1",
-  );
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
   if (!route) return Response.json({ error: "not found" }, { status: 404 });
   if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
     return Response.json({ error: "not found" }, { status: 404 });
@@ -1329,8 +1242,8 @@ export async function handlePlatformCloudflareCompatRequest(
   request: Request,
   env: CloudflareWorkerEnv,
 ): Promise<Response> {
-  const route = PLATFORM_CLOUD_EXTENSION_ROUTES.find(
-    (candidate) => candidate.id === "provider.cloudflare.client_v4",
+  const route = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
   );
   if (!route) return Response.json({ error: "not found" }, { status: 404 });
   if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
@@ -1358,9 +1271,6 @@ function platformCloudExtensionBinding(
   return binding as PlatformCloudExtensionBinding;
 }
 
-function pathIsUnderBase(pathname: string, basePath: string): boolean {
-  return pathname === basePath || pathname.startsWith(`${basePath}/`);
-}
 
 const HARDENING_GATE_REF_PREFIX = "git+";
 const HARDENING_GATE_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}#/i;
