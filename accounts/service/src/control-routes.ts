@@ -3717,7 +3717,11 @@ async function connectionItemOp(
   }
   // Resolve the Connection's owning Space for the ownership gate. A missing
   // connection (typed `not_found`) is mapped to the same non-disclosing 404.
-  const target = await resolveConnectionItemTarget(operations, connectionId);
+  const target = await resolveConnectionItemTarget(
+    operations,
+    sessionSubject,
+    connectionId,
+  );
   if (!target) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
@@ -3747,6 +3751,7 @@ async function connectionItemOp(
 
 async function resolveConnectionItemTarget(
   operations: ControlPlaneOperations,
+  sessionSubject: string,
   connectionId: string,
 ): Promise<
   | { readonly connection: Connection; readonly rawConnectionId: string }
@@ -3762,7 +3767,11 @@ async function resolveConnectionItemTarget(
   }
   const rawConnectionId =
     connectionId.startsWith("pcn_")
-      ? await rawProviderConnectionIdFromPublicId(operations, connectionId)
+      ? await rawProviderConnectionIdFromPublicId(
+          operations,
+          sessionSubject,
+          connectionId,
+        )
       : undefined;
   if (!rawConnectionId) return undefined;
   try {
@@ -3778,14 +3787,25 @@ async function resolveConnectionItemTarget(
 
 async function rawProviderConnectionIdFromPublicId(
   operations: ControlPlaneOperations,
+  sessionSubject: string,
   publicConnectionId: string,
 ): Promise<string | undefined> {
-  for (const providerEnv of await operations.connections.listProviderEnvs()) {
-    if (!providerEnv.spaceId) continue;
-    if (
-      (await publicProviderConnectionId(providerEnv.id)) === publicConnectionId
-    ) {
-      return providerEnv.id;
+  const candidateSpaceIds = new Set<string | undefined>([undefined]);
+  const spaces = await operations.spaces
+    .listSpacesByOwner(sessionSubject)
+    .catch(() => []);
+  for (const space of spaces) candidateSpaceIds.add(space.id);
+  for (const spaceId of candidateSpaceIds) {
+    for (const providerEnv of await operations.connections.listProviderEnvs(
+      spaceId,
+    )) {
+      if (!providerEnv.spaceId) continue;
+      if (
+        (await publicProviderConnectionId(providerEnv.id)) ===
+        publicConnectionId
+      ) {
+        return providerEnv.id;
+      }
     }
   }
   return undefined;
