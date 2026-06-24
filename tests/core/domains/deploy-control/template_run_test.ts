@@ -123,13 +123,15 @@ function fakeVault() {
       options?: { readonly phase?: "plan" | "apply" | "destroy" },
     ) =>
       Promise.resolve(
-        new CredentialBundle(
-          Object.fromEntries(
-            entries.map((entry) => {
-              const alias = entry.alias ? `_${entry.alias}` : "";
-              return [`TF_VAR_cloudflare${alias}_api_token`, "tok-secret"];
-            }),
-          ),
+        new PhaseMintBundle(
+          {
+            env: Object.fromEntries(
+              entries.map((entry) => {
+                const alias = entry.alias ? `_${entry.alias}` : "";
+                return [`TF_VAR_cloudflare${alias}_api_token`, "tok-secret"];
+              }),
+            ),
+          },
           [],
           entries.map((entry) => ({
             provider: FIXTURE_CLOUDFLARE_PROVIDER,

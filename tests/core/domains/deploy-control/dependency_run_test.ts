@@ -30,7 +30,10 @@ import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-co
 import { DependenciesService } from "../../../../core/domains/dependencies/mod.ts";
 import type { SensitiveOutputResolver } from "../../../../core/domains/output-shares/mod.ts";
 import type { JsonValue } from "takosumi-contract";
-import { CredentialBundle } from "../../../../core/adapters/vault/mod.ts";
+import {
+  CredentialBundle,
+  PhaseMintBundle,
+} from "../../../../core/adapters/vault/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
@@ -241,9 +244,11 @@ function fakeProviderVault() {
       ),
     mintForInstallationProviderEnvBindings: () =>
       Promise.resolve(
-        new CredentialBundle(
+        new PhaseMintBundle(
           {
-            TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            env: {
+              TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            },
           },
           [],
           [rootEvidence],
