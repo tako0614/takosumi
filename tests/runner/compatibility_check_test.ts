@@ -14,6 +14,13 @@ import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
 
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return `sha256:${Array.from(hash, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+}
+
 test("compatibility_check returns restored OpenTofu source files only", async () => {
   const runId = `compat_test_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
@@ -960,6 +967,119 @@ esac
     await expect(
       readFile(join(root, "generated-root", "terraform.tfstate")),
     ).resolves.toEqual(restoredState);
+  } finally {
+    if (previousPath === undefined) {
+      delete Bun.env.PATH;
+    } else {
+      Bun.env.PATH = previousPath;
+    }
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("generated-root apply falls back to terraform.tfstate outputs when tofu output is empty", async () => {
+  const runId = `apply_outputs_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-apply-output-bin-"));
+  const previousPath = Bun.env.PATH;
+  const planBytes = new TextEncoder().encode("fake-reviewed-plan");
+  const planDigest = await digestBytes(planBytes);
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const putPlan = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}/artifacts/tfplan`, {
+        method: "PUT",
+        headers: { "content-type": "application/vnd.opentofu.plan" },
+        body: planBytes,
+      }),
+    );
+    expect(putPlan.status).toBe(200);
+
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    echo "init"
+    ;;
+  apply)
+    cat > terraform.tfstate <<'JSON'
+{"version":4,"terraform_version":"1.10.0","serial":1,"lineage":"output-fallback","outputs":{"worker_name":{"value":"demo-worker","type":"string","sensitive":false},"url":{"value":"https://demo-worker.example.test","type":"string","sensitive":false}},"resources":[]}
+JSON
+    echo "apply"
+    ;;
+  output)
+    printf '{}'
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "apply",
+          runId,
+          request: {
+            planRun: {
+              id: runId,
+              source: { kind: "local", path: sourceRoot },
+              requiredProviders: [],
+            },
+            planArtifact: {
+              kind: "runner-local",
+              ref: `runner-local://${runId}/tfplan`,
+              digest: planDigest,
+            },
+            runnerProfile: {
+              sourcePolicy: { allowLocalSource: true },
+              allowedProviders: [],
+            },
+            generatedRoot: {
+              files: {
+                "main.tf": [
+                  'module "app" {',
+                  '  source = "./template-module"',
+                  "}",
+                  "",
+                ].join("\n"),
+                "outputs.tf": [
+                  'output "worker_name" { value = module.app.worker_name }',
+                  'output "url" { value = module.app.url }',
+                  "",
+                ].join("\n"),
+              },
+              moduleFiles: [{ path: "main.tf", text: "terraform {}\n" }],
+            },
+            variables: {},
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      readonly status?: string;
+      readonly outputs?: Record<string, { readonly value?: unknown }>;
+    };
+    expect(body.status).toBe("succeeded");
+    expect(body.outputs?.worker_name?.value).toBe("demo-worker");
+    expect(body.outputs?.url?.value).toBe(
+      "https://demo-worker.example.test",
+    );
   } finally {
     if (previousPath === undefined) {
       delete Bun.env.PATH;
