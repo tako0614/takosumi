@@ -302,7 +302,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     const submitValues: Record<string, string> = {};
     for (const pair of envPairs()) {
       const envName = pair.name.trim();
-      const value = pair.value.trim();
+      const value = pair.value;
       if (envName.length === 0 && value.length === 0) continue;
       if (envName.length === 0) {
         throw new Error(t("conn.genericEnv.nameRequired"));
