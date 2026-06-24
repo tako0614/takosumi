@@ -26,9 +26,10 @@ export {
 } from "./billing-apply.ts";
 
 const STRIPE_API_BASE = "https://api.stripe.com/v1";
-// Pinned Stripe API version. Bump deliberately when validating against a new
-// version in CI; never let Stripe choose the version implicitly per account.
-export const STRIPE_API_VERSION = "2024-12-18.acacia";
+// Pinned Stripe API version. Bump deliberately after validating against the
+// current Stripe API version; never let Stripe choose the version implicitly
+// per account.
+export const STRIPE_API_VERSION = "2026-05-27.dahlia";
 const textEncoder = new TextEncoder();
 
 function stripeRequestHeaders(secretKey: string): Record<string, string> {
