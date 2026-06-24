@@ -1,0 +1,31 @@
+id: kubernetes
+display_name: Kubernetes
+provider_rule: kubernetes
+terraform_source:
+  - hashicorp/kubernetes
+  - registry.opentofu.org/hashicorp/kubernetes
+env_names:
+  - KUBE_CONFIG_PATH
+  - KUBE_HOST
+  - KUBE_TOKEN
+  - KUBE_CLUSTER_CA_CERT_DATA
+required_env_groups:
+  - [KUBE_CONFIG_PATH]
+  - [KUBE_HOST, KUBE_TOKEN]
+auth_modes:
+  kubeconfig:
+    env:
+      KUBE_CONFIG_PATH:
+        from: value
+        name: kubeconfig_path
+  token:
+    env:
+      KUBE_HOST:
+        from: value
+        name: host
+      KUBE_TOKEN:
+        from: secret
+        name: token
+      KUBE_CLUSTER_CA_CERT_DATA:
+        from: secret
+        name: cluster_ca_cert_data

@@ -51,6 +51,7 @@ export type {
 } from "./provider-resolution.ts";
 export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
 export * from "./connections.ts";
+export * from "./credential-recipes.ts";
 export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,

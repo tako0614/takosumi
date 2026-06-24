@@ -1,0 +1,68 @@
+id: openstack
+display_name: OpenStack
+provider_rule: openstack
+terraform_source:
+  - terraform-provider-openstack/openstack
+  - registry.opentofu.org/terraform-provider-openstack/openstack
+env_names:
+  - OS_CLOUD
+  - OS_AUTH_URL
+  - OS_USERNAME
+  - OS_PASSWORD
+  - OS_PROJECT_NAME
+  - OS_USER_DOMAIN_NAME
+  - OS_PROJECT_DOMAIN_NAME
+  - OS_REGION_NAME
+  - OS_APPLICATION_CREDENTIAL_ID
+  - OS_APPLICATION_CREDENTIAL_SECRET
+required_env_groups:
+  - [OS_CLOUD]
+  - [OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, OS_PROJECT_NAME]
+  - [
+      OS_AUTH_URL,
+      OS_APPLICATION_CREDENTIAL_ID,
+      OS_APPLICATION_CREDENTIAL_SECRET,
+    ]
+auth_modes:
+  cloud_profile:
+    env:
+      OS_CLOUD:
+        from: value
+        name: cloud
+  password:
+    env:
+      OS_AUTH_URL:
+        from: value
+        name: auth_url
+      OS_USERNAME:
+        from: value
+        name: username
+      OS_PASSWORD:
+        from: secret
+        name: password
+      OS_PROJECT_NAME:
+        from: value
+        name: project_name
+      OS_USER_DOMAIN_NAME:
+        from: value
+        name: user_domain_name
+      OS_PROJECT_DOMAIN_NAME:
+        from: value
+        name: project_domain_name
+      OS_REGION_NAME:
+        from: value
+        name: region
+  application_credential:
+    env:
+      OS_AUTH_URL:
+        from: value
+        name: auth_url
+      OS_APPLICATION_CREDENTIAL_ID:
+        from: secret
+        name: application_credential_id
+      OS_APPLICATION_CREDENTIAL_SECRET:
+        from: secret
+        name: application_credential_secret
+      OS_REGION_NAME:
+        from: value
+        name: region

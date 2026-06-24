@@ -19,6 +19,9 @@ export interface ProviderCatalogEntry {
   readonly providerSource: string;
   readonly displayName: string;
   readonly recommendedEnvNames: readonly string[];
+  readonly credentialRecipeIds?: readonly string[];
+  readonly requiredEnvGroups?: readonly (readonly string[])[];
+  readonly genericEnvSupported?: boolean;
   readonly helpers: readonly ProviderCredentialHelper[];
   readonly ownershipOptions: readonly ProviderCredentialOwnership[];
   readonly allowedResources: readonly string[];

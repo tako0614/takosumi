@@ -19,7 +19,9 @@
  * Unknown providers are still valid Takosumi providers when carried by a
  * `generic_env_provider` Connection: the user-declared env names on that
  * Connection become the run-local Credential Recipe. This table is therefore a
- * catalog of built-in recipes, not a global provider allowlist.
+ * runtime projection of the built-in recipe catalog, not a global provider
+ * allowlist. The human/machine-readable recipes live in `recipes/providers/`
+ * and tests keep this dependency-free runner table in sync with them.
  *
  * IMPORTANT (runner container isolation): this module is imported by
  * `runner/entrypoint.ts`, which is copied into the OpenTofu runner container image.
@@ -148,6 +150,7 @@ export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[]
         "AWS_ROLE_ARN",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        "AWS_ENDPOINT_URL_S3",
       ],
       requiredGroups: [
         ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
@@ -156,7 +159,7 @@ export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[]
     },
     {
       shortName: "google",
-      match: /(^|\/)hashicorp\/google$/,
+      match: /(^|\/)hashicorp\/google(-beta)?$/,
       cloudFamily: "gcp",
       envNames: [
         "GOOGLE_CREDENTIALS",
@@ -216,6 +219,61 @@ export const PROVIDER_CREDENTIAL_ENV_RULES: readonly ProviderCredentialEnvRule[]
         "SPACES_SECRET_ACCESS_KEY",
       ],
       requiredGroups: [["DIGITALOCEAN_TOKEN"]],
+    },
+    {
+      shortName: "hcloud",
+      match: /(^|\/)hetznercloud\/hcloud$/,
+      cloudFamily: "local-adapters",
+      envNames: ["HCLOUD_TOKEN"],
+      requiredGroups: [["HCLOUD_TOKEN"]],
+    },
+    {
+      shortName: "vultr",
+      match: /(^|\/)vultr\/vultr$/,
+      cloudFamily: "local-adapters",
+      envNames: ["VULTR_API_KEY"],
+      requiredGroups: [["VULTR_API_KEY"]],
+    },
+    {
+      shortName: "scaleway",
+      match: /(^|\/)scaleway\/scaleway$/,
+      cloudFamily: "local-adapters",
+      envNames: [
+        "SCW_ACCESS_KEY",
+        "SCW_SECRET_KEY",
+        "SCW_DEFAULT_PROJECT_ID",
+        "SCW_DEFAULT_ORGANIZATION_ID",
+        "SCW_DEFAULT_REGION",
+        "SCW_DEFAULT_ZONE",
+        "SCW_PROFILE",
+      ],
+      requiredGroups: [["SCW_ACCESS_KEY", "SCW_SECRET_KEY"], ["SCW_PROFILE"]],
+    },
+    {
+      shortName: "openstack",
+      match: /(^|\/)terraform-provider-openstack\/openstack$/,
+      cloudFamily: "local-adapters",
+      envNames: [
+        "OS_CLOUD",
+        "OS_AUTH_URL",
+        "OS_USERNAME",
+        "OS_PASSWORD",
+        "OS_PROJECT_NAME",
+        "OS_USER_DOMAIN_NAME",
+        "OS_PROJECT_DOMAIN_NAME",
+        "OS_REGION_NAME",
+        "OS_APPLICATION_CREDENTIAL_ID",
+        "OS_APPLICATION_CREDENTIAL_SECRET",
+      ],
+      requiredGroups: [
+        ["OS_CLOUD"],
+        ["OS_AUTH_URL", "OS_USERNAME", "OS_PASSWORD", "OS_PROJECT_NAME"],
+        [
+          "OS_AUTH_URL",
+          "OS_APPLICATION_CREDENTIAL_ID",
+          "OS_APPLICATION_CREDENTIAL_SECRET",
+        ],
+      ],
     },
     {
       shortName: "vercel",
@@ -419,9 +477,7 @@ const DEFAULT_OPENTOFU_REGISTRY = "registry.opentofu.org/";
 const REGISTRY_SOURCE_PATTERN =
   /^(?:(?:[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u;
 
-function defaultRegistryProviderIdentity(
-  provider: string,
-): string | undefined {
+function defaultRegistryProviderIdentity(provider: string): string | undefined {
   const normalized = provider.trim();
   if (!REGISTRY_SOURCE_PATTERN.test(normalized)) return undefined;
   return normalized.startsWith(DEFAULT_OPENTOFU_REGISTRY)

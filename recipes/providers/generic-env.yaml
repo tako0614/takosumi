@@ -1,0 +1,28 @@
+id: generic-env
+display_name: Generic environment variables
+declared_env: true
+terraform_source: "*"
+auth_modes:
+  env:
+    env:
+      "*":
+        from: user_defined
+    files:
+      "*":
+        from: user_defined
+constraints:
+  env_name_pattern: "^[A-Z_][A-Z0-9_]*$"
+  reserved_env_names:
+    - PATH
+    - HOME
+    - PWD
+    - SHELL
+  reserved_env_prefixes:
+    - BUN_
+    - DYLD_
+    - LD_
+    - NODE_
+    - NPM_
+    - OPENTOFU_
+    - TAKOSUMI_
+    - TF_

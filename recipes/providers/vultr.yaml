@@ -1,0 +1,16 @@
+id: vultr
+display_name: Vultr
+provider_rule: vultr
+terraform_source:
+  - vultr/vultr
+  - registry.opentofu.org/vultr/vultr
+env_names:
+  - VULTR_API_KEY
+required_env_groups:
+  - [VULTR_API_KEY]
+auth_modes:
+  api_key:
+    env:
+      VULTR_API_KEY:
+        from: secret
+        name: api_key

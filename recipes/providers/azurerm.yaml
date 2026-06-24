@@ -1,0 +1,52 @@
+id: azurerm
+display_name: Azure Resource Manager
+provider_rule: azurerm
+terraform_source:
+  - hashicorp/azurerm
+  - registry.opentofu.org/hashicorp/azurerm
+env_names:
+  - ARM_CLIENT_ID
+  - ARM_CLIENT_SECRET
+  - ARM_TENANT_ID
+  - ARM_SUBSCRIPTION_ID
+  - AZURE_CLIENT_ID
+  - AZURE_CLIENT_SECRET
+  - AZURE_TENANT_ID
+  - AZURE_SUBSCRIPTION_ID
+required_env_groups:
+  - [ARM_CLIENT_ID, ARM_CLIENT_SECRET, ARM_TENANT_ID, ARM_SUBSCRIPTION_ID]
+  - [
+      AZURE_CLIENT_ID,
+      AZURE_CLIENT_SECRET,
+      AZURE_TENANT_ID,
+      AZURE_SUBSCRIPTION_ID,
+    ]
+auth_modes:
+  arm_client_secret:
+    env:
+      ARM_CLIENT_ID:
+        from: value
+        name: client_id
+      ARM_CLIENT_SECRET:
+        from: secret
+        name: client_secret
+      ARM_TENANT_ID:
+        from: value
+        name: tenant_id
+      ARM_SUBSCRIPTION_ID:
+        from: value
+        name: subscription_id
+  azure_client_secret:
+    env:
+      AZURE_CLIENT_ID:
+        from: value
+        name: client_id
+      AZURE_CLIENT_SECRET:
+        from: secret
+        name: client_secret
+      AZURE_TENANT_ID:
+        from: value
+        name: tenant_id
+      AZURE_SUBSCRIPTION_ID:
+        from: value
+        name: subscription_id

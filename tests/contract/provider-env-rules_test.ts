@@ -23,16 +23,17 @@ test("providerEnvRule resolves short name and registry-path forms", () => {
   expect(byShort).toBe(byPath!);
   expect(byShort).toBe(byBarePath!);
   expect(providerEnvRule("gcp")).toBe(google!);
+  expect(providerEnvRule("hashicorp/google-beta")).toBe(google!);
+  expect(
+    providerEnvRule("registry.opentofu.org/hetznercloud/hcloud")?.shortName,
+  ).toBe("hcloud");
   expect(providerEnvRule("unknown-provider")).toBeUndefined();
   expect(providerEnvRule("")).toBeUndefined();
 });
 
 test("sameProviderFamily matches arbitrary default-registry sources by registry identity", () => {
   expect(
-    sameProviderFamily(
-      "registry.opentofu.org/vercel/vercel",
-      "vercel/vercel",
-    ),
+    sameProviderFamily("registry.opentofu.org/vercel/vercel", "vercel/vercel"),
   ).toBe(true);
   expect(
     sameProviderFamily(
@@ -76,6 +77,8 @@ test("cloudFamilyForProvider maps providers to partitions, falling back to local
   expect(cloudFamilyForProvider("gcp")).toBe("gcp");
   expect(cloudFamilyForProvider("kubernetes")).toBe("k8s");
   expect(cloudFamilyForProvider("github")).toBe("local-adapters");
+  expect(cloudFamilyForProvider("hcloud")).toBe("local-adapters");
+  expect(cloudFamilyForProvider("openstack")).toBe("local-adapters");
   expect(cloudFamilyForProvider("totally-unknown")).toBe("local-adapters");
 });
 
@@ -107,6 +110,15 @@ test("requiredEnvGroupsSatisfied honors the provider required groups", () => {
       "AWS_SECRET_ACCESS_KEY",
     ]),
   ).toBe(true);
+  expect(requiredEnvGroupsSatisfied("hcloud", ["HCLOUD_TOKEN"])).toBe(true);
+  expect(requiredEnvGroupsSatisfied("vultr", ["VULTR_API_KEY"])).toBe(true);
+  expect(
+    requiredEnvGroupsSatisfied("scaleway", [
+      "SCW_ACCESS_KEY",
+      "SCW_SECRET_KEY",
+    ]),
+  ).toBe(true);
+  expect(requiredEnvGroupsSatisfied("openstack", ["OS_CLOUD"])).toBe(true);
   // unknown providers are never satisfied.
   expect(requiredEnvGroupsSatisfied("unknown", ["X"])).toBe(false);
 });

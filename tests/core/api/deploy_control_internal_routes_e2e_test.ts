@@ -145,13 +145,26 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   const providersBody =
     (await providersRes.json()) as ListProviderCatalogEntriesResponse;
   expect(providersBody.providers.map((provider) => provider.id).sort()).toEqual(
-    ["aws", "cloudflare", "gcp", "github", "kubernetes"],
+    [
+      "aws",
+      "cloudflare",
+      "digitalocean",
+      "gcp",
+      "github",
+      "hcloud",
+      "kubernetes",
+      "openstack",
+      "scaleway",
+      "vultr",
+    ],
   );
   expect(providersBody.providers).toContainEqual(
     expect.objectContaining({
       id: "cloudflare",
       ownershipOptions: ["env"],
       recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+      credentialRecipeIds: ["cloudflare", "generic-env"],
+      genericEnvSupported: true,
     }),
   );
   const cloudflareProvider = providersBody.providers.find(
@@ -170,11 +183,21 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(cloudflareProvider?.allowedResources).not.toContain(
     "cloudflare_workers_route",
   );
-  for (const id of ["aws", "github", "kubernetes"]) {
+  for (const id of [
+    "aws",
+    "github",
+    "kubernetes",
+    "digitalocean",
+    "hcloud",
+    "vultr",
+    "scaleway",
+    "openstack",
+  ]) {
     expect(providersBody.providers).toContainEqual(
       expect.objectContaining({
         id,
         ownershipOptions: ["env"],
+        genericEnvSupported: true,
       }),
     );
   }
@@ -182,6 +205,8 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
     expect.objectContaining({
       id: "gcp",
       ownershipOptions: ["env"],
+      credentialRecipeIds: ["google", "generic-env"],
+      genericEnvSupported: true,
     }),
   );
 

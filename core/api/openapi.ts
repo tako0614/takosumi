@@ -1277,6 +1277,12 @@ function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
         providerSource: { type: "string" },
         displayName: { type: "string" },
         recommendedEnvNames: { type: "array", items: { type: "string" } },
+        credentialRecipeIds: { type: "array", items: { type: "string" } },
+        requiredEnvGroups: {
+          type: "array",
+          items: { type: "array", items: { type: "string" } },
+        },
+        genericEnvSupported: { type: "boolean" },
         helpers: { type: "array", items: ref("ProviderCredentialHelper") },
         ownershipOptions: {
           type: "array",

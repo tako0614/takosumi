@@ -1,0 +1,16 @@
+id: hcloud
+display_name: Hetzner Cloud
+provider_rule: hcloud
+terraform_source:
+  - hetznercloud/hcloud
+  - registry.opentofu.org/hetznercloud/hcloud
+env_names:
+  - HCLOUD_TOKEN
+required_env_groups:
+  - [HCLOUD_TOKEN]
+auth_modes:
+  token:
+    env:
+      HCLOUD_TOKEN:
+        from: secret
+        name: token

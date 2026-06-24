@@ -27,24 +27,31 @@ test("every provider runtime has a unique id, runner profile id, and provider ad
 });
 
 test("providerForAddress resolves fully-qualified, short, and local provider forms", () => {
-  expect(providerForAddress("registry.opentofu.org/cloudflare/cloudflare")?.id).toBe(
-    "cloudflare",
-  );
+  expect(
+    providerForAddress("registry.opentofu.org/cloudflare/cloudflare")?.id,
+  ).toBe("cloudflare");
   expect(providerForAddress("cloudflare/cloudflare")?.id).toBe("cloudflare");
   expect(providerForAddress("cloudflare")?.id).toBe("cloudflare");
   expect(providerForAddress("hashicorp/aws")?.id).toBe("aws");
+  expect(providerForAddress("hashicorp/google-beta")?.id).toBe("gcp");
+  expect(providerForAddress("hetznercloud/hcloud")?.id).toBe("hcloud");
+  expect(providerForAddress("vultr/vultr")?.id).toBe("vultr");
+  expect(providerForAddress("scaleway/scaleway")?.id).toBe("scaleway");
+  expect(providerForAddress("terraform-provider-openstack/openstack")?.id).toBe(
+    "openstack",
+  );
   expect(providerForAddress("nonexistent/provider")).toBeUndefined();
 });
 
 test("providerForConnectionKind maps each driver kind to its provider", () => {
-  expect(providerForConnectionKind("cloudflare_api_token")?.id).toBe("cloudflare");
+  expect(providerForConnectionKind("cloudflare_api_token")?.id).toBe(
+    "cloudflare",
+  );
   expect(providerForConnectionKind("aws_assume_role")?.id).toBe("aws");
-  expect(providerForConnectionKind("gcp_service_account_json")?.id).toBe(
-    "gcp",
-  );
-  expect(providerForConnectionKind("gcp_service_account_impersonation")?.id).toBe(
-    "gcp",
-  );
+  expect(providerForConnectionKind("gcp_service_account_json")?.id).toBe("gcp");
+  expect(
+    providerForConnectionKind("gcp_service_account_impersonation")?.id,
+  ).toBe("gcp");
 });
 
 test("OSS provider runtime registry does not ship operator-account hosting redirects", () => {

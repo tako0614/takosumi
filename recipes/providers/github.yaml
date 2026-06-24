@@ -1,0 +1,18 @@
+id: github
+display_name: GitHub
+provider_rule: github
+terraform_source:
+  - integrations/github
+  - github/github
+  - registry.opentofu.org/integrations/github
+  - registry.opentofu.org/github/github
+env_names:
+  - GITHUB_TOKEN
+required_env_groups:
+  - [GITHUB_TOKEN]
+auth_modes:
+  token:
+    env:
+      GITHUB_TOKEN:
+        from: secret
+        name: token

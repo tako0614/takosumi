@@ -1,0 +1,32 @@
+id: s3-compatible
+display_name: S3-compatible object storage
+provider_rule: aws
+terraform_source:
+  - hashicorp/aws
+  - registry.opentofu.org/hashicorp/aws
+env_names:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - AWS_REGION
+  - AWS_DEFAULT_REGION
+  - AWS_ENDPOINT_URL_S3
+required_env_groups:
+  - [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+auth_modes:
+  static_keys_with_endpoint:
+    env:
+      AWS_ACCESS_KEY_ID:
+        from: secret
+        name: access_key_id
+      AWS_SECRET_ACCESS_KEY:
+        from: secret
+        name: secret_access_key
+      AWS_REGION:
+        from: value
+        name: region
+      AWS_DEFAULT_REGION:
+        from: value
+        name: region
+      AWS_ENDPOINT_URL_S3:
+        from: value
+        name: endpoint

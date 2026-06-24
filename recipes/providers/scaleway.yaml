@@ -1,0 +1,43 @@
+id: scaleway
+display_name: Scaleway
+provider_rule: scaleway
+terraform_source:
+  - scaleway/scaleway
+  - registry.opentofu.org/scaleway/scaleway
+env_names:
+  - SCW_ACCESS_KEY
+  - SCW_SECRET_KEY
+  - SCW_DEFAULT_PROJECT_ID
+  - SCW_DEFAULT_ORGANIZATION_ID
+  - SCW_DEFAULT_REGION
+  - SCW_DEFAULT_ZONE
+  - SCW_PROFILE
+required_env_groups:
+  - [SCW_ACCESS_KEY, SCW_SECRET_KEY]
+  - [SCW_PROFILE]
+auth_modes:
+  access_key:
+    env:
+      SCW_ACCESS_KEY:
+        from: secret
+        name: access_key
+      SCW_SECRET_KEY:
+        from: secret
+        name: secret_key
+      SCW_DEFAULT_PROJECT_ID:
+        from: value
+        name: project_id
+      SCW_DEFAULT_ORGANIZATION_ID:
+        from: value
+        name: organization_id
+      SCW_DEFAULT_REGION:
+        from: value
+        name: region
+      SCW_DEFAULT_ZONE:
+        from: value
+        name: zone
+  profile:
+    env:
+      SCW_PROFILE:
+        from: value
+        name: profile
