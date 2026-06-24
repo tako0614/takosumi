@@ -112,6 +112,174 @@ test("runner materializes generic provider credential files for plan and cleans 
   });
 });
 
+test("runner rematerializes generic provider credential files for apply and cleans them up", async () => {
+  const fixture = await createProviderCredentialFileFixture();
+  const envSecret = "generic-env-secret-123456789";
+  const fileSecret = "generic-file-secret-123456789";
+  await withFakeTofu(fixture.binDir, async () => {
+    const plan = await handleRunnerRequest(
+      runRequest("apply_generic_provider_file", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "create",
+          requiredProviders: ["registry.opentofu.org/example/envfile"],
+        },
+        runnerProfile: {
+          id: "generic-opentofu-provider",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["*"],
+        },
+        credentials: {
+          env: {
+            GENERIC_API_TOKEN: envSecret,
+          },
+          files: [
+            {
+              path: "provider-credentials.json",
+              mode: 0o600,
+              content: fileSecret,
+              envName: "GENERIC_CREDENTIALS_FILE",
+            },
+          ],
+        },
+      }),
+    );
+    expect(plan.status).toBe(200);
+    const planPayload = (await plan.json()) as {
+      planArtifact: { digest: string };
+    };
+    const planMaterializedPath = await readFile(fixture.pathRecord, "utf8");
+    expect(planMaterializedPath).toContain("/.provider-credentials/");
+    await expect(stat(planMaterializedPath)).rejects.toThrow();
+
+    const apply = await handleRunnerRequest(
+      runRequest("apply_generic_provider_file", "apply", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "create",
+          requiredProviders: ["registry.opentofu.org/example/envfile"],
+        },
+        runnerProfile: {
+          id: "generic-opentofu-provider",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["*"],
+        },
+        credentials: {
+          env: {
+            GENERIC_API_TOKEN: envSecret,
+          },
+          files: [
+            {
+              path: "provider-credentials.json",
+              mode: 0o600,
+              content: fileSecret,
+              envName: "GENERIC_CREDENTIALS_FILE",
+            },
+          ],
+        },
+        planArtifact: planPayload.planArtifact,
+      }),
+    );
+
+    const applyPayload = await apply.json();
+    expect(apply.status).toBe(200);
+    const text = JSON.stringify(applyPayload);
+    expect(text).not.toContain(envSecret);
+    expect(text).not.toContain(fileSecret);
+    expect(text).toContain("[redacted]");
+
+    const applyMaterializedPath = await readFile(fixture.pathRecord, "utf8");
+    expect(applyMaterializedPath).toContain("/.provider-credentials/");
+    await expect(stat(applyMaterializedPath)).rejects.toThrow();
+  });
+});
+
+test("runner rematerializes generic provider credential files for destroy and cleans them up", async () => {
+  const fixture = await createProviderCredentialFileFixture();
+  const envSecret = "generic-env-secret-123456789";
+  const fileSecret = "generic-file-secret-123456789";
+  await withFakeTofu(fixture.binDir, async () => {
+    const plan = await handleRunnerRequest(
+      runRequest("destroy_generic_provider_file", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "destroy",
+          requiredProviders: ["registry.opentofu.org/example/envfile"],
+        },
+        runnerProfile: {
+          id: "generic-opentofu-provider",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["*"],
+        },
+        credentials: {
+          env: {
+            GENERIC_API_TOKEN: envSecret,
+          },
+          files: [
+            {
+              path: "provider-credentials.json",
+              mode: 0o600,
+              content: fileSecret,
+              envName: "GENERIC_CREDENTIALS_FILE",
+            },
+          ],
+        },
+      }),
+    );
+    expect(plan.status).toBe(200);
+    const planPayload = (await plan.json()) as {
+      planArtifact: { digest: string };
+    };
+    const planMaterializedPath = await readFile(fixture.pathRecord, "utf8");
+    expect(planMaterializedPath).toContain("/.provider-credentials/");
+    await expect(stat(planMaterializedPath)).rejects.toThrow();
+
+    const destroy = await handleRunnerRequest(
+      runRequest("destroy_generic_provider_file", "destroy", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "destroy",
+          requiredProviders: ["registry.opentofu.org/example/envfile"],
+        },
+        runnerProfile: {
+          id: "generic-opentofu-provider",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["*"],
+        },
+        credentials: {
+          env: {
+            GENERIC_API_TOKEN: envSecret,
+          },
+          files: [
+            {
+              path: "provider-credentials.json",
+              mode: 0o600,
+              content: fileSecret,
+              envName: "GENERIC_CREDENTIALS_FILE",
+            },
+          ],
+        },
+        planArtifact: planPayload.planArtifact,
+      }),
+    );
+
+    const destroyPayload = await destroy.json();
+    expect(destroy.status).toBe(200);
+    const text = JSON.stringify(destroyPayload);
+    expect(text).not.toContain(envSecret);
+    expect(text).not.toContain(fileSecret);
+    expect(text).toContain("[redacted]");
+
+    const destroyMaterializedPath = await readFile(fixture.pathRecord, "utf8");
+    expect(destroyMaterializedPath).toContain("/.provider-credentials/");
+    await expect(stat(destroyMaterializedPath)).rejects.toThrow();
+  });
+});
+
 test("runner redacts apply stdout and stderr on success", async () => {
   const fixture = await createFakeTofuFixture();
   await withFakeTofu(fixture.binDir, async () => {
@@ -211,7 +379,7 @@ test("runner redacts plan/apply failure payloads", async () => {
 
 function runRequest(
   runId: string,
-  action: "plan" | "apply",
+  action: "plan" | "apply" | "destroy",
   request: unknown,
 ): Request {
   return new Request(`https://runner.internal/runs/${runId}`, {
@@ -359,6 +527,15 @@ case "$cmd" in
     ;;
   show)
     printf '{"resource_changes":[]}'
+    exit 0
+    ;;
+  apply)
+    test -n "\${GENERIC_API_TOKEN:-}"
+    test -n "\${GENERIC_CREDENTIALS_FILE:-}"
+    test -f "$GENERIC_CREDENTIALS_FILE"
+    test "$(cat "$GENERIC_CREDENTIALS_FILE")" = "generic-file-secret-123456789"
+    printf "%s" "$GENERIC_CREDENTIALS_FILE" > "${pathRecord}"
+    echo "apply env $GENERIC_API_TOKEN file $(cat "$GENERIC_CREDENTIALS_FILE")"
     exit 0
     ;;
   output)
