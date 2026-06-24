@@ -8,6 +8,7 @@ import {
   handleStripeWebhook,
   normalizeStripeBillingEvent,
   reconcileBillingEntitlements,
+  STRIPE_API_VERSION,
   verifyStripeWebhookSignature,
 } from "../../../../accounts/service/src/billing.ts";
 import { stripeInvoiceCreditReconciliationInput } from "../../../../accounts/service/src/billing-routes.ts";
@@ -116,6 +117,7 @@ test("createStripeCheckoutSession posts Takosumi subject metadata", async () => 
     expect(request.url).toEqual("https://api.stripe.test/v1/checkout/sessions");
     expect(request.method).toEqual("POST");
     expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
+    expect(request.headers.get("stripe-version")).toEqual(STRIPE_API_VERSION);
     requestBody = await request.text();
     return Response.json({
       id: "cs_1",
