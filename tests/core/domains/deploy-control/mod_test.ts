@@ -1212,6 +1212,9 @@ test("default runner profile seeds cover provider-env targets and future/custom 
   expect(byId.get("generic-opentofu-provider")?.allowedProviders).toEqual([
     "*",
   ]);
+  expect(byId.get("generic-opentofu-provider")?.networkPolicy).toEqual({
+    mode: "operator-managed",
+  });
   expect(byId.get("generic-opentofu-provider")?.requireCredentialRefs).toEqual(
     false,
   );

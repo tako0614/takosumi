@@ -114,6 +114,11 @@ export interface RunnerNetworkPolicy {
     | "egress-allowlist"
     | "operator-managed"
     | string;
+  /**
+   * Exact egress hosts when the runner profile owns an allowlist. Omitted for
+   * operator-managed generic profiles where provider API egress is decided by
+   * the operator runner environment, not by Takosumi's built-in provider list.
+   */
   readonly allowedHosts?: readonly string[];
   readonly allowedHostPatterns?: readonly string[];
 }
