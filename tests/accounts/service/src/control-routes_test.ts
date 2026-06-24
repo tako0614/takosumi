@@ -11,6 +11,7 @@ import {
 } from "../../../../accounts/service/src/control-personal-space.ts";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 // --- Test harness ----------------------------------------------------------
 
@@ -308,6 +309,14 @@ function fakeOperations(
       },
     },
     activity: {
+      record: async (event) => {
+        record("activityRecord", event);
+        return {
+          ...event,
+          id: "act_1",
+          createdAt: "2026-01-01T00:00:00Z",
+        };
+      },
       list: async (spaceId, limit) => {
         record("activityList", spaceId, limit);
         return [];
@@ -1815,14 +1824,15 @@ test("PATCH /api/v1/spaces/:id updates display name and policy after Space acces
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
+  const policy = {
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    quota: { "resources.total": 10 },
+  };
   const { request: req, url } = request("PATCH", "/api/v1/spaces/space_a", {
     cookie,
     body: {
       displayName: "Shota Lab",
-      policy: {
-        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-        quota: { "resources.total": 10 },
-      },
+      policy,
     },
   });
   const response = await handleControlRoute({
@@ -1838,12 +1848,20 @@ test("PATCH /api/v1/spaces/:id updates display name and policy after Space acces
     "space_a",
     {
       displayName: "Shota Lab",
-      policy: {
-        allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-        quota: { "resources.total": 10 },
-      },
+      policy,
     },
   ]);
+  expect(operations.calls.activityRecord?.[0]).toEqual({
+    spaceId: "space_a",
+    actorId: "tsub_ctrl",
+    action: "space.updated",
+    targetType: "space",
+    targetId: "space_a",
+    metadata: {
+      fields: ["displayName", "policy"],
+      policyDigest: await stableJsonDigest(policy),
+    },
+  });
 });
 
 test("PATCH /api/v1/spaces/:id rejects policy that is not a JSON object", async () => {

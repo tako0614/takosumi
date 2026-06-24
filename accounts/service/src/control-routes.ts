@@ -85,6 +85,7 @@ import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
 } from "../../../core/domains/installations/official_seed.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import {
   decodeCursor,
   type Page,
@@ -606,6 +607,9 @@ export interface ControlPlaneOperations {
   };
   // --- Activity (§27 / §34) ---
   readonly activity: {
+    record?(
+      event: Omit<ActivityEvent, "id" | "createdAt">,
+    ): Promise<ActivityEvent | undefined>;
     list(spaceId: string, limit?: number): Promise<readonly ActivityEvent[]>;
   };
   // --- Backups (§29) ---
@@ -1963,7 +1967,22 @@ async function updateSpace(
       );
     }
   }
-  return json({ space: await operations.spaces.updateSpace(spaceId, patch) });
+  const space = await operations.spaces.updateSpace(spaceId, patch);
+  await operations.activity.record?.({
+    spaceId,
+    actorId: sessionSubject,
+    action: "space.updated",
+    targetType: "space",
+    targetId: spaceId,
+    metadata: {
+      fields: Object.keys(patch).sort(),
+      ...(patch.policy !== undefined
+        ? { policyDigest: await stableJsonDigest(patch.policy) }
+        : {}),
+      ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
+    },
+  });
+  return json({ space });
 }
 
 // --- Members (Space membership / roles) ------------------------------------
