@@ -279,13 +279,23 @@ function publicPlanRun(planRun: PlanRun): PublicPlanRun {
 }
 
 /**
- * Minted provider credential env vars threaded onto the runner dispatch payload
- * only. The controller fills this from the Connection Vault in the queue
+ * Minted provider credential env/file material threaded onto the runner dispatch
+ * payload only. The controller fills this from the Connection Vault in the queue
  * consumer just before dispatch; it is NEVER persisted to the store and NEVER
  * logged. For provider-using runs, an absent Vault is fail-closed before runner
  * dispatch so the runner never falls back to ambient provider credentials.
  */
-export type RunCredentials = Readonly<Record<string, string>>;
+export type RunCredentials =
+  | Readonly<Record<string, string>>
+  | {
+      readonly env: Readonly<Record<string, string>>;
+      readonly files?: readonly {
+        readonly path: string;
+        readonly mode: number;
+        readonly content: string;
+        readonly envName?: string;
+      }[];
+    };
 
 function withRunEnvironmentEvidence<R extends PlanRun | ApplyRun>(
   run: R,

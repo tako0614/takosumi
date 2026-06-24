@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -18,8 +25,8 @@ test("runner redacts plan stdout and stderr on success", async () => {
       }),
     );
 
-    expect(response.status).toBe(200);
     const payload = await response.json();
+    expect(response.status).toBe(200);
     const text = JSON.stringify(payload);
     expect(text).not.toContain("plan-tf-var-secret");
     expect(text).not.toContain("plan-token-secret");
@@ -50,11 +57,58 @@ test("runner redacts bare run-scoped credential values from plan output", async 
       }),
     );
 
-    expect(response.status).toBe(200);
     const payload = await response.json();
+    expect(response.status).toBe(200);
     const text = JSON.stringify(payload);
     expect(text).not.toContain(bareRunKey);
     expect(text).toContain("[redacted]");
+  });
+});
+
+test("runner materializes generic provider credential files for plan and cleans them up", async () => {
+  const fixture = await createProviderCredentialFileFixture();
+  const envSecret = "generic-env-secret-123456789";
+  const fileSecret = "generic-file-secret-123456789";
+  await withFakeTofu(fixture.binDir, async () => {
+    const response = await handleRunnerRequest(
+      runRequest("plan_generic_provider_file", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "create",
+          requiredProviders: ["registry.opentofu.org/example/envfile"],
+        },
+        runnerProfile: {
+          id: "generic-opentofu-provider",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["*"],
+        },
+        credentials: {
+          env: {
+            GENERIC_API_TOKEN: envSecret,
+          },
+          files: [
+            {
+              path: "provider-credentials.json",
+              mode: 0o600,
+              content: fileSecret,
+              envName: "GENERIC_CREDENTIALS_FILE",
+            },
+          ],
+        },
+      }),
+    );
+
+    const payload = await response.json();
+    expect(response.status).toBe(200);
+    const text = JSON.stringify(payload);
+    expect(text).not.toContain(envSecret);
+    expect(text).not.toContain(fileSecret);
+    expect(text).toContain("[redacted]");
+
+    const materializedPath = await readFile(fixture.pathRecord, "utf8");
+    expect(materializedPath).toContain("/.provider-credentials/");
+    await expect(stat(materializedPath)).rejects.toThrow();
   });
 });
 
@@ -192,6 +246,24 @@ async function createFakeTofuFixture(fail?: "plan" | "apply"): Promise<{
   return { binDir, sourceDir };
 }
 
+async function createProviderCredentialFileFixture(): Promise<{
+  readonly binDir: string;
+  readonly sourceDir: string;
+  readonly pathRecord: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-runner-envfile-"));
+  const binDir = join(root, "bin");
+  const sourceDir = join(root, "source");
+  const pathRecord = join(root, "credential-path.txt");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(sourceDir, { recursive: true });
+  await writeFile(join(sourceDir, "main.tf"), "terraform {}\n");
+  const tofuPath = join(binDir, "tofu");
+  await writeFile(tofuPath, fakeTofuProviderCredentialFileScript(pathRecord));
+  await chmod(tofuPath, 0o755);
+  return { binDir, sourceDir, pathRecord };
+}
+
 async function withFakeTofu(
   binDir: string,
   callback: () => Promise<void>,
@@ -244,6 +316,49 @@ case "$cmd" in
     if [ "$fail" = "apply" ]; then
       exit 3
     fi
+    exit 0
+    ;;
+  output)
+    printf '{}'
+    exit 0
+    ;;
+  *)
+    echo "unknown tofu command $cmd" >&2
+    exit 127
+    ;;
+esac
+`;
+}
+
+function fakeTofuProviderCredentialFileScript(pathRecord: string): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+cmd="\${1:-}"
+case "$cmd" in
+  init)
+    test -n "\${GENERIC_API_TOKEN:-}"
+    test -n "\${GENERIC_CREDENTIALS_FILE:-}"
+    test -f "$GENERIC_CREDENTIALS_FILE"
+    test "$(cat "$GENERIC_CREDENTIALS_FILE")" = "generic-file-secret-123456789"
+    printf "%s" "$GENERIC_CREDENTIALS_FILE" > "${pathRecord}"
+    echo "init env $GENERIC_API_TOKEN file $(cat "$GENERIC_CREDENTIALS_FILE")"
+    exit 0
+    ;;
+  plan)
+    out=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-out" ]; then
+        shift
+        out="\${1:-}"
+      fi
+      shift || true
+    done
+    echo "plan env $GENERIC_API_TOKEN file $(cat "$GENERIC_CREDENTIALS_FILE")"
+    printf "fake-plan" > "$out"
+    exit 0
+    ;;
+  show)
+    printf '{"resource_changes":[]}'
     exit 0
     ;;
   output)

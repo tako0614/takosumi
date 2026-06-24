@@ -26,6 +26,7 @@ import {
   GIT_HTTPS_TOKEN_ENV,
   GIT_SSH_PRIVATE_KEY_ENV,
   type MintPhase,
+  type MintedFile,
   type MintResponse,
   type SourceGitConnectionKind,
 } from "takosumi-contract/sources";
@@ -210,7 +211,8 @@ export interface ConnectionVault {
   ): Promise<CredentialBundle>;
   /**
    * Per-phase mint (spec §8.3 / §8.4). Enforces the phase rules in the vault and
-   * returns a {@link MintResponse} carrying env (+ files for the source phase).
+   * returns a {@link MintResponse} carrying env plus any runner-only credential
+   * files required by that phase.
    * The result is wrapped so callers can attach it to a runner dispatch only.
    */
   mintForPhase(request: MintRequest): Promise<PhaseMintBundle>;
@@ -266,7 +268,7 @@ export class PhaseMintBundle {
     return this.#env;
   }
 
-  /** Materialized credential files (source phase). Dispatch-path only. */
+  /** Materialized credential files. Dispatch-path only. */
   get files(): readonly MintedFileInternal[] {
     return this.#files;
   }
@@ -299,11 +301,17 @@ interface MintedFileInternal {
   readonly path: string;
   readonly mode: number;
   readonly content: string;
+  readonly envName?: string;
 }
 
 interface MintedProviderValues {
   readonly values: Readonly<Record<string, string>>;
   readonly evidence: ProviderCredentialMintEvidence;
+}
+
+interface ProviderSecretMaterial {
+  readonly env: Readonly<Record<string, string>>;
+  readonly files: readonly MintedFile[];
 }
 
 type CloudflareTokenVendingConfig = NonNullable<
@@ -371,6 +379,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       input.kind === "generic_env_provider"
         ? validateGenericEnvProviderInput(input)
         : undefined;
+    if (!genericEnvRegistration && input.files && input.files.length > 0) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "provider credential files require a generic_env_provider Connection",
+      );
+    }
     const rule = providerEnvRule(input.provider);
     if (!rule && !genericEnvRegistration) {
       throw new ConnectionVaultError(
@@ -392,7 +406,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (isGcpServiceAccountJsonRegistration(input)) {
       values = normalizeGcpServiceAccountJsonValues(input, values);
     }
-    const envNames = genericEnvRegistration?.envNames ?? Object.keys(values);
+    const valueEnvNames = Object.keys(values);
+    const envNames = genericEnvRegistration?.envNames ?? valueEnvNames;
     if (envNames.length === 0) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -406,7 +421,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           ? allowedEnvNamesForProvider(input.provider)
           : [],
     );
-    for (const envName of envNames) {
+    for (const envName of valueEnvNames) {
       if (!allowed.has(envName)) {
         throw new ConnectionVaultError(
           "invalid_argument",
@@ -423,7 +438,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (
       !genericEnvRegistration &&
       rule &&
-      !requiredEnvGroupsSatisfied(input.provider, envNames)
+      !requiredEnvGroupsSatisfied(input.provider, valueEnvNames)
     ) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -436,8 +451,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const cloudPartition = cloudFamilyForProvider(
       input.provider,
     ) as CloudPartition;
+    const secretMaterial = genericEnvRegistration
+      ? {
+          env: values,
+          files: genericEnvRegistration.files,
+        }
+      : values;
     const sealed = await this.#crypto.seal(
-      JSON.stringify(values),
+      JSON.stringify(secretMaterial),
       cloudPartition,
       secretEnvelopeAad({
         cloudPartition,
@@ -479,6 +500,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         ? { scopeHints: normalizeScope(input.scopeHints) }
         : {}),
       envNames: [...envNames].sort(),
+      ...(genericEnvRegistration &&
+      genericEnvRegistration.fileEnvNames.length > 0
+        ? { fileEnvNames: genericEnvRegistration.fileEnvNames }
+        : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
       ...(expiresAt ? { expiresAt } : {}),
@@ -746,8 +771,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
    * Per-connection credential mint. See {@link ConnectionVault.mintForInstallationProviderEnvBindings}.
    * Re-validates each connection id (existence + space ownership) before opening
    * any value, so a caller can never mint a connection from another space. Maps
-   * each connection's credential env to `TF_VAR_<provider>_<alias>_<arg>`
-   * using the provider arg mapping. Returns ONLY the TF_VAR env.
+   * each built-in provider connection's credential env to
+   * `TF_VAR_<provider>_<alias>_<arg>` using the provider arg mapping. Generic
+   * provider connections may also return runner-only credential files whose
+   * paths are exposed through declared env names.
    */
   async mintForInstallationProviderEnvBindings(
     spaceId: string,
@@ -770,6 +797,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const env: Record<string, string> = {};
+    const files: MintedFileInternal[] = [];
     const evidence: ProviderCredentialMintEvidence[] = [];
     for (const entry of entries) {
       requireNonEmpty(entry.provider, "provider");
@@ -809,6 +837,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
       if (customBundle) {
         Object.assign(env, customBundle.env);
+        files.push(...customBundle.files);
         evidence.push(customBundle.evidence);
         continue;
       }
@@ -833,7 +862,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         ] = value;
       }
     }
-    return new PhaseMintBundle({ env }, [], evidence);
+    return new PhaseMintBundle(
+      { env, ...(files.length > 0 ? { files } : {}) },
+      [],
+      evidence,
+    );
   }
 
   async #mintCustomProviderVariables(
@@ -842,6 +875,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   ): Promise<
     | {
         readonly env: Readonly<Record<string, string>>;
+        readonly files: readonly MintedFileInternal[];
         readonly evidence: ProviderCredentialMintEvidence;
       }
     | undefined
@@ -850,13 +884,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // opened (the driver's own `undefined` branch is structural-only). Gate the
     // crypto here so the open happens only for the generic-env provider kind.
     if (connection.kind !== "generic_env_provider") return undefined;
-    const values = await this.#openValues(connection);
+    const material = await this.#openProviderSecretMaterial(connection);
     // The generic-env provider driver maps the opened values to process env
     // entries under the declared names, plus non-secret mint evidence.
     // Its scope-precondition error is re-wrapped to the vault's surface so the
     // message text stays byte-identical for callers/tests.
     try {
-      return mintGenericEnvProviderVariables(connection, values, alias);
+      return mintGenericEnvProviderVariables(
+        connection,
+        material.env,
+        material.files,
+        alias,
+      );
     } catch (error) {
       throw wrapDriverError(error);
     }
@@ -1082,7 +1121,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     });
   }
 
-  async #openValues(connection: Connection): Promise<Record<string, string>> {
+  async #openProviderSecretMaterial(
+    connection: Connection,
+  ): Promise<ProviderSecretMaterial> {
     const blob = await this.#store.getSecretBlob(connection.id);
     if (!blob) {
       throw new ConnectionVaultError(
@@ -1099,11 +1140,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       connectionEnvelopeAad(connection),
     );
     const parsed = JSON.parse(plaintext) as Record<string, unknown>;
-    const values: Record<string, string> = {};
-    for (const [name, value] of Object.entries(parsed)) {
-      if (typeof value === "string") values[name] = value;
+    if (isRecord(parsed.env)) {
+      return {
+        env: stringRecord(parsed.env),
+        files: mintedFilesFromSecretMaterial(parsed.files),
+      };
     }
-    return values;
+    return { env: stringRecord(parsed), files: [] };
+  }
+
+  async #openValues(connection: Connection): Promise<Record<string, string>> {
+    return { ...(await this.#openProviderSecretMaterial(connection)).env };
   }
 
   async #mintProviderValues(
@@ -1476,6 +1523,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isStringRecord(value: unknown): value is Record<string, string> {
   if (!isRecord(value)) return false;
   return Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [name, entry] of Object.entries(value)) {
+    if (typeof entry === "string") out[name] = entry;
+  }
+  return out;
+}
+
+function mintedFilesFromSecretMaterial(value: unknown): readonly MintedFile[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const path = typeof entry.path === "string" ? entry.path : undefined;
+    const content =
+      typeof entry.content === "string" ? entry.content : undefined;
+    const mode = typeof entry.mode === "number" ? entry.mode : undefined;
+    if (!path || content === undefined || mode === undefined) return [];
+    const envName =
+      typeof entry.envName === "string" ? entry.envName : undefined;
+    return [
+      {
+        path,
+        content,
+        mode,
+        ...(envName ? { envName } : {}),
+      },
+    ];
+  });
 }
 
 function isSourceGitKind(
