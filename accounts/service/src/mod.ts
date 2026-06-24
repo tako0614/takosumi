@@ -263,6 +263,8 @@ export type AccountsHandler = (request: Request) => Promise<Response>;
 
 export const TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER =
   "x-takosumi-billing-smoke-token";
+export const TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER =
+  "x-takosumi-materialize-drill-token";
 export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
   "x-takosumi-privacy-operations-token";
 
@@ -309,6 +311,14 @@ export interface AccountsHandlerOptions {
    * allowlist, plan catalog, and Stripe validation still run normally.
    */
   billingCheckoutSmokeToken?: string;
+  /**
+   * Operator-only token that lets the dedicated-materialize readiness drill
+   * request materialization while hosted platform access is still closed. This
+   * bypasses only the launch-readiness gate; account session, Installation
+   * ownership, idempotency, cost acknowledgement, and permission digest checks
+   * still run normally.
+   */
+  materializeDrillToken?: string;
   /**
    * Operator-only token for marking privacy export/delete requests complete.
    * Customers may create/read their own requests with their account session,
@@ -1115,11 +1125,19 @@ export function createAccountsHandler(
 
     const installationRoute = matchInstallationRoute(url.pathname);
     if (installationRoute) {
+      const materializeDrillAllowed =
+        installationRoute.kind === "materialize" &&
+        request.method === "POST" &&
+        materializeDrillAccessAllowed({
+          request,
+          token: options.materializeDrillToken,
+        });
       if (
         platformGuardedInstallationMutation(
           installationRoute.kind,
           request.method,
-        )
+        ) &&
+        !materializeDrillAllowed
       ) {
         const blocked = platformAccessBlocked(options.platformAccess);
         if (blocked) return blocked;
@@ -1602,6 +1620,16 @@ function billingCheckoutSmokeAllowed(input: {
   const header =
     input.request.headers.get(TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER) ??
     "";
+  return constantTimeEqual(header, input.token);
+}
+
+function materializeDrillAccessAllowed(input: {
+  request: Request;
+  token: string | undefined;
+}): boolean {
+  if (!input.token) return false;
+  const header =
+    input.request.headers.get(TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER) ?? "";
   return constantTimeEqual(header, input.token);
 }
 

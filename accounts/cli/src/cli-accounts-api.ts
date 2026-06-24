@@ -9,10 +9,14 @@ export async function requestAccountsApi(input: {
   method?: string;
   body?: unknown;
   idempotencyKey?: string;
+  extraHeaders?: Record<string, string>;
 }): Promise<unknown> {
   const headers = accountsApiHeaders(input.options);
   if (input.idempotencyKey) {
     headers["idempotency-key"] = input.idempotencyKey;
+  }
+  for (const [key, value] of Object.entries(input.extraHeaders ?? {})) {
+    headers[key] = value;
   }
   const init: RequestInit = {
     method: input.method ?? "GET",

@@ -33,6 +33,7 @@ import {
   customOidcOAuthProvider,
   type DeployControlOperations,
   InMemorySharedCellWarmPool,
+  TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
   TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER,
 } from "../../../../accounts/service/src/mod.ts";
 import {
@@ -7553,6 +7554,131 @@ test("accounts handler keeps export un-launch-gated but gates materialize when p
       "launch_readiness_not_complete",
     );
   }
+});
+
+test("accounts handler lets operator materialize drill bypass only the readiness gate", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+    materializeDrillToken: "materialize_drill_token",
+  });
+
+  await handler(
+    new Request("https://accounts.example.test/v1/installation-projections", {
+      method: "POST",
+      body: JSON.stringify({
+        installationId: "inst_materialize_drill",
+        accountId: "acct_materialize_drill",
+        spaceId: "space_materialize_drill",
+        appId: "example.materialize-drill",
+        source: {
+          gitUrl: "https://github.com/example/materialize-drill",
+          ref: "v1.0.0",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          planDigest: "sha256:app",
+          artifactDigest: "sha256:compiled",
+        },
+        mode: "shared-cell",
+        status: "ready",
+        createdBySubject: "tsub_materialize_drill",
+      }),
+    }),
+  );
+
+  const body = {
+    mode: "dedicated",
+    region: "tokyo",
+    confirm: {
+      costAck: true,
+      permissionDigest: await testMaterializePermissionDigest({
+        installationId: "inst_materialize_drill",
+        region: "tokyo",
+      }),
+    },
+  };
+
+  const invalidToken = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "idem-materialize-drill-invalid-token",
+          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]: "wrong",
+        },
+        body: JSON.stringify(body),
+      },
+    ),
+  );
+  expect(invalidToken.status).toEqual(503);
+  expect((await invalidToken.json()).error.code).toEqual(
+    "launch_readiness_not_complete",
+  );
+
+  const invalidSession = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer invalid_session",
+          "Idempotency-Key": "idem-materialize-drill-invalid-session",
+          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]:
+            "materialize_drill_token",
+        },
+        body: JSON.stringify(body),
+      },
+    ),
+  );
+  expect(invalidSession.status).toEqual(401);
+  expect((await invalidSession.json()).error).toEqual("invalid_token");
+
+  const materializeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "idem-materialize-drill",
+          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]:
+            "materialize_drill_token",
+        },
+        body: JSON.stringify(body),
+      },
+    ),
+  );
+  expect(materializeResponse.status).toEqual(202);
+  const operationId = (await materializeResponse.json()).operationId;
+
+  const cancelResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/status",
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "ready",
+          operation: "materialize",
+          operationId,
+          reason: "materialize canceled before cutover",
+        }),
+      },
+    ),
+  );
+  expect(cancelResponse.status).toEqual(200);
+  const cancelBody = await cancelResponse.json();
+  expect(cancelBody.installation.status).toEqual("ready");
+  expect(cancelBody.installation.mode).toEqual("shared-cell");
+  expect(cancelBody.event.type).toEqual("installation.materialize-failed");
+  expect(
+    store
+      .listInstallationEvents("inst_materialize_drill")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "installation.materialize-requested",
+    "installation.materialize-failed",
+  ]);
 });
 
 test("accounts handler allows authenticated owner export while platform readiness access is closed", async () => {

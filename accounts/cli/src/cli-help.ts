@@ -717,6 +717,8 @@ export function installationsMaterializeHelpText(): string {
     "  --idempotency-key <key>",
     "  --accounts-url <url>",
     "  --token <accounts-write-bearer>",
+    "  --drill-token <operator-token>",
+    "  --drill-token-file <path>",
     "  --json",
   ].join("\n");
 }

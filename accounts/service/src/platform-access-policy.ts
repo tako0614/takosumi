@@ -1,9 +1,12 @@
 // Scope: this module gates ONLY the hosted platform readiness surfaces: the
 // platform-cell `materialize` installation mutation and Stripe checkout. The
-// generic Takosumi platform (OIDC sign-in, PAT issuance, upstream OAuth,
-// passkeys, generic Installations + import, PlanRuns, deployment / rollback
-// mutations, export, and the installation status PATCH) is NOT launch-gated
-// and must keep working while the platform readiness is closed.
+// operator-only smoke/drill tokens bypass only this launch-readiness gate; they
+// do not bypass account sessions, tenant ownership, idempotency, approval
+// digest, redirect allowlists, or downstream provider validation. The generic
+// Takosumi platform (OIDC sign-in, PAT issuance, upstream OAuth, passkeys,
+// generic Installations + import, PlanRuns, deployment / rollback mutations,
+// export, and the installation status PATCH) is NOT launch-gated and must keep
+// working while the platform readiness is closed.
 
 import { isSha256HexDigest } from "./installation-helpers.ts";
 import { json, requestIdFrom } from "./http-helpers.ts";

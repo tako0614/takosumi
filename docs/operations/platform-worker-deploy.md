@@ -352,6 +352,28 @@ platform-cell の materialize は `launch_readiness_not_complete` の 503 を返
 これは Stripe checkout と platform-cell materialize だけの公開ゲート。OIDC / PAT / upstream OAuth /
 Capsule / Run / StateVersion / rollback / export は通常の session・Workspace 権限で動き続ける。
 
+GA 前の運営 readiness drill は例外的に `TAKOSUMI_DEPLOY_CONTROL_TOKEN` 相当の operator token を専用ヘッダーで渡し、
+customer-facing 公開ゲートだけを越える。これは account session / Installation ownership / idempotency /
+cost acknowledgement / permission digest を bypass しない。
+
+```bash
+cd takosumi
+TAKOSUMI_ACCOUNTS_TOKEN="$(< ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN)" \
+  bun run cli -- internal installations materialize <scratchInstallationId> \
+    --accounts-url https://app.takosumi.com \
+    --mode dedicated \
+    --region <dedicatedRegion> \
+    --compute <computePlan> \
+    --database <databasePlan> \
+    --object-store <objectStorePlan> \
+    --cutover-strategy blue-green \
+    --drain-seconds <drainSeconds> \
+    --cost-ack \
+    --idempotency-key <materializeIdempotencyKey> \
+    --drill-token-file ../takosumi-private/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN \
+    --json
+```
+
 ## takos.jp からの public install 導線
 
 Takos の public hosted CTA は `takos.jp` から platform worker の dashboard prefill route へ向ける:

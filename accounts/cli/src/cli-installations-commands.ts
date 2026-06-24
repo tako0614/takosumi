@@ -25,6 +25,7 @@ import {
   type InstallationImportPlan,
   parseAccountsInstallationExportBundleInput,
   planInstallationImport,
+  TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
 } from "@takosjp/takosumi-accounts-service";
 import {
   booleanOption,
@@ -281,12 +282,20 @@ export async function runInstallationsMaterialize(
       permissionDigest,
     },
   };
+  let extraHeaders: Record<string, string> | undefined;
+  try {
+    extraHeaders = await materializeDrillHeaders(options);
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
   try {
     const response = await requestAccountsApi({
       method: "POST",
       path: takosumiAccountsInstallationMaterializePath(installationId),
       body,
       idempotencyKey: installationIdempotencyKey(options),
+      extraHeaders,
       options,
     });
     io.stdout(
@@ -301,6 +310,42 @@ export async function runInstallationsMaterialize(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+async function materializeDrillHeaders(
+  options: Record<string, string | boolean>,
+): Promise<Record<string, string> | undefined> {
+  const token =
+    stringOrRequiredValueOption(options, "drillToken") ??
+    (await optionalTrimmedFileOption(options, "drillTokenFile")) ??
+    process.env.TAKOSUMI_MATERIALIZE_DRILL_TOKEN;
+  if (!token) return undefined;
+  return { [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]: token };
+}
+
+async function optionalTrimmedFileOption(
+  options: Record<string, string | boolean>,
+  key: string,
+): Promise<string | undefined> {
+  const path = stringOrRequiredValueOption(options, key);
+  if (!path) return undefined;
+  const value = (await readFile(path, "utf8")).trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function stringOrRequiredValueOption(
+  options: Record<string, string | boolean>,
+  key: string,
+): string | undefined {
+  const value = options[key];
+  if (value === true) {
+    throw new TypeError(`--${kebabCaseForMessage(key)} requires a value`);
+  }
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function kebabCaseForMessage(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
 export async function runInstallationsExport(
