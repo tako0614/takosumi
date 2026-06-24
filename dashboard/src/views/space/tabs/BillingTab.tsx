@@ -74,10 +74,10 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   );
   const hasBillingCatalog = createMemo(() => (plans()?.length ?? 0) > 0);
   const canStartCheckout = createMemo(
-    () => cloudBilling() && mode() !== undefined && mode() !== "disabled",
+    () => cloudBilling() && hasBillingCatalog(),
   );
   const canOpenPortal = createMemo(
-    () => cloudBilling() && canStartCheckout() && hasBillingCatalog(),
+    () => cloudBilling() && mode() !== undefined && mode() !== "disabled",
   );
   const billingSubtitle = createMemo(() => {
     if (billing.loading) return t("billing.loading");
@@ -327,30 +327,21 @@ export default function BillingTab(props: { readonly spaceId: string }) {
                 when={hasBillingCatalog()}
                 fallback={<p class="muted">{t("billing.plans.none")}</p>}
               >
-                <Show
-                  when={canStartCheckout()}
-                  fallback={
-                    <p class="av-plan-policy av-plan-policy-disabled">
-                      {t("billing.plans.disabled")}
-                    </p>
-                  }
-                >
-                  <p class="muted av-plan-policy">
-                    {t("billing.plans.nonRefundable")}
-                  </p>
-                  <Show when={subscriptions().length > 0}>
-                    <ul class="av-plan-list">
-                      <For each={subscriptions()}>{planCard}</For>
-                    </ul>
-                  </Show>
-                  <Show when={packs().length > 0}>
-                    <h3 class="tg-card-title av-plan-section">
-                      {t("billing.packs.title")}
-                    </h3>
-                    <ul class="av-plan-list">
-                      <For each={packs()}>{planCard}</For>
-                    </ul>
-                  </Show>
+                <p class="muted av-plan-policy">
+                  {t("billing.plans.nonRefundable")}
+                </p>
+                <Show when={subscriptions().length > 0}>
+                  <ul class="av-plan-list">
+                    <For each={subscriptions()}>{planCard}</For>
+                  </ul>
+                </Show>
+                <Show when={packs().length > 0}>
+                  <h3 class="tg-card-title av-plan-section">
+                    {t("billing.packs.title")}
+                  </h3>
+                  <ul class="av-plan-list">
+                    <For each={packs()}>{planCard}</For>
+                  </ul>
                 </Show>
               </Show>
             </Match>
