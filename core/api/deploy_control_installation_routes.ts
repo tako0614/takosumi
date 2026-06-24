@@ -30,7 +30,10 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
-import { defaultCapsuleOutputAllowlist } from "../domains/installations/official_seed.ts";
+import {
+  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  defaultCapsuleOutputAllowlist,
+} from "../domains/installations/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
@@ -104,6 +107,44 @@ function publicInstallConfigSourceKind(
     return "first_party_capsule";
   }
   return "generic_capsule";
+}
+
+type InstallConfigListView = "all" | "starter-catalog";
+
+function parseInstallConfigListView(
+  raw: string | undefined,
+):
+  | { readonly kind: "ok"; readonly view: InstallConfigListView }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  if (raw === undefined || raw === "" || raw === "all") {
+    return { kind: "ok", view: "all" };
+  }
+  if (raw === "starter-catalog") {
+    return { kind: "ok", view: "starter-catalog" };
+  }
+  return {
+    kind: "invalid",
+    response: new Response(
+      JSON.stringify({
+        error: {
+          code: "invalid_argument",
+          message: "view must be all or starter-catalog",
+        },
+      }),
+      {
+        status: 400,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    ),
+  };
+}
+
+function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
+  if (config.spaceId !== undefined) return false;
+  if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
+  return (
+    config.trustLevel === "official" && config.catalog?.source !== undefined
+  );
 }
 
 export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoint[] =
@@ -512,6 +553,8 @@ export function mountDeployControlInstallationRoutes(
         }
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
+        const view = parseInstallConfigListView(c.req.query("view"));
+        if (view.kind === "invalid") return view.response;
         // Without a spaceId only built-in shared configs (spaceId-less configs)
         // are returned; with one, built-ins plus that Space's own configs. The
         // official + scoped union is a small set, so it is materialized, merge-
@@ -524,7 +567,11 @@ export function mountDeployControlInstallationRoutes(
           spaceId === undefined
             ? []
             : await installations!.listInstallConfigs(spaceId);
-        const merged = [...official, ...scoped].sort(
+        const merged = (
+          view.view === "starter-catalog"
+            ? official.filter(isStarterCatalogInstallConfig)
+            : [...official, ...scoped]
+        ).sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         );

@@ -79,7 +79,10 @@ import type {
   DependencyVisibility,
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import { defaultCapsuleOutputAllowlist } from "../../../core/domains/installations/official_seed.ts";
+import {
+  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  defaultCapsuleOutputAllowlist,
+} from "../../../core/domains/installations/official_seed.ts";
 import {
   decodeCursor,
   type Page,
@@ -200,6 +203,39 @@ function publicInstallConfigSourceKind(
     return "first_party_capsule";
   }
   return "generic_capsule";
+}
+
+type InstallConfigListView = "all" | "starter-catalog";
+
+function parseInstallConfigListView(
+  url: URL,
+):
+  | { readonly ok: true; readonly view: InstallConfigListView }
+  | { readonly ok: false; readonly response: Response } {
+  const raw =
+    url.searchParams.get("view") ?? url.searchParams.get("catalogView");
+  if (raw === null || raw === "" || raw === "all") {
+    return { ok: true, view: "all" };
+  }
+  if (raw === "starter-catalog") {
+    return { ok: true, view: "starter-catalog" };
+  }
+  return {
+    ok: false,
+    response: errorJson(
+      "invalid_request",
+      "view must be all or starter-catalog",
+      400,
+    ),
+  };
+}
+
+function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
+  if (config.spaceId !== undefined) return false;
+  if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
+  return (
+    config.trustLevel === "official" && config.catalog?.source !== undefined
+  );
 }
 
 const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<Installation["status"]> =
@@ -2627,6 +2663,8 @@ async function listInstallConfigs(
     stringValue(url.searchParams.get("space_id") ?? undefined);
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
+  const view = parseInstallConfigListView(url);
+  if (!view.ok) return view.response;
   // Without a spaceId only built-in shared configs (spaceId-less configs) are
   // returned; with one, built-ins plus that Space's own configs —
   // mirroring the §30 `/api/v1/capsule-configs` projection. The official +
@@ -2648,7 +2686,11 @@ async function listInstallConfigs(
     spaceId === undefined
       ? []
       : await operations.installations.listInstallConfigs(spaceId);
-  const merged = [...official, ...scoped].sort(
+  const merged = (
+    view.view === "starter-catalog"
+      ? official.filter(isStarterCatalogInstallConfig)
+      : [...official, ...scoped]
+  ).sort(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );

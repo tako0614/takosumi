@@ -14,6 +14,10 @@ const appViewsCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/app-views.css"),
   "utf8",
 );
+const controlApiSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
+  "utf8",
+);
 
 describe("/new flow guidance", () => {
   test("keeps /new focused instead of layering guide and progress chrome", () => {
@@ -142,7 +146,7 @@ describe("/new flow guidance", () => {
 
   test("opens normal /new on the catalog while explicit links use the Git flow", () => {
     expect(newAppViewSource).toContain("function initialAddTab");
-    expect(newAppViewSource).toContain("if (hasPrefill) return \"git\"");
+    expect(newAppViewSource).toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).toContain('params.get("mode") === "link"');
     expect(newAppViewSource).toContain(': "catalog"');
     expect(newAppViewSource).toContain(
@@ -171,6 +175,11 @@ describe("/new flow guidance", () => {
     expect(officialSeedSource).toContain('name: "bucketName"');
     expect(officialSeedSource).toContain(
       'defaultValue: "service-name-with-space"',
+    );
+    expect(controlApiSource).toContain("listStarterCatalogInstallConfigs");
+    expect(newAppViewSource).toContain("listStarterCatalogInstallConfigs");
+    expect(newAppViewSource).not.toContain(
+      "createResource(spaceId, listInstallConfigs)",
     );
   });
 

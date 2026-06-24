@@ -3207,6 +3207,119 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(legacyResp?.status).toEqual(200);
 });
 
+test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const officialCreatedAt = "2026-01-01T00:00:00Z";
+  const scopedCreatedAt = "2026-01-02T00:00:00Z";
+  operations.installations.listInstallConfigs = async (spaceId) => {
+    operations.calls.listInstallConfigs ??= [];
+    operations.calls.listInstallConfigs.push(spaceId);
+    if (spaceId === "space_a") {
+      return [
+        {
+          id: "cfg_scoped_e2e",
+          spaceId: "space_a",
+          name: "ts-e2e-browser-functional-config",
+          sourceKind: "generic_capsule",
+          installType: "opentofu_module",
+          trustLevel: "trusted",
+          variableMapping: {},
+          outputAllowlist: {},
+          policy: {},
+          catalog: {
+            source: {
+              git: "https://github.com/example/e2e.git",
+              ref: "main",
+              path: ".",
+            },
+            order: 1,
+            surface: "service",
+            kind: "worker",
+            provider: "cloudflare",
+            suggestedName: "test",
+            badge: { ja: "テスト", en: "Test" },
+            name: { ja: "E2E", en: "E2E" },
+            description: { ja: "E2E", en: "E2E" },
+            inputs: [],
+          },
+          createdAt: scopedCreatedAt,
+          updatedAt: scopedCreatedAt,
+        },
+      ];
+    }
+    return [
+      {
+        id: "cfg-default-opentofu-capsule",
+        name: "opentofu-capsule",
+        sourceKind: "generic_capsule",
+        installType: "opentofu_module",
+        trustLevel: "trusted",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        createdAt: officialCreatedAt,
+        updatedAt: officialCreatedAt,
+      },
+      {
+        id: "cfg-official-cloudflare-hello-worker",
+        name: "cloudflare-hello-worker",
+        sourceKind: "first_party_capsule",
+        installType: "opentofu_module",
+        trustLevel: "official",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        catalog: {
+          templateId: "cloudflare-hello-worker",
+          source: {
+            git: "https://github.com/tako0614/takosumi.git",
+            ref: "abc123",
+            path: "providers/cloudflare/modules/cloudflare-hello-worker/module",
+          },
+          order: 10,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "web-app",
+          badge: { ja: "Webアプリ", en: "Web app" },
+          name: { ja: "Webアプリを公開", en: "Publish a web app" },
+          description: { ja: "Webアプリ", en: "Web app" },
+          inputs: [],
+        },
+        templateBinding: {
+          templateId: "cloudflare-hello-worker",
+          templateVersion: "1.0.0",
+        },
+        createdAt: officialCreatedAt,
+        updatedAt: officialCreatedAt,
+      },
+    ];
+  };
+
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/capsule-configs?workspaceId=space_a&view=starter-catalog",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    installConfigs: Array<{ id: string; spaceId?: string; catalog?: unknown }>;
+  };
+  expect(body.installConfigs.map((config) => config.id)).toEqual([
+    "cfg-default-opentofu-capsule",
+    "cfg-official-cloudflare-hello-worker",
+  ]);
+  expect(body.installConfigs.some((config) => config.spaceId)).toBe(false);
+});
+
 test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

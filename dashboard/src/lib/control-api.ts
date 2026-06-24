@@ -1168,11 +1168,21 @@ export async function putInstallationProviderConnectionSet(
 
 export async function listInstallConfigs(
   spaceId?: string,
+  options: { readonly view?: "starter-catalog" } = {},
 ): Promise<readonly InstallConfig[]> {
   return await fetchAllPages<InstallConfig>(
-    `${BASE}/capsule-configs${query({ workspaceId: spaceId })}`,
+    `${BASE}/capsule-configs${query({
+      workspaceId: spaceId,
+      view: options.view,
+    })}`,
     (body) => (body.installConfigs as readonly InstallConfig[]) ?? [],
   );
+}
+
+export async function listStarterCatalogInstallConfigs(
+  spaceId?: string,
+): Promise<readonly InstallConfig[]> {
+  return await listInstallConfigs(spaceId, { view: "starter-catalog" });
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
