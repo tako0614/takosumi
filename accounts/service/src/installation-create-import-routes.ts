@@ -109,6 +109,7 @@ export async function handleCreateAppInstallation(input: {
   let sourceRef = stringValue(source.ref);
   let sourceCommit =
     stringValue(expected?.sourceCommit) ?? stringValue(source.commit);
+  let sourcePath = stringValue(source.path) ?? stringValue(source.modulePath);
   let planDigest =
     stringValue(expected?.planDigest) ??
     stringValue(source.planDigest) ??
@@ -207,6 +208,7 @@ export async function handleCreateAppInstallation(input: {
   sourceGitUrl = coreApply.sourceUrl;
   sourceRef = coreApply.sourceRef;
   sourceCommit = coreApply.sourceCommit ?? coreApply.sourceDigest;
+  sourcePath = coreApply.sourcePath ?? sourcePath;
   planDigest = coreApply.planDigest;
   artifactDigest = coreApply.artifactDigest;
   const installationId = coreApply.installationId;
@@ -409,6 +411,7 @@ export async function handleCreateAppInstallation(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
+    ...(sourcePath ? { sourcePath } : {}),
     planDigest,
     artifactDigest,
     mode,
@@ -581,9 +584,7 @@ async function oidcClientCreateRequestFromValue(input: {
   defaultIssuer: string;
   now: number;
 }): Promise<
-  | { binding: string; client: OidcClientRecord }
-  | undefined
-  | Response
+  { binding: string; client: OidcClientRecord } | undefined | Response
 > {
   if (input.value === undefined) return undefined;
   const value = Array.isArray(input.value)
@@ -669,9 +670,7 @@ async function oidcClientCreateRequestFromValue(input: {
 
 function materializeOidcClientBinding(input: {
   bindings: readonly ServiceBindingMaterialRecord[];
-	  oidcClient:
-	    | { binding: string; client: OidcClientRecord }
-	    | undefined;
+  oidcClient: { binding: string; client: OidcClientRecord } | undefined;
   installationId: string;
   now: number;
 }): readonly ServiceBindingMaterialRecord[] | Response {

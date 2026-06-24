@@ -491,6 +491,7 @@ function installationProjection(
       git: bundle.source.gitUrl,
       ref: bundle.source.ref,
       commit: bundle.source.commit,
+      ...(bundle.source.path ? { path: bundle.source.path } : {}),
     },
     digests: {
       plan: bundle.source.planDigest,
@@ -582,6 +583,7 @@ to run the target PlanRun + projection-create flow. The archive intentionally
 does not depend on a public install CLI command.
 
 Source commit: \`${bundle.source.commit}\`
+Source path: \`${bundle.source.path ?? "."}\`
 Plan digest digest: \`${bundle.source.planDigest}\`
 Artifact digest: \`${bundle.source.artifactDigest ?? "none"}\`
 

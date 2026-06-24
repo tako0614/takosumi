@@ -119,6 +119,9 @@ export async function materializePreservationSnapshot(input: {
       gitUrl: input.installation.sourceGitUrl,
       ref: input.installation.sourceRef,
       commit: input.installation.sourceCommit,
+      ...(input.installation.sourcePath
+        ? { path: input.installation.sourcePath }
+        : {}),
       planDigest: input.installation.planDigest,
       artifactDigest: input.installation.artifactDigest ?? null,
     },

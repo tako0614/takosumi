@@ -64,6 +64,7 @@ export interface AccountsInstallationExportBundle {
     readonly gitUrl: string;
     readonly ref: string;
     readonly commit: string;
+    readonly path?: string;
     readonly planDigest: string;
     readonly artifactDigest: string | null;
   };
@@ -217,6 +218,9 @@ export function buildInstallationExportBundle(
       gitUrl: input.installation.sourceGitUrl,
       ref: input.installation.sourceRef,
       commit: input.installation.sourceCommit,
+      ...(input.installation.sourcePath
+        ? { path: input.installation.sourcePath }
+        : {}),
       planDigest: input.installation.planDigest,
       artifactDigest: input.installation.artifactDigest ?? null,
     },
@@ -292,6 +296,7 @@ export function planInstallationImport(
     gitUrl: input.bundle.source.gitUrl,
     ref: input.bundle.source.ref,
     commit: input.bundle.source.commit,
+    ...(input.bundle.source.path ? { path: input.bundle.source.path } : {}),
     planDigest: input.bundle.source.planDigest,
     artifactDigest: input.bundle.source.artifactDigest,
   };
@@ -302,6 +307,7 @@ export function planInstallationImport(
       url: input.bundle.source.gitUrl,
       ref: input.bundle.source.ref,
       commit: input.bundle.source.commit,
+      ...(input.bundle.source.path ? { path: input.bundle.source.path } : {}),
     },
   };
   const accountsProjectionRequestTemplate: JsonObject = {
@@ -560,6 +566,7 @@ function parseSourceFields(
     gitUrl: requireString(record.gitUrl, "bundle.source.gitUrl"),
     ref: requireString(record.ref, "bundle.source.ref"),
     commit: requireString(record.commit, "bundle.source.commit"),
+    path: parseOptionalString(record.path, "bundle.source.path"),
     planDigest: requireString(record.planDigest, "bundle.source.planDigest"),
     artifactDigest: parseNullableString(
       record.artifactDigest,
@@ -773,6 +780,17 @@ function parseNullableString(value: unknown, label: string): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") {
     throw new TypeError(`${label} must be a string or null`);
+  }
+  return value;
+}
+
+function parseOptionalString(
+  value: unknown,
+  label: string,
+): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${label} must be a non-empty string when present`);
   }
   return value;
 }

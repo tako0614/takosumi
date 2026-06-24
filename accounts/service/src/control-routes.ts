@@ -3191,6 +3191,7 @@ interface DeployControlProjectionSource {
   readonly sourceGitUrl: string;
   readonly sourceRef: string;
   readonly sourceCommit: string;
+  readonly sourcePath?: string;
   readonly planDigest: string;
   readonly artifactDigest?: string;
 }
@@ -3357,6 +3358,7 @@ async function upsertDeployControlInstallationProjection(input: {
     sourceGitUrl: source.sourceGitUrl,
     sourceRef: source.sourceRef,
     sourceCommit: source.sourceCommit,
+    ...(source.sourcePath ? { sourcePath: source.sourcePath } : {}),
     planDigest: source.planDigest,
     ...(source.artifactDigest ? { artifactDigest: source.artifactDigest } : {}),
     mode,
@@ -3516,6 +3518,7 @@ async function projectionSourceFromPlanRun(input: {
       sourceGitUrl: snapshot.url,
       sourceRef: snapshot.ref,
       sourceCommit: snapshot.resolvedCommit || snapshot.archiveDigest,
+      ...(snapshot.path ? { sourcePath: snapshot.path } : {}),
       planDigest:
         input.planRun.planDigest ??
         input.fallbackRun?.planDigest ??
@@ -3541,6 +3544,7 @@ async function projectionSourceFromPlanRun(input: {
         input.planRun.sourceCommit ??
         source.commit ??
         input.planRun.sourceDigest,
+      ...(source.modulePath ? { sourcePath: source.modulePath } : {}),
       planDigest,
       ...(artifactDigest ? { artifactDigest } : {}),
     };
@@ -3550,6 +3554,7 @@ async function projectionSourceFromPlanRun(input: {
       sourceGitUrl: source.url,
       sourceRef: "prepared",
       sourceCommit: input.planRun.sourceCommit ?? source.digest,
+      ...(source.modulePath ? { sourcePath: source.modulePath } : {}),
       planDigest,
       ...(artifactDigest ? { artifactDigest } : {}),
     };
@@ -3558,6 +3563,7 @@ async function projectionSourceFromPlanRun(input: {
     sourceGitUrl: `local:${source.path}`,
     sourceRef: source.modulePath ?? "local",
     sourceCommit: input.planRun.sourceCommit ?? input.planRun.sourceDigest,
+    ...(source.modulePath ? { sourcePath: source.modulePath } : {}),
     planDigest,
     ...(artifactDigest ? { artifactDigest } : {}),
   };

@@ -421,7 +421,9 @@ async function handleCoreDeployControlBackedRevision(input: {
   }
 
   const sourceGitUrl =
-    stringValue(source?.url) ?? input.installation.sourceGitUrl;
+    stringValue(source?.gitUrl) ??
+    stringValue(source?.url) ??
+    input.installation.sourceGitUrl;
   const sourceRef =
     stringValue(source?.ref) ??
     stringValue(input.body.ref) ??
@@ -430,6 +432,10 @@ async function handleCoreDeployControlBackedRevision(input: {
     stringValue(expected?.sourceCommit) ??
     stringValue(source?.commit) ??
     stringValue(input.body.sourceCommit);
+  const sourcePath =
+    stringValue(source?.path) ??
+    stringValue(source?.modulePath) ??
+    input.installation.sourcePath;
   const planDigest =
     stringValue(expected?.planDigest) ??
     stringValue(source?.planDigest) ??
@@ -451,6 +457,17 @@ async function handleCoreDeployControlBackedRevision(input: {
     return errorJson(
       "source_mismatch",
       "deployment must keep the installation source git URL",
+      409,
+    );
+  }
+  if (
+    input.installation.sourcePath &&
+    sourcePath &&
+    sourcePath !== input.installation.sourcePath
+  ) {
+    return errorJson(
+      "source_path_mismatch",
+      "deployment must keep the installation source path",
       409,
     );
   }
@@ -483,6 +500,7 @@ async function handleCoreDeployControlBackedRevision(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
+    ...(sourcePath ? { sourcePath } : {}),
     planDigest,
     artifactDigest: artifactDigest ?? null,
     requestedBindings,
@@ -505,6 +523,7 @@ async function handleCoreDeployControlBackedRevision(input: {
       sourceGitUrl,
       sourceRef,
       sourceCommit,
+      ...(sourcePath ? { sourcePath } : {}),
       planDigest,
       artifactDigest,
     },

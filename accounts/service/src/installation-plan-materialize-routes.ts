@@ -101,6 +101,11 @@ export async function handlePlanAppInstallationDeployment(input: {
       stringValue(source?.commit) ??
       stringValue(body.sourceCommit) ??
       installation.sourceCommit;
+    const sourcePath =
+      corePlanRun.sourcePath ??
+      stringValue(source?.path) ??
+      stringValue(source?.modulePath) ??
+      installation.sourcePath;
     const planDigest = corePlanRun.planDigest;
     const artifactDigest =
       corePlanRun.artifactDigest ??
@@ -114,6 +119,17 @@ export async function handlePlanAppInstallationDeployment(input: {
       return errorJson(
         "source_mismatch",
         "deployment PlanRun must keep the installation source git URL",
+        409,
+      );
+    }
+    if (
+      installation.sourcePath &&
+      sourcePath &&
+      sourcePath !== installation.sourcePath
+    ) {
+      return errorJson(
+        "source_path_mismatch",
+        "deployment PlanRun must keep the installation source path",
         409,
       );
     }
@@ -147,6 +163,7 @@ export async function handlePlanAppInstallationDeployment(input: {
       sourceGitUrl,
       sourceRef,
       sourceCommit,
+      ...(sourcePath ? { sourcePath } : {}),
       planDigest,
       artifactDigest,
       requestedBindings,
@@ -160,6 +177,7 @@ export async function handlePlanAppInstallationDeployment(input: {
         url: sourceGitUrl,
         ref: sourceRef,
         commit: sourceCommit,
+        ...(sourcePath ? { path: sourcePath } : {}),
         planDigest,
         artifactDigest,
       },
@@ -193,6 +211,10 @@ export async function handlePlanAppInstallationDeployment(input: {
     stringValue(source.ref) ?? stringValue(body.ref) ?? stringValue(body.to);
   const sourceCommit =
     stringValue(source.commit) ?? stringValue(body.sourceCommit);
+  const sourcePath =
+    stringValue(source.path) ??
+    stringValue(source.modulePath) ??
+    installation.sourcePath;
   const planDigest =
     stringValue(source.planDigest) ?? stringValue(body.planDigest);
   const artifactDigest =
@@ -211,6 +233,17 @@ export async function handlePlanAppInstallationDeployment(input: {
     return errorJson(
       "source_mismatch",
       "deployment PlanRun must keep the installation source git URL",
+      409,
+    );
+  }
+  if (
+    installation.sourcePath &&
+    sourcePath &&
+    sourcePath !== installation.sourcePath
+  ) {
+    return errorJson(
+      "source_path_mismatch",
+      "deployment PlanRun must keep the installation source path",
       409,
     );
   }
@@ -244,6 +277,7 @@ export async function handlePlanAppInstallationDeployment(input: {
     sourceGitUrl,
     sourceRef,
     sourceCommit,
+    ...(sourcePath ? { sourcePath } : {}),
     planDigest,
     artifactDigest: artifactDigest ?? null,
     requestedBindings,
@@ -257,6 +291,7 @@ export async function handlePlanAppInstallationDeployment(input: {
       gitUrl: sourceGitUrl,
       ref: sourceRef,
       commit: sourceCommit,
+      ...(sourcePath ? { path: sourcePath } : {}),
       planDigest,
       artifactDigest: artifactDigest ?? null,
     },

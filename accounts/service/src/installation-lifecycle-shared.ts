@@ -116,6 +116,7 @@ export interface CoreInstallationProjection {
   readonly sourceRef: string;
   readonly sourceCommit?: string;
   readonly sourceDigest?: string;
+  readonly sourcePath?: string;
   readonly planDigest: string;
   readonly artifactDigest?: string;
   readonly activatedHttpDomain?: ActivatedHttpDomainProjection;
@@ -127,6 +128,7 @@ export interface CoreDeploymentProjection {
   readonly sourceRef?: string;
   readonly sourceCommit?: string;
   readonly sourceDigest?: string;
+  readonly sourcePath?: string;
   readonly planDigest: string;
   readonly artifactDigest?: string;
   readonly activatedHttpDomain?: ActivatedHttpDomainProjection;
@@ -300,6 +302,7 @@ export function coreDeployControlSourceFromCloudSource(
 ): Record<string, unknown> | Response {
   const kind = stringValue(source.kind) ?? "git";
   const url = stringValue(source.url);
+  const modulePath = stringValue(source.modulePath) ?? stringValue(source.path);
   if (!url) {
     return errorJson("invalid_request", "source.url is required", 400);
   }
@@ -312,7 +315,7 @@ export function coreDeployControlSourceFromCloudSource(
         400,
       );
     }
-    return { kind: "git", url, ref };
+    return { kind: "git", url, ref, ...(modulePath ? { modulePath } : {}) };
   }
   if (kind === "prepared") {
     const digest = stringValue(source.digest);
@@ -323,10 +326,15 @@ export function coreDeployControlSourceFromCloudSource(
         400,
       );
     }
-    return { kind: "prepared", url, digest };
+    return {
+      kind: "prepared",
+      url,
+      digest,
+      ...(modulePath ? { modulePath } : {}),
+    };
   }
   if (kind === "local") {
-    return { kind: "local", path: url };
+    return { kind: "local", path: url, ...(modulePath ? { modulePath } : {}) };
   }
   return errorJson(
     "invalid_request",
@@ -367,6 +375,7 @@ export function coreInstallationProjectionFromApply(
     stringValue(deployment?.sourceCommit) ??
     stringValue(deployment?.source_commit);
   const sourceDigest = stringValue(source?.digest);
+  const sourcePath = stringValue(source?.modulePath);
   const planDigest =
     stringValue(deployment?.planDigest) ?? stringValue(deployment?.plan_digest);
   const artifactDigest =
@@ -391,6 +400,7 @@ export function coreInstallationProjectionFromApply(
     sourceRef,
     sourceCommit,
     sourceDigest,
+    sourcePath,
     planDigest,
     artifactDigest,
     activatedHttpDomain,
@@ -494,6 +504,7 @@ export function coreDeploymentProjectionFromDeploymentLike(input: {
       stringValue(deployment?.sourceCommit) ??
       stringValue(deployment?.source_commit),
     sourceDigest: stringValue(source?.digest),
+    sourcePath: stringValue(source?.modulePath),
     planDigest,
     artifactDigest,
     activatedHttpDomain,
@@ -745,6 +756,7 @@ export function installationRecordFromCoreDeploymentProjection(input: {
     sourceGitUrl: string;
     sourceRef: string;
     sourceCommit: string;
+    sourcePath?: string;
     planDigest: string;
     artifactDigest?: string;
   };
@@ -765,6 +777,10 @@ export function installationRecordFromCoreDeploymentProjection(input: {
       input.projection.sourceDigest ??
       input.fallback?.sourceCommit ??
       input.installation.sourceCommit,
+    sourcePath:
+      input.projection.sourcePath ??
+      input.fallback?.sourcePath ??
+      input.installation.sourcePath,
     planDigest:
       input.projection.planDigest ??
       input.fallback?.planDigest ??
@@ -823,6 +839,7 @@ export function appInstallationRevisionPayload(
       gitUrl: installation.sourceGitUrl,
       ref: installation.sourceRef,
       commit: installation.sourceCommit,
+      ...(installation.sourcePath ? { path: installation.sourcePath } : {}),
       planDigest: installation.planDigest,
       artifactDigest: installation.artifactDigest ?? null,
     },
@@ -964,6 +981,7 @@ export async function appInstallationRevisionConfirmFromValue(input: {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
+  sourcePath?: string;
   planDigest: string;
   artifactDigest: string | null;
   requestedBindings: readonly ServiceBindingMaterialRecord[];
@@ -1021,6 +1039,7 @@ export async function appInstallationRevisionPermissionDigest(input: {
   sourceGitUrl: string;
   sourceRef: string;
   sourceCommit: string;
+  sourcePath?: string;
   planDigest: string;
   artifactDigest: string | null;
   requestedBindings: readonly ServiceBindingMaterialRecord[];
@@ -1035,6 +1054,7 @@ export async function appInstallationRevisionPermissionDigest(input: {
         gitUrl: normalizeSourceGitUrl(input.sourceGitUrl),
         ref: input.sourceRef,
         commit: input.sourceCommit,
+        ...(input.sourcePath ? { path: input.sourcePath } : {}),
         planDigest: input.planDigest,
         artifactDigest: input.artifactDigest,
       },

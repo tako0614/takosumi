@@ -191,6 +191,14 @@ test("privacy request migration records export and deletion operations", async (
   expect(migration).toContain("privacy_requests_status_idx");
 });
 
+test("app installation source path migration preserves Capsule module path", async () => {
+  const migration = await readMigration("026_app_installation_source_path.sql");
+
+  expect(migration).toContain("ALTER TABLE installation_v1.app_installations");
+  expect(migration).toContain("ADD COLUMN IF NOT EXISTS source_path text");
+  expect(migration).toContain("OpenTofu Capsule restore/import fidelity");
+});
+
 test("F7 event chain lock migration creates per-installation row lock", async () => {
   const migration = await readMigration("018_event_chain_lock.sql");
 
