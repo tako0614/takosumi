@@ -47,6 +47,7 @@ import type {
   Connection,
   PlanRun,
   PlanResourceChange,
+  RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import {
   FIXTURE_ARCHIVE_DIGEST,
@@ -1031,6 +1032,81 @@ test("generic Capsule installation plan derives pre-init requiredProviders from 
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
   ]);
+});
+
+test("generic OpenTofu runner profile does not persist wildcard as a required provider before provider discovery", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner({
+    requiredProviders: [provider],
+    providerInstallation: [
+      {
+        provider,
+        mirrored: true,
+        installationMethod: "filesystem_mirror",
+        attested: true,
+        attestationMethod: "forced_filesystem_mirror_init",
+        mirrorPath:
+          "/opt/opentofu/provider-mirror/registry.opentofu.org/vercel/vercel",
+      },
+    ],
+  });
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel",
+    spaceId: seeded.installation.spaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "space",
+    authMethod: "generic_env",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+    verifiedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_vercel",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider,
+        alias: "main",
+        envId: "conn_vercel",
+      },
+    ],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const genericProfile: RunnerProfile = {
+    id: "generic-opentofu-provider",
+    name: "Generic OpenTofu provider",
+    substrate: "cloudflare-containers",
+    allowedProviders: ["*"],
+    stateBackend: { kind: "operator-managed", ref: "r2://state" },
+    stateLock: { kind: "native" },
+    networkPolicy: { mode: "operator-managed" },
+    secretExposure: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: genericProfile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+  expect(planRun.requiredProviders).toEqual([provider]);
+  expect(planRun.policy.status).toEqual("passed");
 });
 
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {

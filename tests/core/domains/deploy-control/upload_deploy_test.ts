@@ -11,6 +11,7 @@ import { expect, test } from "bun:test";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
+  EnqueueRun,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
   OpenTofuRunner,
@@ -183,7 +184,7 @@ function fakeProviderVault() {
   };
 }
 
-async function setup() {
+async function setup(options: { readonly enqueueRun?: EnqueueRun } = {}) {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   // seedInstallationModel creates the Space (space_test) we deploy into; its git
@@ -204,6 +205,7 @@ async function setup() {
     vault: fakeProviderVault() as never,
     now: sequenceNow(1),
     newId: deterministicIds(),
+    ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
   });
   await store.putConnection({
     id: "conn_upload_cf",
@@ -312,6 +314,65 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
     endpoint: { from: "url", type: "url", required: true },
     worker_name: { from: "worker_name", type: "string" },
   });
+});
+
+test("deployUpload returns a queued plan before upload compatibility inspection when a run queue is configured", async () => {
+  const enqueued: Parameters<EnqueueRun>[0][] = [];
+  const { store, runner, sources, installations, controller } = await setup({
+    enqueueRun: async (dispatch) => {
+      enqueued.push(dispatch);
+    },
+  });
+  const snapshot = await sources.recordUploadSnapshot({
+    spaceId: "space_test",
+    snapshotId: "snap_queued_upload",
+    archiveObjectKey: uploadArchiveObjectKey(
+      "space_test",
+      "snap_queued_upload",
+    ),
+    archiveDigest: UPLOAD_DIGEST,
+    archiveSizeBytes: 512,
+  });
+
+  const result = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "queued-uploaded-app",
+      environment: "preview",
+      snapshotId: snapshot.id,
+      providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
+    },
+  );
+
+  expect(result.created).toBe(true);
+  expect(result.run.type).toBe("plan");
+  expect(result.run.status).toBe("queued");
+  expect(enqueued).toEqual([
+    {
+      action: "plan",
+      runId: result.run.id,
+      spaceId: "space_test",
+    },
+  ]);
+  expect(runner.planJobs).toHaveLength(0);
+  let installation = await store.getInstallation(result.installation.id);
+  expect(installation?.compatibilityReportId).toBeUndefined();
+
+  const completed = await controller.runQueuedPlan(result.run.id);
+
+  expect(completed?.status).toBe("succeeded");
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.sourceArchive).toEqual({
+    objectKey: uploadArchiveObjectKey("space_test", "snap_queued_upload"),
+    digest: UPLOAD_DIGEST,
+  });
+  installation = await store.getInstallation(result.installation.id);
+  expect(installation?.compatibilityReportId).toBeDefined();
+  const persistedPlan = await store.getPlanRun(result.run.id);
+  expect(persistedPlan?.compatibilityReportId).toBe(
+    installation?.compatibilityReportId,
+  );
 });
 
 test("deployUpload marks a new upload Installation error when orchestration throws", async () => {

@@ -917,6 +917,11 @@ export interface CreateInstallationPlanInternal {
    */
   readonly sourceSnapshotId?: string;
   /**
+   * Internal upload-deploy fast path: defer Capsule compatibility inspection to
+   * the queued plan consumer. Not exposed on public plan routes.
+   */
+  readonly deferCompatibilityReport?: true;
+  /**
    * Marks the resulting plan as a §19 `drift_check` (Phase 8). Set only by
    * {@link OpenTofuDeploymentController.createInstallationDriftCheck}; threaded
    * onto the created PlanRun so it projects `type: "drift_check"`, never parks
@@ -1310,8 +1315,9 @@ export class OpenTofuDeploymentController {
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
     const allowNoProviders =
-      templatePlan !== undefined &&
-      templatePlan.template.policy.allowedProviders.length === 0;
+      (templatePlan !== undefined &&
+        templatePlan.template.policy.allowedProviders.length === 0) ||
+      (declaredProviders.length === 0 && profile.allowedProviders.includes("*"));
     const basePolicy = evaluatePolicy({
       profile,
       requiredProviders: declaredProviders,
@@ -1643,12 +1649,13 @@ export class OpenTofuDeploymentController {
       : installation.currentDeploymentId
         ? "update"
         : "create";
-    const compatibilityReport =
-      await this.#ensureInstallationCompatibilityReport(
-        installation,
-        source,
-        snapshot,
-      );
+    const compatibilityReport = internal.deferCompatibilityReport
+      ? undefined
+      : await this.#ensureInstallationCompatibilityReport(
+          installation,
+          source,
+          snapshot,
+        );
     const {
       request: planRequest,
       installTypePlan,
@@ -2117,6 +2124,8 @@ export class OpenTofuDeploymentController {
     const requiredProviders =
       compatibilityProviders.length > 0
         ? compatibilityProviders
+        : profile.allowedProviders.includes("*")
+          ? []
         : [...profile.allowedProviders];
     const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
       input.installation,
@@ -2902,7 +2911,7 @@ export class OpenTofuDeploymentController {
    * store.
    */
   async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
-    const planRun = await this.#store.getPlanRun(runId);
+    let planRun = await this.#store.getPlanRun(runId);
     if (!planRun) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -2915,6 +2924,12 @@ export class OpenTofuDeploymentController {
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     if (!this.#hasRunnerForProfile(profile)) return planRun;
+    try {
+      planRun = await this.#ensureQueuedPlanCompatibilityReport(planRun);
+    } catch (error) {
+      await this.#store.deletePlanRunInputs(runId);
+      return await this.#failPlanRun(planRun, undefined, error);
+    }
     // The sidecar is sealed at rest when a sensitive dependency value was
     // injected; #getPlanRunInputs unseals it transparently here so the plan runs
     // against the same inputs / generated root it was created with.
@@ -3057,6 +3072,97 @@ export class OpenTofuDeploymentController {
     if (status !== "running") return false;
     const last = heartbeatAt ?? 0;
     return this.#now() - last > RUN_HEARTBEAT_STALE_MS;
+  }
+
+  async #ensureQueuedPlanCompatibilityReport(
+    planRun: PlanRun,
+  ): Promise<PlanRun> {
+    if (
+      planRun.compatibilityReportId ||
+      !planRun.installationId ||
+      !planRun.sourceSnapshotId ||
+      !this.#sourcesService
+    ) {
+      return planRun;
+    }
+    const installation = await this.#requireInstallation(planRun.installationId);
+    const snapshot = await this.#store.getSourceSnapshot(
+      planRun.sourceSnapshotId,
+    );
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_snapshot_missing: plan run ${planRun.id} references ` +
+          `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+      );
+    }
+    const source = installation.sourceId
+      ? await this.#requireSourceForInstallation(installation)
+      : syntheticUploadSource(installation, snapshot);
+    const report = await this.#ensureInstallationCompatibilityReport(
+      installation,
+      source,
+      snapshot,
+    );
+    if (!report) return planRun;
+    await this.#refreshPlanRunInputsForCompatibilityReport(
+      planRun,
+      report,
+      snapshot,
+    );
+    const updated: PlanRun = {
+      ...planRun,
+      compatibilityReportId: report.id,
+      updatedAt: this.#now(),
+    };
+    await this.#store.putPlanRun(updated);
+    return updated;
+  }
+
+  async #requireSourceForInstallation(
+    installation: Installation,
+  ): Promise<Source> {
+    if (!installation.sourceId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `installation ${installation.id} has no Source`,
+      );
+    }
+    const source = await this.#store.getSource(installation.sourceId);
+    if (!source) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `source ${installation.sourceId} not found for installation ${installation.id}`,
+      );
+    }
+    return source;
+  }
+
+  async #refreshPlanRunInputsForCompatibilityReport(
+    planRun: PlanRun,
+    report: CapsuleCompatibilityReport,
+    snapshot: SourceSnapshot,
+  ): Promise<void> {
+    if (report.level !== "auto_capsulized") return;
+    const rawInputs = await this.#store.getPlanRunInputs(planRun.id);
+    if (!rawInputs) return;
+    const inputs = await this.#getPlanRunInputs(planRun.id);
+    if (!inputs?.generatedRoot) return;
+    const moduleFiles = await this.#normalizedModuleFilesForReport(
+      report,
+      snapshot,
+    );
+    if (!moduleFiles || moduleFiles.length === 0) return;
+    await this.#putPlanRunInputs(
+      {
+        ...inputs,
+        generatedRoot: {
+          ...inputs.generatedRoot,
+          moduleFiles,
+        },
+      },
+      rawInputs.sealed !== undefined,
+    );
   }
 
   /**
