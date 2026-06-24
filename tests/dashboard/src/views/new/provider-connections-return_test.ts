@@ -141,8 +141,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain("missingOwnKeyProviderRows");
     expect(newAppViewSource).not.toContain("operator" + "Missing");
     expect(newAppViewSource).not.toContain("error" + "OperatorManaged");
-    expect(en["new.providers.missingBody"]).toContain("provider access");
-    expect(ja["new.providers.missingBody"]).toContain("Provider アクセス");
+    expect(en["new.providers.missingBody"]).toContain("cloud connection");
+    expect(ja["new.providers.missingBody"]).toContain("クラウド接続");
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {
