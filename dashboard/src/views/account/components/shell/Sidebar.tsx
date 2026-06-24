@@ -1,6 +1,6 @@
 /**
  * Primary navigation: a persistent left rail. It leads with the everyday
- * surfaces (home launcher / cloud connections / settings) so management is always
+ * surfaces (home launcher / provider connections / settings) so management is always
  * one click away — the launcher home stays app-like, the rail keeps wayfinding
  * (where am I, what else is there) that the chromeless shell had lost.
  */
