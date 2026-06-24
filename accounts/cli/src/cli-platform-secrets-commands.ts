@@ -142,6 +142,10 @@ const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
     secretClass: "manual_external",
   },
   {
+    name: "TAKOSUMI_ACCOUNTS_CLIENT_SECRET",
+    secretClass: "manual_external",
+  },
+  {
     name: "TAKOSUMI_METRICS_SCRAPE_TOKEN",
     secretClass: "manual_external",
   },
@@ -272,6 +276,10 @@ async function platformSecretManifest(
     markRequiredManualSecret(entries, name);
     known.add(name);
   }
+  for (const name of await configuredCloudExtensionClientSecretNames(options)) {
+    markRequiredManualSecret(entries, name);
+    known.add(name);
+  }
   for (const name of await configuredStripeBillingSecretNames(options)) {
     markRequiredManualSecret(entries, name);
     known.add(name);
@@ -322,6 +330,14 @@ async function configuredUpstreamOAuthClientSecretNames(
     .sort();
 }
 
+async function configuredCloudExtensionClientSecretNames(
+  options: Record<string, string | boolean>,
+): Promise<readonly string[]> {
+  const configText = await readWranglerConfigText(options);
+  if (!hasConfiguredCloudExtensionClient({ configText })) return [];
+  return ["TAKOSUMI_ACCOUNTS_CLIENT_SECRET"];
+}
+
 async function configuredStripeBillingSecretNames(
   options: Record<string, string | boolean>,
 ): Promise<readonly string[]> {
@@ -331,6 +347,17 @@ async function configuredStripeBillingSecretNames(
     "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
     "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
   ];
+}
+
+function hasConfiguredCloudExtensionClient({
+  configText,
+}: {
+  readonly configText: string | undefined;
+}): boolean {
+  return [
+    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+    "TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION",
+  ].some((name) => configuredStringValue(name, configText) !== undefined);
 }
 
 function hasConfiguredHostedBilling({

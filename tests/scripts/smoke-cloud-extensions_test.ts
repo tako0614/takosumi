@@ -15,6 +15,7 @@ const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   requireCompatMaterialization: false,
   requireProviderE2E: false,
   requireAiUpstreamProfile: false,
+  requireAiServiceGraphToken: false,
 };
 
 const PROVIDER_E2E_RESOURCES = [
@@ -251,6 +252,132 @@ test("cloud extension smoke uses an embeddings model declared by AI Gateway stat
   ).toMatchObject({
     requestedModel: "deepseek/text-embedding-v3",
   });
+});
+
+test("cloud extension smoke proves AI Gateway Service Graph runtime token flow", async () => {
+  const runtimeAuthHeaders: string[] = [];
+  const ownerAuthHeaders: string[] = [];
+  const rotateBodies: unknown[] = [];
+  const runtimeToken = "taksrv_runtime_secret_value";
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiServiceGraphToken: true,
+      aiServiceInstallationId: "inst_ai_runtime",
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      const auth = authorization(init);
+      if (parsed.pathname.includes("/v1/installation-projections/")) {
+        if (auth) ownerAuthHeaders.push(auth);
+        if (parsed.pathname.endsWith("/services")) {
+          return json({
+            installation_id: "inst_ai_runtime",
+            services: [
+              {
+                id: "takosumi.ai.gateway",
+                status: "ready",
+                endpoint: "https://app.takosumi.test/gateway/ai/v1",
+                rotate_token_url:
+                  "/v1/installation-projections/inst_ai_runtime/services/takosumi.ai.gateway/rotate-token",
+              },
+            ],
+          });
+        }
+        if (parsed.pathname.endsWith("/takosumi.ai.gateway/rotate-token")) {
+          rotateBodies.push(JSON.parse(requestBodyText(init) || "{}"));
+          return json({
+            token: runtimeToken,
+            token_type: "Bearer",
+            expires_at: "2026-06-24T00:15:00.000Z",
+            service: { id: "takosumi.ai.gateway", status: "ready" },
+          });
+        }
+      }
+      if (auth === `Bearer ${runtimeToken}`) {
+        runtimeAuthHeaders.push(auth);
+        if (parsed.pathname === "/gateway/ai/v1/__takosumi/status") {
+          return aiGatewayStatus("configured_upstreams", {
+            embeddingModel: "deepseek/text-embedding-v3",
+          });
+        }
+        if (parsed.pathname === "/gateway/ai/v1/models") {
+          return json({
+            object: "list",
+            data: [{ id: "takosumi/default", object: "model" }],
+          });
+        }
+        if (parsed.pathname === "/gateway/ai/v1/chat/completions") {
+          return json({ choices: [{ index: 0 }] });
+        }
+        if (parsed.pathname === "/gateway/ai/v1/embeddings") {
+          return json({ data: [{ embedding: [0] }] });
+        }
+      }
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        auth !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+  );
+
+  expect(result.status).toBe("passed");
+  expect(result.gaReady).toBe(true);
+  expect(result.gaps).toEqual([]);
+  expect(ownerAuthHeaders).toContain(`Bearer ${BASE_OPTIONS.sessionToken}`);
+  expect(runtimeAuthHeaders.length).toBeGreaterThanOrEqual(4);
+  expect(rotateBodies).toEqual([
+    {
+      scopes: ["ai.models.read", "ai.chat", "ai.embeddings"],
+      ttlSeconds: 900,
+    },
+  ]);
+  expect(
+    result.checks.find((check) => check.name === "aiServiceGraphToken")
+      ?.summary,
+  ).toMatchObject({
+    installationId: "inst_ai_runtime",
+    tokenMinted: true,
+    serviceStatus: "ready",
+    modelIds: ["takosumi/default"],
+    chatChoiceCount: 1,
+    embeddingCount: 1,
+    requestedEmbeddingsModel: "deepseek/text-embedding-v3",
+  });
+  expect(JSON.stringify(result)).not.toContain(runtimeToken);
+  expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
+});
+
+test("cloud extension smoke reports missing AI Service Graph installation id as a GA gap", async () => {
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiServiceGraphToken: true,
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain(
+    "ai_gateway_service_graph_installation_id_required",
+  );
 });
 
 test("cloud extension smoke reports provider workers script E2E as a GA gap", async () => {
