@@ -72,11 +72,17 @@ function recordingRunner(options?: {
     },
     apply: (job) => {
       applyJobs.push(job);
+      const hasOutputsOption =
+        options !== undefined &&
+        Object.prototype.hasOwnProperty.call(options, "outputs");
+      const outputs = hasOutputsOption
+        ? options.outputs
+        : {
+            bucket_name: { sensitive: false, value: "my-bucket" },
+            location: { sensitive: false, value: "weur" },
+          };
       return Promise.resolve({
-        outputs: (options?.outputs ?? {
-          bucket_name: { sensitive: false, value: "my-bucket" },
-          location: { sensitive: false, value: "weur" },
-        }) as never,
+        ...(outputs ? { outputs: outputs as never } : {}),
       });
     },
     destroy: () => Promise.resolve({}),
@@ -466,7 +472,69 @@ test("output allowlist projects only template public outputs after the sensitive
       // Declared public name but sensitive: must be dropped.
     },
   });
-  const { controller, installationId } = await seededTemplateController({
+  const { controller, store, installationId } = await seededTemplateController({
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+    runner,
+    vault: fakeVault() as never,
+  });
+
+  const { planRun } = await controller.createPlanRun({
+    spaceId: "space_test",
+    installationId,
+    source: SOURCE,
+    templateId: "cloudflare-r2-storage",
+    templateVersion: "1.0.0",
+    inputs: { bucketName: "my-bucket", accountId: "a" },
+  });
+  const rootOutputs = runner.planJobs[0]!.generatedRoot?.files["outputs.tf"];
+  expect(rootOutputs).toContain('output "bucket_name"');
+  expect(rootOutputs).toContain("value = module.app.bucket_name");
+  expect(rootOutputs).toContain('output "location"');
+  expect(rootOutputs).toContain("value = module.app.location");
+  expect(rootOutputs).not.toContain("internal_arn");
+  const sidecar = await store.getPlanRunInputs(planRun.id);
+  expect(sidecar?.generatedRoot?.files["outputs.tf"]).toEqual(rootOutputs);
+
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(runner.applyJobs[0]!.generatedRoot?.files["outputs.tf"]).toEqual(
+    rootOutputs,
+  );
+
+  // The §21 Deployment records the projected public outputs as `outputsPublic`
+  // (name -> value); the ApplyRun keeps the full projected DeploymentOutput[]
+  // (both filtered through the sensitive/redaction step). The template output
+  // allowlist must leave only the two declared public names.
+  expect(applied.applyRun.outputs).toEqual([
+    {
+      name: "bucket_name",
+      kind: "string",
+      value: "my-bucket",
+      sensitive: false,
+    },
+    { name: "location", kind: "string", value: "weur", sensitive: false },
+  ]);
+  expect(applied.deployment?.outputsPublic).toEqual({
+    bucket_name: "my-bucket",
+    location: "weur",
+  });
+});
+
+test("template apply fails closed when declared public outputs are missing", async () => {
+  const runner = recordingRunner({
+    planResourceChanges: [
+      {
+        address: "module.app.cloudflare_r2_bucket.this",
+        type: "cloudflare_r2_bucket",
+        actions: ["create"],
+      },
+    ],
+    outputs: {},
+  });
+  const { controller, store, installationId } = await seededTemplateController({
     now: sequenceNow(1),
     newId: deterministicIds(),
     runner,
@@ -486,16 +554,13 @@ test("output allowlist projects only template public outputs after the sensitive
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  // The §21 Deployment records the projected public outputs as `outputsPublic`
-  // (name -> value); the ApplyRun keeps the full projected DeploymentOutput[]
-  // (both filtered through the sensitive/redaction step). The template output
-  // allowlist must leave only the two declared public names.
-  const names = (applied.applyRun.outputs ?? []).map((o) => o.name).sort();
-  expect(names).toEqual(["bucket_name", "location"]);
-  expect(Object.keys(applied.deployment?.outputsPublic ?? {}).sort()).toEqual([
-    "bucket_name",
-    "location",
-  ]);
+  expect(applied.applyRun.status).toBe("failed");
+  expect(applied.deployment).toBeUndefined();
+  expect(JSON.stringify(applied.applyRun.diagnostics ?? [])).toContain(
+    "output bucket_name is missing",
+  );
+  const persistedPlan = await store.getPlanRun(planRun.id);
+  expect(persistedPlan?.appliedApplyRunId).toBeUndefined();
 });
 
 test("templateVersion/inputs without templateId is rejected", async () => {

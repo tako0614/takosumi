@@ -18,7 +18,10 @@ import type {
   RunnerStateLockEvidence,
   TemplateDefinition,
 } from "@takosumi/internal/deploy-control-api";
-import type { OutputAllowlistEntry } from "takosumi-contract/installations";
+import type {
+  OutputAllowlistEntry,
+  OutputValueType,
+} from "takosumi-contract/installations";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
   containsSecretLikeString,
@@ -58,15 +61,40 @@ export function projectTemplatePublicOutputs(
   template: TemplateDefinition,
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
 ): readonly DeploymentOutput[] {
-  if (!outputs) return [];
+  if (!outputs) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `template ${template.id}@${template.version} produced no OpenTofu outputs`,
+    );
+  }
   const byName = outputValuesByName(outputs);
   const result: DeploymentOutput[] = [];
   for (const [publicName, spec] of Object.entries(template.outputs.public)) {
     const entry = byName.get(publicName);
-    if (!entry || entry.sensitive) continue;
+    if (!entry) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `template ${template.id}@${template.version} output ${publicName} is missing`,
+      );
+    }
+    if (entry.sensitive) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `template ${template.id}@${template.version} output ${publicName} is sensitive and cannot be published`,
+      );
+    }
     const kind = templateOutputKind(spec.type);
+    if (!templateOutputValueMatchesType(entry.value, spec.type)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `template ${template.id}@${template.version} output ${publicName} does not match declared type ${spec.type}`,
+      );
+    }
     if (!isPublishableDeploymentOutputValue(publicName, kind, entry.value)) {
-      continue;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `template ${template.id}@${template.version} output ${publicName} cannot be published`,
+      );
     }
     result.push({
       name: publicName,
@@ -219,6 +247,24 @@ function outputValueMatchesType(
     case "json":
       return true;
   }
+}
+
+function templateOutputValueMatchesType(
+  value: JsonValue,
+  type: string,
+): boolean {
+  return isOutputValueType(type) ? outputValueMatchesType(value, type) : true;
+}
+
+function isOutputValueType(type: string): type is OutputValueType {
+  return (
+    type === "string" ||
+    type === "url" ||
+    type === "hostname" ||
+    type === "number" ||
+    type === "boolean" ||
+    type === "json"
+  );
 }
 
 export function normalizeDeploymentOutputs(

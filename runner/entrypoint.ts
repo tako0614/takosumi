@@ -2675,14 +2675,37 @@ async function readOpenTofuOutputsIn(
     cwd: moduleDir,
     context,
   });
-  if (result.exitCode !== 0 || result.stdout.trim().length === 0) {
+  if (result.exitCode === 0 && result.stdout.trim().length > 0) {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).length > 0
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+  return await readOpenTofuOutputsFromStateFile(moduleDir);
+}
+
+async function readOpenTofuOutputsFromStateFile(
+  moduleDir: string,
+): Promise<Record<string, unknown> | undefined> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      await readFile(join(moduleDir, "terraform.tfstate"), "utf8"),
+    ) as unknown;
+  } catch {
     return undefined;
   }
-  const parsed = JSON.parse(result.stdout) as unknown;
-  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
+  if (!isRecord(parsed)) return undefined;
+  const outputs = parsed.outputs;
+  if (!isRecord(outputs) || Object.keys(outputs).length === 0) {
+    return undefined;
   }
-  return undefined;
+  return outputs;
 }
 
 async function runCommand(
