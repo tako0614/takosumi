@@ -150,7 +150,7 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(providersBody.providers).toContainEqual(
     expect.objectContaining({
       id: "cloudflare",
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
     }),
   );
@@ -174,14 +174,14 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
     expect(providersBody.providers).toContainEqual(
       expect.objectContaining({
         id,
-        ownershipOptions: ["own_key"],
+        ownershipOptions: ["env"],
       }),
     );
   }
   expect(providersBody.providers).toContainEqual(
     expect.objectContaining({
       id: "gcp",
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
     }),
   );
 

@@ -1529,7 +1529,7 @@ test("generic-env provider policy also passes with a Space generic-env connectio
     now: sequenceNow(42),
     newId: deterministicIds(),
     runner: fakeRunner(),
-    ownKeyProviderRunner: customRunner,
+    providerEnvRunner: customRunner,
     runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
   });

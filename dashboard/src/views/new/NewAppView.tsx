@@ -1175,7 +1175,7 @@ function Inner() {
   ): readonly ProviderCredentialOwnership[] =>
     provider.ownershipOptions.length > 0
       ? provider.ownershipOptions
-      : ["own_key"];
+      : ["env"];
 
   const rowsFromCompatibility = (
     result: CapsuleCompatibilityResult,

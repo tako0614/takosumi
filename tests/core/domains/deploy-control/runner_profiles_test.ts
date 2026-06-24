@@ -4,6 +4,7 @@ import {
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
 } from "../../../../core/domains/deploy-control/mod.ts";
+import { evaluatePolicy } from "../../../../core/domains/deploy-control/policy.ts";
 
 // resolveEnabledRunnerProfiles is the operator-curated provider surface: it maps
 // the CSV TAKOSUMI_ENABLED_RUNNER_PROFILES knob onto the default seeds, enabling
@@ -85,6 +86,36 @@ test("generic OpenTofu provider profile can be explicitly enabled", () => {
   expect(
     enabled[0]?.labels?.["takosumi.com/profile-enabled"],
   ).toEqual("true");
+});
+
+test("Cloud GA surface admits arbitrary providers only through the generic env profile", () => {
+  const enabled = resolveEnabledRunnerProfiles(
+    SEEDS,
+    "cloudflare-default,generic-opentofu-provider",
+  );
+  const byId = new Map(enabled.map((profile) => [profile.id, profile]));
+  const arbitraryProviders = [
+    "registry.opentofu.org/vercel/vercel",
+    "registry.opentofu.org/okta/okta",
+  ];
+
+  const cloudflareDecision = evaluatePolicy({
+    profile: byId.get("cloudflare-default")!,
+    requiredProviders: arbitraryProviders,
+    checkedAt: 123,
+  });
+  expect(cloudflareDecision.status).toBe("blocked");
+  expect(cloudflareDecision.reasons.join("\n")).toContain(
+    "provider registry.opentofu.org/vercel/vercel is not allowed",
+  );
+
+  const genericDecision = evaluatePolicy({
+    profile: byId.get("generic-opentofu-provider")!,
+    requiredProviders: arbitraryProviders,
+    checkedAt: 123,
+  });
+  expect(genericDecision.status).toBe("passed");
+  expect(genericDecision.reasons).toEqual([]);
 });
 
 

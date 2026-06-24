@@ -983,7 +983,7 @@ test("Provider Catalog store: entries are symmetric", async () => {
       displayName: "Cloudflare",
       recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
       helpers: ["cloudflare_api_token"],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: ["cloudflare_workers_script"],
       allowedDataSources: [],
       policyPackId: "cloudflare-default",

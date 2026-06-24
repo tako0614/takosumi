@@ -790,7 +790,26 @@ export type ProviderConnectionStatus =
   | "needs_setup"
   | "expired"
   | "blocked";
-export type ProviderCredentialOwnership = "own_key";
+export type ProviderCredentialOwnership = "env";
+
+function normalizeProviderCredentialOwnership(
+  value: unknown,
+): ProviderCredentialOwnership | undefined {
+  if (value === "env" || value === "own_key") return "env";
+  return undefined;
+}
+
+function normalizeProviderCredentialOwnershipOptions(
+  values: readonly unknown[] | undefined,
+): readonly ProviderCredentialOwnership[] {
+  const normalized: ProviderCredentialOwnership[] = [];
+  for (const value of values ?? []) {
+    const ownership = normalizeProviderCredentialOwnership(value);
+    if (!ownership || normalized.includes(ownership)) continue;
+    normalized.push(ownership);
+  }
+  return normalized;
+}
 
 export interface ProviderConnection {
   readonly id: string;
@@ -1282,7 +1301,12 @@ export async function checkCapsuleCompatibility(input: {
         : {}),
       aliases: provider.aliases ?? [],
       allowed: provider.allowed ?? true,
-      ownershipOptions: provider.ownershipOptions ?? ["own_key"],
+      ownershipOptions: (() => {
+        const ownershipOptions = normalizeProviderCredentialOwnershipOptions(
+          provider.ownershipOptions,
+        );
+        return ownershipOptions.length > 0 ? ownershipOptions : ["env"];
+      })(),
     }));
   const resources = (body.report.resources ?? [])
     .filter((resource) => resource.type !== undefined)

@@ -873,7 +873,7 @@ function fakeOperations(
             displayName: "Cloudflare",
             recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
             helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-            ownershipOptions: ["own_key"],
+            ownershipOptions: ["env"],
             allowedResources: ["cloudflare_workers_script"],
             allowedDataSources: [],
             policyPackId: "policy_cloudflare",
@@ -2330,8 +2330,8 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
     "updatedAt",
   ]);
   expect(body.providerConnections.map((item) => item.ownership)).toEqual([
-    "own_key",
-    "own_key",
+    "env",
+    "env",
   ]);
   expect(String(body.providerConnections[0]?.id).startsWith("pcn_")).toEqual(
     true,
@@ -2837,7 +2837,7 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   };
   const resolution = body.run.providerResolutions?.[0];
   expect(resolution?.status).toEqual("resolved_provider_connection");
-  expect(resolution?.ownership).toEqual("own_key");
+  expect(resolution?.ownership).toEqual("env");
   expect(resolution?.connectionId?.startsWith("pcn_")).toEqual(true);
   expect(resolution?.evidence?.kind).toEqual("provider_connection");
   expect(resolution?.evidence?.connectionId).toEqual(resolution?.connectionId);
@@ -2925,9 +2925,9 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
       }[];
     };
   };
-  expect(body.run.providerResolutions?.[0]?.ownership).toEqual("own_key");
+  expect(body.run.providerResolutions?.[0]?.ownership).toEqual("env");
   expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual(
-    "own_key",
+    "env",
   );
 });
 

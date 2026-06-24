@@ -105,7 +105,7 @@ export async function createWorkerServiceApp(
     ),
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
-    ownKeyProviderRunner: opentofuRunner,
+    providerEnvRunner: opentofuRunner,
     secretCrypto,
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this

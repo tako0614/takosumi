@@ -12,6 +12,10 @@ import type {
 } from "../../contract/provider-envs.ts";
 import type { ProviderCatalogEntry } from "../../contract/providers.ts";
 import {
+  normalizeProviderCredentialOwnership,
+  normalizeProviderCredentialOwnershipOptions,
+} from "../../contract/connections.ts";
+import {
   isProviderDeliveryMode,
   isProviderResolutionStatus,
   PROVIDER_DELIVERY_MODES,
@@ -227,7 +231,7 @@ test("internal provider resolver binding shape uses concrete env ids", () => {
     displayName: "Cloudflare",
     recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
     helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-    ownershipOptions: ["own_key"],
+    ownershipOptions: ["env"],
     allowedResources: ["cloudflare_workers_script"],
     allowedDataSources: [],
     policyPackId: "cloudflare-default",
@@ -240,7 +244,7 @@ test("internal provider resolver binding shape uses concrete env ids", () => {
   ];
   expect(binding.envId).toBe("penv_space_cf");
   expect(providerEnv.materialization).toBe("secret");
-  expect(catalogEntry.ownershipOptions).toEqual(["own_key"]);
+  expect(catalogEntry.ownershipOptions).toEqual(["env"]);
   expect(bindings).toHaveLength(2);
 });
 
@@ -271,12 +275,12 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
     requirement,
     status: "resolved_provider_connection",
     connectionId: "conn_cf_main",
-    ownership: "own_key",
+    ownership: "env",
     evidence: {
       kind: "provider_connection",
       provider: "cloudflare",
       connectionId: "conn_cf_main",
-      ownership: "own_key",
+      ownership: "env",
       requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     },
   };
@@ -319,8 +323,21 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
   expect(isProviderResolutionStatus(resolution.status)).toBe(true);
   expect(runEnvironment.providerResolutions[0]?.materialization).toBe("secret");
   expect(runEnvironment.providerResolutions[0]?.envId).toBe("penv_cf_secret");
-  expect(publicResolution.ownership).toBe("own_key");
+  expect(publicResolution.ownership).toBe("env");
   expect(runtimeGrant.serviceBindingId).toBe("sb_1");
+});
+
+test("Provider credential ownership normalizes legacy own_key to env", () => {
+  expect(normalizeProviderCredentialOwnership("env")).toBe("env");
+  expect(normalizeProviderCredentialOwnership("own_key")).toBe("env");
+  expect(normalizeProviderCredentialOwnership("gateway")).toBeUndefined();
+  expect(
+    normalizeProviderCredentialOwnershipOptions([
+      "own_key",
+      "env",
+      "gateway",
+    ]),
+  ).toEqual(["env"]);
 });
 
 test("Connection expiry shape", () => {

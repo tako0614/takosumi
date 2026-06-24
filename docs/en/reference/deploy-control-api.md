@@ -104,6 +104,7 @@ The OSS API must not expose:
 
 ```text
 /compat/cloudflare/client/v4
+/gateway/ai/v1
 provider-compatible Gateway endpoint routes
 official managed resource backend controls
 managed edge/storage/container resource APIs
@@ -111,3 +112,9 @@ official billing/quota/usage endpoints
 ```
 
 Those belong to closed Takosumi Cloud.
+
+The current Cloud compatibility API scope is Cloudflare Compatibility Gateway
+and the OpenAI-compatible AI Gateway only. Other providers stay on the normal
+OpenTofu/Terraform path with ProviderConnection / CredentialRecipe /
+ProviderBinding env-file injection, including generic-env Provider Connections
+for providers without a guided recipe.

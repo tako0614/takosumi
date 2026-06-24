@@ -328,7 +328,7 @@ test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes
   expect(payload.connection.values).toBeUndefined();
 });
 
-test("POST /internal/v1/connections/generic-env-provider registers an own-key Provider Connection", async () => {
+test("POST /internal/v1/connections/generic-env-provider registers a secret-backed Provider Connection", async () => {
   const app = await makeApp();
   const response = await app.request(GENERIC_ENV_PROVIDER_PATH, {
     method: "POST",

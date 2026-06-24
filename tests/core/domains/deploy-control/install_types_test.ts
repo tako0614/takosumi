@@ -820,7 +820,7 @@ test("provider credential policy can fail closed on static non-ttl provider secr
   ]);
 });
 
-test("static own-key provider secrets remain allowed unless temporary credentials are explicitly required", async () => {
+test("static ProviderConnection secrets remain allowed unless temporary credentials are explicitly required", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const vault = new StaticSecretConnectionVault({
     store,

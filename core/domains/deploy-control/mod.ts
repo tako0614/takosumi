@@ -621,7 +621,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
       displayName: "Cloudflare",
       recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
       helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: [],
       allowedDataSources: [],
       policyPackId: "cloudflare-default",
@@ -641,7 +641,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
         "AWS_REGION",
       ],
       helpers: ["aws_assume_role", "generic_env"],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: ["aws_s3_bucket", "aws_s3_bucket_public_access_block"],
       allowedDataSources: [],
       policyPackId: "aws-basic",
@@ -663,7 +663,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
         "gcp_service_account_impersonation",
         "generic_env",
       ],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: [
         "google_storage_bucket",
         "google_cloud_run_v2_service",
@@ -679,7 +679,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
       displayName: "GitHub",
       recommendedEnvNames: ["GITHUB_TOKEN"],
       helpers: ["generic_env"],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: [],
       allowedDataSources: [],
       policyPackId: "github-basic",
@@ -692,7 +692,7 @@ function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
       displayName: "Kubernetes",
       recommendedEnvNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN"],
       helpers: ["generic_env"],
-      ownershipOptions: ["own_key"],
+      ownershipOptions: ["env"],
       allowedResources: [],
       allowedDataSources: [],
       policyPackId: "kubernetes-basic",
@@ -723,6 +723,8 @@ export interface DependencyValueSealer {
 export interface OpenTofuDeploymentControllerDependencies {
   readonly store?: OpenTofuDeploymentStore;
   readonly runner?: OpenTofuRunner;
+  readonly providerEnvRunner?: OpenTofuRunner;
+  /** @deprecated Use providerEnvRunner. */
   readonly ownKeyProviderRunner?: OpenTofuRunner;
   /**
    * Cloud-only compatibility seam: permits Space-scoped ProviderEnv rows to be
@@ -980,7 +982,7 @@ interface TerminalRunPersistResult<R extends PlanRun | ApplyRun> {
 export class OpenTofuDeploymentController {
   readonly #store: OpenTofuDeploymentStore;
   readonly #runner?: OpenTofuRunner;
-  readonly #ownKeyProviderRunner?: OpenTofuRunner;
+  readonly #providerEnvRunner?: OpenTofuRunner;
   readonly #vault?: ConnectionVault;
   readonly #sourcesService?: SourcesService;
   readonly #defaultRunnerProfileId: string;
@@ -1020,7 +1022,8 @@ export class OpenTofuDeploymentController {
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
     this.#store = dependencies.store ?? new InMemoryOpenTofuDeploymentStore();
     this.#runner = dependencies.runner;
-    this.#ownKeyProviderRunner = dependencies.ownKeyProviderRunner;
+    this.#providerEnvRunner =
+      dependencies.providerEnvRunner ?? dependencies.ownKeyProviderRunner;
     this.#vault = dependencies.vault;
     this.#sourcesService = dependencies.sourcesService;
     this.#sources = new SourceManagement(dependencies.sourcesService);
@@ -1319,7 +1322,7 @@ export class OpenTofuDeploymentController {
       await this.#evaluateGenericEnvProviderExecutionPolicy({
         profile,
         installation,
-        hasOwnKeyProviderRunner: this.#ownKeyProviderRunner !== undefined,
+        hasProviderEnvRunner: this.#providerEnvRunner !== undefined,
       });
     const policyReasons = [
       ...basePolicy.reasons,
@@ -1890,7 +1893,7 @@ export class OpenTofuDeploymentController {
   async #evaluateGenericEnvProviderExecutionPolicy(input: {
     readonly profile: RunnerProfile;
     readonly installation?: Installation;
-    readonly hasOwnKeyProviderRunner?: boolean;
+    readonly hasProviderEnvRunner?: boolean;
   }): Promise<{ readonly reasons: readonly string[] }> {
     if (!input.installation) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
@@ -1911,7 +1914,7 @@ export class OpenTofuDeploymentController {
 
     const reasons: string[] = [];
     void input.profile;
-    void input.hasOwnKeyProviderRunner;
+    void input.hasProviderEnvRunner;
     for (const connection of genericEnvConnections) {
       if (connection.scope !== "space") {
         reasons.push(
@@ -1928,13 +1931,13 @@ export class OpenTofuDeploymentController {
 
   #hasRunnerForProfile(profile: RunnerProfile): boolean {
     return this.#isCustomRunnerProfile(profile)
-      ? this.#ownKeyProviderRunner !== undefined
+      ? this.#providerEnvRunner !== undefined
       : this.#runner !== undefined;
   }
 
   #runnerForProfile(profile: RunnerProfile): OpenTofuRunner {
     const runner = this.#isCustomRunnerProfile(profile)
-      ? this.#ownKeyProviderRunner
+      ? this.#providerEnvRunner
       : this.#runner;
     if (!runner) {
       throw new OpenTofuControllerError(

@@ -108,7 +108,7 @@ Provider Connection の env/file injection で動かします。
 
 ```text
 cloudflare/cloudflare provider
-  -> base_url = https://api.takosumi.com/compat/cloudflare/client/v4
+  -> base_url = https://app.takosumi.com/compat/cloudflare/client/v4
   -> Takosumi Cloudflare Compatibility Gateway
   -> Takosumi Managed Edge internal API
 ```

@@ -2355,7 +2355,7 @@ alter table takosumi_runs
       version: 45,
       domain: "deploy",
       description:
-        "Drop the never-read provider-template / retired provider material ledger tables created by the v43 migration. No live read path queries these tables: provider templates persist in takosumi_provider_templates and provider material persists as Provider Env records behind own-key Provider Connections. Idempotent: each drop is a no-op on databases that never created the retired tables.",
+        "Drop the never-read provider-template / retired provider material ledger tables created by the v43 migration. No live read path queries these tables: provider templates persist in takosumi_provider_templates and provider material persists as Provider Env records behind explicit Provider Connections. Idempotent: each drop is a no-op on databases that never created the retired tables.",
       sql: `drop index if exists takosumi_provider_env_pins_pack_idx;
 drop index if exists takosumi_provider_env_pins_provider_source_idx;
 drop index if exists takosumi_provider_env_pins_space_idx;
