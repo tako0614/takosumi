@@ -8414,6 +8414,110 @@ test("accounts handler records AppInstallation materialize operation failures", 
   ]);
 });
 
+test("accounts handler can close materialize operation before cutover without failing installation", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({ store });
+
+  await handler(
+    new Request("https://accounts.example.test/v1/installation-projections", {
+      method: "POST",
+      body: JSON.stringify({
+        installationId: "inst_materialize_cancel",
+        accountId: "acct_materialize_cancel",
+        spaceId: "space_materialize_cancel",
+        appId: "example.materialize-cancel",
+        source: {
+          gitUrl: "https://github.com/example/materialize-cancel",
+          ref: "v1.0.0",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          planDigest: "sha256:app",
+          artifactDigest: "sha256:compiled",
+        },
+        mode: "shared-cell",
+        status: "ready",
+        createdBySubject: "tsub_materialize_cancel",
+      }),
+    }),
+  );
+
+  const materializeResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/materialize",
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": "idem-materialize-cancel" },
+        body: JSON.stringify({
+          mode: "dedicated",
+          region: "tokyo",
+          confirm: {
+            costAck: true,
+            permissionDigest: await testMaterializePermissionDigest({
+              installationId: "inst_materialize_cancel",
+              region: "tokyo",
+            }),
+          },
+        }),
+      },
+    ),
+  );
+  expect(materializeResponse.status).toEqual(202);
+  const operationId = (await materializeResponse.json()).operationId;
+
+  const cancelResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/status",
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "ready",
+          operation: "materialize",
+          operationId,
+          reason: "materialize canceled before cutover",
+        }),
+      },
+    ),
+  );
+  expect(cancelResponse.status).toEqual(200);
+  const cancelBody = await cancelResponse.json();
+  expect(cancelBody.installation.status).toEqual("ready");
+  expect(cancelBody.installation.mode).toEqual("shared-cell");
+  expect(cancelBody.event.type).toEqual("installation.materialize-failed");
+  expect(cancelBody.event.payload.reason).toEqual(
+    "materialize canceled before cutover",
+  );
+  expect(store.findAppInstallation("inst_materialize_cancel")?.status).toEqual(
+    "ready",
+  );
+  expect(store.findAppInstallation("inst_materialize_cancel")?.mode).toEqual(
+    "shared-cell",
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_materialize_cancel")
+      .map((event) => event.eventType),
+  ).toEqual([
+    "installation.created",
+    "installation.materialize-requested",
+    "installation.materialize-failed",
+  ]);
+
+  const repeatedCancelResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/status",
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "ready",
+          operation: "materialize",
+          operationId,
+          reason: "materialize canceled before cutover",
+        }),
+      },
+    ),
+  );
+  expect(repeatedCancelResponse.status).toEqual(409);
+});
+
 test("accounts handler runs configured materialize worker and swaps runtime binding", async () => {
   const store = new InMemoryAccountsStore();
   const captured: {

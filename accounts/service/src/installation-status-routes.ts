@@ -236,35 +236,35 @@ export async function handleUpdateAppInstallationStatus(input: {
         now: updated.updatedAt,
       });
     }
-    if (updated.status === "failed" && failedOperation) {
-      const fallback =
+  }
+  if (failedOperation) {
+    const fallback =
+      failedOperation === "materialize"
+        ? "materialize worker failed"
+        : "export failed";
+    const failureReason = publicInstallationOperationErrorMessage(
+      body.reason,
+      fallback,
+    );
+    const failureError = publicInstallationOperationErrorMessage(
+      body.error ?? body.reason,
+      fallback,
+    );
+    failedOperationEvent = await appendLedgerEvent(input.store, {
+      installationId: input.installationId,
+      eventType:
         failedOperation === "materialize"
-          ? "materialize worker failed"
-          : "export failed";
-      const failureReason = publicInstallationOperationErrorMessage(
-        body.reason,
-        fallback,
-      );
-      const failureError = publicInstallationOperationErrorMessage(
-        body.error ?? body.reason,
-        fallback,
-      );
-      failedOperationEvent = await appendLedgerEvent(input.store, {
-        installationId: input.installationId,
-        eventType:
-          failedOperation === "materialize"
-            ? installationMaterializeFailedEvent
-            : installationExportFailedEvent,
-        payload: {
-          operationId: stringValue(body.operationId),
-          from: installation.status,
-          to: updated.status,
-          reason: failureReason,
-          error: failureError,
-        },
-        now: updated.updatedAt,
-      });
-    }
+          ? installationMaterializeFailedEvent
+          : installationExportFailedEvent,
+      payload: {
+        operationId: stringValue(body.operationId),
+        from: installation.status,
+        to: updated.status,
+        reason: failureReason,
+        error: failureError,
+      },
+      now: updated.status === installation.status ? now : updated.updatedAt,
+    });
   }
   if (requestedMode && requestedMode !== installation.mode) {
     materializeSucceededEvent = await appendLedgerEvent(input.store, {
