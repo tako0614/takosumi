@@ -17,6 +17,14 @@ const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   requireAiUpstreamProfile: false,
 };
 
+const PROVIDER_E2E_RESOURCES = [
+  "cloudflare_r2_bucket",
+  "cloudflare_workers_kv_namespace",
+  "cloudflare_d1_database",
+  "cloudflare_workers_script",
+  "cloudflare_workers_route",
+] as const;
+
 test("cloud extension smoke records redacted pass with a materialization gap", async () => {
   const seenAuth: string[] = [];
   const result = await runCloudExtensionSmoke(
@@ -75,24 +83,8 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
       status: 200,
       ok: true,
       summary: {
-        resources: [
-          {
-            resource: "cloudflare_r2_bucket",
-            ok: true,
-            completedSteps: ["init", "plan", "apply", "destroy"],
-            summary: {},
-          },
-          {
-            resource: "cloudflare_workers_script",
-            ok: true,
-            completedSteps: ["init", "plan", "apply", "destroy"],
-            summary: {},
-          },
-        ],
-        completedResources: [
-          "cloudflare_r2_bucket",
-          "cloudflare_workers_script",
-        ],
+        resources: successfulProviderResources(),
+        completedResources: [...PROVIDER_E2E_RESOURCES],
         failedResources: [],
       },
     }),
@@ -180,26 +172,12 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
       status: 200,
       ok: true,
       summary: {
-        resources: [
-          {
-            resource: "cloudflare_r2_bucket",
-            ok: true,
-            completedSteps: ["init", "plan", "apply", "destroy"],
-            summary: {
-              tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
-            },
+        resources: successfulProviderResources({
+          cloudflare_r2_bucket: {
+            tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
           },
-          {
-            resource: "cloudflare_workers_script",
-            ok: true,
-            completedSteps: ["init", "plan", "apply", "destroy"],
-            summary: {},
-          },
-        ],
-        completedResources: [
-          "cloudflare_r2_bucket",
-          "cloudflare_workers_script",
-        ],
+        }),
+        completedResources: [...PROVIDER_E2E_RESOURCES],
         failedResources: [],
         tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
       },
@@ -216,10 +194,7 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
     result.checks.find((check) => check.name === "cloudflareCompatProviderE2E")
       ?.summary,
   ).toMatchObject({
-    completedResources: [
-      "cloudflare_r2_bucket",
-      "cloudflare_workers_script",
-    ],
+    completedResources: [...PROVIDER_E2E_RESOURCES],
     failedResources: [],
   });
   expect(JSON.stringify(result)).not.toContain(patOptions.sessionToken);
@@ -311,6 +286,19 @@ test("cloud extension smoke reports provider workers script E2E as a GA gap", as
     "cloudflare_compat_provider_workers_script_not_ready",
   );
 });
+
+function successfulProviderResources(
+  summaries: Partial<
+    Record<(typeof PROVIDER_E2E_RESOURCES)[number], object>
+  > = {},
+) {
+  return PROVIDER_E2E_RESOURCES.map((resource) => ({
+    resource,
+    ok: true,
+    completedSteps: ["init", "plan", "apply", "destroy"],
+    summary: summaries[resource] ?? {},
+  }));
+}
 
 function responseFor(pathname: string, authenticated: boolean): Response {
   if (pathname === "/v1/account/session/me") {

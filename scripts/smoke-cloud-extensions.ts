@@ -18,6 +18,7 @@ export const CLOUD_EXTENSION_SMOKE_KIND =
   "takosumi.cloud-extension-smoke@v1" as const;
 
 const CLOUDFLARE_COMPAT_ACCOUNT_ID = "ts_acc_takosumi_cloud";
+const CLOUDFLARE_COMPAT_ZONE_ID = "zone_takosumi_cloud";
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT = "takosumi-smoke";
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${CLOUDFLARE_COMPAT_SMOKE_SCRIPT}`;
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
@@ -631,12 +632,20 @@ function cloudExtensionGaps(
   if (providerE2E && !providerE2E.ok) {
     gaps.push("cloudflare_compat_provider_e2e_failed");
     for (const resource of providerE2EResources(providerE2E.summary)) {
-      if (resource.resource === "cloudflare_workers_script" && !resource.ok) {
-        gaps.push("cloudflare_compat_provider_workers_script_not_ready");
+      if (!resource.ok) {
+        gaps.push(providerE2EGap(resource.resource));
       }
     }
   }
   return gaps;
+}
+
+function providerE2EGap(resource: string): string {
+  const suffix = resource
+    .replace(/^cloudflare_/u, "")
+    .replaceAll(/[^a-z0-9]+/g, "_")
+    .replaceAll(/^_|_$/g, "");
+  return `cloudflare_compat_provider_${suffix}_not_ready`;
 }
 
 function providerE2EResources(
@@ -674,7 +683,10 @@ async function runCloudflareCompatProviderE2E(
 ): Promise<CloudExtensionProviderE2EResult> {
   const resources = [
     await runCloudflareCompatR2BucketProviderE2E(options),
+    await runCloudflareCompatKvNamespaceProviderE2E(options),
+    await runCloudflareCompatD1DatabaseProviderE2E(options),
     await runCloudflareCompatWorkersScriptProviderE2E(options),
+    await runCloudflareCompatWorkersRouteProviderE2E(options),
   ];
   const failedResources = resources
     .filter((resource) => !resource.ok)
@@ -770,11 +782,195 @@ output "bucket_name" {
       summary: {
         bucketName,
       },
-      errorClass:
-        error instanceof Error ? error.name || "Error" : typeof error,
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
       message: sanitizeErrorMessage(
         error instanceof Error ? error.message : String(error),
       ),
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runCloudflareCompatKvNamespaceProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
+  const namespaceTitle = `takosumi-e2e-kv-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "namespace_title" {
+  type = string
+}
+
+resource "cloudflare_workers_kv_namespace" "smoke" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  title      = var.namespace_title
+}
+
+output "namespace_title" {
+  value = cloudflare_workers_kv_namespace.smoke.title
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_namespace_title: namespaceTitle,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      resource: "cloudflare_workers_kv_namespace",
+      ok: true,
+      completedSteps,
+      summary: { namespaceTitle },
+    };
+  } catch (error) {
+    const cleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
+          query: { title: namespaceTitle },
+          idField: "id",
+        })
+      : undefined;
+    return {
+      resource: "cloudflare_workers_kv_namespace",
+      ok: false,
+      completedSteps,
+      summary: { namespaceTitle },
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+      cleanup,
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runCloudflareCompatD1DatabaseProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
+  const databaseName = `takosumi-e2e-d1-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "database_name" {
+  type = string
+}
+
+resource "cloudflare_d1_database" "smoke" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  name       = var.database_name
+}
+
+output "database_name" {
+  value = cloudflare_d1_database.smoke.name
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_database_name: databaseName,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      resource: "cloudflare_d1_database",
+      ok: true,
+      completedSteps,
+      summary: { databaseName },
+    };
+  } catch (error) {
+    const cleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
+          query: { name: databaseName },
+          idField: "uuid",
+          fallbackIdField: "id",
+        })
+      : undefined;
+    return {
+      resource: "cloudflare_d1_database",
+      ok: false,
+      completedSteps,
+      summary: { databaseName },
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+      cleanup,
     };
   } finally {
     await rm(workdir, { recursive: true, force: true });
@@ -867,12 +1063,128 @@ output "script_name" {
       ok: false,
       completedSteps,
       summary: { scriptName },
-      errorClass:
-        error instanceof Error ? error.name || "Error" : typeof error,
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
       message: sanitizeErrorMessage(
         error instanceof Error ? error.message : String(error),
       ),
       cleanup,
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runCloudflareCompatWorkersRouteProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
+  const suffix = Date.now().toString(36);
+  const scriptName = `takosumi-e2e-route-${suffix}`;
+  const routePattern = `example.com/takosumi-${suffix}/*`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "script_name" {
+  type = string
+}
+
+variable "route_pattern" {
+  type = string
+}
+
+locals {
+  worker_module = <<-EOT
+    export default { async fetch() { return new Response('takosumi route e2e'); } };
+  EOT
+}
+
+resource "cloudflare_workers_script" "smoke" {
+  account_id         = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  script_name        = var.script_name
+  content            = local.worker_module
+  main_module        = "index.js"
+  compatibility_date = "2025-01-01"
+}
+
+resource "cloudflare_workers_route" "smoke" {
+  zone_id = "${CLOUDFLARE_COMPAT_ZONE_ID}"
+  pattern = var.route_pattern
+  script  = cloudflare_workers_script.smoke.script_name
+}
+
+output "route_pattern" {
+  value = cloudflare_workers_route.smoke.pattern
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_script_name: scriptName,
+      TF_VAR_route_pattern: routePattern,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      resource: "cloudflare_workers_route",
+      ok: true,
+      completedSteps,
+      summary: { routePattern, scriptName },
+    };
+  } catch (error) {
+    const routeCleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
+          query: { pattern: routePattern },
+          idField: "id",
+        })
+      : undefined;
+    const scriptCleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      : undefined;
+    return {
+      resource: "cloudflare_workers_route",
+      ok: false,
+      completedSteps,
+      summary: { routePattern, scriptName },
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+      cleanup: { route: routeCleanup, script: scriptCleanup },
     };
   } finally {
     await rm(workdir, { recursive: true, force: true });
@@ -905,8 +1217,73 @@ async function cleanupCloudflareCompatWorkerScript(
     return {
       attempted: true,
       ok: false,
-      errorClass:
-        error instanceof Error ? error.name || "Error" : typeof error,
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+    };
+  }
+}
+
+async function cleanupCloudflareCompatCollectionResource(
+  options: CloudExtensionSmokeOptions,
+  input: {
+    readonly collectionPath: string;
+    readonly query: Record<string, string>;
+    readonly idField: string;
+    readonly fallbackIdField?: string;
+  },
+): Promise<Record<string, unknown>> {
+  const query = new URLSearchParams(input.query);
+  const collectionUrl = `${options.url}/compat/cloudflare/client/v4${input.collectionPath}?${query.toString()}`;
+  try {
+    const listed = await fetch(collectionUrl, {
+      headers: {
+        authorization: `Bearer ${options.sessionToken}`,
+        accept: "application/json",
+      },
+    });
+    const body = await readJson(listed);
+    const result = record(body).result;
+    const rows = Array.isArray(result) ? result.map(record) : [];
+    const deleted: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      const id =
+        typeof row[input.idField] === "string"
+          ? row[input.idField]
+          : input.fallbackIdField &&
+              typeof row[input.fallbackIdField] === "string"
+            ? row[input.fallbackIdField]
+            : null;
+      if (!id) continue;
+      const response = await fetch(
+        `${options.url}/compat/cloudflare/client/v4${input.collectionPath}/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          headers: {
+            authorization: `Bearer ${options.sessionToken}`,
+            accept: "application/json",
+          },
+        },
+      );
+      const deleteBody = await readJson(response);
+      deleted.push({
+        id,
+        status: response.status,
+        ok: response.ok && record(deleteBody).success === true,
+      });
+    }
+    return {
+      attempted: true,
+      listStatus: listed.status,
+      listed: rows.length,
+      deleted,
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
       message: sanitizeErrorMessage(
         error instanceof Error ? error.message : String(error),
       ),
@@ -1015,8 +1392,9 @@ function embeddingsModelFromAiGatewayStatus(
 ): string | null {
   const models = summary.embeddingModels;
   if (!Array.isArray(models)) return null;
-  return models.find((model): model is string => typeof model === "string") ??
-    null;
+  return (
+    models.find((model): model is string => typeof model === "string") ?? null
+  );
 }
 
 function aiGatewayEmbeddingModels(
