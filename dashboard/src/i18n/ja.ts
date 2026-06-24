@@ -439,6 +439,8 @@ export const ja = {
   "new.flow.stepSelect": "選択",
   "new.flow.stepConfigure": "設定",
   "new.flow.stepReview": "確認",
+  "new.summary.aria": "追加内容",
+  "new.summary.provider": "Provider",
   "new.catalogInput.title": "サービス設定",
   "new.catalogInput.subtitle": "表示名と、公開に必要な最小限の項目です。",
   "new.catalogInput.errorRequired": "{label} を入力してください。",

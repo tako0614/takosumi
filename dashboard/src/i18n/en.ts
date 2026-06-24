@@ -436,6 +436,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.flow.stepSelect": "Select",
   "new.flow.stepConfigure": "Set up",
   "new.flow.stepReview": "Review",
+  "new.summary.aria": "Add summary",
+  "new.summary.provider": "Provider",
   "new.catalogInput.title": "Service setup",
   "new.catalogInput.subtitle":
     "Name the service and fill the minimum fields needed to publish it.",

@@ -1916,6 +1916,20 @@ function Inner() {
       </>
     );
   };
+  const addSummaryTitle = () =>
+    selectedCatalogEntry()?.name[locale()] ||
+    name().trim() ||
+    capsuleNameFromUrl(gitUrl()) ||
+    t("new.advancedImport.title");
+  const addSummaryDescription = () =>
+    selectedCatalogEntry()?.description[locale()] ||
+    (activeTab() === "git"
+      ? t("new.advancedImport.subtitle")
+      : t("new.selection.subtitle"));
+  const addSummaryProvider = () =>
+    selectedCatalogEntry()
+      ? providerDisplayName(selectedCatalogEntry()!.provider)
+      : sourceHostLabel(gitUrl());
 
   return (
     <AppShell>
@@ -1946,21 +1960,25 @@ function Inner() {
                   <p>{t("new.subtitle")}</p>
                 </div>
               </div>
-              <label class="av-store-search">
-                <Search size={18} aria-hidden="true" />
-                <span class="sr-only">{t("new.store.searchLabel")}</span>
-                <input
-                  type="search"
-                  value={catalogQuery()}
-                  onInput={(event) =>
-                    setCatalogQuery(event.currentTarget.value)
-                  }
-                  placeholder={t("new.store.searchPlaceholder")}
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-              </label>
-              <ManualImportCard onSelect={() => setActiveTab("git")} />
+              <div class="av-store-tools">
+                <label class="av-store-search">
+                  <Search size={18} aria-hidden="true" />
+                  <span class="sr-only">{t("new.store.searchLabel")}</span>
+                  <input
+                    id="new-catalog-search"
+                    name="catalogSearch"
+                    type="search"
+                    value={catalogQuery()}
+                    onInput={(event) =>
+                      setCatalogQuery(event.currentTarget.value)
+                    }
+                    placeholder={t("new.store.searchPlaceholder")}
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                </label>
+                <ManualImportCard onSelect={() => setActiveTab("git")} />
+              </div>
             </div>
             <div class="av-store-shelf">
               <div class="av-store-section-head">
@@ -2600,31 +2618,71 @@ function Inner() {
                 </Show>
               </form>
 
-              <Show when={showSetupProgress()} fallback={null}>
-                <details class="wb-disclosure">
-                  <summary>{t("new.step.technical")}</summary>
-                  <ol class="wb-steps">
-                    <li class={`wb-step ${stepClass(stepSource())}`}>
-                      <span class="wb-step-icon">{stepIcon(stepSource())}</span>
-                      {t("new.step.register")}
-                    </li>
-                    <li class={`wb-step ${stepClass(stepSync())}`}>
-                      <span class="wb-step-icon">{stepIcon(stepSync())}</span>
-                      {t("new.step.sync")}
-                    </li>
-                    <li class={`wb-step ${stepClass(stepInstall())}`}>
-                      <span class="wb-step-icon">
-                        {stepIcon(stepInstall())}
+              <aside class="av-add-summary" aria-label={t("new.summary.aria")}>
+                <div class="av-add-summary-card">
+                  <div class="av-add-summary-head">
+                    <span class="av-add-summary-icon" aria-hidden="true">
+                      <Show
+                        when={selectedCatalogEntry()}
+                        fallback={<Download size={22} />}
+                      >
+                        {(entry) => <CatalogIcon entry={entry()} />}
+                      </Show>
+                    </span>
+                    <div>
+                      <span class="av-add-summary-kicker">
+                        {usingSelectedService()
+                          ? t("new.flow.selected")
+                          : t("new.flow.manual")}
                       </span>
-                      {t("new.step.create")}
-                    </li>
-                    <li class={`wb-step ${stepClass(stepPlan())}`}>
-                      <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
-                      {t("new.step.plan")}
-                    </li>
-                  </ol>
-                </details>
-              </Show>
+                      <h3>{addSummaryTitle()}</h3>
+                    </div>
+                  </div>
+                  <p>{addSummaryDescription()}</p>
+                  <dl class="av-add-summary-meta">
+                    <div>
+                      <dt>{t("new.summary.provider")}</dt>
+                      <dd>{addSummaryProvider()}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("new.deeplink.version")}</dt>
+                      <dd>{displayRef(ref())}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("new.deeplink.folder")}</dt>
+                      <dd>{displayModulePath(path())}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <Show when={showSetupProgress()} fallback={null}>
+                  <details class="wb-disclosure av-add-technical">
+                    <summary>{t("new.step.technical")}</summary>
+                    <ol class="wb-steps">
+                      <li class={`wb-step ${stepClass(stepSource())}`}>
+                        <span class="wb-step-icon">
+                          {stepIcon(stepSource())}
+                        </span>
+                        {t("new.step.register")}
+                      </li>
+                      <li class={`wb-step ${stepClass(stepSync())}`}>
+                        <span class="wb-step-icon">{stepIcon(stepSync())}</span>
+                        {t("new.step.sync")}
+                      </li>
+                      <li class={`wb-step ${stepClass(stepInstall())}`}>
+                        <span class="wb-step-icon">
+                          {stepIcon(stepInstall())}
+                        </span>
+                        {t("new.step.create")}
+                      </li>
+                      <li class={`wb-step ${stepClass(stepPlan())}`}>
+                        <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
+                        {t("new.step.plan")}
+                      </li>
+                    </ol>
+                  </details>
+                </Show>
+              </aside>
             </div>
           </section>
         </Show>
