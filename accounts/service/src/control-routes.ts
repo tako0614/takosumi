@@ -3717,15 +3717,11 @@ async function connectionItemOp(
   }
   // Resolve the Connection's owning Space for the ownership gate. A missing
   // connection (typed `not_found`) is mapped to the same non-disclosing 404.
-  let connection: Connection;
-  try {
-    connection = await operations.getConnection(connectionId);
-  } catch (error) {
-    if (controllerErrorCode(error) === "not_found") {
-      return errorJson("connection_not_found", "connection not found", 404);
-    }
-    throw error;
+  const target = await resolveConnectionItemTarget(operations, connectionId);
+  if (!target) {
+    return errorJson("connection_not_found", "connection not found", 404);
   }
+  const { connection, rawConnectionId } = target;
   const spaceId = connection.spaceId;
   if (!spaceId) {
     return errorJson("connection_not_found", "connection not found", 404);
@@ -3743,10 +3739,56 @@ async function connectionItemOp(
     return errorJson("connection_not_found", "connection not found", 404);
   }
   if (op === "test") {
-    return json(await operations.testConnection(connectionId));
+    return json(await operations.testConnection(rawConnectionId));
   }
-  await operations.revokeConnection(connectionId);
+  await operations.revokeConnection(rawConnectionId);
   return new Response(null, { status: 204 });
+}
+
+async function resolveConnectionItemTarget(
+  operations: ControlPlaneOperations,
+  connectionId: string,
+): Promise<
+  | { readonly connection: Connection; readonly rawConnectionId: string }
+  | undefined
+> {
+  try {
+    return {
+      connection: await operations.getConnection(connectionId),
+      rawConnectionId: connectionId,
+    };
+  } catch (error) {
+    if (controllerErrorCode(error) !== "not_found") throw error;
+  }
+  const rawConnectionId =
+    connectionId.startsWith("pcn_")
+      ? await rawProviderConnectionIdFromPublicId(operations, connectionId)
+      : undefined;
+  if (!rawConnectionId) return undefined;
+  try {
+    return {
+      connection: await operations.getConnection(rawConnectionId),
+      rawConnectionId,
+    };
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return undefined;
+    throw error;
+  }
+}
+
+async function rawProviderConnectionIdFromPublicId(
+  operations: ControlPlaneOperations,
+  publicConnectionId: string,
+): Promise<string | undefined> {
+  for (const providerEnv of await operations.connections.listProviderEnvs()) {
+    if (!providerEnv.spaceId) continue;
+    if (
+      (await publicProviderConnectionId(providerEnv.id)) === publicConnectionId
+    ) {
+      return providerEnv.id;
+    }
+  }
+  return undefined;
 }
 
 /**
