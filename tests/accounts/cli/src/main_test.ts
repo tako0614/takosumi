@@ -9276,6 +9276,104 @@ test("platform-secrets apply fails when configured upstream OAuth client secret 
   }
 });
 
+test("platform-secrets apply fails when configured Cloud extension client secret is missing", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
+      'TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION = "enabled"',
+    ].join("\n"),
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
+    "protected-key",
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["apply", "--config", config, "--secrets-dir", dir, "--dry-run"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async (args) => {
+        commands.push([...args]);
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    );
+
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain(
+      "missing required manual platform secret(s): TAKOSUMI_ACCOUNTS_CLIENT_SECRET",
+    );
+    expect(commands).toEqual([]);
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
+test("platform-secrets apply pushes Cloud extension confidential client secret when configured", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
+      'TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION = "enabled"',
+    ].join("\n"),
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
+    "protected-key",
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_ACCOUNTS_CLIENT_SECRET"),
+    "cloud-extension-client-secret",
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const commands: string[][] = [];
+  const stdinByName = new Map<string, string | undefined>();
+
+  try {
+    const code = await runPlatformSecrets(
+      ["apply", "--config", config, "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async (args, input) => {
+        commands.push([...args]);
+        stdinByName.set(args[4] ?? "", input);
+        return { code: 0, stdout: "ok", stderr: "" };
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const pushedNames = commands.map((command) => command[4]).sort();
+    expect(pushedNames).toContain("TAKOSUMI_ACCOUNTS_CLIENT_SECRET");
+    expect(stdinByName.get("TAKOSUMI_ACCOUNTS_CLIENT_SECRET")).toEqual(
+      "cloud-extension-client-secret",
+    );
+    const output = stdout.concat(stderr).join("\n");
+    expect(output).toContain("Pushed 6 platform secret(s)");
+    expect(output).not.toContain("cloud-extension-client-secret");
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
 test("platform-secrets apply fails when configured billing Stripe secrets are missing", async () => {
   const dir = await makeTempDir();
   const config = await makeTempFile({ suffix: ".toml" });

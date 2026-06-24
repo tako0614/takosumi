@@ -8,10 +8,16 @@
  * file path is written to the evidence JSON.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import {
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  takosumiAccountsInstallationServiceRotateTokenPath,
+  takosumiAccountsInstallationServicesPath,
+} from "../accounts/contract/src/mod.ts";
 import { TAKOSUMI_AI_GATEWAY_STATUS_PATH } from "../contract/ai-gateway.ts";
 
 export const CLOUD_EXTENSION_SMOKE_KIND =
@@ -19,8 +25,6 @@ export const CLOUD_EXTENSION_SMOKE_KIND =
 
 const CLOUDFLARE_COMPAT_ACCOUNT_ID = "ts_acc_takosumi_cloud";
 const CLOUDFLARE_COMPAT_ZONE_ID = "zone_takosumi_cloud";
-const CLOUDFLARE_COMPAT_SMOKE_SCRIPT = "takosumi-smoke";
-const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH = `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${CLOUDFLARE_COMPAT_SMOKE_SCRIPT}`;
 const CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY =
   "export default { fetch() { return new Response('takosumi smoke'); } };";
 const CLOUD_EXTENSION_CATALOG_PATH = "/__takosumi/cloud/extensions";
@@ -28,6 +32,14 @@ const REQUIRED_CLOUD_EXTENSION_IDS = [
   "ai.openai_compatible.v1",
   "provider.cloudflare.client_v4",
 ] as const;
+
+function cloudflareCompatSmokeScriptName(): string {
+  return `takosumi-smoke-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function cloudflareCompatSmokeScriptPath(scriptName: string): string {
+  return `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${scriptName}`;
+}
 
 type FetchLike = typeof fetch;
 type AuthTokenKind = "session" | "pat";
@@ -42,6 +54,8 @@ export interface CloudExtensionSmokeOptions {
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
   readonly requireAiUpstreamProfile: boolean;
+  readonly requireAiServiceGraphToken: boolean;
+  readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -68,6 +82,8 @@ export interface CloudExtensionSmokeResult {
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
   readonly requireAiUpstreamProfile: boolean;
+  readonly requireAiServiceGraphToken: boolean;
+  readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
   readonly extensionVersions?: {
     readonly aiGateway?: string;
@@ -88,6 +104,8 @@ interface CliArgs {
   readonly requireCompatMaterialization?: boolean;
   readonly requireProviderE2e?: boolean;
   readonly requireAiUpstreamProfile?: boolean;
+  readonly requireAiServiceGraphToken?: boolean;
+  readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -149,6 +167,11 @@ export async function resolveOptions(
       requireProviderE2E:
         args.requireProviderE2E === true || args.requireProviderE2e === true,
       requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
+      requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
+      aiServiceInstallationId: optionalString(
+        args.aiServiceInstallationId ??
+          env.TAKOSUMI_AI_GATEWAY_SERVICE_INSTALLATION_ID,
+      ),
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
       cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -174,6 +197,11 @@ export async function resolveOptions(
     requireProviderE2E:
       args.requireProviderE2E === true || args.requireProviderE2e === true,
     requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
+    requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
+    aiServiceInstallationId: optionalString(
+      args.aiServiceInstallationId ??
+        env.TAKOSUMI_AI_GATEWAY_SERVICE_INSTALLATION_ID,
+    ),
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
     cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -209,6 +237,10 @@ export async function runCloudExtensionSmoke(
     authorization: `Bearer ${options.sessionToken}`,
     accept: "application/json",
   };
+  const compatSmokeScriptName = cloudflareCompatSmokeScriptName();
+  const compatSmokeScriptPath = cloudflareCompatSmokeScriptPath(
+    compatSmokeScriptName,
+  );
   const checks: CloudExtensionSmokeCheck[] = [
     await authTokenCheck(fetchImpl, options, authHeaders),
     await requestCheck(fetchImpl, options, {
@@ -323,6 +355,16 @@ export async function runCloudExtensionSmoke(
           },
         }),
   );
+  if (options.requireAiServiceGraphToken || options.aiServiceInstallationId) {
+    checks.push(
+      await aiServiceGraphTokenCheck(
+        fetchImpl,
+        options,
+        authHeaders,
+        embeddingsModel,
+      ),
+    );
+  }
   checks.push(
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatVerifyAuth",
@@ -363,7 +405,7 @@ export async function runCloudExtensionSmoke(
     }),
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatScriptPutAuth",
-      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      path: compatSmokeScriptPath,
       method: "PUT",
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization accepts a script upload"
@@ -387,7 +429,7 @@ export async function runCloudExtensionSmoke(
     }),
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatScriptGetAuth",
-      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      path: compatSmokeScriptPath,
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization can read the uploaded script"
         : "Cloudflare Workers script materialization read is either implemented or explicitly fail-closed",
@@ -406,7 +448,7 @@ export async function runCloudExtensionSmoke(
     }),
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatScriptDeleteAuth",
-      path: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_PATH,
+      path: compatSmokeScriptPath,
       method: "DELETE",
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization cleanup succeeds"
@@ -451,6 +493,8 @@ export async function runCloudExtensionSmoke(
     requireCompatMaterialization: options.requireCompatMaterialization,
     requireProviderE2E: options.requireProviderE2E,
     requireAiUpstreamProfile: options.requireAiUpstreamProfile,
+    requireAiServiceGraphToken: options.requireAiServiceGraphToken,
+    aiServiceInstallationId: options.aiServiceInstallationId,
     platformVersion: options.platformVersion,
     extensionVersions:
       options.aiGatewayVersion || options.cloudflareCompatVersion
@@ -526,6 +570,211 @@ async function cloudflareCompatProviderE2ECheck(
       expected:
         "Cloudflare Terraform/OpenTofu provider can plan, apply, and destroy through the compatibility endpoint",
       summary: {
+        errorClass:
+          error instanceof Error ? error.name || "Error" : typeof error,
+        message: sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      },
+    };
+  }
+}
+
+async function aiServiceGraphTokenCheck(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  embeddingsModel: string | undefined,
+): Promise<CloudExtensionSmokeCheck> {
+  const installationId = options.aiServiceInstallationId;
+  const serviceId = TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY;
+  const path = installationId
+    ? takosumiAccountsInstallationServiceRotateTokenPath(
+        installationId,
+        serviceId,
+      )
+    : "/v1/installation-projections/<installation-id>/services/takosumi.ai.gateway/rotate-token";
+  const expected =
+    "minted Service Graph runtime token can call the OpenAI-compatible AI Gateway without account/session credentials";
+  if (!installationId) {
+    return syntheticCheck({
+      name: "aiServiceGraphToken",
+      method: "POST",
+      path,
+      expected,
+      summary: { errorCode: "ai_service_graph_installation_id_required" },
+    });
+  }
+
+  const completedSteps: string[] = [];
+  try {
+    const servicesPath = takosumiAccountsInstallationServicesPath(
+      installationId,
+    );
+    const servicesResponse = await fetchImpl(`${options.url}${servicesPath}`, {
+      headers: ownerAuthHeaders,
+    });
+    const servicesBody = await readJson(servicesResponse);
+    const service = serviceProjection(servicesBody, serviceId);
+    if (servicesResponse.status !== 200 || !service) {
+      return {
+        name: "aiServiceGraphToken",
+        method: "POST",
+        path,
+        status: servicesResponse.status,
+        ok: false,
+        expected,
+        summary: {
+          installationId,
+          servicesStatus: servicesResponse.status,
+          servicePresent: Boolean(service),
+        },
+      };
+    }
+    completedSteps.push("list-services");
+
+    const rotateResponse = await fetchImpl(`${options.url}${path}`, {
+      method: "POST",
+      headers: { ...ownerAuthHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        scopes: ["ai.models.read", "ai.chat", "ai.embeddings"],
+        ttlSeconds: 900,
+      }),
+    });
+    const rotateBody = await readJson(rotateResponse);
+    const serviceToken = stringValue(record(rotateBody).token);
+    if (
+      rotateResponse.status !== 200 ||
+      !serviceToken ||
+      !serviceToken.startsWith("taksrv_")
+    ) {
+      const rotatedService = record(record(rotateBody).service);
+      return {
+        name: "aiServiceGraphToken",
+        method: "POST",
+        path,
+        status: rotateResponse.status,
+        ok: false,
+        expected,
+        summary: {
+          installationId,
+          completedSteps,
+          rotateStatus: rotateResponse.status,
+          tokenMinted: false,
+          tokenType: stringValue(record(rotateBody).token_type) ?? null,
+          preRotationServiceStatus: stringValue(service.status) ?? null,
+          serviceStatus: stringValue(rotatedService.status) ?? null,
+        },
+      };
+    }
+    const rotatedService = record(record(rotateBody).service);
+    completedSteps.push("rotate-token");
+
+    const serviceAuthHeaders = {
+      authorization: `Bearer ${serviceToken}`,
+      accept: "application/json",
+    };
+    const statusResponse = await fetchImpl(
+      `${options.url}${TAKOSUMI_AI_GATEWAY_STATUS_PATH}`,
+      { headers: serviceAuthHeaders },
+    );
+    const statusBody = await readJson(statusResponse);
+    const serviceEmbeddingsModel =
+      embeddingsModelFromAiGatewayStatus(summarizeAiGatewayStatus(statusBody)) ??
+      embeddingsModel;
+    completedSteps.push("status");
+
+    const modelsResponse = await fetchImpl(`${options.url}/gateway/ai/v1/models`, {
+      headers: serviceAuthHeaders,
+    });
+    const modelsBody = await readJson(modelsResponse);
+    completedSteps.push("models");
+
+    const chatResponse = await fetchImpl(
+      `${options.url}/gateway/ai/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: { ...serviceAuthHeaders, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "takosumi/default",
+          messages: [{ role: "user", content: "Reply with exactly: ok" }],
+        }),
+      },
+    );
+    const chatBody = await readJson(chatResponse);
+    completedSteps.push("chat");
+
+    let embeddingsStatus = 0;
+    let embeddingCount = 0;
+    if (serviceEmbeddingsModel) {
+      const embeddingsResponse = await fetchImpl(
+        `${options.url}/gateway/ai/v1/embeddings`,
+        {
+          method: "POST",
+          headers: {
+            ...serviceAuthHeaders,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: serviceEmbeddingsModel,
+            input: "takosumi",
+          }),
+        },
+      );
+      const embeddingsBody = await readJson(embeddingsResponse);
+      embeddingsStatus = embeddingsResponse.status;
+      embeddingCount = embeddingsCount(embeddingsBody);
+      completedSteps.push("embeddings");
+    }
+
+    const models = modelIds(modelsBody);
+    const ok =
+      statusResponse.status === 200 &&
+      modelsResponse.status === 200 &&
+      models.includes("takosumi/default") &&
+      chatResponse.status === 200 &&
+      choicesCount(chatBody) > 0 &&
+      (!serviceEmbeddingsModel ||
+        (embeddingsStatus === 200 && embeddingCount > 0));
+
+    return {
+      name: "aiServiceGraphToken",
+      method: "POST",
+      path,
+      status: ok ? 200 : 500,
+      ok,
+      expected,
+      summary: {
+        installationId,
+        completedSteps,
+        tokenMinted: true,
+        tokenType: stringValue(record(rotateBody).token_type) ?? null,
+        tokenExpiresAtPresent:
+          typeof record(rotateBody).expires_at === "string",
+        preRotationServiceStatus: stringValue(service.status) ?? null,
+        serviceStatus: stringValue(rotatedService.status) ?? null,
+        statusStatus: statusResponse.status,
+        statusMode: stringValue(record(statusBody).mode) ?? null,
+        modelsStatus: modelsResponse.status,
+        modelIds: models,
+        chatStatus: chatResponse.status,
+        chatChoiceCount: choicesCount(chatBody),
+        embeddingsStatus,
+        embeddingCount,
+        requestedEmbeddingsModel: serviceEmbeddingsModel ?? null,
+      },
+    };
+  } catch (error) {
+    return {
+      name: "aiServiceGraphToken",
+      method: "POST",
+      path,
+      status: 500,
+      ok: false,
+      expected,
+      summary: {
+        installationId,
+        completedSteps,
         errorClass:
           error instanceof Error ? error.name || "Error" : typeof error,
         message: sanitizeErrorMessage(
@@ -612,6 +861,17 @@ function cloudExtensionGaps(
   if (aiStatus && !aiStatus.ok) {
     gaps.push("ai_gateway_status_not_ready");
   }
+  const aiServiceGraphToken = checks.find(
+    (check) => check.name === "aiServiceGraphToken",
+  );
+  if (
+    aiServiceGraphToken?.summary.errorCode ===
+    "ai_service_graph_installation_id_required"
+  ) {
+    gaps.push("ai_gateway_service_graph_installation_id_required");
+  } else if (aiServiceGraphToken && !aiServiceGraphToken.ok) {
+    gaps.push("ai_gateway_service_graph_token_not_ready");
+  }
   const aiEmbeddings = checks.find(
     (check) => check.name === "aiEmbeddingsAuth",
   );
@@ -628,6 +888,17 @@ function cloudExtensionGaps(
   );
   if (materialization) {
     gaps.push("cloudflare_compat_materialization_not_enabled");
+  }
+  const scriptMaterializationFailed = checks.some(
+    (check) =>
+      [
+        "cloudflareCompatScriptPutAuth",
+        "cloudflareCompatScriptGetAuth",
+        "cloudflareCompatScriptDeleteAuth",
+      ].includes(check.name) && !check.ok,
+  );
+  if (scriptMaterializationFailed) {
+    gaps.push("cloudflare_compat_script_materialization_failed");
   }
   const providerE2E = checks.find(
     (check) => check.name === "cloudflareCompatProviderE2E",
@@ -2029,6 +2300,17 @@ function modelIds(body: unknown): string[] {
     .filter((id): id is string => typeof id === "string");
 }
 
+function serviceProjection(
+  body: unknown,
+  serviceId: string,
+): Record<string, unknown> | undefined {
+  const services = record(body).services;
+  if (!Array.isArray(services)) return undefined;
+  return services
+    .map((service) => record(service))
+    .find((service) => service.id === serviceId);
+}
+
 function choicesCount(body: unknown): number {
   const choices = record(body).choices;
   return Array.isArray(choices) ? choices.length : 0;
@@ -2043,6 +2325,10 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function parseArgs(argv: readonly string[]): CliArgs {
@@ -2099,6 +2385,7 @@ function sanitizeErrorMessage(value: string): string {
   return value
     .replaceAll(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer <redacted>")
     .replaceAll(/takpat_[A-Za-z0-9._~+/=-]+/g, "takpat_<redacted>")
+    .replaceAll(/taksrv_[A-Za-z0-9._~+/=-]+/g, "taksrv_<redacted>")
     .replaceAll(/token=[^&\s]+/g, "token=<redacted>")
     .replaceAll(/client_secret=[^&\s]+/g, "client_secret=<redacted>");
 }
@@ -2132,6 +2419,7 @@ async function runSelfTest(): Promise<void> {
     requireCompatMaterialization: false,
     requireProviderE2E: false,
     requireAiUpstreamProfile: false,
+    requireAiServiceGraphToken: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
     const parsed = new URL(url);
@@ -2211,7 +2499,7 @@ async function runSelfTest(): Promise<void> {
     { ...options, requireCompatMaterialization: true },
     async (url, init) => {
       const parsed = new URL(url);
-      if (parsed.pathname.endsWith("/workers/scripts/takosumi-smoke")) {
+      if (parsed.pathname.includes("/workers/scripts/takosumi-smoke-")) {
         return cloudflareResponse(false, null, 501, [9001]);
       }
       return jsonResponseForSelfTest(parsed, init);
@@ -2378,6 +2666,8 @@ Options:
   --require-compat-materialization     fail if Cloudflare Workers script materialization still returns 501
   --require-provider-e2e               run tofu init/plan/apply/destroy through the Cloudflare compat endpoint
   --require-ai-upstream-profile        fail when AI Gateway only has the Workers AI fallback configured
+  --require-ai-service-graph-token     rotate an AI Gateway Service Graph runtime token and use it against /gateway/ai/v1
+  --ai-service-installation-id <id>    installation projection id used for Service Graph runtime-token rotation
   --platform-version <id>              include deployed platform version id in evidence
   --ai-gateway-version <id>            include deployed AI gateway worker version id in evidence
   --cloudflare-compat-version <id>     include deployed Cloudflare compat worker version id in evidence
