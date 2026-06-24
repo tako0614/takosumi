@@ -49,10 +49,8 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
 
   expect(source).toContain("isTakosumiCloudRuntime");
   expect(source).toContain("<Show when={cloudBilling()}>");
-  expect(source).toContain("when={canStartCheckout()}");
-  expect(source).toContain(
-    'fallback={\n                    <p class="av-plan-policy av-plan-policy-disabled">',
-  );
+  expect(source).toContain("const canStartCheckout = createMemo");
+  expect(source).toContain("cloudBilling() && hasBillingCatalog()");
   expect(source).toContain("listSpaceUsage");
   expect(source).toContain('"billing.usage.title"');
   expect(source).toContain('"billing.plans.title"');
@@ -60,11 +58,12 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
   expect(source).not.toContain("createResource(listBillingPlans)");
 });
 
-test("BillingTab hides purchase cards while billing is disabled", () => {
+test("BillingTab lets a new Cloud workspace start checkout before billing is active", () => {
   const source = readFileSync(sourcePath, "utf8");
-  const disabledFallbackIndex = source.indexOf(
-    'fallback={\n                    <p class="av-plan-policy av-plan-policy-disabled">',
+  const checkoutMemoIndex = source.indexOf(
+    "const canStartCheckout = createMemo",
   );
+  const portalMemoIndex = source.indexOf("const canOpenPortal = createMemo");
   const nonRefundableIndex = source.indexOf(
     '<p class="muted av-plan-policy">\n                    {t("billing.plans.nonRefundable")}',
   );
@@ -72,13 +71,14 @@ test("BillingTab hides purchase cards while billing is disabled", () => {
     "<Show when={subscriptions().length > 0}>",
   );
 
-  expect(disabledFallbackIndex).toBeGreaterThan(0);
-  expect(nonRefundableIndex).toBeGreaterThan(disabledFallbackIndex);
+  expect(checkoutMemoIndex).toBeGreaterThan(0);
+  expect(portalMemoIndex).toBeGreaterThan(checkoutMemoIndex);
+  expect(source).toContain("cloudBilling() && hasBillingCatalog()");
+  expect(source).toContain(
+    'cloudBilling() && mode() !== undefined && mode() !== "disabled"',
+  );
+  expect(source).not.toContain("billing.plans.disabled");
   expect(subscriptionListIndex).toBeGreaterThan(nonRefundableIndex);
-  expect(en["billing.plans.disabled"]).toBe(
-    "Purchases are not available for this workspace right now. Plans will appear here when checkout is open.",
-  );
-  expect(ja["billing.plans.disabled"]).toBe(
-    "現在、このワークスペースでは購入できません。購入が必要になった場合は、この画面にプランが表示されます。",
-  );
+  expect(en["billing.plans.nonRefundable"]).toContain("non-refundable");
+  expect(ja["billing.plans.nonRefundable"]).toContain("返金");
 });
