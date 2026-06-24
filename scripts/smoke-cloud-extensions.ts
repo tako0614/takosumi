@@ -425,6 +425,9 @@ export async function runCloudExtensionSmoke(
       summarize: summarizeCloudflareEnvelope,
     }),
   );
+  if (options.requireCompatMaterialization) {
+    checks.push(await cloudflareCompatRestLifecycleCheck(fetchImpl, options));
+  }
   if (options.requireProviderE2E) {
     checks.push(
       await cloudflareCompatProviderE2ECheck(options, providerE2eRunner),
@@ -637,6 +640,17 @@ function cloudExtensionGaps(
       }
     }
   }
+  const restLifecycle = checks.find(
+    (check) => check.name === "cloudflareCompatRestLifecycle",
+  );
+  if (restLifecycle && !restLifecycle.ok) {
+    gaps.push("cloudflare_compat_rest_lifecycle_failed");
+    for (const resource of providerE2EResources(restLifecycle.summary)) {
+      if (!resource.ok) {
+        gaps.push(providerE2EGap(`${resource.resource}_rest`));
+      }
+    }
+  }
   return gaps;
 }
 
@@ -702,6 +716,401 @@ async function runCloudflareCompatProviderE2E(
       failedResources,
     },
   };
+}
+
+async function cloudflareCompatRestLifecycleCheck(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionSmokeCheck> {
+  try {
+    const resources = [
+      await runCloudflareCompatKvNamespaceRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatD1DatabaseRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatR2BucketRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatWorkerRouteRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatInvalidScopeRestCheck(fetchImpl, options),
+    ];
+    const failedResources = resources
+      .filter((resource) => !resource.ok)
+      .map((resource) => resource.resource);
+    return {
+      name: "cloudflareCompatRestLifecycle",
+      method: "REST",
+      path: "/compat/cloudflare/client/v4",
+      status: failedResources.length === 0 ? 200 : 500,
+      ok: failedResources.length === 0,
+      expected:
+        "Cloudflare compatibility REST API validates, creates, reads, filters, deletes, and fail-closes scoped resources",
+      summary: {
+        resources,
+        completedResources: resources
+          .filter((resource) => resource.ok)
+          .map((resource) => resource.resource),
+        failedResources,
+      },
+    };
+  } catch (error) {
+    return {
+      name: "cloudflareCompatRestLifecycle",
+      method: "REST",
+      path: "/compat/cloudflare/client/v4",
+      status: 500,
+      ok: false,
+      expected:
+        "Cloudflare compatibility REST API validates, creates, reads, filters, deletes, and fail-closes scoped resources",
+      summary: {
+        errorClass:
+          error instanceof Error ? error.name || "Error" : typeof error,
+        message: sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      },
+    };
+  }
+}
+
+async function runCloudflareCompatKvNamespaceRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const title = `takosumi-rest-kv-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  let namespaceId: string | undefined;
+  try {
+    const created = await cloudflareCompatJson(fetchImpl, options, {
+      path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
+      method: "POST",
+      body: { title },
+    });
+    namespaceId = expectCloudflareResultString(created, ["id"]);
+    completedSteps.push("create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces/${encodeURIComponent(namespaceId)}`,
+      }),
+    );
+    completedSteps.push("read");
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces?title=${encodeURIComponent(title)}`,
+      }),
+      "id",
+      namespaceId,
+    );
+    completedSteps.push("list-filter");
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
+        method: "POST",
+        body: {},
+      }),
+    );
+    completedSteps.push("validation");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces/${encodeURIComponent(namespaceId)}`,
+        method: "DELETE",
+      }),
+    );
+    completedSteps.push("delete");
+    namespaceId = undefined;
+    return {
+      resource: "cloudflare_workers_kv_namespace_rest",
+      ok: true,
+      completedSteps,
+      summary: { title },
+    };
+  } catch (error) {
+    const cleanup = namespaceId
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
+          query: { title },
+          idField: "id",
+        })
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_workers_kv_namespace_rest",
+      completedSteps,
+      { title },
+      error,
+      cleanup,
+    );
+  }
+}
+
+async function runCloudflareCompatD1DatabaseRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const name = `takosumi-rest-d1-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  let databaseId: string | undefined;
+  try {
+    const created = await cloudflareCompatJson(fetchImpl, options, {
+      path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
+      method: "POST",
+      body: { name },
+    });
+    databaseId = expectCloudflareResultString(created, ["uuid", "id"]);
+    completedSteps.push("create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database/${encodeURIComponent(databaseId)}`,
+      }),
+    );
+    completedSteps.push("read");
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database?name=${encodeURIComponent(name)}`,
+      }),
+      databaseId.startsWith("d1_") ? "uuid" : "id",
+      databaseId,
+    );
+    completedSteps.push("list-filter");
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
+        method: "POST",
+        body: {},
+      }),
+    );
+    completedSteps.push("validation");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database/${encodeURIComponent(databaseId)}`,
+        method: "DELETE",
+      }),
+    );
+    completedSteps.push("delete");
+    databaseId = undefined;
+    return {
+      resource: "cloudflare_d1_database_rest",
+      ok: true,
+      completedSteps,
+      summary: { name },
+    };
+  } catch (error) {
+    const cleanup = databaseId
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
+          query: { name },
+          idField: "uuid",
+          fallbackIdField: "id",
+        })
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_d1_database_rest",
+      completedSteps,
+      { name },
+      error,
+      cleanup,
+    );
+  }
+}
+
+async function runCloudflareCompatR2BucketRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const name = `takosumi-rest-r2-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  let created = false;
+  try {
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets`,
+        method: "POST",
+        body: { name },
+      }),
+      [201],
+    );
+    created = true;
+    completedSteps.push("create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets/${encodeURIComponent(name)}`,
+      }),
+    );
+    completedSteps.push("read");
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets?name=${encodeURIComponent(name)}`,
+      }),
+      "name",
+      name,
+    );
+    completedSteps.push("list-filter");
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets`,
+        method: "POST",
+        body: {},
+      }),
+    );
+    completedSteps.push("validation");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets/${encodeURIComponent(name)}`,
+        method: "DELETE",
+      }),
+    );
+    created = false;
+    completedSteps.push("delete");
+    return {
+      resource: "cloudflare_r2_bucket_rest",
+      ok: true,
+      completedSteps,
+      summary: { name },
+    };
+  } catch (error) {
+    const cleanup = created
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets`,
+          query: { name },
+          idField: "name",
+        })
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_r2_bucket_rest",
+      completedSteps,
+      { name },
+      error,
+      cleanup,
+    );
+  }
+}
+
+async function runCloudflareCompatWorkerRouteRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const suffix = Date.now().toString(36);
+  const scriptName = `takosumi-rest-worker-${suffix}`;
+  const routePattern = `example.com/takosumi-rest-${suffix}/*`;
+  const completedSteps: string[] = [];
+  let scriptCreated = false;
+  let routeId: string | undefined;
+  try {
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+        method: "PUT",
+        bodyText:
+          "export default { fetch() { return new Response('takosumi rest'); } };",
+        contentType: "application/javascript",
+      }),
+      [201],
+    );
+    scriptCreated = true;
+    completedSteps.push("script-create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+      }),
+    );
+    completedSteps.push("script-read");
+    const createdRoute = await cloudflareCompatJson(fetchImpl, options, {
+      path: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
+      method: "POST",
+      body: { pattern: routePattern, script: scriptName },
+    });
+    routeId = expectCloudflareResultString(createdRoute, ["id"]);
+    completedSteps.push("route-create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes/${encodeURIComponent(routeId)}`,
+      }),
+    );
+    completedSteps.push("route-read");
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes?pattern=${encodeURIComponent(routePattern)}`,
+      }),
+      "id",
+      routeId,
+    );
+    completedSteps.push("route-list-filter");
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
+        method: "POST",
+        body: {},
+      }),
+    );
+    completedSteps.push("route-validation");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes/${encodeURIComponent(routeId)}`,
+        method: "DELETE",
+      }),
+    );
+    routeId = undefined;
+    completedSteps.push("route-delete");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+        method: "DELETE",
+      }),
+    );
+    scriptCreated = false;
+    completedSteps.push("script-delete");
+    return {
+      resource: "cloudflare_workers_script_route_rest",
+      ok: true,
+      completedSteps,
+      summary: { scriptName, routePattern },
+    };
+  } catch (error) {
+    const routeCleanup = routeId
+      ? await cleanupCloudflareCompatCollectionResource(options, {
+          collectionPath: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
+          query: { pattern: routePattern },
+          idField: "id",
+        })
+      : undefined;
+    const scriptCleanup = scriptCreated
+      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_workers_script_route_rest",
+      completedSteps,
+      { scriptName, routePattern },
+      error,
+      { route: routeCleanup, script: scriptCleanup },
+    );
+  }
+}
+
+async function runCloudflareCompatInvalidScopeRestCheck(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const completedSteps: string[] = [];
+  try {
+    const response = await cloudflareCompatJson(fetchImpl, options, {
+      path: `/accounts/not-${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts`,
+    });
+    const body = record(response.body);
+    if (response.status < 400 || body.success === true) {
+      throw new Error(
+        `expected invalid virtual account to fail closed, got ${response.status}`,
+      );
+    }
+    completedSteps.push("invalid-account-denied");
+    return {
+      resource: "cloudflare_virtual_scope_rest",
+      ok: true,
+      completedSteps,
+      summary: summarizeCloudflareEnvelope(response.body),
+    };
+  } catch (error) {
+    return restLifecycleFailure(
+      "cloudflare_virtual_scope_rest",
+      completedSteps,
+      {},
+      error,
+    );
+  }
 }
 
 async function runCloudflareCompatR2BucketProviderE2E(
@@ -1004,9 +1413,38 @@ variable "script_name" {
   type = string
 }
 
+variable "binding_suffix" {
+  type = string
+}
+
+resource "cloudflare_workers_kv_namespace" "binding" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  title      = "takosumi-bind-kv-\${var.binding_suffix}"
+}
+
+resource "cloudflare_r2_bucket" "binding" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  name       = "takosumi-bind-r2-\${var.binding_suffix}"
+}
+
+resource "cloudflare_d1_database" "binding" {
+  account_id = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  name       = "takosumi-bind-d1-\${var.binding_suffix}"
+}
+
 locals {
   worker_module = <<-EOT
-    export default { async fetch() { return new Response('takosumi provider e2e'); } };
+    export default {
+      async fetch(_request, env) {
+        return new Response(JSON.stringify({
+          text: env.TEXT_VALUE,
+          hasSecret: !!env.SECRET_VALUE,
+          hasKv: !!env.SMOKE_KV,
+          hasBucket: !!env.SMOKE_BUCKET,
+          hasDb: !!env.SMOKE_DB
+        }));
+      }
+    };
   EOT
 }
 
@@ -1016,6 +1454,13 @@ resource "cloudflare_workers_script" "smoke" {
   content            = local.worker_module
   main_module        = "index.js"
   compatibility_date = "2025-01-01"
+  bindings = [
+    { name = "TEXT_VALUE", type = "plain_text", text = "takosumi" },
+    { name = "SECRET_VALUE", type = "secret_text", text = "takosumi-secret" },
+    { name = "SMOKE_KV", type = "kv_namespace", namespace_id = cloudflare_workers_kv_namespace.binding.id },
+    { name = "SMOKE_BUCKET", type = "r2_bucket", bucket_name = cloudflare_r2_bucket.binding.name },
+    { name = "SMOKE_DB", type = "d1", id = cloudflare_d1_database.binding.id }
+  ]
 }
 
 output "script_name" {
@@ -1026,6 +1471,7 @@ output "script_name" {
     const env = {
       CLOUDFLARE_API_TOKEN: options.sessionToken,
       TF_VAR_script_name: scriptName,
+      TF_VAR_binding_suffix: scriptName.replace(/^takosumi-e2e-worker-/u, ""),
       TF_IN_AUTOMATION: "1",
     };
     await tofu(["init", "-input=false", "-no-color"], workdir, env);
@@ -1052,7 +1498,16 @@ output "script_name" {
       resource: "cloudflare_workers_script",
       ok: true,
       completedSteps,
-      summary: { scriptName },
+      summary: {
+        scriptName,
+        bindingTypes: [
+          "plain_text",
+          "secret_text",
+          "kv_namespace",
+          "r2_bucket",
+          "d1",
+        ],
+      },
     };
   } catch (error) {
     const cleanup = completedSteps.includes("apply")
@@ -1062,7 +1517,16 @@ output "script_name" {
       resource: "cloudflare_workers_script",
       ok: false,
       completedSteps,
-      summary: { scriptName },
+      summary: {
+        scriptName,
+        bindingTypes: [
+          "plain_text",
+          "secret_text",
+          "kv_namespace",
+          "r2_bucket",
+          "d1",
+        ],
+      },
       errorClass: error instanceof Error ? error.name || "Error" : typeof error,
       message: sanitizeErrorMessage(
         error instanceof Error ? error.message : String(error),
@@ -1289,6 +1753,118 @@ async function cleanupCloudflareCompatCollectionResource(
       ),
     };
   }
+}
+
+async function cloudflareCompatJson(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  input: {
+    readonly path: string;
+    readonly method?: string;
+    readonly body?: unknown;
+    readonly bodyText?: string;
+    readonly contentType?: string;
+  },
+): Promise<{ readonly status: number; readonly body: unknown }> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${options.sessionToken}`,
+    accept: "application/json",
+  };
+  if (input.body !== undefined) headers["content-type"] = "application/json";
+  if (input.contentType) headers["content-type"] = input.contentType;
+  const response = await fetchImpl(
+    `${options.url}/compat/cloudflare/client/v4${input.path}`,
+    {
+      method: input.method ?? "GET",
+      headers,
+      body:
+        input.bodyText ??
+        (input.body === undefined ? undefined : JSON.stringify(input.body)),
+    },
+  );
+  return { status: response.status, body: await readJson(response) };
+}
+
+function expectCloudflareOk(
+  response: { readonly status: number; readonly body: unknown },
+  statuses: readonly number[] = [200],
+): void {
+  const body = record(response.body);
+  if (!statuses.includes(response.status) || body.success !== true) {
+    throw new Error(
+      `expected Cloudflare compat success ${statuses.join("|")}, got ${response.status}: ${JSON.stringify(summarizeCloudflareEnvelope(response.body))}`,
+    );
+  }
+}
+
+function expectCloudflareValidationError(response: {
+  readonly status: number;
+  readonly body: unknown;
+}): void {
+  const body = record(response.body);
+  const summary = summarizeCloudflareEnvelope(response.body);
+  if (response.status !== 400 || body.success !== false) {
+    throw new Error(
+      `expected Cloudflare compat validation error, got ${response.status}: ${JSON.stringify(summary)}`,
+    );
+  }
+  const errorCodes = summary.errorCodes;
+  if (!Array.isArray(errorCodes) || errorCodes.length === 0) {
+    throw new Error("expected Cloudflare compat validation error code");
+  }
+}
+
+function expectCloudflareResultString(
+  response: { readonly status: number; readonly body: unknown },
+  fields: readonly string[],
+): string {
+  expectCloudflareOk(response, [200, 201]);
+  const result = record(record(response.body).result);
+  for (const field of fields) {
+    const value = result[field];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  throw new Error(`missing result field: ${fields.join("|")}`);
+}
+
+function expectCloudflareListContains(
+  response: { readonly status: number; readonly body: unknown },
+  field: string,
+  expected: string,
+): void {
+  const body = record(response.body);
+  if (response.status !== 200 || body.success !== true) {
+    throw new Error(
+      `expected Cloudflare compat list success, got ${response.status}: ${JSON.stringify(summarizeCloudflareEnvelope(response.body))}`,
+    );
+  }
+  const rows = body.result;
+  if (!Array.isArray(rows)) {
+    throw new Error("expected Cloudflare compat list result array");
+  }
+  if (!rows.map(record).some((row) => row[field] === expected)) {
+    throw new Error(`expected Cloudflare compat list to include ${field}`);
+  }
+}
+
+function restLifecycleFailure(
+  resource: string,
+  completedSteps: readonly string[],
+  summary: Record<string, unknown>,
+  error: unknown,
+  cleanup?: Record<string, unknown>,
+): CloudExtensionProviderResourceResult {
+  return {
+    resource,
+    ok: false,
+    completedSteps,
+    summary,
+    errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+    message: sanitizeErrorMessage(
+      error instanceof Error ? error.message : String(error),
+    ),
+    cleanup,
+  };
 }
 
 async function tofu(
