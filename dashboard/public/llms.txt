@@ -1,6 +1,6 @@
 # Takosumi Dashboard
 
-Takosumi Dashboard is the signed-in application for hosting services with connected cloud accounts.
+Takosumi Dashboard is the signed-in application for hosting services with connected provider credentials.
 
 This app is not a public documentation surface.
 
