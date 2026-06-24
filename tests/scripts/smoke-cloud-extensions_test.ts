@@ -72,13 +72,17 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
       requireCompatMaterialization: true,
       requireProviderE2E: true,
     },
-    async (url, init) =>
-      responseForImplementedCompat(
-        new URL(url).pathname,
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "configured_upstreams",
-      ),
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
     async () => ({
       status: 200,
       ok: true,
@@ -108,13 +112,17 @@ test("cloud extension smoke can require external AI upstream profiles", async ()
       requireCompatMaterialization: true,
       requireAiUpstreamProfile: true,
     },
-    async (url, init) =>
-      responseForImplementedCompat(
-        new URL(url).pathname,
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "workers_ai_fallback",
-      ),
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
   );
 
   expect(result.status).toBe("failed");
@@ -142,6 +150,8 @@ test("cloud extension smoke fails readiness when catalog bindings are missing", 
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "configured_upstreams",
+        requestBodyText(init),
+        new URL(url).searchParams,
       );
     },
   );
@@ -161,13 +171,17 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
   };
   const result = await runCloudExtensionSmoke(
     patOptions,
-    async (url, init) =>
-      responseForImplementedCompat(
-        new URL(url).pathname,
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "configured_upstreams",
-      ),
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
     async (options) => ({
       status: 200,
       ok: true,
@@ -223,6 +237,8 @@ test("cloud extension smoke uses an embeddings model declared by AI Gateway stat
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
       );
     },
   );
@@ -244,13 +260,17 @@ test("cloud extension smoke reports provider workers script E2E as a GA gap", as
       requireCompatMaterialization: true,
       requireProviderE2E: true,
     },
-    async (url, init) =>
-      responseForImplementedCompat(
-        new URL(url).pathname,
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
         init?.method ?? "GET",
         authorization(init) !== undefined,
         "configured_upstreams",
-      ),
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
     async () => ({
       status: 500,
       ok: false,
@@ -407,9 +427,96 @@ function responseForImplementedCompat(
   aiMode:
     | "configured_upstreams"
     | "workers_ai_fallback" = "configured_upstreams",
+  bodyText = "",
+  searchParams: URLSearchParams = new URLSearchParams(),
 ): Response {
   if (pathname === "/gateway/ai/v1/__takosumi/status") {
     return aiGatewayStatus(aiMode);
+  }
+  if (pathname.includes("/accounts/not-ts_acc_takosumi_cloud/")) {
+    return cloudflare(false, null, 404, [7003]);
+  }
+  if (pathname.includes("/storage/kv/namespaces")) {
+    if (method === "POST" && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "POST") {
+      return cloudflare(true, { id: "kv_test", title: "test" }, 201);
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { id: "kv_test", deleted: true });
+    }
+    if (pathname.endsWith("/kv_test")) {
+      return cloudflare(true, { id: "kv_test", title: "test" });
+    }
+    return cloudflare(true, [
+      { id: "kv_test", title: searchParams.get("title") ?? "test" },
+    ]);
+  }
+  if (pathname.includes("/d1/database")) {
+    if (method === "POST" && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "POST") {
+      return cloudflare(true, { uuid: "d1_test", name: "test" }, 201);
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { uuid: "d1_test", deleted: true });
+    }
+    if (pathname.endsWith("/d1_test")) {
+      return cloudflare(true, { uuid: "d1_test", name: "test" });
+    }
+    return cloudflare(true, [
+      { uuid: "d1_test", name: searchParams.get("name") ?? "test" },
+    ]);
+  }
+  if (pathname.includes("/r2/buckets")) {
+    if (method === "POST" && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "POST") {
+      return cloudflare(true, { name: "r2-test" }, 201);
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { name: "r2-test", deleted: true });
+    }
+    if (!pathname.endsWith("/r2/buckets")) {
+      return cloudflare(true, { name: searchParams.get("name") ?? "r2-test" });
+    }
+    return cloudflare(true, [
+      { name: searchParams.get("name") ?? "r2-test" },
+    ]);
+  }
+  if (pathname.includes("/workers/routes")) {
+    if (method === "POST" && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "POST") {
+      return cloudflare(true, { id: "route_test", pattern: "test/*" }, 201);
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { id: "route_test", deleted: true });
+    }
+    if (pathname.endsWith("/route_test")) {
+      return cloudflare(true, { id: "route_test", pattern: "test/*" });
+    }
+    return cloudflare(true, [
+      { id: "route_test", pattern: searchParams.get("pattern") ?? "test/*" },
+    ]);
+  }
+  if (pathname.includes("/workers/scripts/takosumi-rest-worker-")) {
+    if (method === "PUT") {
+      return cloudflare(true, { id: "takosumi-rest-worker-test" }, 201);
+    }
+    if (method === "GET") {
+      return cloudflare(true, { id: "takosumi-rest-worker-test" });
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, {
+        id: "takosumi-rest-worker-test",
+        deleted: true,
+      });
+    }
   }
   if (!pathname.includes("/workers/scripts/takosumi-smoke")) {
     return responseFor(pathname, authenticated);
@@ -430,6 +537,10 @@ function authorization(init: RequestInit | undefined): string | undefined {
   return typeof init?.headers === "object" && init.headers !== null
     ? (init.headers as Record<string, string>).authorization
     : undefined;
+}
+
+function requestBodyText(init: RequestInit | undefined): string {
+  return typeof init?.body === "string" ? init.body : "";
 }
 
 function json(body: unknown, status = 200): Response {
