@@ -12,6 +12,7 @@ import {
 import { runConnections } from "./cli-connections-commands.ts";
 import {
   runInstallationsExport,
+  runInstallationsExportOperation,
   runInstallationsImportApply,
   runInstallationsImportPlan,
   runInstallationsInspect,
@@ -205,6 +206,9 @@ async function runInternalInstallations(
   }
   if (command === "export") {
     return await runInstallationsExport(rest, io);
+  }
+  if (command === "export-operation") {
+    return await runInstallationsExportOperation(rest, io);
   }
   if (command === "import-plan") {
     return await runInstallationsImportPlan(rest, io);

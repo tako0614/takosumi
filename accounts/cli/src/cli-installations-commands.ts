@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import {
   type TakosumiSubject,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  takosumiAccountsInstallationExportOperationPath,
   takosumiAccountsInstallationPlanRunsPath,
   takosumiAccountsInstallationExportPath,
   takosumiAccountsInstallationMaterializePath,
@@ -11,6 +12,7 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import {
   installationsExportHelpText,
+  installationsExportOperationHelpText,
   installationsImportApplyHelpText,
   installationsImportPlanHelpText,
   installationsInspectHelpText,
@@ -359,6 +361,46 @@ export async function runInstallationsExport(
       path: takosumiAccountsInstallationExportPath(installationId),
       body,
       idempotencyKey: installationIdempotencyKey(options),
+      options,
+    });
+    io.stdout(
+      formatInstallationOperation(
+        response,
+        booleanOption(options, "json"),
+        "Export",
+      ),
+    );
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+export async function runInstallationsExportOperation(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const [installationId, operationId, ...rest] = args;
+  const options = parseOptions(rest);
+  if (options.help) {
+    io.stdout(installationsExportOperationHelpText());
+    return 0;
+  }
+  if (!installationId || installationId.startsWith("--")) {
+    io.stderr("installation id is required");
+    return 2;
+  }
+  if (!operationId || operationId.startsWith("--")) {
+    io.stderr("operation id is required");
+    return 2;
+  }
+  try {
+    const response = await requestAccountsApi({
+      path: takosumiAccountsInstallationExportOperationPath(
+        installationId,
+        operationId,
+      ),
       options,
     });
     io.stdout(
