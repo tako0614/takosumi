@@ -164,8 +164,10 @@ TAKOSUMI_ACCOUNTS_ISSUER = "https://app.takosumi.com"
 TAKOSUMI_ACCOUNTS_SUBJECT = "tsub_takosumi_prod"
 TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "closed"
 TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
-# Operator-curated provider surface (CSV of runner profile ids); aws/gcp enabled later.
-TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default"
+# Operator-curated provider surface. Cloudflare is the guided GA recipe; the
+# generic profile lets other OpenTofu providers run through explicit env/file
+# Provider Connections instead of adding provider-compatible Gateway APIs.
+TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default,generic-opentofu-provider"
 # Optional post-apply release activation bridge. This generic webhook hands
 # already-filtered, non-sensitive apply evidence to an operator/Cloud
 # materializer that owns app publication (for example Worker/assets/container
