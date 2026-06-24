@@ -127,7 +127,10 @@ export async function deployUpload(
     const planResponse = await deps.controller.createInstallationPlan(
       installation.id,
       context,
-      { sourceSnapshotId: snapshot.id },
+      {
+        sourceSnapshotId: snapshot.id,
+        deferCompatibilityReport: true,
+      },
     );
     const run = await deps.controller.getRun(planResponse.planRun.id);
     const status = deployStatus(run);
