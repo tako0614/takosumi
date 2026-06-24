@@ -14,8 +14,14 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { Space } from "takosumi-contract/spaces";
-import { CredentialBundle, PhaseMintBundle } from "../../../core/adapters/vault/mod.ts";
-import type { OpenTofuDeploymentStore, StoredSource } from "../../../core/domains/deploy-control/store.ts";
+import {
+  CredentialBundle,
+  PhaseMintBundle,
+} from "../../../core/adapters/vault/mod.ts";
+import type {
+  OpenTofuDeploymentStore,
+  StoredSource,
+} from "../../../core/domains/deploy-control/store.ts";
 
 export interface SeededModel {
   readonly space: Space;
@@ -122,8 +128,8 @@ export function fakeProviderVault(
       ),
     mintForInstallationProviderEnvBindings: () =>
       Promise.resolve(
-        new CredentialBundle(
-          { TF_VAR_cloudflare_main_api_token: token },
+        new PhaseMintBundle(
+          { env: { TF_VAR_cloudflare_main_api_token: token } },
           [],
           [rootEvidence],
         ),
@@ -261,7 +267,9 @@ export async function seedProviderConnections(
         materialization === "secret"
           ? connectionId
           : `penv_fixture_gateway_${shortName}`,
-      ...(materialization === "secret" ? { spaceId: installation.spaceId } : {}),
+      ...(materialization === "secret"
+        ? { spaceId: installation.spaceId }
+        : {}),
       providerSource: provider,
       displayName: shortName,
       materialization,
@@ -311,9 +319,7 @@ function providerEnvNames(provider: string): readonly string[] {
   return [`${providerShortName(provider).toUpperCase()}_TOKEN`];
 }
 
-function providerConnectionKind(
-  shortName: string,
-): Connection["kind"] {
+function providerConnectionKind(shortName: string): Connection["kind"] {
   if (shortName === "cloudflare") return "cloudflare_api_token";
   if (shortName === "aws") return "aws_assume_role";
   if (shortName === "google" || shortName === "gcp") {

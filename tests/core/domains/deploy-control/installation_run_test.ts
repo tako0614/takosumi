@@ -252,7 +252,7 @@ function fakeProviderVault() {
           : [{ provider: "cloudflare", connectionId: "fixture" }];
       const env = Object.assign({}, ...resolvedEntries.map(envForEntry));
       const evidence = resolvedEntries.map(evidenceForEntry);
-      return Promise.resolve(new CredentialBundle(env, [], evidence));
+      return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));
     },
   };
 }
@@ -368,9 +368,11 @@ function countingProviderVault() {
     mintForInstallationProviderEnvBindings: () => {
       mintCount += 1;
       return Promise.resolve(
-        new CredentialBundle(
+        new PhaseMintBundle(
           {
-            TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            env: {
+              TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            },
           },
           [],
           [

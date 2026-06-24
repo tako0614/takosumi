@@ -169,8 +169,12 @@ function fakeProviderVault() {
       ),
     mintForInstallationProviderEnvBindings: () =>
       Promise.resolve(
-        new CredentialBundle(
-          { TF_VAR_cloudflare_main_api_token: "fixture-provider-token" },
+        new PhaseMintBundle(
+          {
+            env: {
+              TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            },
+          },
           [],
           [
             {

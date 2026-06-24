@@ -316,7 +316,9 @@ test("DLQ backstop does not clobber a running run with a fresh owner", async () 
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue,
   });
-  const request = await seedUpdatable(store, { installationId: "inst_dlq_live" });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_dlq_live",
+  });
   const { planRun } = await controller.createPlanRun(request);
   expect(planRun.status).toEqual("queued");
 
@@ -540,7 +542,7 @@ function fakeVault(
           phase: "plan" as const,
         });
       }
-      return Promise.resolve(new CredentialBundle(env, [], evidence));
+      return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));
     },
     mintForPhase: () =>
       Promise.resolve(new PhaseMintBundle({ env: {} }, [], [])),
@@ -563,7 +565,7 @@ function fakeVault(
           phase: "plan" as const,
         });
       }
-      return Promise.resolve(new CredentialBundle(env, [], evidence));
+      return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));
     },
   };
 }

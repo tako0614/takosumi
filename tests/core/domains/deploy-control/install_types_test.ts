@@ -41,6 +41,7 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import {
   CredentialBundle,
+  PhaseMintBundle,
   StaticSecretConnectionVault,
 } from "../../../../core/adapters/vault/mod.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
@@ -252,9 +253,11 @@ function fakeProviderVault() {
       ),
     mintForInstallationProviderEnvBindings: () =>
       Promise.resolve(
-        new CredentialBundle(
+        new PhaseMintBundle(
           {
-            TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            env: {
+              TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+            },
           },
           [],
           [rootEvidence],
@@ -984,7 +987,7 @@ test("provider credential policy fails closed when required provider mint return
       revoke: () => Promise.resolve(true),
       mint: () => Promise.resolve(new CredentialBundle({})),
       mintForInstallationProviderEnvBindings: () =>
-        Promise.resolve(new CredentialBundle({})),
+        Promise.resolve(new PhaseMintBundle({ env: {} })),
     } as never,
     now: sequenceNow(100),
     newId: deterministicIds(),
@@ -1059,8 +1062,12 @@ test("provider credential policy fails closed when provider mint evidence is par
       mint: () => Promise.resolve(new CredentialBundle({})),
       mintForInstallationProviderEnvBindings: () =>
         Promise.resolve(
-          new CredentialBundle(
-            { TF_VAR_cloudflare_main_api_token: "fixture-provider-token" },
+          new PhaseMintBundle(
+            {
+              env: {
+                TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+              },
+            },
             [],
             [
               {
@@ -1146,8 +1153,12 @@ test("provider credential policy fails closed when provider mint evidence names 
       mint: () => Promise.resolve(new CredentialBundle({})),
       mintForInstallationProviderEnvBindings: () =>
         Promise.resolve(
-          new CredentialBundle(
-            { TF_VAR_cloudflare_main_api_token: "fixture-provider-token" },
+          new PhaseMintBundle(
+            {
+              env: {
+                TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+              },
+            },
             [],
             [
               {
