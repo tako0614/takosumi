@@ -12,6 +12,7 @@ const publicInstallationOperationErrorMessages = new Set([
   "materialize worker continuity requires dedicated readiness",
   "materialize worker continuity OIDC client mismatch",
   "materialize worker continuity service binding refs mismatch",
+  "materialize canceled before cutover",
   "installation export bundle could not be collected",
   "export worker failed",
   "export worker did not return a downloadUrl",
