@@ -30,6 +30,7 @@ import type {
   ConnectionResponse,
   ConnectionScopeHints,
   CreateApplyRunRequest,
+  CreateConnectionFile,
   CreateConnectionRequest,
   DeployControlErrorCode,
   Deployment,
@@ -3827,7 +3828,8 @@ async function listControlConnections(
  *     internal resolver records stay on the bearer-gated §30 surface, so we force
  *     `scope` server-side;
  *   - the secret `values` are write-only: they are forwarded to the controller
- *     and NEVER read, logged, or echoed; the response is the public
+ *     and NEVER read, logged, or echoed; generic-env `files` are also forwarded
+ *     write-only and never echoed; the response is the public
  *     {@link Connection} projection, which has no `values` field.
  */
 async function createControlConnection(
@@ -3864,10 +3866,23 @@ async function createControlConnection(
     ? "google"
     : provider;
   const values = stringRecord(body.values);
-  if (!values || Object.keys(values).length === 0) {
-    return errorJson("invalid_request", "values is required", 400);
+  const filesResult = connectionCredentialFiles(body.files);
+  if (!filesResult.ok) {
+    return errorJson("invalid_request", filesResult.message, 400);
   }
-  if (sourceGitKind && !stringValue(values.GIT_HTTPS_TOKEN)) {
+  const files = filesResult.files;
+  const valueCount = values ? Object.keys(values).length : 0;
+  if (valueCount === 0 && files.length === 0) {
+    return errorJson("invalid_request", "values or files is required", 400);
+  }
+  if (!requestedGenericEnv && files.length > 0) {
+    return errorJson(
+      "invalid_request",
+      "credential files are only accepted for generic env provider connections",
+      400,
+    );
+  }
+  if (sourceGitKind && !stringValue(values?.GIT_HTTPS_TOKEN)) {
     return errorJson(
       "invalid_request",
       "values.GIT_HTTPS_TOKEN is required",
@@ -3876,7 +3891,7 @@ async function createControlConnection(
   }
   const scopeHints = connectionScopeHintsFromValues(
     normalizedProvider,
-    values,
+    values ?? {},
     body.scopeHints,
   );
   const createRequest: CreateConnectionRequest = {
@@ -3910,7 +3925,8 @@ async function createControlConnection(
       ? { displayName: stringValue(body.displayName) }
       : {}),
     ...(scopeHints ? { scopeHints } : {}),
-    values,
+    values: values ?? {},
+    ...(files.length > 0 ? { files } : {}),
   };
   const response = await operations.createConnection(createRequest);
   // `response.connection` is the public projection (no secret values).
@@ -4661,6 +4677,46 @@ function stringRecord(
     if (typeof raw === "string") out[key] = raw;
   }
   return out;
+}
+
+function connectionCredentialFiles(
+  value: unknown,
+):
+  | { readonly ok: true; readonly files: readonly CreateConnectionFile[] }
+  | { readonly ok: false; readonly message: string } {
+  if (value === undefined) return { ok: true, files: [] };
+  if (!Array.isArray(value)) {
+    return { ok: false, message: "files must be an array" };
+  }
+  const files: CreateConnectionFile[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isPlainJsonObject(item)) {
+      return { ok: false, message: `files[${index}] must be an object` };
+    }
+    const path = stringValue(item.path);
+    const content = stringValue(item.content);
+    if (!path) {
+      return { ok: false, message: `files[${index}].path is required` };
+    }
+    if (content === undefined) {
+      return { ok: false, message: `files[${index}].content is required` };
+    }
+    const mode =
+      typeof item.mode === "number" && Number.isInteger(item.mode)
+        ? item.mode
+        : undefined;
+    if (item.mode !== undefined && mode === undefined) {
+      return { ok: false, message: `files[${index}].mode must be an integer` };
+    }
+    const envName = stringValue(item.envName);
+    files.push({
+      path,
+      content,
+      ...(mode !== undefined ? { mode } : {}),
+      ...(envName ? { envName } : {}),
+    });
+  }
+  return { ok: true, files };
 }
 
 /**
