@@ -1327,7 +1327,7 @@ function Inner() {
   /**
    * Single install action. Folds the old two-step (check → confirm) into one:
    * run the compatibility check when needed, stop only on a real blocker (compat
-   * level not runnable, or missing/unselected provider access) so the inline
+   * level not runnable, or missing/unselected cloud connection) so the inline
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
