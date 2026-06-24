@@ -185,6 +185,16 @@ export interface CloudExtensionProviderE2EResult {
   readonly summary: Record<string, unknown>;
 }
 
+interface CloudExtensionProviderResourceResult {
+  readonly resource: string;
+  readonly ok: boolean;
+  readonly completedSteps: readonly string[];
+  readonly summary: Record<string, unknown>;
+  readonly errorClass?: string;
+  readonly message?: string;
+  readonly cleanup?: Record<string, unknown>;
+}
+
 export type CloudExtensionProviderE2ERunner = (
   options: CloudExtensionSmokeOptions,
 ) => Promise<CloudExtensionProviderE2EResult>;
@@ -235,28 +245,32 @@ export async function runCloudExtensionSmoke(
         response.status === 200 && modelIds(body).includes("takosumi/default"),
       summarize: (body) => ({ modelIds: modelIds(body) }),
     }),
-    await requestCheck(fetchImpl, options, {
-      name: "aiGatewayStatus",
-      path: TAKOSUMI_AI_GATEWAY_STATUS_PATH,
-      expected: options.requireAiUpstreamProfile
-        ? "authenticated AI Gateway status reports at least one configured upstream profile"
-        : "authenticated AI Gateway status reports configured upstreams or the explicit Workers AI fallback",
-      headers: authHeaders,
-      pass: (response, body) => {
-        if (response.status !== 200) return false;
-        const mode = record(body).mode;
-        if (options.requireAiUpstreamProfile) {
-          return (
-            mode === "configured_upstreams" &&
-            positiveNumber(record(record(body).summary).profileCount)
-          );
-        }
+  ];
+  const aiGatewayStatus = await requestCheck(fetchImpl, options, {
+    name: "aiGatewayStatus",
+    path: TAKOSUMI_AI_GATEWAY_STATUS_PATH,
+    expected: options.requireAiUpstreamProfile
+      ? "authenticated AI Gateway status reports at least one configured upstream profile"
+      : "authenticated AI Gateway status reports configured upstreams or the explicit Workers AI fallback",
+    headers: authHeaders,
+    pass: (response, body) => {
+      if (response.status !== 200) return false;
+      const mode = record(body).mode;
+      if (options.requireAiUpstreamProfile) {
         return (
-          mode === "configured_upstreams" || mode === "workers_ai_fallback"
+          mode === "configured_upstreams" &&
+          positiveNumber(record(record(body).summary).profileCount)
         );
-      },
-      summarize: summarizeAiGatewayStatus,
-    }),
+      }
+      return mode === "configured_upstreams" || mode === "workers_ai_fallback";
+    },
+    summarize: summarizeAiGatewayStatus,
+  });
+  checks.push(aiGatewayStatus);
+  const embeddingsModel = embeddingsModelFromAiGatewayStatus(
+    aiGatewayStatus.summary,
+  );
+  checks.push(
     await requestCheck(fetchImpl, options, {
       name: "aiChatAuth",
       path: "/gateway/ai/v1/chat/completions",
@@ -275,21 +289,40 @@ export async function runCloudExtensionSmoke(
           typeof record(body).model === "string" ? record(body).model : null,
       }),
     }),
-    await requestCheck(fetchImpl, options, {
-      name: "aiEmbeddingsAuth",
-      path: "/gateway/ai/v1/embeddings",
-      method: "POST",
-      expected: "authenticated OpenAI-compatible embeddings request succeeds",
-      headers: { ...authHeaders, "content-type": "application/json" },
-      body: { model: "workers-ai/bge-base-en-v1.5", input: "takosumi" },
-      pass: (response, body) =>
-        response.status === 200 && embeddingsCount(body) > 0,
-      summarize: (body) => ({
-        embeddingCount: embeddingsCount(body),
-        model:
-          typeof record(body).model === "string" ? record(body).model : null,
-      }),
-    }),
+  );
+  checks.push(
+    embeddingsModel
+      ? await requestCheck(fetchImpl, options, {
+          name: "aiEmbeddingsAuth",
+          path: "/gateway/ai/v1/embeddings",
+          method: "POST",
+          expected:
+            "authenticated OpenAI-compatible embeddings request succeeds with a configured embeddings-capable model",
+          headers: { ...authHeaders, "content-type": "application/json" },
+          body: { model: embeddingsModel, input: "takosumi" },
+          pass: (response, body) =>
+            response.status === 200 && embeddingsCount(body) > 0,
+          summarize: (body) => ({
+            embeddingCount: embeddingsCount(body),
+            requestedModel: embeddingsModel,
+            model:
+              typeof record(body).model === "string"
+                ? record(body).model
+                : null,
+          }),
+        })
+      : syntheticCheck({
+          name: "aiEmbeddingsAuth",
+          method: "POST",
+          path: "/gateway/ai/v1/embeddings",
+          expected:
+            "authenticated OpenAI-compatible embeddings request succeeds with a configured embeddings-capable model",
+          summary: {
+            errorCode: "ai_gateway_embedding_model_not_configured",
+          },
+        }),
+  );
+  checks.push(
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatVerifyAuth",
       path: "/compat/cloudflare/client/v4/user/tokens/verify",
@@ -390,7 +423,7 @@ export async function runCloudExtensionSmoke(
       },
       summarize: summarizeCloudflareEnvelope,
     }),
-  ];
+  );
   if (options.requireProviderE2E) {
     checks.push(
       await cloudflareCompatProviderE2ECheck(options, providerE2eRunner),
@@ -536,6 +569,24 @@ async function requestCheck(
   };
 }
 
+function syntheticCheck(input: {
+  readonly name: string;
+  readonly method: string;
+  readonly path: string;
+  readonly expected: string;
+  readonly summary: Record<string, unknown>;
+}): CloudExtensionSmokeCheck {
+  return {
+    name: input.name,
+    method: input.method,
+    path: input.path,
+    status: 0,
+    ok: false,
+    expected: input.expected,
+    summary: input.summary,
+  };
+}
+
 function cloudExtensionGaps(
   checks: readonly CloudExtensionSmokeCheck[],
 ): string[] {
@@ -557,6 +608,16 @@ function cloudExtensionGaps(
   if (aiStatus && !aiStatus.ok) {
     gaps.push("ai_gateway_status_not_ready");
   }
+  const aiEmbeddings = checks.find(
+    (check) => check.name === "aiEmbeddingsAuth",
+  );
+  if (
+    aiEmbeddings &&
+    aiEmbeddings.summary.errorCode ===
+      "ai_gateway_embedding_model_not_configured"
+  ) {
+    gaps.push("ai_gateway_embedding_model_not_configured");
+  }
   const materialization = checks.find(
     (check) =>
       check.name === "cloudflareCompatScriptPutAuth" && check.status === 501,
@@ -564,12 +625,76 @@ function cloudExtensionGaps(
   if (materialization) {
     gaps.push("cloudflare_compat_materialization_not_enabled");
   }
+  const providerE2E = checks.find(
+    (check) => check.name === "cloudflareCompatProviderE2E",
+  );
+  if (providerE2E && !providerE2E.ok) {
+    gaps.push("cloudflare_compat_provider_e2e_failed");
+    for (const resource of providerE2EResources(providerE2E.summary)) {
+      if (resource.resource === "cloudflare_workers_script" && !resource.ok) {
+        gaps.push("cloudflare_compat_provider_workers_script_not_ready");
+      }
+    }
+  }
   return gaps;
+}
+
+function providerE2EResources(
+  summary: Record<string, unknown>,
+): readonly CloudExtensionProviderResourceResult[] {
+  const resources = summary.resources;
+  if (!Array.isArray(resources)) return [];
+  return resources
+    .map((resource) => record(resource))
+    .filter(
+      (resource): resource is Record<string, unknown> & { resource: string } =>
+        typeof resource.resource === "string",
+    )
+    .map((resource) => ({
+      resource: resource.resource,
+      ok: resource.ok === true,
+      completedSteps: Array.isArray(resource.completedSteps)
+        ? resource.completedSteps.filter(
+            (step): step is string => typeof step === "string",
+          )
+        : [],
+      summary: record(resource.summary),
+      errorClass:
+        typeof resource.errorClass === "string"
+          ? resource.errorClass
+          : undefined,
+      message:
+        typeof resource.message === "string" ? resource.message : undefined,
+      cleanup: resource.cleanup ? record(resource.cleanup) : undefined,
+    }));
 }
 
 async function runCloudflareCompatProviderE2E(
   options: CloudExtensionSmokeOptions,
 ): Promise<CloudExtensionProviderE2EResult> {
+  const resources = [
+    await runCloudflareCompatR2BucketProviderE2E(options),
+    await runCloudflareCompatWorkersScriptProviderE2E(options),
+  ];
+  const failedResources = resources
+    .filter((resource) => !resource.ok)
+    .map((resource) => resource.resource);
+  return {
+    status: failedResources.length === 0 ? 200 : 500,
+    ok: failedResources.length === 0,
+    summary: {
+      resources,
+      completedResources: resources
+        .filter((resource) => resource.ok)
+        .map((resource) => resource.resource),
+      failedResources,
+    },
+  };
+}
+
+async function runCloudflareCompatR2BucketProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
   const workdir = await mkdtemp(
     join(tmpdir(), "takosumi-cloud-compat-provider-"),
   );
@@ -630,31 +755,162 @@ output "bucket_name" {
     );
     completedSteps.push("destroy");
     return {
-      status: 200,
+      resource: "cloudflare_r2_bucket",
       ok: true,
+      completedSteps,
       summary: {
-        resource: "cloudflare_r2_bucket",
         bucketName,
-        completedSteps,
       },
     };
   } catch (error) {
     return {
-      status: 500,
+      resource: "cloudflare_r2_bucket",
       ok: false,
+      completedSteps,
       summary: {
-        resource: "cloudflare_r2_bucket",
         bucketName,
-        completedSteps,
-        errorClass:
-          error instanceof Error ? error.name || "Error" : typeof error,
-        message: sanitizeErrorMessage(
-          error instanceof Error ? error.message : String(error),
-        ),
       },
+      errorClass:
+        error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
     };
   } finally {
     await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runCloudflareCompatWorkersScriptProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
+  const scriptName = `takosumi-e2e-worker-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "script_name" {
+  type = string
+}
+
+locals {
+  worker_module = <<-EOT
+    export default { async fetch() { return new Response('takosumi provider e2e'); } };
+  EOT
+}
+
+resource "cloudflare_workers_script" "smoke" {
+  account_id         = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  script_name        = var.script_name
+  content            = local.worker_module
+  main_module        = "index.js"
+  compatibility_date = "2025-01-01"
+}
+
+output "script_name" {
+  value = cloudflare_workers_script.smoke.script_name
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_script_name: scriptName,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      resource: "cloudflare_workers_script",
+      ok: true,
+      completedSteps,
+      summary: { scriptName },
+    };
+  } catch (error) {
+    const cleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      : undefined;
+    return {
+      resource: "cloudflare_workers_script",
+      ok: false,
+      completedSteps,
+      summary: { scriptName },
+      errorClass:
+        error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+      cleanup,
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function cleanupCloudflareCompatWorkerScript(
+  options: CloudExtensionSmokeOptions,
+  scriptName: string,
+): Promise<Record<string, unknown>> {
+  try {
+    const response = await fetch(
+      `${options.url}/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${options.sessionToken}`,
+          accept: "application/json",
+        },
+      },
+    );
+    const body = await readJson(response);
+    return {
+      attempted: true,
+      status: response.status,
+      ok: response.ok && record(body).success === true,
+      summary: summarizeCloudflareEnvelope(body),
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      errorClass:
+        error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+    };
   }
 }
 
@@ -733,6 +989,7 @@ function summarizeCloudExtensionCatalog(
 function summarizeAiGatewayStatus(body: unknown): Record<string, unknown> {
   const row = record(body);
   const summary = record(row.summary);
+  const embeddingModels = aiGatewayEmbeddingModels(row);
   return {
     kind: row.kind,
     mode: typeof row.mode === "string" ? row.mode : undefined,
@@ -749,7 +1006,49 @@ function summarizeAiGatewayStatus(body: unknown): Record<string, unknown> {
           (provider): provider is string => typeof provider === "string",
         )
       : [],
+    embeddingModels,
   };
+}
+
+function embeddingsModelFromAiGatewayStatus(
+  summary: Record<string, unknown>,
+): string | null {
+  const models = summary.embeddingModels;
+  if (!Array.isArray(models)) return null;
+  return models.find((model): model is string => typeof model === "string") ??
+    null;
+}
+
+function aiGatewayEmbeddingModels(
+  row: Record<string, unknown>,
+): readonly string[] {
+  const models = new Set<string>();
+  const profiles = row.upstreamProfiles;
+  if (Array.isArray(profiles)) {
+    for (const profile of profiles) {
+      const publicModels = record(profile).publicModels;
+      if (!Array.isArray(publicModels)) continue;
+      for (const publicModel of publicModels) {
+        const item = record(publicModel);
+        const endpoints = item.endpoints;
+        if (
+          Array.isArray(endpoints) &&
+          endpoints.includes("embeddings") &&
+          typeof item.publicModel === "string"
+        ) {
+          models.add(item.publicModel);
+        }
+      }
+    }
+  }
+  const fallback = record(row.workersAiFallback);
+  if (
+    fallback.enabled !== false &&
+    typeof fallback.embeddingModel === "string"
+  ) {
+    models.add(fallback.embeddingModel);
+  }
+  return [...models];
 }
 
 function positiveNumber(value: unknown): boolean {
@@ -1068,6 +1367,7 @@ function cloudExtensionCatalogResponse(configured: boolean): Response {
 function aiGatewayStatusResponse(
   mode: "configured_upstreams" | "workers_ai_fallback",
 ): Response {
+  const embeddingModel = "workers-ai/bge-base-en-v1.5";
   return jsonResponse({
     kind: "takosumi.ai-gateway-status@v1",
     mode,
@@ -1077,6 +1377,34 @@ function aiGatewayStatusResponse(
       publicModelCount: mode === "configured_upstreams" ? 1 : 3,
       providers:
         mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+    },
+    upstreamProfiles:
+      mode === "configured_upstreams"
+        ? [
+            {
+              id: "deepseek-main",
+              provider: "deepseek",
+              endpointOrigin: "https://api.deepseek.example",
+              modelCount: 2,
+              publicModels: [
+                {
+                  publicModel: "takosumi/default",
+                  endpoints: ["chat.completions"],
+                  default: true,
+                },
+                {
+                  publicModel: "deepseek/text-embedding-v3",
+                  endpoints: ["embeddings"],
+                },
+              ],
+            },
+          ]
+        : [],
+    workersAiFallback: {
+      enabled: true,
+      aiBindingConfigured: true,
+      chatModel: "@cf/meta/llama-3.1-8b-instruct",
+      embeddingModel,
     },
   });
 }

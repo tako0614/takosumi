@@ -75,8 +75,25 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
       status: 200,
       ok: true,
       summary: {
-        resource: "cloudflare_r2_bucket",
-        completedSteps: ["init", "plan", "apply", "destroy"],
+        resources: [
+          {
+            resource: "cloudflare_r2_bucket",
+            ok: true,
+            completedSteps: ["init", "plan", "apply", "destroy"],
+            summary: {},
+          },
+          {
+            resource: "cloudflare_workers_script",
+            ok: true,
+            completedSteps: ["init", "plan", "apply", "destroy"],
+            summary: {},
+          },
+        ],
+        completedResources: [
+          "cloudflare_r2_bucket",
+          "cloudflare_workers_script",
+        ],
+        failedResources: [],
       },
     }),
   );
@@ -163,9 +180,28 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
       status: 200,
       ok: true,
       summary: {
-        resource: "cloudflare_r2_bucket",
+        resources: [
+          {
+            resource: "cloudflare_r2_bucket",
+            ok: true,
+            completedSteps: ["init", "plan", "apply", "destroy"],
+            summary: {
+              tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
+            },
+          },
+          {
+            resource: "cloudflare_workers_script",
+            ok: true,
+            completedSteps: ["init", "plan", "apply", "destroy"],
+            summary: {},
+          },
+        ],
+        completedResources: [
+          "cloudflare_r2_bucket",
+          "cloudflare_workers_script",
+        ],
+        failedResources: [],
         tokenSeenByRunner: options.sessionToken.startsWith("takpat_"),
-        completedSteps: ["init", "plan", "apply", "destroy"],
       },
     }),
   );
@@ -180,10 +216,100 @@ test("cloud extension smoke supports PAT auth and provider E2E evidence", async 
     result.checks.find((check) => check.name === "cloudflareCompatProviderE2E")
       ?.summary,
   ).toMatchObject({
-    resource: "cloudflare_r2_bucket",
-    completedSteps: ["init", "plan", "apply", "destroy"],
+    completedResources: [
+      "cloudflare_r2_bucket",
+      "cloudflare_workers_script",
+    ],
+    failedResources: [],
   });
   expect(JSON.stringify(result)).not.toContain(patOptions.sessionToken);
+});
+
+test("cloud extension smoke uses an embeddings model declared by AI Gateway status", async () => {
+  const requestedModels: string[] = [];
+  const result = await runCloudExtensionSmoke(
+    { ...BASE_OPTIONS, requireCompatMaterialization: true },
+    async (url, init) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/gateway/ai/v1/__takosumi/status") {
+        return aiGatewayStatus("configured_upstreams", {
+          embeddingModel: "deepseek/text-embedding-v3",
+        });
+      }
+      if (parsed.pathname === "/gateway/ai/v1/embeddings") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          readonly model?: string;
+        };
+        if (body.model) requestedModels.push(body.model);
+        return json({ data: [{ embedding: [0] }], model: body.model });
+      }
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+      );
+    },
+  );
+
+  expect(result.status).toBe("passed");
+  expect(result.gaReady).toBe(true);
+  expect(requestedModels).toEqual(["deepseek/text-embedding-v3"]);
+  expect(
+    result.checks.find((check) => check.name === "aiEmbeddingsAuth")?.summary,
+  ).toMatchObject({
+    requestedModel: "deepseek/text-embedding-v3",
+  });
+});
+
+test("cloud extension smoke reports provider workers script E2E as a GA gap", async () => {
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireProviderE2E: true,
+    },
+    async (url, init) =>
+      responseForImplementedCompat(
+        new URL(url).pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+      ),
+    async () => ({
+      status: 500,
+      ok: false,
+      summary: {
+        resources: [
+          {
+            resource: "cloudflare_r2_bucket",
+            ok: true,
+            completedSteps: ["init", "plan", "apply", "destroy"],
+            summary: {},
+          },
+          {
+            resource: "cloudflare_workers_script",
+            ok: false,
+            completedSteps: ["init", "plan", "apply"],
+            summary: { scriptName: "takosumi-e2e-worker-test" },
+            errorClass: "Error",
+            message:
+              "tofu destroy exited 1: 501 Cloudflare compatibility route is mounted, but this resource is not supported yet",
+            cleanup: { attempted: true, ok: true, status: 200 },
+          },
+        ],
+        completedResources: ["cloudflare_r2_bucket"],
+        failedResources: ["cloudflare_workers_script"],
+      },
+    }),
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain("cloudflare_compat_provider_e2e_failed");
+  expect(result.gaps).toContain(
+    "cloudflare_compat_provider_workers_script_not_ready",
+  );
 });
 
 function responseFor(pathname: string, authenticated: boolean): Response {
@@ -241,7 +367,10 @@ function cloudExtensionCatalog(configured: boolean): Response {
 
 function aiGatewayStatus(
   mode: "configured_upstreams" | "workers_ai_fallback",
+  options: { readonly embeddingModel?: string } = {},
 ): Response {
+  const embeddingModel =
+    options.embeddingModel ?? "workers-ai/bge-base-en-v1.5";
   return json({
     kind: "takosumi.ai-gateway-status@v1",
     mode,
@@ -251,6 +380,34 @@ function aiGatewayStatus(
       publicModelCount: mode === "configured_upstreams" ? 1 : 3,
       providers:
         mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+    },
+    upstreamProfiles:
+      mode === "configured_upstreams"
+        ? [
+            {
+              id: "deepseek-main",
+              provider: "deepseek",
+              endpointOrigin: "https://api.deepseek.example",
+              modelCount: 2,
+              publicModels: [
+                {
+                  publicModel: "takosumi/default",
+                  endpoints: ["chat.completions"],
+                  default: true,
+                },
+                {
+                  publicModel: embeddingModel,
+                  endpoints: ["embeddings"],
+                },
+              ],
+            },
+          ]
+        : [],
+    workersAiFallback: {
+      enabled: true,
+      aiBindingConfigured: true,
+      chatModel: "@cf/meta/llama-3.1-8b-instruct",
+      embeddingModel,
     },
   });
 }
