@@ -145,10 +145,12 @@ import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import {
   canTransitionAppInstallationStatus,
+  type AppInstallationMode,
   type AppInstallationStatus,
   type InstallationRecord,
   type SpaceKind,
 } from "./ledger.ts";
+import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "./encoding.ts";
 
@@ -829,6 +831,7 @@ interface ControlRouteContext {
   readonly url: URL;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
+  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
   /**
    * Operator billing plan catalog (spec §32) for `GET /api/v1/billing/plans`.
    * Falls back to the `TAKOSUMI_BILLING_PLANS` env var when omitted.
@@ -925,6 +928,7 @@ export async function handleControlRoute(
       operations,
       store,
       session,
+      sharedCellRuntime: context.sharedCellRuntime,
       billingPlans: context.billingPlans,
     });
   } catch (error) {
@@ -956,6 +960,7 @@ interface DispatchInput {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly session: { readonly subject: string };
+  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
   readonly billingPlans?: readonly BillingPlan[];
 }
 
@@ -1010,6 +1015,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       operations,
       store,
       input.session.subject,
+      input.sharedCellRuntime,
     );
   }
 
@@ -2817,6 +2823,7 @@ async function deployUploadedSnapshot(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
+  sharedCellRuntime?: SharedCellRuntimeAllocator,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body)
@@ -2896,6 +2903,26 @@ async function deployUploadedSnapshot(
   }
   const planOnly = booleanValue(body.planOnly);
   const autoApprove = booleanValue(body.autoApprove);
+  const projectionMode =
+    body.projectionMode === undefined
+      ? undefined
+      : deployProjectionModeValue(body.projectionMode);
+  if (body.projectionMode !== undefined && !projectionMode) {
+    return errorJson(
+      "invalid_argument",
+      "projectionMode must be self-hosted or shared-cell",
+      400,
+      request,
+    );
+  }
+  if (projectionMode === "shared-cell" && !sharedCellRuntime) {
+    return errorJson(
+      "feature_unavailable",
+      "shared-cell projection runtime is not configured",
+      503,
+      request,
+    );
+  }
   const deployRequest: InternalDeployRequest = {
     spaceId,
     name,
@@ -2909,12 +2936,15 @@ async function deployUploadedSnapshot(
   };
   try {
     const deployResponse = await operations.deployUpload(deployRequest);
-    await syncDeployControlProjectionFromDeploy({
+    const projectionError = await syncDeployControlProjectionFromDeploy({
       operations,
       store,
       sessionSubject: sessionSubject as TakosumiSubject,
       deployResponse,
+      projectionMode,
+      sharedCellRuntime,
     });
+    if (projectionError) return projectionError;
     return json(await publicDeployResponse(operations, deployResponse));
   } catch (error) {
     logDeployUploadFailure(error, {
@@ -2946,11 +2976,16 @@ async function syncDeployControlProjectionFromDeploy(input: {
   readonly store: AccountsStore;
   readonly sessionSubject: TakosumiSubject;
   readonly deployResponse: DeployResponse;
-}): Promise<void> {
+  readonly projectionMode?: Extract<
+    AppInstallationMode,
+    "self-hosted" | "shared-cell"
+  >;
+  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
+}): Promise<Response | undefined> {
   const planRunId =
     input.deployResponse.planRun?.id ?? input.deployResponse.run.id;
   const { planRun } = await input.operations.getPlanRun(planRunId);
-  await upsertDeployControlInstallationProjection({
+  return await upsertDeployControlInstallationProjection({
     operations: input.operations,
     store: input.store,
     sessionSubject: input.sessionSubject,
@@ -2958,6 +2993,8 @@ async function syncDeployControlProjectionFromDeploy(input: {
     planRun,
     fallbackRun: input.deployResponse.planRun ?? input.deployResponse.run,
     requestedStatus: projectionStatusFromDeploy(input.deployResponse),
+    projectionMode: input.projectionMode,
+    sharedCellRuntime: input.sharedCellRuntime,
   });
 }
 
@@ -2967,7 +3004,7 @@ async function syncDeployControlProjectionFromApply(input: {
   readonly sessionSubject: TakosumiSubject;
   readonly planRun: PublicPlanRun;
   readonly response: ApplyRunResponse;
-}): Promise<void> {
+}): Promise<Response | undefined> {
   const installation =
     input.response.installation ??
     (input.planRun.installationId
@@ -2975,8 +3012,8 @@ async function syncDeployControlProjectionFromApply(input: {
           .getInstallation(input.planRun.installationId)
           .catch(() => undefined)
       : undefined);
-  if (!installation) return;
-  await upsertDeployControlInstallationProjection({
+  if (!installation) return undefined;
+  return await upsertDeployControlInstallationProjection({
     operations: input.operations,
     store: input.store,
     sessionSubject: input.sessionSubject,
@@ -3016,16 +3053,21 @@ async function upsertDeployControlInstallationProjection(input: {
   readonly planRun: PublicPlanRun;
   readonly fallbackRun?: Run;
   readonly requestedStatus: AppInstallationStatus;
-}): Promise<void> {
+  readonly projectionMode?: Extract<
+    AppInstallationMode,
+    "self-hosted" | "shared-cell"
+  >;
+  readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
+}): Promise<Response | undefined> {
   const source = await projectionSourceFromPlanRun({
     operations: input.operations,
     planRun: input.planRun,
     fallbackRun: input.fallbackRun,
   });
-  if (!source) return;
+  if (!source) return undefined;
   const existing = await input.store.findAppInstallation(input.installation.id);
   if (existing?.status === "ready" && input.requestedStatus === "installing") {
-    return;
+    return undefined;
   }
   const now = Date.now();
   const accountId =
@@ -3037,8 +3079,47 @@ async function upsertDeployControlInstallationProjection(input: {
       spaceId: input.installation.spaceId,
       now,
     }));
-  if (!accountId) return;
+  if (!accountId) return undefined;
   const status = nextProjectionStatus(existing?.status, input.requestedStatus);
+  const mode = existing?.mode ?? input.projectionMode ?? "self-hosted";
+  let runtimeBindingId = existing?.runtimeBindingId;
+  let runtimeBinding;
+  if (mode === "shared-cell" && !runtimeBindingId) {
+    if (!input.sharedCellRuntime) {
+      return errorJson(
+        "feature_unavailable",
+        "shared-cell projection runtime is not configured",
+        503,
+      );
+    }
+    runtimeBinding = await input.sharedCellRuntime({
+      installationId: input.installation.id,
+      accountId,
+      spaceId: input.installation.spaceId,
+      appId: input.installation.name,
+      createdBySubject: input.sessionSubject,
+      now,
+    });
+    if (!runtimeBinding) {
+      return errorJson(
+        "shared_cell_capacity_unavailable",
+        "shared-cell install requires an available warm runtime slot",
+        503,
+      );
+    }
+    if (
+      runtimeBinding.installationId !== input.installation.id ||
+      runtimeBinding.mode !== "shared-cell" ||
+      runtimeBinding.targetType !== "shared-cell"
+    ) {
+      return errorJson(
+        "invalid_shared_cell_runtime_target",
+        "shared-cell runtime allocator must return a shared-cell runtime target for the requested installation",
+        500,
+      );
+    }
+    runtimeBindingId = runtimeBinding.runtimeBindingId;
+  }
   const record: InstallationRecord = {
     installationId: input.installation.id,
     accountId,
@@ -3049,10 +3130,8 @@ async function upsertDeployControlInstallationProjection(input: {
     sourceCommit: source.sourceCommit,
     planDigest: source.planDigest,
     ...(source.artifactDigest ? { artifactDigest: source.artifactDigest } : {}),
-    mode: existing?.mode ?? "self-hosted",
-    ...(existing?.runtimeBindingId
-      ? { runtimeBindingId: existing.runtimeBindingId }
-      : {}),
+    mode,
+    ...(runtimeBindingId ? { runtimeBindingId } : {}),
     ...(existing?.billingAccountId
       ? { billingAccountId: existing.billingAccountId }
       : {}),
@@ -3062,6 +3141,7 @@ async function upsertDeployControlInstallationProjection(input: {
     updatedAt: now,
   };
   await input.store.saveAppInstallation(record);
+  if (runtimeBinding) await input.store.saveRuntimeBinding(runtimeBinding);
   if (!existing) {
     await appendLedgerEvent(input.store, {
       installationId: record.installationId,
@@ -3075,7 +3155,7 @@ async function upsertDeployControlInstallationProjection(input: {
       },
       now,
     });
-    return;
+    return undefined;
   }
   if (record.status !== existing.status) {
     await appendProjectionStatusChangedEvent({
@@ -3087,6 +3167,7 @@ async function upsertDeployControlInstallationProjection(input: {
       now,
     });
   }
+  return undefined;
 }
 
 async function saveProjectionStatusChange(input: {
@@ -3275,6 +3356,13 @@ function projectionStatusFromDeploy(
   return "installing";
 }
 
+function deployProjectionModeValue(
+  value: unknown,
+): Extract<AppInstallationMode, "self-hosted" | "shared-cell"> | undefined {
+  if (value === "self-hosted" || value === "shared-cell") return value;
+  return undefined;
+}
+
 function projectionStatusFromRunStatus(
   status: Run["status"],
 ): AppInstallationStatus {
@@ -3380,13 +3468,14 @@ async function applyPlanRun(
     ...(confirmDestructive ? { confirmDestructive: true } : {}),
   };
   const response = await operations.createApplyRun(applyRequest);
-  await syncDeployControlProjectionFromApply({
+  const projectionError = await syncDeployControlProjectionFromApply({
     operations,
     store,
     sessionSubject: sessionSubject as TakosumiSubject,
     planRun,
     response,
   });
+  if (projectionError) return projectionError;
   return jsonStatus(await publicApplyActionResponse(operations, response), 201);
 }
 

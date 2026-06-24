@@ -7546,6 +7546,8 @@ test("internal installations import-plan emits a target restore request", async 
         "inst_target",
         "--created-by-subject",
         "tsub_target",
+        "--mode",
+        "shared-cell",
       ],
       {
         stdout: (line) => stdout.push(line),
@@ -7572,7 +7574,7 @@ test("internal installations import-plan emits a target restore request", async 
     expect(plan.request.installationId).toEqual(undefined);
     expect(plan.request.accountId).toEqual("acct_target");
     expect(plan.request.spaceId).toEqual("space_target");
-    expect(plan.request.mode).toEqual("self-hosted");
+    expect(plan.request.mode).toEqual("shared-cell");
     expect(plan.request.source.url).toEqual("https://github.com/takos/takos");
     expect(plan.request.source.gitUrl).toEqual(
       "https://github.com/takos/takos",

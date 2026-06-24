@@ -1344,6 +1344,7 @@ export function createAccountsHandler(
         url,
         store,
         operations: options.controlPlaneOperations,
+        sharedCellRuntime: options.sharedCellRuntime,
         billingPlans: options.billingPlans,
       });
       if (controlResponse) return controlResponse;

@@ -58,6 +58,12 @@ const installationStatuses = [
   "failed",
 ] as const;
 
+const installationImportModes = [
+  "shared-cell",
+  "dedicated",
+  "self-hosted",
+] as const;
+
 export async function runInstallationsList(
   args: string[],
   io: CliIo,
@@ -606,8 +612,10 @@ async function buildInstallationImportPlanFromOptions(
     throw new Error("--created-by-subject must be a tsub_ subject");
   }
   const mode = optionalStringOption(options, "mode") ?? "self-hosted";
-  if (mode !== "self-hosted" && mode !== "dedicated") {
-    throw new Error("--mode must be self-hosted or dedicated");
+  if (!isInstallationImportMode(mode)) {
+    throw new Error(
+      "--mode must be one of: shared-cell, dedicated, self-hosted",
+    );
   }
   const bundle = parseAccountsInstallationExportBundleInput(
     parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
@@ -735,5 +743,13 @@ function isInstallationStatus(
 ): value is (typeof installationStatuses)[number] {
   return installationStatuses.includes(
     value as (typeof installationStatuses)[number],
+  );
+}
+
+function isInstallationImportMode(
+  value: string,
+): value is (typeof installationImportModes)[number] {
+  return installationImportModes.includes(
+    value as (typeof installationImportModes)[number],
   );
 }
