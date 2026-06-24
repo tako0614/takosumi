@@ -57,12 +57,18 @@ describe("/new flow guidance", () => {
 
   test("keeps the service catalog app-like and the source form advanced", () => {
     expect(newAppViewSource).toContain('class="av-store"');
+    expect(newAppViewSource).toContain('class="av-store-hero"');
+    expect(newAppViewSource).toContain('class="av-store-search"');
     expect(newAppViewSource).toContain('class="av-catalog-grid"');
     expect(newAppViewSource).toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
+    expect(newAppViewSource).toContain("function catalogKindLabel");
     expect(newAppViewSource).toContain("function CatalogCard");
     expect(newAppViewSource).toContain("function ManualImportCard");
+    expect(newAppViewSource).toContain("const [catalogQuery");
+    expect(newAppViewSource).toContain("const allCatalogEntries = createMemo");
     expect(newAppViewSource).toContain("const catalogEntries = createMemo");
+    expect(newAppViewSource).toContain("catalogEntryMatchesQuery");
     expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
     expect(newAppViewSource).toContain("function catalogConfigPriority");
     expect(newAppViewSource).toContain("config.spaceId === undefined");
@@ -77,14 +83,20 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('entry.surface === "building_block"');
     expect(newAppViewSource).toContain('entry.surface === "example"');
     expect(newAppViewSource).toContain('t("new.store.title")');
+    expect(newAppViewSource).toContain('t("new.store.featuredTitle")');
+    expect(newAppViewSource).toContain('t("new.store.searchPlaceholder")');
     expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
     expect(newAppViewSource).toContain('t("new.store.examplesTitle")');
-    expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
+    expect(newAppViewSource).toContain('class="av-store-section"');
+    expect(newAppViewSource).not.toContain(
+      'class="wb-disclosure av-catalog-more"',
+    );
     expect(newAppViewSource).toContain(
       'class="av-catalog-card av-catalog-card-manual"',
     );
     expect(newAppViewSource).toContain('t("new.manualCard.title")');
     expect(newAppViewSource).toContain('t("new.manualCard.body")');
+    expect(newAppViewSource).toContain('t("new.manualCard.action")');
     const storeHeadStart = newAppViewSource.indexOf(
       '<div class="av-store-head">',
     );
@@ -109,9 +121,9 @@ describe("/new flow guidance", () => {
     );
     expect(storeHeadStart).toBeGreaterThan(-1);
     expect(catalogGridStart).toBeGreaterThan(storeHeadStart);
-    expect(
-      newAppViewSource.slice(storeHeadStart, catalogGridStart),
-    ).not.toContain('setActiveTab("git")');
+    expect(newAppViewSource.slice(storeHeadStart, catalogGridStart)).toContain(
+      'setActiveTab("git")',
+    );
     expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).not.toContain("sourceSummaryMeta");
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
@@ -123,7 +135,11 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.catalog.select");
     expect(en).not.toHaveProperty("new.store.subtitle");
     expect(en["new.store.title"]).toBe("Choose a service to add");
+    expect(en["new.store.featuredTitle"]).toBe("Recommended");
+    expect(en["new.store.searchPlaceholder"]).toContain("Search");
     expect(en["new.manualCard.title"]).toBe("Add from link");
+    expect(en["new.manualCard.action"]).toBe("Open");
+    expect(en["new.catalog.add"]).toBe("Add");
     expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
     expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
@@ -137,7 +153,11 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.catalog.select");
     expect(ja).not.toHaveProperty("new.store.subtitle");
     expect(ja["new.store.title"]).toBe("追加するサービスを選択");
+    expect(ja["new.store.featuredTitle"]).toBe("おすすめ");
+    expect(ja["new.store.searchPlaceholder"]).toContain("探す");
     expect(ja["new.manualCard.title"]).toBe("リンクから追加");
+    expect(ja["new.manualCard.action"]).toBe("開く");
+    expect(ja["new.catalog.add"]).toBe("追加");
     expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
     expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
