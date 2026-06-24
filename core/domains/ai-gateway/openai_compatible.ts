@@ -7,7 +7,9 @@ import {
   type TakosumiAiGatewayModelListResponse,
   type TakosumiOpenAiCompatibleProfile,
   type TakosumiAiGatewayProvider,
+  type TakosumiAiGatewayRoute,
   type TakosumiAiGatewayScope,
+  type TakosumiAiGatewayStatusResponse,
 } from "takosumi-contract/ai-gateway";
 import type { JsonObject, JsonValue } from "takosumi-contract";
 import {
@@ -38,7 +40,7 @@ export interface TakosumiAiGatewayAuthContext {
 }
 
 export interface TakosumiAiGatewayAuthRequest {
-  readonly endpoint: TakosumiAiGatewayEndpoint;
+  readonly endpoint: TakosumiAiGatewayRoute;
   readonly requiredScopes: readonly TakosumiAiGatewayScope[];
 }
 
@@ -136,6 +138,8 @@ export async function handleTakosumiAiGatewayRequest(
   if (!auth.ok) return auth.response;
 
   switch (endpoint) {
+    case "status":
+      return handleStatus(options.config);
     case "models":
       return handleModels(options.config);
     case "chat.completions":
@@ -158,8 +162,9 @@ export async function handleTakosumiAiGatewayRequest(
 export function endpointFromPath(
   pathname: string,
   basePath = TAKOSUMI_AI_GATEWAY_BASE_PATH,
-): TakosumiAiGatewayEndpoint | undefined {
+): TakosumiAiGatewayRoute | undefined {
   const base = basePath.replace(/\/+$/, "");
+  if (pathname === `${base}/__takosumi/status`) return "status";
   if (pathname === `${base}/models`) return "models";
   if (pathname === `${base}/chat/completions`) return "chat.completions";
   if (pathname === `${base}/embeddings`) return "embeddings";
@@ -167,9 +172,11 @@ export function endpointFromPath(
 }
 
 export function requiredScopesForEndpoint(
-  endpoint: TakosumiAiGatewayEndpoint,
+  endpoint: TakosumiAiGatewayRoute,
 ): readonly TakosumiAiGatewayScope[] {
   switch (endpoint) {
+    case "status":
+      return ["ai.models.read"];
     case "models":
       return ["ai.models.read"];
     case "chat.completions":
@@ -177,6 +184,46 @@ export function requiredScopesForEndpoint(
     case "embeddings":
       return ["ai.embeddings"];
   }
+}
+
+function handleStatus(config: TakosumiAiGatewayConfig): Response {
+  const models = allModels(config);
+  const response: TakosumiAiGatewayStatusResponse = {
+    kind: "takosumi.ai-gateway-status@v1",
+    mode: "configured_upstreams",
+    defaultModel: config.defaultModel,
+    endpoints: ["status", "models", "chat.completions", "embeddings"],
+    summary: {
+      profileCount: config.profiles.length,
+      publicModelCount: models.length,
+      providers: [
+        ...new Set(config.profiles.map((profile) => profile.provider)),
+      ],
+    },
+    upstreamProfiles: config.profiles.map((profile) => ({
+      id: profile.id,
+      provider: profile.provider,
+      type: profile.type,
+      endpointOrigin: new URL(profile.baseUrl).origin,
+      modelCount: profile.models.length,
+      publicModels: profile.models.map((model) => ({
+        publicModel: model.publicModel,
+        endpoints: model.endpoints,
+        default: model.default,
+        contextWindow: model.contextWindow,
+        maxOutputTokens: model.maxOutputTokens,
+        billingClass: model.billingClass,
+        metadata: model.metadata,
+      })),
+    })),
+    workersAiFallback: {
+      enabled: false,
+      aiBindingConfigured: false,
+      chatModel: "",
+      embeddingModel: "",
+    },
+  };
+  return jsonResponse(response);
 }
 
 function handleModels(config: TakosumiAiGatewayConfig): Response {
@@ -400,9 +447,13 @@ function upstreamResponseHeaders(
 
 function methodIssueForEndpoint(
   method: string,
-  endpoint: TakosumiAiGatewayEndpoint,
+  endpoint: TakosumiAiGatewayRoute,
 ): Response | undefined {
-  if (endpoint === "models" && method !== "GET" && method !== "HEAD") {
+  if (
+    (endpoint === "models" || endpoint === "status") &&
+    method !== "GET" &&
+    method !== "HEAD"
+  ) {
     return aiGatewayError(405, "method_not_allowed", "method not allowed");
   }
   if (
