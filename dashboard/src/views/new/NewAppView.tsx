@@ -40,6 +40,7 @@ import {
   KeyRound,
   Link2,
   Plus,
+  Search,
   Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
@@ -132,6 +133,17 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
   }
 }
 
+function catalogKindLabel(kind: CatalogEntry["kind"]): string {
+  switch (kind) {
+    case "worker":
+      return t("new.catalog.kind.worker");
+    case "site":
+      return t("new.catalog.kind.site");
+    case "storage":
+      return t("new.catalog.kind.storage");
+  }
+}
+
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
 
@@ -163,6 +175,10 @@ function CatalogCard(props: {
           <CatalogIcon entry={props.entry} />
         </span>
         <span class="av-catalog-text">
+          <span class="av-catalog-meta">
+            <span>{catalogKindLabel(props.entry.kind)}</span>
+            <span>{providerDisplayName(props.entry.provider)}</span>
+          </span>
           <span class="av-catalog-name">{props.entry.name[locale()]}</span>
           <span class="av-catalog-desc">
             {props.entry.description[locale()]}
@@ -170,6 +186,7 @@ function CatalogCard(props: {
         </span>
         <span class="av-catalog-action" aria-hidden="true">
           <Plus size={16} />
+          <span>{t("new.catalog.add")}</span>
         </span>
       </button>
     </li>
@@ -193,6 +210,7 @@ function ManualImportCard(props: { readonly onSelect: () => void }) {
         </span>
         <span class="av-catalog-action" aria-hidden="true">
           <ArrowRight size={16} />
+          <span>{t("new.manualCard.action")}</span>
         </span>
       </button>
     </li>
@@ -556,6 +574,7 @@ function Inner() {
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
     initialAddTab(initialSearch, Boolean(prefill)),
   );
+  const [catalogQuery, setCatalogQuery] = createSignal("");
   const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
     null,
   );
@@ -625,7 +644,7 @@ function Inner() {
   const configList = createMemo<readonly InstallConfig[]>(
     () => configs() ?? [],
   );
-  const catalogEntries = createMemo<readonly CatalogEntry[]>(() =>
+  const allCatalogEntries = createMemo<readonly CatalogEntry[]>(() =>
     dedupeCatalogConfigs(
       configList().filter((config): config is CatalogInstallConfig =>
         Boolean(config.catalog?.source),
@@ -642,6 +661,25 @@ function Inner() {
           a.order - b.order ||
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
+  );
+  const normalizedCatalogQuery = () => catalogQuery().trim().toLowerCase();
+  const catalogEntryMatchesQuery = (entry: CatalogEntry) => {
+    const query = normalizedCatalogQuery();
+    if (!query) return true;
+    const searchText = [
+      entry.name[locale()],
+      entry.description[locale()],
+      entry.provider,
+      entry.kind,
+      entry.suggestedName,
+      entry.source?.git ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    return searchText.includes(query);
+  };
+  const catalogEntries = createMemo<readonly CatalogEntry[]>(() =>
+    allCatalogEntries().filter(catalogEntryMatchesQuery),
   );
   const primaryCatalog = createMemo(() =>
     catalogEntries().filter((entry) => entry.surface === "service"),
@@ -1909,39 +1947,94 @@ function Inner() {
 
         <Show when={activeTab() !== "git" && !gitUrl().trim()}>
           <section class="av-store" aria-label={t("new.store.aria")}>
-            <div class="av-store-head">
-              <div>
-                <span class="av-store-kicker">{t("new.store.kicker")}</span>
-                <h2>{t("new.store.title")}</h2>
-              </div>
-            </div>
-            <Switch>
-              <Match when={configs.loading}>
-                <div class="av-catalog-grid" aria-busy="true">
-                  <Skeleton variant="row" count={3} />
+            <div class="av-store-hero">
+              <div class="av-store-head">
+                <div>
+                  <span class="av-store-kicker">{t("new.store.kicker")}</span>
+                  <h2>{t("new.store.title")}</h2>
+                  <p>{t("new.subtitle")}</p>
                 </div>
-              </Match>
-              <Match when={configs.error}>
-                <Toast tone="error">
-                  {t("common.fetchFailed", {
-                    message: (configs.error as ControlApiError).message,
-                  })}
-                </Toast>
-              </Match>
-              <Match when={!configs.loading && catalogEntries().length === 0}>
-                <EmptyState
-                  icon={<Download size={28} />}
-                  title={t("new.store.empty.title")}
-                  message={t("new.store.empty.message")}
-                  action={
-                    <Button variant="primary" href="/new?mode=link">
-                      {t("new.advancedImport.open")}
-                    </Button>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  icon={<Link2 size={16} />}
+                  onClick={() => setActiveTab("git")}
+                >
+                  {t("new.advancedImport.open")}
+                </Button>
+              </div>
+              <label class="av-store-search">
+                <Search size={18} aria-hidden="true" />
+                <span class="sr-only">{t("new.store.searchLabel")}</span>
+                <input
+                  type="search"
+                  value={catalogQuery()}
+                  onInput={(event) =>
+                    setCatalogQuery(event.currentTarget.value)
                   }
+                  placeholder={t("new.store.searchPlaceholder")}
+                  autocomplete="off"
+                  spellcheck={false}
                 />
-              </Match>
-              <Match when={catalogEntries().length > 0}>
-                <>
+              </label>
+            </div>
+            <div class="av-store-shelf">
+              <div class="av-store-section-head">
+                <h3>{t("new.store.featuredTitle")}</h3>
+                <span>
+                  {t("new.store.count", { count: catalogEntries().length })}
+                </span>
+              </div>
+              <Switch>
+                <Match when={configs.loading}>
+                  <div class="av-catalog-grid" aria-busy="true">
+                    <Skeleton variant="row" count={3} />
+                  </div>
+                </Match>
+                <Match when={configs.error}>
+                  <Toast tone="error">
+                    {t("common.fetchFailed", {
+                      message: (configs.error as ControlApiError).message,
+                    })}
+                  </Toast>
+                </Match>
+                <Match
+                  when={!configs.loading && allCatalogEntries().length === 0}
+                >
+                  <EmptyState
+                    icon={<Download size={28} />}
+                    title={t("new.store.empty.title")}
+                    message={t("new.store.empty.message")}
+                    action={
+                      <Button variant="primary" href="/new?mode=link">
+                        {t("new.advancedImport.open")}
+                      </Button>
+                    }
+                  />
+                </Match>
+                <Match
+                  when={
+                    !configs.loading &&
+                    allCatalogEntries().length > 0 &&
+                    catalogEntries().length === 0
+                  }
+                >
+                  <EmptyState
+                    icon={<Search size={28} />}
+                    title={t("new.store.searchEmpty.title")}
+                    message={t("new.store.searchEmpty.message")}
+                    action={
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        onClick={() => setCatalogQuery("")}
+                      >
+                        {t("new.store.searchEmpty.clear")}
+                      </Button>
+                    }
+                  />
+                </Match>
+                <Match when={catalogEntries().length > 0}>
                   <ul class="av-catalog-grid">
                     <For each={featuredCatalog()}>
                       {(entry) => (
@@ -1953,46 +2046,39 @@ function Inner() {
                     </For>
                     <ManualImportCard onSelect={() => setActiveTab("git")} />
                   </ul>
-                  <Show
-                    when={
-                      showSecondaryCatalog() &&
-                      buildingBlockCatalog().length > 0
-                    }
-                  >
-                    <details class="wb-disclosure av-catalog-more">
-                      <summary>{t("new.store.blocksTitle")}</summary>
-                      <ul class="av-catalog-grid av-catalog-grid-secondary">
-                        <For each={buildingBlockCatalog()}>
-                          {(entry) => (
-                            <CatalogCard
-                              entry={entry}
-                              onSelect={pickCatalogEntry}
-                            />
-                          )}
-                        </For>
-                      </ul>
-                    </details>
-                  </Show>
-                  <Show
-                    when={showSecondaryCatalog() && exampleCatalog().length > 0}
-                  >
-                    <details class="wb-disclosure av-catalog-more">
-                      <summary>{t("new.store.examplesTitle")}</summary>
-                      <ul class="av-catalog-grid av-catalog-grid-secondary">
-                        <For each={exampleCatalog()}>
-                          {(entry) => (
-                            <CatalogCard
-                              entry={entry}
-                              onSelect={pickCatalogEntry}
-                            />
-                          )}
-                        </For>
-                      </ul>
-                    </details>
-                  </Show>
-                </>
-              </Match>
-            </Switch>
+                </Match>
+              </Switch>
+            </div>
+            <Show
+              when={showSecondaryCatalog() && buildingBlockCatalog().length > 0}
+            >
+              <section class="av-store-section">
+                <div class="av-store-section-head">
+                  <h3>{t("new.store.blocksTitle")}</h3>
+                </div>
+                <ul class="av-catalog-grid av-catalog-grid-secondary">
+                  <For each={buildingBlockCatalog()}>
+                    {(entry) => (
+                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
+                    )}
+                  </For>
+                </ul>
+              </section>
+            </Show>
+            <Show when={showSecondaryCatalog() && exampleCatalog().length > 0}>
+              <section class="av-store-section">
+                <div class="av-store-section-head">
+                  <h3>{t("new.store.examplesTitle")}</h3>
+                </div>
+                <ul class="av-catalog-grid av-catalog-grid-secondary">
+                  <For each={exampleCatalog()}>
+                    {(entry) => (
+                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
+                    )}
+                  </For>
+                </ul>
+              </section>
+            </Show>
           </section>
         </Show>
 
