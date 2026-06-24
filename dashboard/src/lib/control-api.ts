@@ -869,6 +869,8 @@ export interface CapsuleCompatibilityResource {
 }
 
 export interface CapsuleCompatibilityResult {
+  readonly reportId?: string;
+  readonly sourceSnapshotId?: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly summary: string;
   readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
@@ -1252,6 +1254,7 @@ export async function checkCapsuleCompatibility(input: {
   });
   const body = await controlFetch<{
     report: {
+      readonly id: string;
       readonly level: CapsuleCompatibilityLevel;
       readonly findings?: readonly {
         readonly severity?: "info" | "warning" | "error";
@@ -1305,7 +1308,8 @@ export async function checkCapsuleCompatibility(input: {
         const ownershipOptions = normalizeProviderCredentialOwnershipOptions(
           provider.ownershipOptions,
         );
-        return ownershipOptions.length > 0 ? ownershipOptions : ["env"];
+        const fallback: readonly ProviderCredentialOwnership[] = ["env"];
+        return ownershipOptions.length > 0 ? ownershipOptions : fallback;
       })(),
     }));
   const resources = (body.report.resources ?? [])
@@ -1316,6 +1320,8 @@ export async function checkCapsuleCompatibility(input: {
       allowed: resource.allowed ?? true,
     }));
   return {
+    reportId: body.report.id,
+    sourceSnapshotId: snapshot.id,
     level: body.report.level,
     summary:
       diagnostics[0]?.message ??
@@ -1574,10 +1580,16 @@ export async function waitForLatestSourceSnapshot(
 /** Create a plan run for an Installation. Returns the opaque Run envelope. */
 export async function planInstallation(
   installationId: string,
+  options: { readonly compatibilityReportId?: string } = {},
 ): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/capsules/${encodeURIComponent(installationId)}/plan`,
-    { method: "POST" },
+    {
+      method: "POST",
+      body: options.compatibilityReportId
+        ? { compatibilityReportId: options.compatibilityReportId }
+        : {},
+    },
   );
 }
 

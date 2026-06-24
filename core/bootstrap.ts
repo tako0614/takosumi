@@ -539,7 +539,10 @@ export interface TakosumiOperations {
    * InstallConfig -> Source, picks the latest SourceSnapshot, and dispatches
    * with installation state scope.
    */
-  createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
+  createInstallationPlan(
+    installationId: string,
+    options?: { readonly compatibilityReportId?: string },
+  ): Promise<PlanRunResponse>;
   /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
   createInstallationDestroyPlan(
     installationId: string,
@@ -1085,8 +1088,14 @@ export async function createTakosumiService(
       ),
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
-    createInstallationPlan: (installationId) =>
-      opentofuController.createInstallationPlan(installationId),
+    createInstallationPlan: (installationId, options) =>
+      opentofuController.createInstallationPlan(
+        installationId,
+        {},
+        options?.compatibilityReportId
+          ? { compatibilityReportId: options.compatibilityReportId }
+          : {},
+      ),
     createInstallationDestroyPlan: (installationId) =>
       opentofuController.createInstallationDestroyPlan(installationId),
     createInstallationDriftCheck: (installationId) =>

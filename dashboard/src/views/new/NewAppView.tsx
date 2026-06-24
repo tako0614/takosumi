@@ -89,9 +89,6 @@ import { locale, t } from "../../i18n/index.ts";
 import {
   Badge,
   Button,
-  Card,
-  CardHeader,
-  CardSection,
   EmptyState,
   FormField,
   Input,
@@ -1170,12 +1167,15 @@ function Inner() {
     }
   });
 
+  const settleProviderConnectionRows = async () => {
+    setProviderRows((rows) => defaultProviderRowsWithReadyConnections(rows));
+    await Promise.resolve();
+  };
+
   const ownershipOptionsForProvider = (
     provider: CapsuleCompatibilityProvider,
   ): readonly ProviderCredentialOwnership[] =>
-    provider.ownershipOptions.length > 0
-      ? provider.ownershipOptions
-      : ["env"];
+    provider.ownershipOptions.length > 0 ? provider.ownershipOptions : ["env"];
 
   const rowsFromCompatibility = (
     result: CapsuleCompatibilityResult,
@@ -1338,6 +1338,7 @@ function Inner() {
       // The check failed or could not resolve a result; its own error is shown.
       if (!compatibility()) return;
     }
+    await settleProviderConnectionRows();
     // Blockers render inline from compatibility state (compat result panel /
     // cloud-account callout). Stop here so the user can resolve them first.
     if (!canContinue()) return;
@@ -1451,6 +1452,11 @@ function Inner() {
       setError(proceedBlocker());
       return;
     }
+    await settleProviderConnectionRows();
+    if (!canContinue()) {
+      setError(proceedBlocker());
+      return;
+    }
     setBusy(true);
     setError(null);
     setExistingInstallation(null);
@@ -1467,8 +1473,8 @@ function Inner() {
       authConnectionId: sourceAuthConnectionIdForRun(),
       installConfigId:
         compatibility()?.installConfigId ?? selectedInstallConfigId(),
+      compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
-      providerConnections: providerConnectionsPayload(),
       sourceId: createdSourceId(),
       installationId: createdInstallationId(),
       syncDone: stepSync() === "done",
@@ -1522,6 +1528,16 @@ function Inner() {
         setStepSync("done");
       }
 
+      await settleProviderConnectionRows();
+      throwIfStaleFlow(flow);
+      if (!canContinue()) {
+        setStepInstall("idle");
+        setStepPlan("idle");
+        setError(null);
+        return;
+      }
+      const providerConnectionsForRun = providerConnectionsPayload();
+
       // Step 3 — create the current compatibility record bound to the chosen
       // service-side config. Public UI presents this as Capsule creation.
       let installationId = flowInput.installationId;
@@ -1555,14 +1571,19 @@ function Inner() {
       }
       await putInstallationProviderConnectionSet(
         installationId,
-        flowInput.providerConnections,
+        providerConnectionsForRun,
       );
       throwIfStaleFlow(flow);
       setStepInstall("done");
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");
-      const planEnvelope = await planInstallation(installationId);
+      const planEnvelope = await planInstallation(
+        installationId,
+        flowInput.compatibilityReportId
+          ? { compatibilityReportId: flowInput.compatibilityReportId }
+          : {},
+      );
       throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
@@ -1956,36 +1977,44 @@ function Inner() {
         </Show>
 
         <Show when={activeTab() === "git" || Boolean(gitUrl().trim())}>
-          <Card class="av-import-card">
-            <CardHeader
-              title={
-                usingSelectedService()
-                  ? (selectedCatalogEntry()?.name[locale()] ??
-                    sourceSummaryTitle())
-                  : t("new.advancedImport.title")
-              }
-              subtitle={
-                usingSelectedService()
-                  ? (selectedCatalogEntry()?.description[locale()] ??
-                    t("new.selection.subtitle"))
-                  : t("new.advancedImport.subtitle")
-              }
-              actions={
-                activeTab() === "git" && !gitUrl().trim() ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    onClick={() => setActiveTab("catalog")}
-                  >
-                    {t("new.advancedImport.close")}
-                  </Button>
-                ) : undefined
-              }
-            />
-            <CardSection>
+          <section class="av-add-flow" aria-label={t("new.title")}>
+            <div class="av-add-flow-header">
+              <div class="av-add-flow-icon" aria-hidden="true">
+                <Show
+                  when={selectedCatalogEntry()}
+                  fallback={<Download size={22} />}
+                >
+                  {(entry) => <CatalogIcon entry={entry()} />}
+                </Show>
+              </div>
+              <div class="av-add-flow-copy">
+                <h2>
+                  {usingSelectedService()
+                    ? (selectedCatalogEntry()?.name[locale()] ??
+                      sourceSummaryTitle())
+                    : t("new.advancedImport.title")}
+                </h2>
+                <p>
+                  {usingSelectedService()
+                    ? (selectedCatalogEntry()?.description[locale()] ??
+                      t("new.selection.subtitle"))
+                    : t("new.advancedImport.subtitle")}
+                </p>
+              </div>
+              <Show when={activeTab() === "git" && !gitUrl().trim()}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => setActiveTab("catalog")}
+                >
+                  {t("new.advancedImport.close")}
+                </Button>
+              </Show>
+            </div>
+            <div class="av-add-flow-body">
               <form
-                class="wb-install-form wb-install-source-form"
+                class="wb-install-form wb-install-source-form av-add-form"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void submitInstall();
@@ -2486,8 +2515,8 @@ function Inner() {
                   </ol>
                 </details>
               </Show>
-            </CardSection>
-          </Card>
+            </div>
+          </section>
         </Show>
       </Show>
     </AppShell>

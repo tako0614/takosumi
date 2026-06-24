@@ -241,12 +241,17 @@ describe("/new Provider Connections return context", () => {
     const setCreatedIndex = newAppViewSource.indexOf(
       "setCreatedInstallationId(installationId);",
     );
+    const payloadIndex = newAppViewSource.indexOf(
+      "const providerConnectionsForRun = providerConnectionsPayload();",
+    );
     const saveIndex = newAppViewSource.indexOf(
       "await putInstallationProviderConnectionSet(",
     );
     const doneIndex = newAppViewSource.indexOf('setStepInstall("done");');
 
     expect(createIndex).toBeGreaterThan(-1);
+    expect(payloadIndex).toBeGreaterThan(-1);
+    expect(createIndex).toBeGreaterThan(payloadIndex);
     expect(setCreatedIndex).toBeGreaterThan(createIndex);
     expect(saveIndex).toBeGreaterThan(setCreatedIndex);
     expect(doneIndex).toBeGreaterThan(saveIndex);
@@ -262,8 +267,15 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("abortActiveFlow()");
     expect(newAppViewSource).toContain("const flowInput = {");
     expect(newAppViewSource).toContain(
+      "const providerConnectionsForRun = providerConnectionsPayload();",
+    );
+    expect(newAppViewSource).not.toContain(
       "providerConnections: providerConnectionsPayload()",
     );
+    expect(newAppViewSource).toContain("await settleProviderConnectionRows();");
+    expect(
+      newAppViewSource.match(/await settleProviderConnectionRows\(\);/g) ?? [],
+    ).toHaveLength(3);
     expect(newAppViewSource).toContain("throwIfStaleFlow(flow)");
     expect(newAppViewSource).toContain("INSTALLATION_NAME_PATTERN");
     expect(newAppViewSource).toContain('"new.error.nameInvalid"');

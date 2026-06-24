@@ -42,12 +42,8 @@ import type {
   PolicyConfig,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
-import type {
-  CapsuleCompatibilityReport,
-} from "takosumi-contract/capsules";
-import type {
-  DependencySnapshotEntry,
-} from "takosumi-contract/dependencies";
+import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { DependencySnapshotEntry } from "takosumi-contract/dependencies";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -168,13 +164,7 @@ export class RunVerificationService {
           `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
       );
     }
-    if (report.sourceSnapshotId !== snapshot.id) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
-          `uses SourceSnapshot ${snapshot.id} but report ${report.id} was created for ${report.sourceSnapshotId}`,
-      );
-    }
+    this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
     const policy = await this.#policyForPlanRun(planRun);
     this.#assertCompatibilityReportRunnable(report, policy);
     if (
@@ -386,19 +376,64 @@ export class RunVerificationService {
           `CompatibilityReport ${planRun.compatibilityReportId} which no longer exists`,
       );
     }
-    if (
-      planRun.sourceSnapshotId &&
-      report.sourceSnapshotId !== planRun.sourceSnapshotId
+    if (planRun.sourceSnapshotId) {
+      const snapshot = await this.#store.getSourceSnapshot(
+        planRun.sourceSnapshotId,
+      );
+      if (!snapshot) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `source_snapshot_missing: plan run ${planRun.id} references ` +
+            `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+        );
+      }
+      this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
+    } else if (
+      report.installationId &&
+      report.installationId !== planRun.installationContext?.installationId
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
-          `uses SourceSnapshot ${planRun.sourceSnapshotId} but report ` +
-          `${report.id} was created for ${report.sourceSnapshotId}`,
+        `compatibility_report_installation_mismatch: plan run ${planRun.id} ` +
+          `uses Capsule ${planRun.installationContext?.installationId ?? "<none>"} ` +
+          `but report ${report.id} was created for ${report.installationId}`,
       );
     }
     const policy = await this.#policyForPlanRun(planRun);
     this.#assertCompatibilityReportRunnable(report, policy);
+  }
+
+  #assertCompatibilityReportScopedToRun(
+    report: CapsuleCompatibilityReport,
+    planRun: PlanRun,
+    snapshot: SourceSnapshot,
+  ): void {
+    if (report.sourceSnapshotId !== snapshot.id) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_snapshot_mismatch: plan run ${planRun.id} ` +
+          `uses SourceSnapshot ${snapshot.id} but report ${report.id} was created for ${report.sourceSnapshotId}`,
+      );
+    }
+    if (report.sourceId && report.sourceId !== snapshot.sourceId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_source_mismatch: plan run ${planRun.id} ` +
+          `uses Source ${snapshot.sourceId ?? "<none>"} but report ${report.id} ` +
+          `was created for ${report.sourceId}`,
+      );
+    }
+    if (
+      report.installationId &&
+      report.installationId !== planRun.installationContext?.installationId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_installation_mismatch: plan run ${planRun.id} ` +
+          `uses Capsule ${planRun.installationContext?.installationId ?? "<none>"} ` +
+          `but report ${report.id} was created for ${report.installationId}`,
+      );
+    }
   }
 
   /**

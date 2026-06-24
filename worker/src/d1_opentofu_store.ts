@@ -1452,6 +1452,70 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     };
   }
 
+  async getLatestCapsuleCompatibilityReportForSourceSnapshot(
+    sourceSnapshotId: string,
+    options: {
+      readonly sourceId?: string;
+      readonly installationId?: string;
+    } = {},
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    await this.#ensureSchema();
+    const filters = [
+      eq(schema.capsuleCompatibilityReports.sourceSnapshotId, sourceSnapshotId),
+    ];
+    if (options.sourceId) {
+      filters.push(
+        or(
+          isNull(schema.capsuleCompatibilityReports.sourceId),
+          eq(schema.capsuleCompatibilityReports.sourceId, options.sourceId),
+        )!,
+      );
+    }
+    if (options.installationId) {
+      filters.push(
+        or(
+          isNull(schema.capsuleCompatibilityReports.installationId),
+          eq(
+            schema.capsuleCompatibilityReports.installationId,
+            options.installationId,
+          ),
+        )!,
+      );
+    }
+    const rows = await this.#orm
+      .select()
+      .from(schema.capsuleCompatibilityReports)
+      .where(and(...filters))
+      .orderBy(
+        desc(schema.capsuleCompatibilityReports.createdAt),
+        desc(schema.capsuleCompatibilityReports.id),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
+      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceSnapshotId: row.sourceSnapshotId,
+      level: row.level as CapsuleCompatibilityReport["level"],
+      findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
+      providers: row.providersJson as CapsuleCompatibilityReport["providers"],
+      resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
+      dataSources:
+        row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
+      provisioners:
+        row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
+      ...(row.normalizedObjectKey
+        ? { normalizedObjectKey: row.normalizedObjectKey }
+        : {}),
+      ...(row.normalizedDigest
+        ? { normalizedDigest: row.normalizedDigest }
+        : {}),
+      createdAt: row.createdAt,
+    };
+  }
+
   // -- InstallationProviderEnvBindingSet ------------------------------------------------------
 
   async putInstallationProviderEnvBindingSet(

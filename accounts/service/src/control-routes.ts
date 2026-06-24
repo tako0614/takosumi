@@ -764,7 +764,10 @@ export interface ControlPlaneOperations {
     };
   };
   // --- Runs (§6.8 / §19 / §23) ---
-  createInstallationPlan(installationId: string): Promise<PlanRunResponse>;
+  createInstallationPlan(
+    installationId: string,
+    options?: { readonly compatibilityReportId?: string },
+  ): Promise<PlanRunResponse>;
   createInstallationDestroyPlan(
     installationId: string,
   ): Promise<PlanRunResponse>;
@@ -1273,7 +1276,16 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     const leaf = segments[2];
     if (leaf === "plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response = await operations.createInstallationPlan(installationId);
+      const body = await readJsonObject(request.clone()).catch(() => null);
+      const compatibilityReportId =
+        typeof body?.compatibilityReportId === "string" &&
+        body.compatibilityReportId.trim()
+          ? body.compatibilityReportId.trim()
+          : undefined;
+      const response = await operations.createInstallationPlan(
+        installationId,
+        compatibilityReportId ? { compatibilityReportId } : undefined,
+      );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,
@@ -2445,7 +2457,7 @@ async function deleteInstallation(
       202,
     );
   } catch (error) {
-    const abandoned = await maybeAbandonUnappliedUploadInstallation({
+    const abandoned = await maybeAbandonUnappliedInstallation({
       error,
       operations,
       store,
@@ -2456,20 +2468,20 @@ async function deleteInstallation(
   }
 }
 
-async function maybeAbandonUnappliedUploadInstallation(input: {
+async function maybeAbandonUnappliedInstallation(input: {
   readonly error: unknown;
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly installation: Installation;
 }): Promise<Response | undefined> {
-  if (!isUploadOriginSnapshotMissingError(input.error)) return undefined;
   if (
-    input.installation.sourceId ||
     input.installation.currentDeploymentId ||
     input.installation.currentStateGeneration > 0
   ) {
     return undefined;
   }
+  const reason = unappliedInstallationAbandonReason(input.error);
+  if (!reason) return undefined;
   const projection = await input.store.findAppInstallation(
     input.installation.id,
   );
@@ -2483,7 +2495,7 @@ async function maybeAbandonUnappliedUploadInstallation(input: {
     store: input.store,
     installation: projection,
     requestedStatus: "failed",
-    reason: "delete requested before first upload-origin apply",
+    reason,
   });
   const updatedProjection = await input.store.findAppInstallation(
     input.installation.id,
@@ -2498,12 +2510,34 @@ async function maybeAbandonUnappliedUploadInstallation(input: {
   );
 }
 
+function unappliedInstallationAbandonReason(
+  error: unknown,
+): string | undefined {
+  if (isUploadOriginSnapshotMissingError(error)) {
+    return "delete requested before first upload-origin apply";
+  }
+  if (isProviderConnectionNotReadyForDestroyError(error)) {
+    return "delete requested before first apply while provider connection is not ready";
+  }
+  return undefined;
+}
+
 function isUploadOriginSnapshotMissingError(error: unknown): boolean {
   if (controllerErrorCode(error) !== "failed_precondition") return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes("is upload-origin") &&
     message.includes("pinned upload SourceSnapshot")
+  );
+}
+
+function isProviderConnectionNotReadyForDestroyError(error: unknown): boolean {
+  if (controllerErrorCode(error) !== "failed_precondition") return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\bProvider Env\b/.test(message) &&
+    /\bstatus\b/.test(message) &&
+    /\bis not ready\b/.test(message)
   );
 }
 
@@ -3993,7 +4027,7 @@ async function rawProviderConnectionIdFromPublicId(
         (await publicProviderConnectionId(providerEnv.id)) ===
         publicConnectionId
       ) {
-        return providerEnv.id;
+        return providerEnv.secretRef ?? providerEnv.id;
       }
     }
   }
