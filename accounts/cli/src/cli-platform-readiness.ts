@@ -353,8 +353,11 @@ function platformReadinessTemplateFieldValue(field: string): unknown {
   if (field.endsWith("Digest") || field.endsWith("Hash")) {
     return "sha256:<64-hex>";
   }
-  if (field === "commitSha" || field === "sourceCommit") {
+  if (field === "commitSha") {
     return "<40-hex-commit-sha>";
+  }
+  if (field === "sourceCommit") {
+    return "<40-hex-commit-sha-or-64-hex-source-digest>";
   }
   if (field.endsWith("Url")) return "https://accounts.example.invalid/<path>";
   if (field.endsWith("Ref")) return `vault://platform-readiness/<${field}>`;
@@ -1088,8 +1091,11 @@ function hasValidStructuredEvidenceFieldShape(
       !isPlaceholderEvidenceRef(value)
     );
   }
-  if (field === "commitSha" || field === "sourceCommit") {
+  if (field === "commitSha") {
     return typeof value === "string" && /^[a-fA-F0-9]{40}$/.test(value);
+  }
+  if (field === "sourceCommit") {
+    return isSourceIdentityEvidenceValue(value);
   }
   if (field.endsWith("Url")) {
     return (
@@ -1144,6 +1150,15 @@ function hasValidStructuredEvidenceFieldShape(
     return false;
   }
   return true;
+}
+
+function isSourceIdentityEvidenceValue(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (/^[a-fA-F0-9]{40}$/.test(value) ||
+      /^[a-fA-F0-9]{64}$/.test(value) ||
+      /^sha256:[a-fA-F0-9]{64}$/.test(value))
+  );
 }
 
 function hasValidStructuredEvidenceCrossFieldShape(

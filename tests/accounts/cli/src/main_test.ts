@@ -1101,6 +1101,48 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
   }
 });
 
+test("launch-readiness validate accepts upload source digest identities", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun();
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry) =>
+    completePlatformReadinessEntry(entry, rehearsalRun.id),
+  );
+  const sourceDigest =
+    "c9913a5e25d1c58da061f59d72bb0903be1a25e8b42bfbefb244def32349cbc1";
+  for (const entry of [...document.domains, ...document.rehearsal]) {
+    for (const evidence of entry.evidence as Record<string, unknown>[]) {
+      if (typeof evidence.sourceCommit === "string") {
+        evidence.sourceCommit = sourceDigest;
+      }
+    }
+  }
+  await writeTextFile(file, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "validate", "--file", file, "--json"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.ready).toEqual(true);
+  } finally {
+    await removePath(file);
+  }
+});
+
 test("launch-readiness validate accepts zero caps for quota guard drills", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
