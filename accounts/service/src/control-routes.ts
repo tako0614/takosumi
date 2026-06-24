@@ -1209,11 +1209,11 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         return await patchInstallation(request, operations, installationId);
       }
       if (method === "DELETE") {
-        const response =
-          await operations.createInstallationDestroyPlan(installationId);
-        return jsonStatus(
-          await publicPlanActionResponse(operations, response),
-          202,
+        return await deleteInstallation(
+          operations,
+          store,
+          installation,
+          installationId,
         );
       }
       return methodNotAllowed("GET, PATCH, DELETE");
@@ -2322,6 +2322,82 @@ async function patchInstallation(
     status,
   );
   return json({ installation: publicInstallation(installation) });
+}
+
+async function deleteInstallation(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  installation: Installation,
+  installationId: string,
+): Promise<Response> {
+  try {
+    const response =
+      await operations.createInstallationDestroyPlan(installationId);
+    return jsonStatus(
+      await publicPlanActionResponse(operations, response),
+      202,
+    );
+  } catch (error) {
+    const abandoned = await maybeAbandonUnappliedUploadInstallation({
+      error,
+      operations,
+      store,
+      installation,
+    });
+    if (abandoned) return abandoned;
+    throw error;
+  }
+}
+
+async function maybeAbandonUnappliedUploadInstallation(input: {
+  readonly error: unknown;
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly installation: Installation;
+}): Promise<Response | undefined> {
+  if (!isUploadOriginSnapshotMissingError(input.error)) return undefined;
+  if (
+    input.installation.sourceId ||
+    input.installation.currentDeploymentId ||
+    input.installation.currentStateGeneration > 0
+  ) {
+    return undefined;
+  }
+  const projection = await input.store.findAppInstallation(
+    input.installation.id,
+  );
+  if (!projection) return undefined;
+  const installation =
+    await input.operations.installations.patchInstallationStatus(
+      input.installation.id,
+      "error",
+    );
+  await saveProjectionStatusChange({
+    store: input.store,
+    installation: projection,
+    requestedStatus: "failed",
+    reason: "delete requested before first upload-origin apply",
+  });
+  const updatedProjection = await input.store.findAppInstallation(
+    input.installation.id,
+  );
+  return jsonStatus(
+    {
+      installation: publicInstallation(installation),
+      abandoned: true,
+      projectionStatus: updatedProjection?.status ?? "failed",
+    },
+    202,
+  );
+}
+
+function isUploadOriginSnapshotMissingError(error: unknown): boolean {
+  if (controllerErrorCode(error) !== "failed_precondition") return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("is upload-origin") &&
+    message.includes("pinned upload SourceSnapshot")
+  );
 }
 
 async function createInstallation(
@@ -3765,14 +3841,13 @@ async function resolveConnectionItemTarget(
   } catch (error) {
     if (controllerErrorCode(error) !== "not_found") throw error;
   }
-  const rawConnectionId =
-    connectionId.startsWith("pcn_")
-      ? await rawProviderConnectionIdFromPublicId(
-          operations,
-          sessionSubject,
-          connectionId,
-        )
-      : undefined;
+  const rawConnectionId = connectionId.startsWith("pcn_")
+    ? await rawProviderConnectionIdFromPublicId(
+        operations,
+        sessionSubject,
+        connectionId,
+      )
+    : undefined;
   if (!rawConnectionId) return undefined;
   try {
     return {

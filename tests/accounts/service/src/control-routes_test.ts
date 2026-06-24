@@ -2988,6 +2988,98 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
   expect(operations.calls.listForInstallation?.[0]).toEqual("inst_1");
 });
 
+test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projections", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAppInstallation({
+    installationId: "inst_upload_pending",
+    accountId: "acct_upload_pending",
+    spaceId: "space_a",
+    appId: "upload-pending",
+    sourceGitUrl: "upload://space_a/snap_upload_pending",
+    sourceRef: "upload",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"d".repeat(64)}`,
+    mode: "shared-cell",
+    status: "installing",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const baseOperations = fakeOperations();
+  const uploadInstallation = {
+    id: "inst_upload_pending",
+    spaceId: "space_a",
+    name: "upload-pending",
+    slug: "upload-pending",
+    installType: "opentofu_module",
+    installConfigId: "cfg_upload_pending",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getInstallation: async () =>
+        uploadInstallation as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getInstallation"]>
+        >,
+      patchInstallationStatus: async (id, status) =>
+        ({
+          ...uploadInstallation,
+          id,
+          status,
+          updatedAt: "2026-01-02T00:00:00Z",
+        }) as unknown as Awaited<
+          ReturnType<
+            ControlPlaneOperations["installations"]["patchInstallationStatus"]
+          >
+        >,
+    },
+    createInstallationDestroyPlan: async () => {
+      const error = new Error(
+        "installation inst_upload_pending is upload-origin; a plan requires a pinned upload SourceSnapshot (deploy a new upload via takosumi deploy)",
+      ) as Error & { code: string };
+      error.code = "failed_precondition";
+      throw error;
+    },
+  });
+
+  const { request: req, url } = request(
+    "DELETE",
+    "/api/v1/installations/inst_upload_pending",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(202);
+  const body = (await response!.json()) as {
+    abandoned: boolean;
+    installation: { status: string };
+    projectionStatus: string;
+  };
+  expect(body.abandoned).toEqual(true);
+  expect(body.installation.status).toEqual("error");
+  expect(body.projectionStatus).toEqual("failed");
+  expect(store.findAppInstallation("inst_upload_pending")?.status).toEqual(
+    "failed",
+  );
+  expect(
+    store
+      .listInstallationEvents("inst_upload_pending")
+      .map((event) => event.eventType),
+  ).toContain("installation.status_changed");
+});
+
 test("POST /api/v1/installations/:id/dependencies derives spaceId from the consumer", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
