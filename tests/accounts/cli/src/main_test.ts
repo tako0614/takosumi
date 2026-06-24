@@ -7360,6 +7360,81 @@ test("internal installations export posts a pending bundle request", async () =>
   }
 });
 
+test("internal installations export-operation reads operation status", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Promise.resolve(
+      Response.json({
+        operationId: "op_export",
+        installationId: "inst_1",
+        status: "ready",
+        downloadUrl: "https://exports.example/download",
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "export-operation",
+        "inst_1",
+        "op_export",
+        "--accounts-url",
+        "http://accounts.local",
+        "--token",
+        "accounts-token",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    expect(requests[0]?.url).toEqual(
+      "http://accounts.local/v1/installation-projections/inst_1/exports/op_export",
+    );
+    expect(requests[0]?.method).toEqual("GET");
+    expect(requests[0]?.headers.get("authorization")).toEqual(
+      "Bearer accounts-token",
+    );
+    expect(stdout.join("\n")).toEqual(
+      [
+        "Export operation op_export",
+        "  installation: inst_1",
+        "  status: ready",
+        "  download: https://exports.example/download",
+      ].join("\n"),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("internal installations export-operation requires operation id", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await main(
+    ["internal", "installations", "export-operation", "inst_1"],
+    {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    },
+  );
+
+  expect(code).toEqual(2);
+  expect(stdout).toEqual([]);
+  expect(stderr).toEqual(["operation id is required"]);
+});
+
 test("internal installations export requires age recipients", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];

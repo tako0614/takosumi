@@ -739,6 +739,19 @@ export function installationsExportHelpText(): string {
   ].join("\n");
 }
 
+export function installationsExportOperationHelpText(): string {
+  return [
+    "takosumi internal installations export-operation <installation-id> <operation-id>",
+    "",
+    "Reads an installation export operation without downloading the archive.",
+    "",
+    "Options:",
+    "  --accounts-url <url>",
+    "  --token <accounts-read-bearer>",
+    "  --json",
+  ].join("\n");
+}
+
 export function installationsImportPlanHelpText(): string {
   return [
     "takosumi internal installations import-plan",
