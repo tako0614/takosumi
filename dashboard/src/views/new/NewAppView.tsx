@@ -195,25 +195,16 @@ function CatalogCard(props: {
 
 function ManualImportCard(props: { readonly onSelect: () => void }) {
   return (
-    <li>
-      <button
-        type="button"
-        class="av-catalog-card av-catalog-card-manual"
-        onClick={props.onSelect}
-      >
-        <span class="av-catalog-icon" aria-hidden="true">
-          <Link2 size={20} />
-        </span>
-        <span class="av-catalog-text">
-          <span class="av-catalog-name">{t("new.manualCard.title")}</span>
-          <span class="av-catalog-desc">{t("new.manualCard.body")}</span>
-        </span>
-        <span class="av-catalog-action" aria-hidden="true">
-          <ArrowRight size={16} />
-          <span>{t("new.manualCard.action")}</span>
-        </span>
-      </button>
-    </li>
+    <button type="button" class="av-store-link-tile" onClick={props.onSelect}>
+      <span class="av-store-link-icon" aria-hidden="true">
+        <Link2 size={18} />
+      </span>
+      <span class="av-store-link-copy">
+        <span>{t("new.manualCard.title")}</span>
+        <small>{t("new.manualCard.body")}</small>
+      </span>
+      <ArrowRight size={16} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -1954,14 +1945,6 @@ function Inner() {
                   <h2>{t("new.store.title")}</h2>
                   <p>{t("new.subtitle")}</p>
                 </div>
-                <Button
-                  variant="secondary"
-                  type="button"
-                  icon={<Link2 size={16} />}
-                  onClick={() => setActiveTab("git")}
-                >
-                  {t("new.advancedImport.open")}
-                </Button>
               </div>
               <label class="av-store-search">
                 <Search size={18} aria-hidden="true" />
@@ -1977,12 +1960,13 @@ function Inner() {
                   spellcheck={false}
                 />
               </label>
+              <ManualImportCard onSelect={() => setActiveTab("git")} />
             </div>
             <div class="av-store-shelf">
               <div class="av-store-section-head">
                 <h3>{t("new.store.featuredTitle")}</h3>
                 <span>
-                  {t("new.store.count", { count: catalogEntries().length })}
+                  {t("new.store.count", { count: featuredCatalog().length })}
                 </span>
               </div>
               <Switch>
@@ -2044,7 +2028,6 @@ function Inner() {
                         />
                       )}
                     </For>
-                    <ManualImportCard onSelect={() => setActiveTab("git")} />
                   </ul>
                 </Match>
               </Switch>

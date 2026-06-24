@@ -472,46 +472,40 @@
 .av-store {
   display: flex;
   flex-direction: column;
-  gap: var(--tg-s-5);
-  width: min(100%, 1120px);
-  margin: 0 auto var(--tg-s-5);
+  gap: var(--tg-s-6);
+  width: min(100%, 1160px);
+  margin: 0 auto var(--tg-s-6);
 }
 .av-store-hero {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  align-items: end;
   gap: var(--tg-s-4);
-  padding: var(--tg-s-5);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--tg-accent-soft) 48%, transparent),
-      transparent 42%
-    ),
-    var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-xs);
 }
 .av-store-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tg-s-3);
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  min-width: 0;
 }
 .av-store-kicker {
   display: inline-flex;
-  margin-bottom: var(--tg-s-1);
-  color: var(--tg-accent-text);
+  margin-bottom: var(--tg-s-2);
+  color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
   font-weight: 750;
+  text-transform: uppercase;
 }
 .av-store-head h2 {
   margin: 0;
-  font-size: var(--tg-fs-3xl);
+  font-size: var(--tg-fs-2xl);
   line-height: 1.1;
   letter-spacing: 0;
 }
 .av-store-head p {
-  margin: var(--tg-s-1) 0 0;
+  max-width: 56ch;
+  margin: var(--tg-s-2) 0 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   line-height: 1.5;
@@ -521,12 +515,14 @@
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--tg-s-2);
-  min-height: 46px;
-  padding: 0 var(--tg-s-3);
+  width: min(100%, 680px);
+  min-height: 52px;
+  padding: 0 var(--tg-s-4);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-md);
-  background: var(--tg-bg);
+  background: var(--tg-bg-elev);
   color: var(--tg-fg-muted);
+  box-shadow: var(--tg-shadow-xs);
 }
 .av-store-search:focus-within {
   border-color: var(--tg-accent);
@@ -534,7 +530,7 @@
 }
 .av-store-search input {
   min-width: 0;
-  height: 44px;
+  height: 50px;
   border: 0;
   outline: none;
   background: transparent;
@@ -543,6 +539,60 @@
 }
 .av-store-search input::placeholder {
   color: var(--tg-fg-subtle);
+}
+.av-store-link-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--tg-s-3);
+  width: 100%;
+  min-height: 58px;
+  padding: var(--tg-s-3);
+  border: 1px dashed var(--tg-line-strong);
+  border-radius: var(--tg-r-md);
+  background: color-mix(in srgb, var(--tg-bg-elev) 70%, var(--tg-bg-subtle));
+  color: var(--tg-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--tg-dur) var(--tg-ease),
+    background var(--tg-dur) var(--tg-ease),
+    transform var(--tg-dur) var(--tg-ease);
+}
+.av-store-link-tile:hover {
+  border-color: color-mix(in srgb, var(--tg-accent) 54%, var(--tg-line));
+  background: var(--tg-bg-elev);
+  transform: translateY(-1px);
+}
+.av-store-link-tile:focus-visible {
+  outline: none;
+  border-color: var(--tg-accent);
+  box-shadow: var(--tg-ring);
+}
+.av-store-link-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg);
+  color: var(--tg-fg-muted);
+}
+.av-store-link-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.av-store-link-copy span {
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+.av-store-link-copy small {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .av-store-shelf,
 .av-store-section {
@@ -570,25 +620,25 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: var(--tg-s-3);
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: var(--tg-s-4) var(--tg-s-3);
 }
 .av-catalog-card {
   position: relative;
-  display: flex;
-  min-height: 214px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  justify-items: center;
+  min-height: 178px;
   width: 100%;
   height: 100%;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--tg-s-3);
-  padding: var(--tg-s-4);
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-3);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
   background: var(--tg-bg-elev);
   color: inherit;
   font: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   box-shadow: var(--tg-shadow-xs);
   transition:
@@ -597,20 +647,43 @@
     box-shadow var(--tg-dur) var(--tg-ease);
 }
 .av-catalog-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--tg-s-1);
-  min-height: 34px;
-  margin-top: auto;
-  padding: 0 var(--tg-s-3);
+  position: absolute;
+  top: var(--tg-s-2);
+  right: var(--tg-s-2);
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--tg-accent) 36%, var(--tg-line));
-  border-radius: var(--tg-r-md);
+  border-radius: var(--tg-r-full);
   background: var(--tg-accent-soft);
   color: var(--tg-accent-text);
-  font-size: var(--tg-fs-sm);
-  font-weight: 750;
   flex: none;
+}
+.av-catalog-action span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.av-catalog-action svg {
+  width: 16px;
+  height: 16px;
+}
+/*
+ * The catalog is an add picker, not an ops table. Each tile carries a vivid
+ * app-like icon first, then only the minimum text needed to choose.
+ */
+.av-catalog-card .av-catalog-action {
+  align-items: center;
+  justify-content: center;
 }
 .av-catalog-grid > li:nth-child(4n + 1) .av-catalog-icon {
   background: linear-gradient(145deg, #e5484d, #b42318);
@@ -644,23 +717,25 @@
   box-shadow: var(--tg-ring);
 }
 .av-catalog-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: var(--tg-s-2);
+  display: grid;
+  justify-items: center;
+  gap: var(--tg-s-1);
   min-width: 0;
+  width: 100%;
 }
 .av-catalog-meta {
   display: flex;
+  justify-content: center;
   flex-wrap: wrap;
   gap: var(--tg-s-1);
+  order: 2;
 }
 .av-catalog-meta span {
   display: inline-flex;
   max-width: 100%;
-  min-height: 22px;
+  min-height: 20px;
   align-items: center;
-  padding: 0 var(--tg-s-2);
+  padding: 0 7px;
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-full);
   color: var(--tg-fg-muted);
@@ -672,9 +747,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
-  border-radius: var(--tg-r-lg);
+  width: 66px;
+  height: 66px;
+  border-radius: 18px;
   border: 0;
   flex: none;
   box-shadow:
@@ -683,51 +758,50 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 .av-catalog-icon svg {
-  width: 25px;
-  height: 25px;
+  width: 30px;
+  height: 30px;
   stroke-width: 2.1;
 }
 .av-catalog-name {
   font-weight: 700;
-  font-size: var(--tg-fs-lg);
-  line-height: 1.25;
+  font-size: var(--tg-fs-sm);
+  line-height: 1.28;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .av-catalog-desc {
   color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  line-height: 1.45;
+  font-size: var(--tg-fs-xs);
+  line-height: 1.35;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .av-catalog-more {
   width: 100%;
   margin-top: 0;
 }
 .av-catalog-grid-secondary {
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-}
-.av-catalog-card-manual {
-  border-style: dashed;
-  background: color-mix(in srgb, var(--tg-bg-elev) 78%, var(--tg-bg-subtle));
-}
-.av-catalog-card-manual .av-catalog-icon {
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg-muted);
-  box-shadow: none;
+  grid-template-columns: repeat(auto-fill, minmax(144px, 1fr));
 }
 .av-add-flow {
   display: grid;
-  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.45fr);
-  gap: var(--tg-s-5);
-  width: min(100%, 1040px);
+  grid-template-columns: 1fr;
+  gap: var(--tg-s-4);
+  width: min(100%, 860px);
   margin: 0 auto;
   align-items: start;
 }
 .av-add-flow-header {
-  position: sticky;
-  top: calc(var(--tg-s-4) + env(safe-area-inset-top, 0px));
   display: grid;
-  gap: var(--tg-s-4);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--tg-s-3);
   min-width: 0;
   padding: var(--tg-s-4);
   border: 1px solid var(--tg-line);
@@ -777,6 +851,7 @@
 }
 .av-add-guide {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--tg-s-2);
   margin: 0;
   padding: var(--tg-s-3);
@@ -786,12 +861,14 @@
   background: var(--tg-bg-subtle);
 }
 .av-add-guide li {
-  display: flex;
+  display: grid;
+  justify-items: center;
   align-items: center;
   gap: var(--tg-s-2);
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   font-weight: 650;
+  text-align: center;
 }
 .av-add-guide span {
   display: inline-grid;
@@ -955,8 +1032,8 @@ button.tg-tab {
   }
 
   .av-store-hero {
+    grid-template-columns: 1fr;
     gap: var(--tg-s-3);
-    padding: var(--tg-s-4);
   }
 
   .av-store-head h2 {
@@ -968,32 +1045,34 @@ button.tg-tab {
   }
 
   .av-catalog-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--tg-s-3);
   }
 
   .av-catalog-card {
-    min-height: 186px;
-    gap: var(--tg-s-3);
-    padding: var(--tg-s-3);
+    min-height: 168px;
+    gap: var(--tg-s-2);
+    padding: var(--tg-s-3) var(--tg-s-2);
   }
 
   .av-catalog-icon {
-    width: 46px;
-    height: 46px;
+    width: 56px;
+    height: 56px;
     flex: 0 0 auto;
+    border-radius: 16px;
   }
 
   .av-catalog-name {
-    font-size: var(--tg-fs-base);
+    font-size: var(--tg-fs-sm);
   }
 
   .av-catalog-desc {
-    display: block;
     font-size: var(--tg-fs-xs);
   }
 
   .av-catalog-action {
-    width: 100%;
+    width: 28px;
+    height: 28px;
   }
 
   .av-store-section-head {
@@ -1011,13 +1090,12 @@ button.tg-tab {
   }
 
   .av-add-flow {
-    grid-template-columns: 1fr;
     gap: var(--tg-s-3);
   }
 
   .av-add-flow-header {
-    position: static;
     display: grid;
+    grid-template-columns: 1fr;
     padding: var(--tg-s-3);
   }
 

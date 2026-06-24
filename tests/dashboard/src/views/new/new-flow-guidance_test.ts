@@ -91,31 +91,32 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain(
       'class="wb-disclosure av-catalog-more"',
     );
-    expect(newAppViewSource).toContain(
-      'class="av-catalog-card av-catalog-card-manual"',
-    );
+    expect(newAppViewSource).toContain('class="av-store-link-tile"');
+    expect(newAppViewSource).toContain('class="av-store-link-icon"');
     expect(newAppViewSource).toContain('t("new.manualCard.title")');
     expect(newAppViewSource).toContain('t("new.manualCard.body")');
-    expect(newAppViewSource).toContain('t("new.manualCard.action")');
     const storeHeadStart = newAppViewSource.indexOf(
       '<div class="av-store-head">',
     );
     const catalogGridStart = newAppViewSource.indexOf(
       '<ul class="av-catalog-grid">',
     );
-    const manualImportStart = newAppViewSource.indexOf(
+    const manualImportCallStart = newAppViewSource.indexOf(
       "<ManualImportCard",
-      catalogGridStart,
     );
     const catalogGridEnd = newAppViewSource.indexOf("</ul>", catalogGridStart);
     const manualImportUseSource = newAppViewSource.slice(
-      manualImportStart,
-      catalogGridEnd,
+      manualImportCallStart,
+      catalogGridStart,
     );
     expect(manualImportUseSource).toContain('setActiveTab("git")');
-    expect(manualImportStart).toBeGreaterThan(catalogGridStart);
-    expect(manualImportStart).toBeLessThan(catalogGridEnd);
+    expect(manualImportCallStart).toBeGreaterThan(storeHeadStart);
+    expect(manualImportCallStart).toBeLessThan(catalogGridStart);
+    expect(
+      newAppViewSource.slice(catalogGridStart, catalogGridEnd),
+    ).not.toContain("<ManualImportCard");
     expect(newAppViewSource).not.toContain('class="av-manual-import"');
+    expect(newAppViewSource).not.toContain("av-catalog-card-manual");
     expect(newAppViewSource).not.toContain(
       '<details class="wb-disclosure av-manual-import">',
     );
