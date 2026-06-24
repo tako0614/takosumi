@@ -301,11 +301,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuRunner?: OpenTofuRunner;
   /**
-   * Runner used only for own-key provider executions. Hosted/reference Workers
-   * inject the same Cloudflare Container runner object but route it through this
-   * separate seam so user-supplied provider profiles cannot accidentally run on
-   * a broader operator credential path.
+   * Runner used for explicit ProviderConnection env/file executions. Hosted
+   * workers inject the same Cloudflare Container runner object but route it
+   * through this seam so user-supplied provider profiles cannot accidentally
+   * run on a broader operator credential path.
    */
+  readonly providerEnvRunner?: OpenTofuRunner;
+  /** @deprecated Use providerEnvRunner. */
   readonly ownKeyProviderRunner?: OpenTofuRunner;
   /**
    * Connection Vault used to mint run-scoped provider credentials for
@@ -866,8 +868,11 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
-    ...(options.ownKeyProviderRunner
-      ? { ownKeyProviderRunner: options.ownKeyProviderRunner }
+    ...(options.providerEnvRunner ?? options.ownKeyProviderRunner
+      ? {
+          providerEnvRunner:
+            options.providerEnvRunner ?? options.ownKeyProviderRunner,
+        }
       : {}),
     allowOperatorBackedProviderEnvs:
       options.allowOperatorBackedProviderEnvs === true,

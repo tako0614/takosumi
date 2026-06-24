@@ -41,7 +41,7 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /new_sqlite_classes = \["CoordinationObject"\]/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunnerObject"\]/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunOwnerObject"\]/);
-  assert.match(workerService, /ownKeyProviderRunner: opentofuRunner/);
+  assert.match(workerService, /providerEnvRunner: opentofuRunner/);
 });
 
 test("platform scaffold exposes production hardening evidence gates", async () => {

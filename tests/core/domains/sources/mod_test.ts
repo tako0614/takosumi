@@ -762,7 +762,7 @@ output "public_url" {
       "AWS_REGION",
     ],
     helpers: ["aws_assume_role", "generic_env"],
-    ownershipOptions: ["own_key"],
+    ownershipOptions: ["env"],
     allowedResources: ["aws_s3_bucket"],
     allowedDataSources: [],
     policyPackId: "aws-basic",
@@ -799,7 +799,7 @@ output "public_url" {
       provider.ownershipOptions,
     ]),
   );
-  expect(ownershipOptionsBySource.get("hashicorp/aws")).toEqual(["own_key"]);
+  expect(ownershipOptionsBySource.get("hashicorp/aws")).toEqual(["env"]);
   expect(ownershipOptionsBySource.get("vercel/vercel")).toBeUndefined();
   expect(ownershipOptionsBySource.get("draft/provider")).toBeUndefined();
 });

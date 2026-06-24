@@ -54,10 +54,29 @@ export type ConnectionStatus =
   | "expired"
   | "error";
 
-export const PROVIDER_CREDENTIAL_OWNERSHIPS = ["own_key"] as const;
+export const PROVIDER_CREDENTIAL_OWNERSHIPS = ["env"] as const;
 
 export type ProviderCredentialOwnership =
   (typeof PROVIDER_CREDENTIAL_OWNERSHIPS)[number];
+
+export function normalizeProviderCredentialOwnership(
+  value: unknown,
+): ProviderCredentialOwnership | undefined {
+  if (value === "env" || value === "own_key") return "env";
+  return undefined;
+}
+
+export function normalizeProviderCredentialOwnershipOptions(
+  values: readonly unknown[] | undefined,
+): readonly ProviderCredentialOwnership[] {
+  const normalized: ProviderCredentialOwnership[] = [];
+  for (const value of values ?? []) {
+    const ownership = normalizeProviderCredentialOwnership(value);
+    if (!ownership || normalized.includes(ownership)) continue;
+    normalized.push(ownership);
+  }
+  return normalized;
+}
 
 export type ProviderConnectionStatus =
   | "ready"

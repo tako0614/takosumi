@@ -72,6 +72,7 @@ import type {
   PublicInstallConfig,
   PublicInstallation,
 } from "takosumi-contract/installations";
+import { normalizeProviderCredentialOwnershipOptions } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencyMode,
@@ -282,7 +283,7 @@ async function publicProviderResolution(
   const ownership = resolution.envId
     ? await providerConnectionOwnershipForEnvId(operations, resolution.envId)
     : resolution.materialization
-      ? "own_key"
+      ? "env"
       : undefined;
   return {
     requirement: resolution.requirement,
@@ -344,7 +345,7 @@ async function providerConnectionOwnershipForEnvId(
   const providerEnv = await operations.connections
     .getProviderEnv?.(providerEnvId)
     .catch(() => undefined);
-  if (!providerEnv) return "own_key";
+  if (!providerEnv) return "env";
   return await providerConnectionOwnership(operations, providerEnv);
 }
 
@@ -354,7 +355,7 @@ async function providerConnectionOwnership(
 ): Promise<ProviderConnection["ownership"]> {
   void operations;
   void providerEnv;
-  return "own_key";
+  return "env";
 }
 
 async function publicCompatibilityReportResponse(
@@ -373,6 +374,14 @@ async function publicCompatibilityReportResponse(
   return {
     report: {
       ...report,
+      providers: report.providers.map((provider) => {
+        const ownershipOptions = normalizeProviderCredentialOwnershipOptions(
+          provider.ownershipOptions,
+        );
+        return ownershipOptions.length > 0
+          ? { ...provider, ownershipOptions }
+          : provider;
+      }),
       ...(providerResolutions ? { providerResolutions } : {}),
     },
     ...(response.run ? { run: await publicRun(operations, response.run) } : {}),

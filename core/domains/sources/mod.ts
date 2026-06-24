@@ -28,6 +28,7 @@ import type {
 import type { PolicyConfig } from "takosumi-contract/installations";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import { normalizeProviderCredentialOwnershipOptions } from "takosumi-contract/connections";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   OpenTofuControllerError,
@@ -624,13 +625,15 @@ export class SourcesService {
     const catalogBySource = new Map(
       catalogEntries.map((entry) => [
         canonicalProviderAddress(entry.providerSource),
-        entry.ownershipOptions,
+        normalizeProviderCredentialOwnershipOptions(entry.ownershipOptions),
       ]),
     );
     return providers.map((provider) => {
       const source = canonicalProviderAddress(provider.source);
       const ownershipOptions = catalogBySource.get(source);
-      return ownershipOptions ? { ...provider, ownershipOptions } : provider;
+      return ownershipOptions && ownershipOptions.length > 0
+        ? { ...provider, ownershipOptions }
+        : provider;
     });
   }
 

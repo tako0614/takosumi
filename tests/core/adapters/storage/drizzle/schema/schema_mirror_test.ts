@@ -713,7 +713,7 @@ test("Worker D1 bootstrap converts legacy provider_templates to OSS-safe Provide
       1,
       JSON.stringify({
         id: "pcat_legacy_gateway",
-        ownershipOptions: ["own_key"],
+        ownershipOptions: ["env"],
       }),
       "2026-06-08T00:00:00.000Z",
       "2026-06-08T00:00:00.000Z",
@@ -723,7 +723,7 @@ test("Worker D1 bootstrap converts legacy provider_templates to OSS-safe Provide
       0,
       JSON.stringify({
         id: "pcat_legacy_secret",
-        ownershipOptions: ["own_key"],
+        ownershipOptions: ["env"],
       }),
       "2026-06-08T00:00:00.000Z",
       "2026-06-08T00:00:00.000Z",

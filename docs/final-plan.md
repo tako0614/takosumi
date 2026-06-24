@@ -756,7 +756,7 @@ Shape:
 
 ```text
 cloudflare/cloudflare provider
-  -> base_url = https://api.takosumi.com/compat/cloudflare/client/v4
+  -> base_url = https://app.takosumi.com/compat/cloudflare/client/v4
   -> Takosumi Cloudflare Compatibility Gateway
   -> Takosumi Managed Edge internal API
   -> Cloudflare Workers for Platforms / R2 / D1 / KV
@@ -798,7 +798,7 @@ connections:
     provider: cloudflare
     type: cloud_managed
     mode: cloudflare_workers_compat
-    endpoint: https://api.takosumi.com/compat/cloudflare/client/v4
+    endpoint: https://app.takosumi.com/compat/cloudflare/client/v4
     virtual_account_id: ts_acc_xxxxx
 
 provider_bindings:
@@ -1219,6 +1219,25 @@ Workers for Platforms backend
 compatibility report
 ```
 
+The Cloud compatibility API surface stays limited to this Cloudflare Workers
+subset plus the OpenAI-compatible AI Gateway below. Other OpenTofu providers are
+enabled by Provider Connections, Credential Recipes, and the generic env/file
+runner profile, not by adding provider-compatible Gateway APIs.
+
+### MVP 5.1: AI Gateway
+
+Cloud-only:
+
+```text
+/gateway/ai/v1/models
+/gateway/ai/v1/chat/completions
+/gateway/ai/v1/embeddings
+OpenAI-compatible request/response shape
+operator-configured upstream profiles
+Workers AI fallback
+short-lived runtime service tokens
+```
+
 ### MVP 6: Cloud Managed Resources
 
 Cloud-only:
@@ -1471,13 +1490,19 @@ Cloud-only:
 
 ```text
 /compat/cloudflare/client/v4/...
+/gateway/ai/v1/...
 /cloud/managed/edge-workers
 /cloud/managed/storage
 /cloud/usage
 /cloud/billing
 ```
 
-Cloud-only APIs must not be exposed as OSS product APIs.
+Cloud-only APIs must not be exposed as OSS product APIs. The current GA
+compatibility contract is only Cloudflare Compatibility Gateway and Takosumi AI
+Gateway. AWS, GCP, S3-compatible storage, Hetzner, DigitalOcean, Vultr,
+OpenStack, Kubernetes, GitHub, and other providers should run through normal
+OpenTofu/Terraform providers with explicit ProviderConnection env/file
+injection.
 
 ## 21. Security Requirements
 
