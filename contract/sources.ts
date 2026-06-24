@@ -185,21 +185,29 @@ export const MINT_PHASES: readonly MintPhase[] = [
 ] as const;
 
 /**
- * A file the Vault mints for a phase (e.g. the git askpass script or the SSH key
- * file). `content` is secret material and must never be logged. `mode` is the
- * POSIX file mode the runner should chmod the file to (e.g. `0o600`).
+ * A file the Vault mints for a phase (for example a git askpass script, an SSH
+ * key file, or a provider credential JSON file). `content` is secret material
+ * and must never be logged. `mode` is the POSIX file mode the runner should
+ * chmod the file to (for example `0o600`).
  */
 export interface MintedFile {
   readonly path: string;
   readonly mode: number;
   readonly content: string;
+  /**
+   * Optional env name that should receive the materialized absolute file path
+   * during tofu phases. Source-phase git files leave this unset and are wired by
+   * the runner's git helpers instead.
+   */
+  readonly envName?: string;
 }
 
 /**
  * Vault mint result. `env` carries credential env vars (provider creds for the
- * tofu phases; git creds for the source phase). `files` carries the materialized
- * credential files for the source phase (askpass script / ssh key). Both are
- * secret material — never logged or persisted to the public ledger.
+ * tofu phases; git creds for the source phase). `files` carries credential
+ * files to materialize only inside the runner sandbox (source git helper files
+ * or provider credential files). Both are secret material and must never be
+ * logged or persisted to the public ledger.
  */
 export interface MintResponse {
   readonly env: Readonly<Record<string, string>>;

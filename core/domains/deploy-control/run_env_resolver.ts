@@ -102,7 +102,8 @@ export class RunEnvResolver {
     providerResolutions: readonly ProviderResolution[],
     credentials: RunCredentials | undefined,
   ): Promise<ResolvedRunEnvironment> {
-    const credentialEnvNames = Object.keys(credentials ?? {}).sort();
+    const credentialEnvNames =
+      credentialEnvNamesFromRunCredentials(credentials);
     const runEnvironmentEvidenceDigest = await stableJsonDigest({
       runId: input.auditRunId,
       phase: input.phase,
@@ -176,6 +177,36 @@ export class RunEnvResolver {
       return providerResolutionFromResolved(input, requirement, match);
     });
   }
+}
+
+function credentialEnvNamesFromRunCredentials(
+  credentials: RunCredentials | undefined,
+): readonly string[] {
+  if (!credentials) return [];
+  if (isStructuredRunCredentials(credentials)) {
+    return [
+      ...Object.keys(credentials.env),
+      ...(credentials.files ?? []).flatMap((file) =>
+        file.envName ? [file.envName] : [],
+      ),
+    ].sort();
+  }
+  return Object.keys(credentials).sort();
+}
+
+function isStructuredRunCredentials(
+  credentials: RunCredentials,
+): credentials is Extract<
+  RunCredentials,
+  { readonly env: Readonly<Record<string, string>> }
+> {
+  return (
+    credentials !== null &&
+    typeof credentials === "object" &&
+    "env" in credentials &&
+    typeof credentials.env === "object" &&
+    credentials.env !== null
+  );
 }
 
 function providerRequirement(

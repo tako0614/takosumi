@@ -168,6 +168,7 @@ export interface Connection {
   readonly status: ConnectionStatus;
   readonly scopeHints?: ConnectionScopeHints;
   readonly envNames: readonly string[];
+  readonly fileEnvNames?: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
@@ -209,6 +210,14 @@ export interface CreateConnectionRequest {
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   readonly values: Readonly<Record<string, string>>;
+  readonly files?: readonly CreateConnectionFile[];
+}
+
+export interface CreateConnectionFile {
+  readonly path: string;
+  readonly content: string;
+  readonly mode?: number;
+  readonly envName?: string;
 }
 
 export interface ConnectionOAuthStartRequest {

@@ -888,6 +888,94 @@ test("mintForInstallationProviderEnvBindings maps approved generic-env variables
   expect(bundle.providerCredentialEvidence[0]?.rootOnly).toBe(false);
 });
 
+test("mintForInstallationProviderEnvBindings maps generic provider files to tofu credential files", async () => {
+  const { store, vault } = makeVault();
+  const conn = await markVerified(
+    store,
+    await vault.register({
+      spaceId: "space_1",
+      provider: "registry.opentofu.org/example/envfile",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: {
+        GENERIC_API_TOKEN: "generic-secret",
+      },
+      files: [
+        {
+          path: "provider-credentials.json",
+          content: '{"token":"file-secret"}',
+          envName: "GENERIC_CREDENTIALS_FILE",
+        },
+      ],
+    }),
+  );
+
+  expect(conn.envNames).toEqual([
+    "GENERIC_API_TOKEN",
+    "GENERIC_CREDENTIALS_FILE",
+  ]);
+  expect(conn.fileEnvNames).toEqual(["GENERIC_CREDENTIALS_FILE"]);
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
+    {
+      provider: "registry.opentofu.org/example/envfile",
+      connectionId: conn.id,
+    },
+  ]);
+  const response = bundle.toMintResponse();
+
+  expect(response.env).toEqual({ GENERIC_API_TOKEN: "generic-secret" });
+  expect(response.files).toEqual([
+    {
+      path: "provider-credentials.json",
+      content: '{"token":"file-secret"}',
+      mode: 0o600,
+      envName: "GENERIC_CREDENTIALS_FILE",
+    },
+  ]);
+  expect(JSON.stringify(bundle)).not.toContain("generic-secret");
+  expect(JSON.stringify(bundle)).not.toContain("file-secret");
+});
+
+test("generic-env provider registration rejects unsafe credential file declarations", async () => {
+  const { vault } = makeVault();
+  await expect(
+    vault.register({
+      spaceId: "space_1",
+      provider: "registry.opentofu.org/example/envfile",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: {},
+      files: [
+        {
+          path: "../escape.json",
+          content: "secret",
+          envName: "GENERIC_CREDENTIALS_FILE",
+        },
+      ],
+    }),
+  ).rejects.toThrow("credential file path ../escape.json is unsafe");
+
+  await expect(
+    vault.register({
+      spaceId: "space_1",
+      provider: "registry.opentofu.org/example/envfile",
+      authMethod: "static_secret",
+      kind: "generic_env_provider",
+      values: { GENERIC_CREDENTIALS_FILE: "also-a-value" },
+      files: [
+        {
+          path: "provider.json",
+          content: "secret",
+          envName: "GENERIC_CREDENTIALS_FILE",
+        },
+      ],
+    }),
+  ).rejects.toThrow(
+    "env name GENERIC_CREDENTIALS_FILE cannot be supplied both as a value and a credential file path",
+  );
+});
+
 test("generic-env provider registration accepts arbitrary providers with explicit env names", async () => {
   const { store, vault } = makeVault();
   const provider =

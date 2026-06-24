@@ -118,10 +118,18 @@ interface BackupSpec {
 
 export interface CommandContext {
   readonly env: Record<string, string>;
+  readonly credentialFiles?: readonly ProviderCredentialFile[];
   readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;
   readonly sourceArchiveMaxDecompressedBytes?: number;
+}
+
+interface ProviderCredentialFile {
+  readonly path: string;
+  readonly mode: number;
+  readonly content: string;
+  readonly envName?: string;
 }
 
 const port = Number(Bun.env.PORT ?? "8080");
@@ -700,7 +708,6 @@ async function runGeneratedRootPlan(
   const source = parseSource(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
-  assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
   let buildLog = "";
@@ -742,26 +749,39 @@ async function runGeneratedRootPlan(
   const planContext = build
     ? withArtifactPathVar(commandContext, workspace, build)
     : commandContext;
-  return await initPlanAndBuildResponse(
-    runId,
+  const preparedCredentials = await prepareProviderCredentialFiles(
+    planContext,
     workspace,
-    workspace.generatedRootDir,
-    {
-      operation,
-      commandContext: planContext,
-      buildLog,
-      requiredProviders: parseRequiredProviders(request),
-      ...(parseProviderInstallationPolicy(request)
-        ? {
-            providerInstallationPolicy:
-              parseProviderInstallationPolicy(request),
-          }
-        : {}),
-      extra: {
-        ...(sourceCommit ? { sourceCommit } : {}),
-      },
-    },
   );
+  try {
+    assertRunnerPolicyBeforeInit(
+      request,
+      runnerProfile,
+      preparedCredentials.context,
+    );
+    return await initPlanAndBuildResponse(
+      runId,
+      workspace,
+      workspace.generatedRootDir,
+      {
+        operation,
+        commandContext: preparedCredentials.context,
+        buildLog,
+        requiredProviders: parseRequiredProviders(request),
+        ...(parseProviderInstallationPolicy(request)
+          ? {
+              providerInstallationPolicy:
+                parseProviderInstallationPolicy(request),
+            }
+          : {}),
+        extra: {
+          ...(sourceCommit ? { sourceCommit } : {}),
+        },
+      },
+    );
+  } finally {
+    await preparedCredentials.cleanup();
+  }
 }
 
 interface PlanResponseOptions {
@@ -893,15 +913,7 @@ async function runReviewedPlanApply(
   const generatedRoot = parseGeneratedRoot(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
-  assertRunnerPolicyBeforeInit(request, runnerProfile, commandContext);
   const workspace = workspaceForRun(runId);
-  const strictMirrorInit = await prepareStrictProviderMirrorInit(
-    workspace,
-    commandContext,
-    parseRequiredProviders(request),
-    parseProviderInstallationPolicy(request),
-  );
-  const applyContext = strictMirrorInit?.commandContext ?? commandContext;
   const planArtifact = parsePlanArtifact(request);
   await verifyPlanArtifact(workspace.planPath, planArtifact);
   if (!generatedRoot) {
@@ -911,46 +923,70 @@ async function runReviewedPlanApply(
   const moduleDir = await restoreGeneratedRootApplyWorkspace(
     runId,
     parseSource(request),
-    applyContext,
+    commandContext,
     generatedRoot,
   );
+  const preparedCredentials = await prepareProviderCredentialFiles(
+    commandContext,
+    workspace,
+  );
+  try {
+    assertRunnerPolicyBeforeInit(
+      request,
+      runnerProfile,
+      preparedCredentials.context,
+    );
+    const strictMirrorInit = await prepareStrictProviderMirrorInit(
+      workspace,
+      preparedCredentials.context,
+      parseRequiredProviders(request),
+      parseProviderInstallationPolicy(request),
+    );
+    const applyContext =
+      strictMirrorInit?.commandContext ?? preparedCredentials.context;
 
-  const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: moduleDir,
-    context: applyContext,
-  });
-  if (init.exitCode !== 0) {
-    return commandFailurePayload(runId, action, init, applyContext);
+    const init = await runCommand(
+      ["tofu", "init", "-input=false", "-no-color"],
+      {
+        cwd: moduleDir,
+        context: applyContext,
+      },
+    );
+    if (init.exitCode !== 0) {
+      return commandFailurePayload(runId, action, init, applyContext);
+    }
+    const providerInstallation = await providerInstallationEvidence(
+      moduleDir,
+      parseRequiredProviders(request),
+      strictMirrorInit?.attestation,
+    );
+    const result = await runCommand(
+      ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
+      { cwd: moduleDir, context: applyContext },
+    );
+    const outputs =
+      action === "apply" && result.exitCode === 0
+        ? await readOpenTofuOutputsIn(moduleDir, applyContext)
+        : undefined;
+    return {
+      runId,
+      action,
+      status: result.exitCode === 0 ? "succeeded" : "failed",
+      exitCode: result.exitCode,
+      providerInstallation,
+      ...(outputs ? { outputs } : {}),
+      stdout: redactRunnerOutput(
+        [init.stdout, result.stdout].filter(Boolean).join("\n"),
+        applyContext.redactionValues,
+      ),
+      stderr: redactRunnerOutput(
+        [init.stderr, result.stderr].filter(Boolean).join("\n"),
+        applyContext.redactionValues,
+      ),
+    };
+  } finally {
+    await preparedCredentials.cleanup();
   }
-  const providerInstallation = await providerInstallationEvidence(
-    moduleDir,
-    parseRequiredProviders(request),
-    strictMirrorInit?.attestation,
-  );
-  const result = await runCommand(
-    ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
-    { cwd: moduleDir, context: applyContext },
-  );
-  const outputs =
-    action === "apply" && result.exitCode === 0
-      ? await readOpenTofuOutputsIn(moduleDir, applyContext)
-      : undefined;
-  return {
-    runId,
-    action,
-    status: result.exitCode === 0 ? "succeeded" : "failed",
-    exitCode: result.exitCode,
-    providerInstallation,
-    ...(outputs ? { outputs } : {}),
-    stdout: redactRunnerOutput(
-      [init.stdout, result.stdout].filter(Boolean).join("\n"),
-      applyContext.redactionValues,
-    ),
-    stderr: redactRunnerOutput(
-      [init.stderr, result.stderr].filter(Boolean).join("\n"),
-      applyContext.redactionValues,
-    ),
-  };
 }
 
 // For generated-root apply the consumer resends generatedRoot. Restore the
@@ -3018,6 +3054,7 @@ export function commandContextFromRequest(
   const env = baseCommandEnv();
   const requiredProviders = parseRequiredProviders(request);
   const payloadCredentials = credentialsFromRequest(request);
+  const credentialFiles = providerCredentialFilesFromRequest(request);
   const redactionValues = redactionValuesFromRequestCredentials(request);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
@@ -3044,6 +3081,7 @@ export function commandContextFromRequest(
   }
   return {
     env,
+    ...(credentialFiles.length > 0 ? { credentialFiles } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
@@ -3078,6 +3116,16 @@ export function assertRunnerPolicyForRequest(
 function credentialsFromRequest(request: unknown): Record<string, string> {
   const credentials = recordField(request, "credentials");
   if (!isRecord(credentials)) return {};
+  const rawEnv = recordField(credentials, "env");
+  if (isRecord(rawEnv)) {
+    return credentialsFromRecord(rawEnv);
+  }
+  return credentialsFromRecord(credentials);
+}
+
+function credentialsFromRecord(
+  credentials: Record<string, unknown>,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(credentials)) {
     if (typeof value !== "string") continue;
@@ -3092,6 +3140,44 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
   return out;
 }
 
+function providerCredentialFilesFromRequest(
+  request: unknown,
+): readonly ProviderCredentialFile[] {
+  const credentials = recordField(request, "credentials");
+  if (!isRecord(credentials)) return [];
+  const files = recordField(credentials, "files");
+  if (!Array.isArray(files)) return [];
+  return files.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error("provider credential file is malformed");
+    }
+    const path = stringField(entry, "path");
+    const content = entry.content;
+    const mode = entry.mode;
+    const envName = stringField(entry, "envName");
+    if (
+      typeof path !== "string" ||
+      typeof content !== "string" ||
+      typeof mode !== "number"
+    ) {
+      throw new Error("provider credential file is malformed");
+    }
+    assertSafeCredentialFileName(path);
+    assertSafeCredentialFileMode(mode);
+    if (envName !== undefined && !isAdmittedDeclaredProviderEnvName(envName)) {
+      throw new Error(
+        `provider credential file env name is unsafe: ${envName}`,
+      );
+    }
+    return {
+      path,
+      content,
+      mode: Math.floor(mode),
+      ...(envName ? { envName } : {}),
+    };
+  });
+}
+
 function isAdmittedDeclaredProviderEnvName(name: string): boolean {
   return isProviderEnvName(name) && !isReservedProviderEnvName(name);
 }
@@ -3104,11 +3190,10 @@ function redactionValuesFromRequest(request: unknown): string[] {
 }
 
 function redactionValuesFromRequestCredentials(request: unknown): string[] {
-  const credentials = recordField(request, "credentials");
-  if (!isRecord(credentials)) return [];
-  return Object.values(credentials).flatMap((value) =>
-    typeof value === "string" ? [value] : [],
-  );
+  return [
+    ...Object.values(credentialsFromRequest(request)),
+    ...providerCredentialFilesFromRequest(request).map((file) => file.content),
+  ];
 }
 
 function sourceCredentialRedactionValues(
@@ -3128,6 +3213,45 @@ function sourceCredentialRedactionValuesFromRequest(
   } catch {
     return [];
   }
+}
+
+interface PreparedProviderCredentialFiles {
+  readonly context: CommandContext;
+  readonly cleanup: () => Promise<void>;
+}
+
+async function prepareProviderCredentialFiles(
+  context: CommandContext,
+  workspace: RunWorkspace,
+): Promise<PreparedProviderCredentialFiles> {
+  const files = context.credentialFiles ?? [];
+  if (files.length === 0) {
+    return { context, cleanup: async () => {} };
+  }
+  const credentialDir = join(workspace.root, ".provider-credentials");
+  await mkdir(credentialDir, { recursive: true, mode: 0o700 });
+  const env: Record<string, string> = { ...context.env };
+  for (const file of files) {
+    assertSafeCredentialFileName(file.path);
+    assertSafeCredentialFileMode(file.mode);
+    const target = join(credentialDir, file.path);
+    await writeFile(target, file.content, { mode: file.mode });
+    await chmod(target, file.mode);
+    if (file.envName) {
+      if (!isAdmittedDeclaredProviderEnvName(file.envName)) {
+        throw new Error(
+          `provider credential file env name is unsafe: ${file.envName}`,
+        );
+      }
+      env[file.envName] = target;
+    }
+  }
+  return {
+    context: { ...context, env },
+    cleanup: async () => {
+      await shredCredentialDir(credentialDir);
+    },
+  };
 }
 
 function baseCommandEnv(): Record<string, string> {

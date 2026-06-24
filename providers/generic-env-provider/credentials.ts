@@ -2,16 +2,17 @@
  * Secret-backed generic-env provider connection driver (provider-agnostic).
  *
  * A generic-env provider Connection (`kind: "generic_env_provider"`) carries
- * write-only provider env values for arbitrary OpenTofu providers. The
- * connection's own `envNames` is the declared recipe for known and unknown
- * providers alike. There is no per-provider arg mapping: each declared variable
- * is passed straight through to the runner process under its real
- * environment-variable name.
+ * write-only provider env values and credential files for arbitrary OpenTofu
+ * providers. The connection's own `envNames` / `fileEnvNames` are the declared
+ * recipe for known and unknown providers alike. There is no per-provider arg
+ * mapping: each declared variable is passed straight through to the runner
+ * process under its real environment-variable name, and declared file env names
+ * receive the runner-local credential file path.
  *
  * This driver is the extracted, self-contained form of the vault's
  * `#mintCustomProviderVariables` logic. The crypto / secret-opening stays in
  * core (the vault opens the sealed blob and hands the decrypted values in); this
- * driver maps already-opened values to the runner-facing env map and
+ * driver maps already-opened values/files to the runner-facing env/file map and
  * the provider-credential mint evidence.
  *
  * Behavior is byte-identical to the in-vault path:
@@ -23,6 +24,7 @@
  *     skipped (defensive — the open path already filters to strings).
  */
 import type { Connection } from "takosumi-contract/connections";
+import type { MintedFile } from "takosumi-contract/sources";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 
 /**
@@ -47,6 +49,7 @@ export class GenericEnvProviderDriverError extends Error {
 /** Successful mint output: the process env map plus mint evidence. */
 export interface GenericEnvProviderMintResult {
   readonly env: Readonly<Record<string, string>>;
+  readonly files: readonly MintedFile[];
   readonly evidence: ProviderCredentialMintEvidence;
 }
 
@@ -67,6 +70,7 @@ export interface GenericEnvProviderMintResult {
 export function mintGenericEnvProviderVariables(
   connection: Connection,
   values: Readonly<Record<string, string>>,
+  files: readonly MintedFile[],
   alias: string | undefined,
 ): GenericEnvProviderMintResult | undefined {
   void alias;
@@ -76,7 +80,10 @@ export function mintGenericEnvProviderVariables(
       `generic-env provider connection ${connection.id} must be Space-scoped`,
     );
   }
-  const allowed = new Set(connection.envNames);
+  const fileEnvNames = new Set(connection.fileEnvNames ?? []);
+  const allowed = new Set(
+    connection.envNames.filter((name) => !fileEnvNames.has(name)),
+  );
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(values)) {
     if (typeof value !== "string") continue;
@@ -88,8 +95,19 @@ export function mintGenericEnvProviderVariables(
     }
     env[name] = value;
   }
+  const allowedFileEnvNames = fileEnvNames;
+  const mintedFiles = files.map((file) => {
+    if (file.envName && !allowedFileEnvNames.has(file.envName)) {
+      throw new GenericEnvProviderDriverError(
+        `file env name ${file.envName} is not allowed for provider ${connection.provider}`,
+        "invalid_argument",
+      );
+    }
+    return { ...file };
+  });
   return {
     env,
+    files: mintedFiles,
     evidence: {
       providerEnvId: connection.id,
       provider: connection.provider,

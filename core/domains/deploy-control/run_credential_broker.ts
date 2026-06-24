@@ -146,10 +146,12 @@ export class RunCredentialBroker {
         }
       }
       assertNoCloudOnlyGatewayMaterialization(planRun, resolved);
-      // Per-connection split: the same resolved entries that produced the rootgen
-      // provider blocks produce these TF_VAR_<provider>_<alias>_<arg> vars.
+      // Per-connection split: the same resolved entries that produced the
+      // rootgen provider blocks produce the runner dispatch credentials.
+      // Built-in recipes become TF_VAR_<provider>_<alias>_<arg> vars; generic
+      // provider connections pass explicit env/file material through unchanged.
       // This is the only provider credential delivery path for Installation
-      // runs; providers without a root-only arg mapping receive no shared env.
+      // runs.
       const providerEntries = providerMintEntriesFromResolved(resolved);
       const missingRootOnly = missingRootOnlyCredentialProviders(
         planRun.requiredProviders,
@@ -209,7 +211,11 @@ export class RunCredentialBroker {
         evidence,
         providerEntries.length,
       );
-      return { ...bundle.env, ...perAlias.env };
+      const perAliasResponse = perAlias.toMintResponse();
+      const env = { ...bundle.env, ...perAliasResponse.env };
+      return perAliasResponse.files && perAliasResponse.files.length > 0
+        ? { env, files: perAliasResponse.files }
+        : env;
     } catch (error) {
       const mapped = mapVaultError(error);
       if (mapped instanceof OpenTofuControllerError) {
