@@ -80,6 +80,58 @@ test("AI Gateway lists public model aliases without exposing upstream keys", asy
   expect(JSON.stringify(body)).not.toContain("zai-secret");
 });
 
+test("AI Gateway status reports configured upstreams without exposing keys", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const authRequests: TakosumiAiGatewayAuthRequest[] = [];
+  const url = gatewayUrl("/gateway/ai/v1/__takosumi/status");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, { method: "GET" }),
+    url,
+    {
+      config,
+      authorize: async (_request, auth) => {
+        authRequests.push(auth);
+        return { ok: true };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(authRequests).toEqual([
+    { endpoint: "status", requiredScopes: ["ai.models.read"] },
+  ]);
+  const body = await response.json();
+  expect(body).toMatchObject({
+    kind: "takosumi.ai-gateway-status@v1",
+    mode: "configured_upstreams",
+    defaultModel: "deepseek/chat",
+    summary: {
+      profileCount: 2,
+      publicModelCount: 2,
+      providers: ["deepseek", "zai"],
+    },
+    workersAiFallback: {
+      enabled: false,
+      aiBindingConfigured: false,
+    },
+  });
+  expect(body.endpoints).toEqual([
+    "status",
+    "models",
+    "chat.completions",
+    "embeddings",
+  ]);
+  expect(body.upstreamProfiles[0]).toMatchObject({
+    id: "deepseek",
+    provider: "deepseek",
+    endpointOrigin: "https://api.deepseek.example",
+    modelCount: 1,
+  });
+  expect(JSON.stringify(body)).not.toContain("deepseek-secret");
+  expect(JSON.stringify(body)).not.toContain("zai-secret");
+  expect(JSON.stringify(body)).not.toContain("apiKey");
+});
+
 test("AI Gateway forwards chat completions with default alias and safe headers", async () => {
   const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
   let upstreamRequest: Request | undefined;
