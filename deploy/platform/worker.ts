@@ -917,9 +917,10 @@ export interface PlatformCloudExtensionCatalog {
 
 export function matchPlatformCloudExtensionRoute(
   pathname: string,
-  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
 ): PlatformCloudExtensionRoute | undefined {
-  return routes.find((route) => pathIsUnderBase(pathname, route.basePath));
+  return PLATFORM_CLOUD_EXTENSION_ROUTES.find((route) =>
+    pathIsUnderBase(pathname, route.basePath),
+  );
 }
 
 export function isPlatformCloudExtensionCatalogPath(pathname: string): boolean {
@@ -929,9 +930,8 @@ export function isPlatformCloudExtensionCatalogPath(pathname: string): boolean {
 export function platformCloudExtensionCatalog(
   env: CloudflareWorkerEnv,
   origin: string,
-  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
 ): PlatformCloudExtensionCatalog {
-  const extensions = routes.map((route) => ({
+  const extensions = PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => ({
     id: route.id,
     kind: route.kind,
     ...(route.provider ? { provider: route.provider } : {}),
@@ -962,12 +962,11 @@ export function handlePlatformCloudExtensionCatalogRequest(
   request: Request,
   url: URL,
   env: CloudflareWorkerEnv,
-  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
 ): Response {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
-  return Response.json(platformCloudExtensionCatalog(env, url.origin, routes), {
+  return Response.json(platformCloudExtensionCatalog(env, url.origin), {
     headers: { "cache-control": "no-store" },
   });
 }
@@ -975,12 +974,8 @@ export function handlePlatformCloudExtensionCatalogRequest(
 export async function handlePlatformCloudExtensionRequest(
   request: Request,
   env: CloudflareWorkerEnv,
-  routes: readonly PlatformCloudExtensionRoute[] = PLATFORM_CLOUD_EXTENSION_ROUTES,
 ): Promise<Response | undefined> {
-  const route = matchPlatformCloudExtensionRoute(
-    new URL(request.url).pathname,
-    routes,
-  );
+  const route = matchPlatformCloudExtensionRoute(new URL(request.url).pathname);
   if (!route) return undefined;
   return await handlePlatformCloudExtensionRouteRequest(request, env, route);
 }
@@ -1320,10 +1315,10 @@ export async function handlePlatformAiGatewayRequest(
     (candidate) => candidate.id === "ai.openai_compatible.v1",
   );
   if (!route) return Response.json({ error: "not found" }, { status: 404 });
-  return (
-    (await handlePlatformCloudExtensionRequest(request, env, [route])) ??
-    Response.json({ error: "not found" }, { status: 404 })
-  );
+  if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
 }
 
 export function isCloudOnlyCloudflareCompatPath(pathname: string): boolean {
@@ -1338,10 +1333,10 @@ export async function handlePlatformCloudflareCompatRequest(
     (candidate) => candidate.id === "provider.cloudflare.client_v4",
   );
   if (!route) return Response.json({ error: "not found" }, { status: 404 });
-  return (
-    (await handlePlatformCloudExtensionRequest(request, env, [route])) ??
-    Response.json({ error: "not found" }, { status: 404 })
-  );
+  if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
 }
 
 interface PlatformCloudExtensionBinding {

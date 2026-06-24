@@ -337,7 +337,10 @@ test("POST /internal/v1/connections/generic-env-provider registers an own-key Pr
       spaceId: SPACE_ID,
       provider: "registry.opentofu.org/integrations/github",
       displayName: "github",
-      values: { GITHUB_TOKEN: "github-secret-token" },
+      values: {
+        GITHUB_TOKEN: "github-secret-token",
+        GITHUB_CUSTOM_ENDPOINT: "https://github.example.test",
+      },
     }),
   });
   expect(response.status).toBe(201);
@@ -350,7 +353,10 @@ test("POST /internal/v1/connections/generic-env-provider registers an own-key Pr
   expect(payload.connection.kind).toBe("generic_env_provider");
   expect(payload.connection.credentialDriver).toBe("generic_env");
   expect(payload.connection.scope).toBe("space");
-  expect(payload.connection.envNames).toEqual(["GITHUB_TOKEN"]);
+  expect(payload.connection.envNames).toEqual([
+    "GITHUB_CUSTOM_ENDPOINT",
+    "GITHUB_TOKEN",
+  ]);
 });
 
 test("POST /internal/v1/connections/generic-env-provider registers an arbitrary OpenTofu provider recipe", async () => {
@@ -684,7 +690,9 @@ test("internal provider resolver records reject global OSS records and allow sco
     },
   );
   expect(globalGatewayDenied.status).toBe(400);
-  expect((await globalGatewayDenied.json()).error.code).toBe("invalid_argument");
+  expect((await globalGatewayDenied.json()).error.code).toBe(
+    "invalid_argument",
+  );
 
   const globalSecretDenied = await app.request(
     "/internal/v1/provider-envs/penv_globalsecret1",

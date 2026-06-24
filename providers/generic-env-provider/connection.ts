@@ -2,13 +2,12 @@
  * Generic-env provider connection driver (registration-side validation).
  *
  * A generic-env provider Connection (`kind: "generic_env_provider"`) is a
- * Space-owned carrier of write-only provider env values. When the provider has
- * a built-in `provider-env-rules` recipe, each submitted env name must be in
- * that provider allowlist. When the provider is unknown to Takosumi, the
- * submitted env names themselves become the explicit per-Connection recipe. In
- * both cases every env name must be a valid uppercase environment-variable
- * identifier and every value must be a string. The connection is always
- * Space-scoped (never operator-scoped).
+ * Space-owned carrier of write-only provider env values. The submitted env
+ * names themselves become the explicit per-Connection Credential Recipe,
+ * regardless of whether Takosumi also has a guided recipe for that provider.
+ * Every env name must be a valid uppercase environment-variable identifier,
+ * every value must be a string, and runner/runtime-reserved names are rejected.
+ * The connection is always Space-scoped (never operator-scoped).
  *
  * This is the extracted, self-contained form of the structural validation in
  * the vault's `#registerGenericEnvProvider`. The crypto / sealing / store
@@ -21,10 +20,8 @@
  */
 import type { CreateConnectionRequest } from "takosumi-contract/connections";
 import {
-  allowedEnvNamesForProvider,
   isProviderEnvName,
   isReservedProviderEnvName,
-  providerEnvRule,
 } from "takosumi-contract/provider-env-rules";
 
 /**
@@ -90,10 +87,6 @@ export function validateGenericEnvProviderRegistration(
       "values must supply at least one provider env name",
     );
   }
-  const builtInRule = providerEnvRule(input.provider);
-  const allowed = builtInRule
-    ? new Set(allowedEnvNamesForProvider(input.provider))
-    : undefined;
   for (const name of envNames) {
     if (!isProviderEnvName(name)) {
       throw new GenericEnvProviderConnectionError(
@@ -105,12 +98,6 @@ export function validateGenericEnvProviderRegistration(
       throw new GenericEnvProviderConnectionError(
         "invalid_argument",
         `env name ${name} is reserved for the runner runtime`,
-      );
-    }
-    if (allowed && !allowed.has(name)) {
-      throw new GenericEnvProviderConnectionError(
-        "invalid_argument",
-        `env name ${name} is not allowed for provider ${input.provider}`,
       );
     }
     if (typeof values[name] !== "string") {

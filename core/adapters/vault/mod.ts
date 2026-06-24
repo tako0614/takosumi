@@ -400,9 +400,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const allowed = new Set(
-      rule
-        ? allowedEnvNamesForProvider(input.provider)
-        : genericEnvRegistration?.envNames ?? [],
+      genericEnvRegistration
+        ? genericEnvRegistration.envNames
+        : rule
+          ? allowedEnvNamesForProvider(input.provider)
+          : [],
     );
     for (const envName of envNames) {
       if (!allowed.has(envName)) {
@@ -418,7 +420,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         );
       }
     }
-    if (rule && !requiredEnvGroupsSatisfied(input.provider, envNames)) {
+    if (
+      !genericEnvRegistration &&
+      rule &&
+      !requiredEnvGroupsSatisfied(input.provider, envNames)
+    ) {
       throw new ConnectionVaultError(
         "invalid_argument",
         `provider ${input.provider} requires one of these env-name groups`,
@@ -622,16 +628,25 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         detail: `connection ${connectionId} expired at ${connection.expiresAt}`,
       };
     }
-    if (isReservedGcpConnection(connection)) {
+    const values = await this.#openValues(connection);
+    let verified: { readonly ok: boolean; readonly detail?: string };
+    if (connection.kind === "generic_env_provider") {
+      const driver = verifyDriverForKind(connection.kind);
+      if (!driver) {
+        return {
+          status: "pending",
+          detail:
+            "no verification driver is configured for generic-env provider connections",
+        };
+      }
+      verified = await driver({ connection, values, fetch: this.#fetch });
+    } else if (isReservedGcpConnection(connection)) {
       return {
         status: "pending",
         detail:
           "reserved (gcp live verification and credential mint drivers pending)",
       };
-    }
-    const values = await this.#openValues(connection);
-    let verified: { readonly ok: boolean; readonly detail?: string };
-    if (isCloudflareProvider(connection.provider)) {
+    } else if (isCloudflareProvider(connection.provider)) {
       const token = values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN;
       if (!token) {
         return {
@@ -788,19 +803,20 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
       assertConnectionVerified(connection);
       assertProviderMintDriverAvailable(connection);
-      const argMap = providerCredentialArgs(connection.provider);
-      if (argMap.length === 0) {
-        const customBundle = await this.#mintCustomProviderVariables(
-          connection,
-          entry.alias,
-        );
-        if (!customBundle) {
-          // No per-alias split for this provider: rootgen emits a credential-free
-          // alias and no shared provider env is admitted by the runner.
-          continue;
-        }
+      const customBundle = await this.#mintCustomProviderVariables(
+        connection,
+        entry.alias,
+      );
+      if (customBundle) {
         Object.assign(env, customBundle.env);
         evidence.push(customBundle.evidence);
+        continue;
+      }
+      const argMap = providerCredentialArgs(connection.provider);
+      if (argMap.length === 0) {
+        // No per-alias split for this provider: rootgen emits a credential-free
+        // alias and no shared provider env is admitted by the runner unless the
+        // connection was the generic-env carrier handled above.
         continue;
       }
       const minted = await this.#mintProviderValues(
@@ -835,8 +851,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // crypto here so the open happens only for the generic-env provider kind.
     if (connection.kind !== "generic_env_provider") return undefined;
     const values = await this.#openValues(connection);
-    // The generic-env provider driver maps the opened values to root-only
-    // `TF_VAR_<name>` entries + mint evidence.
+    // The generic-env provider driver maps the opened values to process env
+    // entries under the declared names, plus non-secret mint evidence.
     // Its scope-precondition error is re-wrapped to the vault's surface so the
     // message text stays byte-identical for callers/tests.
     try {

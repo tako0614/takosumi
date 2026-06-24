@@ -360,6 +360,35 @@ test("test() reaches verified for a generic-env provider connection (was permane
   expect(persisted?.verifiedAt).toBeDefined();
 });
 
+test("test() structurally verifies generic-env even for guided providers", async () => {
+  let fetchCalled = false;
+  const { store, vault } = makeVault({
+    fetch: (() => {
+      fetchCalled = true;
+      throw new Error("generic-env verification must not call provider APIs");
+    }) as never,
+  });
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    kind: "generic_env_provider",
+    values: {
+      CLOUDFLARE_API_TOKEN: "cf-secret-token",
+      CLOUDFLARE_CUSTOM_ENDPOINT: "https://api.example.test/client/v4",
+    },
+  });
+  expect(connection.kind).toBe("generic_env_provider");
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+  expect(fetchCalled).toBe(false);
+
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+  expect(persisted?.verifiedAt).toBeDefined();
+});
+
 test("operator-scoped provider connections do not create global secret Provider Envs", async () => {
   const { store, vault } = makeVault();
   const connection = await vault.register({
@@ -448,7 +477,10 @@ test("test() verifies and mints gcp service account JSON Provider Connections", 
   expect(persisted?.status).toBe("verified");
 
   const bundle = await vault.mintForInstallationProviderEnvBindings("space_1", [
-    { provider: "registry.opentofu.org/hashicorp/google", connectionId: connection.id },
+    {
+      provider: "registry.opentofu.org/hashicorp/google",
+      connectionId: connection.id,
+    },
   ]);
   expect(bundle.env.TF_VAR_google_credentials).toEqual(serviceAccountJson);
   expect(bundle.env.TF_VAR_google_project).toEqual("project-1");

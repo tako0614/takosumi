@@ -37,7 +37,12 @@ export interface ProviderTokenHelper {
 }
 
 export interface ProviderDescriptor {
+  /** Stable UI option id. */
   readonly provider: string;
+  /** Canonical OpenTofu provider source stored on the ProviderConnection. */
+  readonly providerSource?: string;
+  /** Additional stored provider sources that should use this descriptor label. */
+  readonly providerAliases?: readonly string[];
   readonly label: string;
   readonly fields: readonly ProviderCredentialField[];
   /**
@@ -242,6 +247,8 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
   },
   {
     provider: "hcloud",
+    providerSource: "hetznercloud/hcloud",
+    providerAliases: ["hetznercloud/hcloud"],
     get label() {
       return providerCopy("conn.provider.hcloud.label");
     },
@@ -269,6 +276,7 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
   },
   {
     provider: "s3-compatible",
+    providerSource: "hashicorp/aws",
     get label() {
       return providerCopy("conn.provider.s3.label");
     },
@@ -322,5 +330,7 @@ export const PROVIDERS: readonly ProviderDescriptor[] = [
 export function providerDescriptor(
   provider: string,
 ): ProviderDescriptor | undefined {
-  return PROVIDERS.find((p) => p.provider === provider);
+  return PROVIDERS.find(
+    (p) => p.provider === provider || p.providerAliases?.includes(provider),
+  );
 }

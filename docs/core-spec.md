@@ -22,12 +22,12 @@ Only Cloud has compatibility gateways and managed resources.
 
 ## Product Layers
 
-| Layer | License / operation | Scope |
-| --- | --- | --- |
-| Takosumi Core | OSS | Shared execution engine |
-| Takosumi | OSS self-host | Personal / small-team self-host product |
-| Takosumi for Operators | OSS self-host | Multi-tenant operator edition |
-| Takosumi Cloud | Closed official service | Hosted Operators + Cloud-only features |
+| Layer                  | License / operation     | Scope                                   |
+| ---------------------- | ----------------------- | --------------------------------------- |
+| Takosumi Core          | OSS                     | Shared execution engine                 |
+| Takosumi               | OSS self-host           | Personal / small-team self-host product |
+| Takosumi for Operators | OSS self-host           | Multi-tenant operator edition           |
+| Takosumi Cloud         | Closed official service | Hosted Operators + Cloud-only features  |
 
 ## OSS Core Responsibilities
 
@@ -66,21 +66,21 @@ closed Takosumi Cloud operator modules
 
 ## Public Model
 
-| Concept | Meaning |
-| --- | --- |
-| Workspace | User/team isolation boundary for projects, secrets, state, runs, and audit |
-| Project | One service, product, or infrastructure group |
-| Capsule | One OpenTofu/Terraform module execution unit |
-| Source | Git URL/ref/commit/path, tarball, template, or local upload |
-| ProviderConnection | Stored provider credential configuration |
-| CredentialRecipe | How to materialize a provider credential as env/file/pre-run output |
-| ProviderBinding | Mapping from provider name/alias to ProviderConnection |
-| Secret | Encrypted material referenced by ProviderConnection or Capsule inputs |
-| Run | One init/validate/plan/apply/destroy/refresh/output action |
-| StateVersion | Stored state generation for a Capsule |
-| Output | Captured OpenTofu output value |
-| Runner | Local/docker/remote/operator/cloud execution worker |
-| AuditEvent | Actor/action/target/result evidence |
+| Concept            | Meaning                                                                    |
+| ------------------ | -------------------------------------------------------------------------- |
+| Workspace          | User/team isolation boundary for projects, secrets, state, runs, and audit |
+| Project            | One service, product, or infrastructure group                              |
+| Capsule            | One OpenTofu/Terraform module execution unit                               |
+| Source             | Git URL/ref/commit/path, tarball, template, or local upload                |
+| ProviderConnection | Stored provider credential configuration                                   |
+| CredentialRecipe   | How to materialize a provider credential as env/file/pre-run output        |
+| ProviderBinding    | Mapping from provider name/alias to ProviderConnection                     |
+| Secret             | Encrypted material referenced by ProviderConnection or Capsule inputs      |
+| Run                | One init/validate/plan/apply/destroy/refresh/output action                 |
+| StateVersion       | Stored state generation for a Capsule                                      |
+| Output             | Captured OpenTofu output value                                             |
+| Runner             | Local/docker/remote/operator/cloud execution worker                        |
+| AuditEvent         | Actor/action/target/result evidence                                        |
 
 Existing internal names such as `Space`, `Installation`, and `ProviderEnv` are
 legacy implementation names while the codebase is being migrated. New public
@@ -123,8 +123,10 @@ connections:
 
 Secrets are never written to Capsule source, generated `.tfvars`, state
 metadata, logs, or audit messages. They are decrypted only for the run sandbox.
-For a declared-env arbitrary provider recipe, the declared names are injected
-into the runner process under the same names, such as `SNOWFLAKE_PASSWORD`.
+For a declared-env provider recipe, the declared names are injected into the
+runner process under the same names, such as `SNOWFLAKE_PASSWORD`. This path is
+available for any OpenTofu/Terraform provider, including providers that also
+have guided CredentialRecipes.
 Runner/runtime-reserved names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and
 `TF_*` are rejected for declared-env recipes.
 
@@ -195,8 +197,8 @@ auth_modes:
 ```
 
 Built-in CredentialRecipes are validation and guided-setup helpers, not the
-global provider boundary. Unsupported providers can still run through an
-explicit declared-env recipe:
+global provider boundary. Any provider can run through an explicit declared-env
+recipe when the runner profile and egress policy allow it:
 
 ```yaml
 id: declared-env

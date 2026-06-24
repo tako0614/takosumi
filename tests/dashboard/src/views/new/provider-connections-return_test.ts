@@ -186,8 +186,9 @@ describe("/new Provider Connections return context", () => {
       "submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId",
     );
     expect(connectionsTabSource).toContain(
-      "scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues)",
+      "scopeHints: scopeHintsFromConnectionValues(",
     );
+    expect(connectionsTabSource).toContain("d.providerSource ?? d.provider");
     expect(connectionsHelperSource).toContain(
       'envName: "CLOUDFLARE_ACCOUNT_ID"',
     );
@@ -352,6 +353,15 @@ describe("/new Provider Connections return context", () => {
     }
     expect(en["conn.provider.aws.label"]).toBe("AWS");
     expect(ja["conn.provider.gcp.label"]).toBe("Google Cloud");
+    expect(connectionsHelperSource).toContain(
+      'providerSource: "hetznercloud/hcloud"',
+    );
+    expect(connectionsHelperSource).toContain(
+      'providerSource: "hashicorp/aws"',
+    );
+    expect(connectionsTabSource).toContain(
+      "provider: d.providerSource ?? d.provider",
+    );
   });
 
   test("custom ProviderConnection path asks for provider source and env variables", () => {

@@ -161,7 +161,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       const accountId = connectionValues.CLOUDFLARE_ACCOUNT_ID?.trim();
       return accountId ? { accountId } : undefined;
     }
-    if (providerId === "aws") {
+    if (providerId === "aws" || providerId === "hashicorp/aws") {
       const awsRegion = connectionValues.AWS_REGION?.trim();
       return awsRegion ? { awsRegion } : undefined;
     }
@@ -254,9 +254,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     }
     const connection = await createConnection({
       spaceId: spaceId(),
-      provider: d.provider,
-      displayName: displayName().trim() || undefined,
-      scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues),
+      provider: d.providerSource ?? d.provider,
+      displayName:
+        displayName().trim() || (d.providerSource ? d.label : undefined),
+      scopeHints: scopeHintsFromConnectionValues(
+        d.providerSource ?? d.provider,
+        submitValues,
+      ),
       values: submitValues,
     });
     await afterConnectionCreated(connection);
@@ -277,9 +281,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     }
     const connection = await createConnection({
       spaceId: spaceId(),
-      provider: d.provider,
-      displayName: displayName().trim() || undefined,
-      scopeHints: scopeHintsFromConnectionValues(d.provider, submitValues),
+      provider: d.providerSource ?? d.provider,
+      displayName:
+        displayName().trim() || (d.providerSource ? d.label : undefined),
+      scopeHints: scopeHintsFromConnectionValues(
+        d.providerSource ?? d.provider,
+        submitValues,
+      ),
       values: submitValues,
     });
     await afterConnectionCreated(connection);

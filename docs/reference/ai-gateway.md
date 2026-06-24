@@ -10,10 +10,16 @@ runtime profile projected through Service Graph. It lets a deployed Capsule
 runtime use one Takosumi endpoint and one rotated Service Graph service token
 while Takosumi Cloud keeps upstream provider keys in platform secrets. The OSS
 platform worker carries only a fail-closed route seam and an optional
-Cloud-extension service binding handoff. The seam is registered in the same
-Cloud extension route registry used for provider-compatible Cloud-only
-gateways. Upstream profiles, provider keys, and request forwarding belong to
-the closed Takosumi Cloud deployment.
+Cloud-extension service binding handoff. The platform Cloud extension registry
+currently contains exactly two routes: this AI Gateway and the Cloudflare
+Compatibility Gateway. Upstream profiles, provider keys, and request forwarding
+belong to the closed Takosumi Cloud deployment.
+
+For the current GA scope, Takosumi Cloud compatibility APIs are limited to the
+Cloudflare Compatibility Gateway and this AI Gateway. Other providers should be
+supported through their normal OpenTofu/Terraform providers and generic
+ProviderConnection env/file injection rather than new provider-compatible
+gateway APIs.
 
 The platform route is active only when the realized operator config binds the
 closed Cloud extension Worker:

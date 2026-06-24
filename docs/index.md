@@ -24,7 +24,7 @@ Takosumi OSS:
 
 Takosumi Cloud:
   closed な公式ホスティング版 Takosumi for Operators
-  + Cloud 専用の compatibility gateway
+  + Cloud 専用の compatibility gateway（Cloudflare / AI）
   + Cloud 専用の managed resources。
 ```
 
@@ -39,13 +39,13 @@ Cloud だけが互換 API と managed resource を持つ。
 
 Takosumi Cloud の通常画面では、内部モデルをそのまま前面に出しません。
 
-| 画面の言葉 | 意味 |
-| --- | --- |
-| サービス | ホストするアプリ、worker、API、site、storage など |
-| 接続 | Cloudflare / AWS / GCP などのアカウント連携 |
-| 変更内容 | deploy 前に確認する plan / resource summary |
-| 履歴 | いつ誰が何を変更したか |
-| Restore point | state version を使った復元点 |
+| 画面の言葉    | 意味                                              |
+| ------------- | ------------------------------------------------- |
+| サービス      | ホストするアプリ、worker、API、site、storage など |
+| 接続          | Cloudflare / AWS / GCP などのアカウント連携       |
+| 変更内容      | deploy 前に確認する plan / resource summary       |
+| 履歴          | いつ誰が何を変更したか                            |
+| Restore point | state version を使った復元点                      |
 
 詳細を見たい場合は、OpenTofu/Terraform の model を [Model reference](./reference/model.md) で確認できます。
 
@@ -97,11 +97,14 @@ Takosumi Cloud は closed な公式ホスティング版です。
 Takosumi Cloud =
   official hosted Takosumi for Operators
   + Cloudflare Compatibility Gateway
+  + Takosumi AI Gateway
   + Takosumi Managed Edge / Storage / DB / KV / Queue / Container
   + billing / quota / usage / support / abuse controls
 ```
 
-Cloudflare compatibility は Cloud 専用です。
+互換 API はまず Cloudflare と AI Gateway に絞ります。その他の provider は
+新しい互換 API を増やすのではなく、通常の OpenTofu/Terraform provider と
+Provider Connection の env/file injection で動かします。
 
 ```text
 cloudflare/cloudflare provider
@@ -119,6 +122,14 @@ cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
 cloudflare_d1_database
 worker vars/secrets/bindings
+```
+
+AI Gateway は OpenAI-compatible な Cloud 専用 runtime API です。
+
+```text
+GET  /gateway/ai/v1/models
+POST /gateway/ai/v1/chat/completions
+POST /gateway/ai/v1/embeddings
 ```
 
 ## 次に読むもの

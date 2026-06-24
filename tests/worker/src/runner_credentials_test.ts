@@ -23,7 +23,7 @@ const REQUEST = {
   },
 };
 
-test("shared provider env payload credentials are ignored", () => {
+test("generic-env provider payload credentials are admitted", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   Bun.env.CLOUDFLARE_API_TOKEN = "ambient-env-token";
   try {
@@ -31,7 +31,7 @@ test("shared provider env payload credentials are ignored", () => {
       { ...REQUEST, credentials: { CLOUDFLARE_API_TOKEN: "payload-token" } },
       CLOUDFLARE_PROFILE,
     );
-    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBe("payload-token");
   } finally {
     restoreEnv("CLOUDFLARE_API_TOKEN", prev);
   }
@@ -62,7 +62,7 @@ test("does not fall back to Bun.env even for a local-dev runner profile", () => 
   }
 });
 
-test("shared provider env names are ignored from the payload", () => {
+test("generic-env provider payload admits upper-snake env and rejects invalid names", () => {
   const prev = Bun.env.CLOUDFLARE_API_TOKEN;
   delete Bun.env.CLOUDFLARE_API_TOKEN;
   try {
@@ -71,16 +71,16 @@ test("shared provider env names are ignored from the payload", () => {
         ...REQUEST,
         credentials: {
           CLOUDFLARE_API_TOKEN: "payload-token",
-          // Not a cloudflare env name; must be ignored.
-          AWS_SECRET_ACCESS_KEY: "should-not-appear",
+          // Another declared provider env supplied by the control plane payload.
+          AWS_SECRET_ACCESS_KEY: "payload-aws-secret",
           // Invalid env-name shape; must be ignored.
           "lower-case": "nope",
         },
       },
       CLOUDFLARE_PROFILE,
     );
-    expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
-    expect(context.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(context.env.CLOUDFLARE_API_TOKEN).toBe("payload-token");
+    expect(context.env.AWS_SECRET_ACCESS_KEY).toBe("payload-aws-secret");
     expect(context.env["lower-case"]).toBeUndefined();
   } finally {
     restoreEnv("CLOUDFLARE_API_TOKEN", prev);
@@ -101,9 +101,7 @@ test("TF_VAR_ per-alias credentials from the payload are admitted into the tofu 
     },
     CLOUDFLARE_PROFILE,
   );
-  // The shared provider env is ignored; only generated-root TF_VAR credentials
-  // are admitted.
-  expect(context.env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+  expect(context.env.CLOUDFLARE_API_TOKEN).toEqual("shared-token");
   expect(context.env.TF_VAR_cloudflare_main_api_token).toEqual(
     "per-alias-compute-token",
   );

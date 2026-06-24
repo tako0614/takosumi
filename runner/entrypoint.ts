@@ -45,12 +45,6 @@ const PROVIDER_SNAPSHOT_COMMAND_ENV_PREFIX =
   "TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND_";
 const PROVIDER_SNAPSHOT_POINTER_DIR_ENV =
   "TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR";
-const ROOT_ONLY_PROVIDER_ENV_NAMES = new Set(
-  PROVIDER_CREDENTIAL_ENV_RULES.flatMap((rule) =>
-    providerCredentialArgs(rule.shortName).map((arg) => arg.envName),
-  ),
-);
-
 type RunRequest = {
   readonly action?: unknown;
   readonly runId?: unknown;
@@ -3054,7 +3048,9 @@ export function assertRunnerPolicyForRequest(
  * `credentials` field. §13 per-alias tofu variables (`TF_VAR_...`) are admitted
  * for built-in root-only provider args. Declared-env provider variables are
  * admitted under their real env names after rejecting runner/runtime reserved
- * names and raw env names reserved for root-only provider args.
+ * names. They are read only from the dispatched credential payload, never from
+ * ambient process env, so built-in provider names such as CLOUDFLARE_API_TOKEN
+ * can still be used by explicit generic-env ProviderConnections.
  */
 function credentialsFromRequest(request: unknown): Record<string, string> {
   const credentials = recordField(request, "credentials");
@@ -3074,11 +3070,7 @@ function credentialsFromRequest(request: unknown): Record<string, string> {
 }
 
 function isAdmittedDeclaredProviderEnvName(name: string): boolean {
-  return (
-    isProviderEnvName(name) &&
-    !isReservedProviderEnvName(name) &&
-    !ROOT_ONLY_PROVIDER_ENV_NAMES.has(name)
-  );
+  return isProviderEnvName(name) && !isReservedProviderEnvName(name);
 }
 
 function redactionValuesFromRequest(request: unknown): string[] {

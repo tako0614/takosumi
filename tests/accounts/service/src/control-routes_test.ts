@@ -4079,6 +4079,7 @@ test("Connections create: honors explicit generic env for guided providers", asy
       values: {
         CLOUDFLARE_API_TOKEN: "cf-secret-token",
         CLOUDFLARE_ACCOUNT_ID: "acct",
+        CLOUDFLARE_CUSTOM_ENDPOINT: "https://cloudflare.example.test",
       },
     },
   });
@@ -4101,9 +4102,13 @@ test("Connections create: honors explicit generic env for guided providers", asy
   expect(passed.kind).toEqual("generic_env_provider");
   expect(passed.credentialDriver).toEqual("generic_env");
   expect(passed.scope).toEqual("space");
+  expect(passed.values?.CLOUDFLARE_CUSTOM_ENDPOINT).toEqual(
+    "https://cloudflare.example.test",
+  );
 
   const text = await response!.text();
   expect(text).not.toContain("cf-secret-token");
+  expect(text).not.toContain("cloudflare.example.test");
 });
 
 test("Connections create: requires spaceId and values", async () => {
