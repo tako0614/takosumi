@@ -520,11 +520,21 @@ test("generateInstallationRoot keeps generic-env credentials out of generated ro
     template: R2_TEMPLATE,
     inputs: { bucketName: "b", accountId: "a", location: "" },
     installType: "opentofu_module",
-    providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
+    providerEnvBindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        credentialDelivery: "provider_env",
+      },
+    ],
   });
   const main = files["main.tf"]!;
-  expect(main).toContain('variable "cloudflare_main_api_token" {');
-  expect(main).toContain("  ephemeral = true");
+  expect(main).toContain('provider "cloudflare" {');
+  expect(main).toContain('  alias = "main"');
+  expect(main).toContain("    cloudflare = cloudflare.main");
+  expect(main).not.toContain('variable "cloudflare_main_api_token" {');
+  expect(main).not.toContain("  api_token = var.cloudflare_main_api_token");
+  expect(main).not.toContain("  ephemeral = true");
   expect(main).not.toContain('variable "EXTRA_PROVIDER_TOKEN"');
   expect(main).not.toContain('provider "EXTRA_PROVIDER_TOKEN"');
 });

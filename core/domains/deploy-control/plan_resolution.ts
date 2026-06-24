@@ -280,9 +280,14 @@ function providerEnvBindingsFromResolved(
   const providers: RootInstallationProviderEnvBinding[] = [];
   for (const entry of resolved) {
     const provider = entry.provider;
+    const credentialDelivery =
+      entry.connection?.kind === "generic_env_provider"
+        ? "provider_env"
+        : "generated_root_variable";
     providers.push({
       provider,
       ...(entry.alias ? { alias: entry.alias } : {}),
+      credentialDelivery,
     });
   }
   return providers;
