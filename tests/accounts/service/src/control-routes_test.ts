@@ -4179,6 +4179,107 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
   expect(text).not.toContain("SNOWFLAKE_PASSWORD");
 });
 
+test("Connections create: forwards generic env credential files without echoing secrets", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const provider = "registry.opentofu.org/example/envfile";
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider,
+      kind: "generic_env_provider",
+      credentialDriver: "generic_env",
+      displayName: "Env file provider",
+      values: {
+        GENERIC_API_TOKEN: "generic-secret",
+      },
+      files: [
+        {
+          path: "provider-credentials.json",
+          content: '{"token":"file-secret"}',
+          envName: "GENERIC_CREDENTIALS_FILE",
+          mode: 0o600,
+        },
+      ],
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    values?: Record<string, string>;
+    files?: Array<{
+      path: string;
+      content: string;
+      envName?: string;
+      mode?: number;
+    }>;
+  };
+  expect(passed.provider).toEqual(provider);
+  expect(passed.kind).toEqual("generic_env_provider");
+  expect(passed.credentialDriver).toEqual("generic_env");
+  expect(passed.values?.GENERIC_API_TOKEN).toEqual("generic-secret");
+  expect(passed.files).toEqual([
+    {
+      path: "provider-credentials.json",
+      content: '{"token":"file-secret"}',
+      envName: "GENERIC_CREDENTIALS_FILE",
+      mode: 0o600,
+    },
+  ]);
+
+  const text = await response!.text();
+  expect(text).not.toContain("generic-secret");
+  expect(text).not.toContain("file-secret");
+});
+
+test("Connections create: rejects credential files for fixed provider helpers", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "cloudflare",
+      values: {
+        CLOUDFLARE_API_TOKEN: "cf-secret",
+      },
+      files: [
+        {
+          path: "cloudflare.json",
+          content: '{"token":"file-secret"}',
+          envName: "CLOUDFLARE_CREDENTIALS_FILE",
+        },
+      ],
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.createConnection).toBeUndefined();
+  const text = await response!.text();
+  expect(text).not.toContain("cf-secret");
+  expect(text).not.toContain("file-secret");
+  expect(JSON.parse(text).error.message).toContain("generic env");
+});
+
 test("Connections create: known non-Cloudflare providers are explicit generic env, not compat endpoints", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
