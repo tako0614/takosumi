@@ -85,7 +85,10 @@ export interface PlatformControlPlaneSmokeResult {
   readonly capsuleModule: "cloudflare-hello-worker";
   readonly credentialPath: "space_scoped_provider_connection";
   readonly providerConnectionMode: "guided" | "generic-env";
+  /** Required end-to-end checkpoints for this smoke shape. */
   readonly steps: readonly string[];
+  /** Checkpoints that were actually completed before the result was written. */
+  readonly completedSteps: readonly string[];
   readonly appName: string;
   readonly environment: string;
   readonly connectionId?: string;
@@ -440,6 +443,7 @@ export function dryRunResult(
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
+    completedSteps: requiredSteps(options),
     appName: options.appName,
     environment: options.environment,
     ...(options.backupRestoreRehearsal
@@ -480,6 +484,10 @@ export async function runPlatformControlPlaneSmoke(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<PlatformControlPlaneSmokeResult> {
   const spaceId = await resolveSpaceId(options);
+  const completedSteps: string[] = [];
+  const completeStep = (step: string): void => {
+    if (!completedSteps.includes(step)) completedSteps.push(step);
+  };
   let connectionId: string | undefined;
   let providerConnectionId: string | undefined;
   let connectionRevoked = false;
@@ -510,6 +518,11 @@ export async function runPlatformControlPlaneSmoke(
     const connection = await createSpaceCloudflareConnection(options, spaceId);
     connectionId = connection.rawConnectionId;
     providerConnectionId = connection.providerConnectionId;
+    completeStep("spaceScopedProviderConnection");
+    if (options.cloudflareConnectionMode === "generic-env") {
+      completeStep("genericEnvProviderConnection");
+    }
+    completeStep("connectionVerified");
     const deploy =
       options.sourceMode === "git"
         ? await deployGitSourceCapsule(options, {
@@ -525,6 +538,12 @@ export async function runPlatformControlPlaneSmoke(
     sourceSnapshotId = deploy.sourceSnapshotId;
     installationId = deploy.installation.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
+    if (options.sourceMode === "git") {
+      completeStep("sourceRegistered");
+      completeStep("sourceSynced");
+    }
+    completeStep("scratchInstall");
+    completeStep("plan");
     capsuleGateStatus = "passed";
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
     policyStatus = publicPolicyStatus(completedPlan);
@@ -544,18 +563,23 @@ export async function runPlatformControlPlaneSmoke(
     const completedApply = await pollRun(options, applyRunId);
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
+    completeStep("apply");
     await assertCloudflareWorkerExists(options);
+    completeStep("deploymentVerified");
     await assertPublicWorkerUrl(options);
+    completeStep("publicUrlVerified");
     deploymentLedger = await assertDeploymentLedger(options, {
       spaceId,
       installationId,
       applyRunId,
     });
+    completeStep("deploymentLedgerVerified");
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
         spaceId,
         installationId,
       });
+      completeStep("backupRestoreRehearsal");
     }
 
     const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
@@ -590,6 +614,8 @@ export async function runPlatformControlPlaneSmoke(
     policyStatus = publicPolicyStatus(completedDestroy);
     assertRunSucceeded(completedDestroy, "destroy apply");
     await assertCloudflareWorkerGone(options);
+    await assertPublicWorkerUrlGone(options);
+    completeStep("destroy");
 
     if (!options.keepConnection) {
       connectionRevoked = await revokeConnection(options, connectionId);
@@ -598,6 +624,7 @@ export async function runPlatformControlPlaneSmoke(
           "temporary ProviderConnection revoke did not confirm success",
         );
       }
+      completeStep("connectionRevoked");
     }
     return {
       kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
@@ -610,6 +637,7 @@ export async function runPlatformControlPlaneSmoke(
       providerConnectionMode: options.cloudflareConnectionMode,
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
+      completedSteps,
       appName: options.appName,
       environment: options.environment,
       connectionId,
@@ -671,10 +699,12 @@ export async function runPlatformControlPlaneSmoke(
       !connectionRevokeSkippedReason
     ) {
       connectionRevoked = await revokeConnection(options, connectionId);
+      if (connectionRevoked) completeStep("connectionRevoked");
     }
   }
   return failedResult(options, {
     spaceId,
+    completedSteps,
     connectionId,
     providerConnectionId,
     installationId,
@@ -703,6 +733,7 @@ function failedResult(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly spaceId: string;
+    readonly completedSteps: readonly string[];
     readonly connectionId?: string;
     readonly providerConnectionId?: string;
     readonly sourceId?: string;
@@ -740,6 +771,7 @@ function failedResult(
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
+    completedSteps: input.completedSteps,
     appName: options.appName,
     environment: options.environment,
     connectionId: input.connectionId,
@@ -757,10 +789,12 @@ function failedResult(
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl: publicWorkerUrl(options),
-    deploymentVerified: false,
-    publicUrlVerified: false,
-    deploymentLedgerVerified: false,
-    destroyVerified: false,
+    deploymentVerified: input.completedSteps.includes("deploymentVerified"),
+    publicUrlVerified: input.completedSteps.includes("publicUrlVerified"),
+    deploymentLedgerVerified: input.completedSteps.includes(
+      "deploymentLedgerVerified",
+    ),
+    destroyVerified: input.completedSteps.includes("destroy"),
     connectionRevoked: input.connectionRevoked,
     timedOutRunId: input.timedOutRunId,
     runCancellationStatus: input.runCancellationStatus,
@@ -1728,6 +1762,43 @@ async function assertCloudflareWorkerGone(
   );
 }
 
+async function assertPublicWorkerUrlGone(
+  options: PlatformControlPlaneSmokeOptions,
+): Promise<void> {
+  const url = publicWorkerUrl(options);
+  const deadline = Date.now() + 120_000;
+  let lastStatus = 0;
+  let lastBody = "";
+  while (Date.now() <= deadline) {
+    try {
+      const response = await fetch(url, {
+        headers: { accept: "text/html" },
+      });
+      lastStatus = response.status;
+      lastBody = await response.text();
+      if (
+        response.status === 404 ||
+        !(
+          response.ok &&
+          lastBody.includes("<h1>It works</h1>") &&
+          lastBody.includes("provisioned by a Takosumi Installation")
+        )
+      ) {
+        return;
+      }
+    } catch (error) {
+      lastBody = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    await sleep(2_000);
+  }
+  throw new Error(
+    `Cloudflare Worker public URL still served the Takosumi page after destroy (last HTTP ${lastStatus}, body ${JSON.stringify(
+      lastBody.slice(0, 120),
+    )})`,
+  );
+}
+
 async function cloudflareScriptRequest(
   options: PlatformControlPlaneSmokeOptions,
   method: "GET" | "DELETE",
@@ -2302,6 +2373,7 @@ async function runSelfTest(): Promise<void> {
   }
   const failed = failedResult(options, {
     spaceId: "space_selftest",
+    completedSteps: [],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
@@ -2325,6 +2397,7 @@ async function runSelfTest(): Promise<void> {
   }
   const deployTimeout = failedResult(options, {
     spaceId: "space_selftest",
+    completedSteps: ["spaceScopedProviderConnection", "connectionVerified"],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
