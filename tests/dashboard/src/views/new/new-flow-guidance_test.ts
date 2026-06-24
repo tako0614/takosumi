@@ -61,6 +61,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).toContain("function CatalogCard");
+    expect(newAppViewSource).toContain("function ManualImportCard");
     expect(newAppViewSource).toContain("const catalogEntries = createMemo");
     expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
     expect(newAppViewSource).toContain("function catalogConfigPriority");
@@ -79,7 +80,11 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
     expect(newAppViewSource).toContain('t("new.store.examplesTitle")');
     expect(newAppViewSource).toContain('class="wb-disclosure av-catalog-more"');
-    expect(newAppViewSource).toContain('t("new.advancedImport.open")');
+    expect(newAppViewSource).toContain(
+      'class="av-catalog-card av-catalog-card-manual"',
+    );
+    expect(newAppViewSource).toContain('t("new.manualCard.title")');
+    expect(newAppViewSource).toContain('t("new.manualCard.body")');
     const storeHeadStart = newAppViewSource.indexOf(
       '<div class="av-store-head">',
     );
@@ -87,19 +92,18 @@ describe("/new flow guidance", () => {
       '<ul class="av-catalog-grid">',
     );
     const manualImportStart = newAppViewSource.indexOf(
-      '<div class="av-manual-import">',
+      "<ManualImportCard",
+      catalogGridStart,
     );
-    const importCardStart = newAppViewSource.indexOf(
-      '<Card class="av-import-card">',
-    );
-    expect(manualImportStart).toBeGreaterThan(catalogGridStart);
-    expect(importCardStart).toBeGreaterThan(manualImportStart);
-    const manualImportSource = newAppViewSource.slice(
+    const catalogGridEnd = newAppViewSource.indexOf("</ul>", catalogGridStart);
+    const manualImportUseSource = newAppViewSource.slice(
       manualImportStart,
-      importCardStart,
+      catalogGridEnd,
     );
-    expect(manualImportSource).toContain('t("new.advancedImport.open")');
-    expect(manualImportSource).toContain('setActiveTab("git")');
+    expect(manualImportUseSource).toContain('setActiveTab("git")');
+    expect(manualImportStart).toBeGreaterThan(catalogGridStart);
+    expect(manualImportStart).toBeLessThan(catalogGridEnd);
+    expect(newAppViewSource).not.toContain('class="av-manual-import"');
     expect(newAppViewSource).not.toContain(
       '<details class="wb-disclosure av-manual-import">',
     );
@@ -118,7 +122,8 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en).not.toHaveProperty("new.catalog.select");
     expect(en).not.toHaveProperty("new.store.subtitle");
-    expect(en["new.store.title"]).toBe("What do you want to host?");
+    expect(en["new.store.title"]).toBe("Choose a service to add");
+    expect(en["new.manualCard.title"]).toBe("Add from link");
     expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
     expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
@@ -131,7 +136,8 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja).not.toHaveProperty("new.catalog.select");
     expect(ja).not.toHaveProperty("new.store.subtitle");
-    expect(ja["new.store.title"]).toBe("何をホストしますか？");
+    expect(ja["new.store.title"]).toBe("追加するサービスを選択");
+    expect(ja["new.manualCard.title"]).toBe("リンクから追加");
     expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
     expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
