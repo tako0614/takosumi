@@ -80,6 +80,7 @@ test("generic OpenTofu provider profile can be explicitly enabled", () => {
   expect(idsOf(enabled)).toEqual(["generic-opentofu-provider"]);
   expect(enabled[0]?.allowedProviders).toEqual(["*"]);
   expect(enabled[0]?.requireCredentialRefs).toBe(false);
+  expect(enabled[0]?.networkPolicy).toEqual({ mode: "operator-managed" });
   expect(enabled[0]?.labels?.["takosumi.com/provider-surface"]).toEqual(
     "generic",
   );
@@ -118,6 +119,16 @@ test("Cloud GA surface admits arbitrary providers only through the generic env p
   expect(genericDecision.reasons).toEqual([]);
 });
 
+test("generic OpenTofu provider profile does not pretend to own provider API egress hosts", () => {
+  const profile = createDefaultRunnerProfiles(123).find(
+    (candidate) => candidate.id === "generic-opentofu-provider",
+  );
+
+  expect(profile?.allowedProviders).toEqual(["*"]);
+  expect(profile?.networkPolicy?.mode).toBe("operator-managed");
+  expect(profile?.networkPolicy?.allowedHosts).toBeUndefined();
+  expect(profile?.networkPolicy?.allowedHostPatterns).toBeUndefined();
+});
 
 test("merges takosumi.com/profile-enabled=true into every enabled profile", () => {
   const enabled = resolveEnabledRunnerProfiles(

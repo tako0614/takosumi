@@ -215,7 +215,6 @@ export function createDefaultRunnerProfiles(
       },
       networkPolicy: {
         mode: "operator-managed",
-        allowedHosts: ["registry.opentofu.org"],
       },
     }),
   ];

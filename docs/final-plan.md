@@ -558,6 +558,12 @@ such as `SNOWFLAKE_PASSWORD`. Runner/runtime reserved names (`PATH`,
 `TAKOSUMI_*`, `OPENTOFU_*`, `TF_*`, and similar process control env) are
 rejected.
 
+The generic OpenTofu provider runner profile allows arbitrary provider sources
+with `allowedProviders: ["*"]`. Its network egress is operator-managed rather
+than expressed as a fake built-in host allowlist, because arbitrary providers
+can call arbitrary provider APIs. Operators must choose the runner substrate and
+egress controls appropriate for the providers they permit.
+
 ## 7. Provider Binding
 
 Provider Binding is intentionally simple.
