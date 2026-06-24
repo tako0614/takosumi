@@ -3931,6 +3931,65 @@ test("POST /api/v1/connections/:id/revoke deletes the connection and answers 204
   expect(operations.calls.revokeConnection).toEqual(["conn_abc"]);
 });
 
+test("POST /api/v1/connections/:id/revoke accepts public ProviderConnection ids", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const publicConnectionId = await publicProviderConnectionIdForTest("conn_cf");
+  const notFound = Object.assign(new Error("not found"), {
+    code: "not_found",
+  });
+  const getConnectionCalls: string[] = [];
+  const operations = fakeOperations({
+    getConnection: async (connectionId) => {
+      getConnectionCalls.push(connectionId);
+      if (connectionId === publicConnectionId) throw notFound;
+      return {
+        id: connectionId,
+        spaceId: "space_a",
+        provider: "cloudflare",
+        kind: "cloudflare_api_token",
+        authMethod: "static_secret",
+        scope: "space",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getConnection"]>
+      >;
+    },
+    connections: {
+      listProviderEnvs: async () => [
+        {
+          id: "conn_cf",
+          spaceId: "space_a",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          displayName: "Cloudflare",
+          materialization: "secret",
+          status: "ready",
+          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    `/api/v1/connections/${publicConnectionId}/revoke`,
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(204);
+  expect(getConnectionCalls).toEqual([publicConnectionId, "conn_cf"]);
+  expect(operations.calls.revokeConnection).toEqual(["conn_cf"]);
+});
+
 test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the caller does not own", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
