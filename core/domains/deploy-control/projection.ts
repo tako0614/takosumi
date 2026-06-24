@@ -356,8 +356,10 @@ function isPublishableDeploymentOutputValue(
   if (typeof value !== "string") {
     return !containsSecretLikeJsonValue(value);
   }
-  if (containsSecretLikeString(value)) return false;
-  if (!kind.endsWith("_url")) return !SECRET_QUERY_RE.test(value);
+  if (containsSecretLikeString(value) || redactString(value) !== value) {
+    return false;
+  }
+  if (!kind.endsWith("_url")) return true;
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -380,7 +382,10 @@ function containsSecretLikeJsonValue(value: JsonValue): boolean {
     inspected += 1;
     if (inspected > 1_000) return true;
     if (typeof current === "string") {
-      if (SECRET_QUERY_RE.test(current) || containsSecretLikeString(current)) {
+      if (
+        containsSecretLikeString(current) ||
+        redactString(current) !== current
+      ) {
         return true;
       }
       continue;

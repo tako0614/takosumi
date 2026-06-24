@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   projectOutputAllowlistPublicOutputs,
   projectOutputAllowlistSpaceOutputs,
+  projectTemplatePublicOutputs,
 } from "../../../../core/domains/deploy-control/projection.ts";
 
 test("output allowlist projection drops optional nested JSON secret material", () => {
@@ -93,4 +94,64 @@ test("output allowlist projection drops optional empty generated output shims", 
 
   expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({});
   expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
+});
+
+test("template public string outputs allow ordinary labels containing secret words", () => {
+  const template = {
+    id: "cloudflare-hello-worker",
+    version: "1.0.0",
+    outputs: {
+      public: {
+        worker_name: { from: "worker_name", type: "string" },
+        url: { from: "url", type: "string" },
+      },
+    },
+  } as const;
+
+  expect(
+    projectTemplatePublicOutputs(template as never, {
+      worker_name: {
+        sensitive: false,
+        value: "takosumi-credential-recipes-demo",
+      },
+      url: {
+        sensitive: false,
+        value: "https://takosumi-credential-recipes-demo.example.test",
+      },
+    }),
+  ).toEqual([
+    {
+      name: "worker_name",
+      kind: "string",
+      value: "takosumi-credential-recipes-demo",
+      sensitive: false,
+    },
+    {
+      name: "url",
+      kind: "string",
+      value: "https://takosumi-credential-recipes-demo.example.test",
+      sensitive: false,
+    },
+  ]);
+});
+
+test("template public string outputs still reject concrete secret-shaped values", () => {
+  const template = {
+    id: "cloudflare-hello-worker",
+    version: "1.0.0",
+    outputs: {
+      public: {
+        worker_name: { from: "worker_name", type: "string" },
+      },
+    },
+  } as const;
+
+  expect(() =>
+    projectTemplatePublicOutputs(template as never, {
+      worker_name: {
+        sensitive: false,
+        value: "token=abc123",
+      },
+    }),
+  ).toThrow("cannot be published");
 });
