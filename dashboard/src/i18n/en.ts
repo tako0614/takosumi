@@ -402,12 +402,13 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
-  "new.subtitle": "Choose a starter or paste an install link.",
+  "new.subtitle":
+    "Choose something ready to add, or paste an install link. You will review changes before deploy.",
   "new.store.aria": "Available services",
   "new.store.kicker": "Add",
-  "new.store.title": "Choose a service to add",
-  "new.store.featuredTitle": "Recommended",
-  "new.store.blocksTitle": "Storage and building blocks",
+  "new.store.title": "What do you want to add?",
+  "new.store.featuredTitle": "Ready to add",
+  "new.store.blocksTitle": "Building blocks",
   "new.store.examplesTitle": "Examples",
   "new.store.searchLabel": "Search services to add",
   "new.store.searchPlaceholder": "Search by service, provider, or type",
@@ -423,7 +424,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.catalog.kind.storage": "Storage",
   "new.catalog.add": "Add",
   "new.manualCard.title": "Add from link",
-  "new.manualCard.body": "Use a Git URL or install link.",
+  "new.manualCard.body": "Paste an install link or Git URL.",
   "new.manualCard.action": "Open",
   "new.advancedImport.open": "Add another link",
   "new.advancedImport.close": "Pick a starter",

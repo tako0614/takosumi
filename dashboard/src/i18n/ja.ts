@@ -405,12 +405,13 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
-  "new.subtitle": "おすすめから選ぶか、リンクを貼って追加します。",
+  "new.subtitle":
+    "追加できるものを選ぶか、インストールリンクを貼ります。デプロイ前に変更内容を確認できます。",
   "new.store.aria": "おすすめサービス",
   "new.store.kicker": "追加",
-  "new.store.title": "追加するサービスを選択",
-  "new.store.featuredTitle": "おすすめ",
-  "new.store.blocksTitle": "保存先と部品",
+  "new.store.title": "何を追加しますか？",
+  "new.store.featuredTitle": "すぐ追加できるもの",
+  "new.store.blocksTitle": "部品・保存先",
   "new.store.examplesTitle": "サンプル",
   "new.store.searchLabel": "追加するサービスを検索",
   "new.store.searchPlaceholder": "サービス名、Provider、種類で探す",
@@ -425,7 +426,7 @@ export const ja = {
   "new.catalog.kind.storage": "Storage",
   "new.catalog.add": "追加",
   "new.manualCard.title": "リンクから追加",
-  "new.manualCard.body": "Git URL やインストールリンクを指定します。",
+  "new.manualCard.body": "インストールリンクまたは Git URL を貼ります。",
   "new.manualCard.action": "開く",
   "new.advancedImport.open": "その他のリンクから追加",
   "new.advancedImport.close": "おすすめから選ぶ",

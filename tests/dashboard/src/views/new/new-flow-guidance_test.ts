@@ -135,13 +135,13 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en).not.toHaveProperty("new.catalog.select");
     expect(en).not.toHaveProperty("new.store.subtitle");
-    expect(en["new.store.title"]).toBe("Choose a service to add");
-    expect(en["new.store.featuredTitle"]).toBe("Recommended");
+    expect(en["new.store.title"]).toBe("What do you want to add?");
+    expect(en["new.store.featuredTitle"]).toBe("Ready to add");
     expect(en["new.store.searchPlaceholder"]).toContain("Search");
     expect(en["new.manualCard.title"]).toBe("Add from link");
     expect(en["new.manualCard.action"]).toBe("Open");
     expect(en["new.catalog.add"]).toBe("Add");
-    expect(en["new.store.blocksTitle"]).toBe("Storage and building blocks");
+    expect(en["new.store.blocksTitle"]).toBe("Building blocks");
     expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
       "add another link",
@@ -153,13 +153,13 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja).not.toHaveProperty("new.catalog.select");
     expect(ja).not.toHaveProperty("new.store.subtitle");
-    expect(ja["new.store.title"]).toBe("追加するサービスを選択");
-    expect(ja["new.store.featuredTitle"]).toBe("おすすめ");
+    expect(ja["new.store.title"]).toBe("何を追加しますか？");
+    expect(ja["new.store.featuredTitle"]).toBe("すぐ追加できるもの");
     expect(ja["new.store.searchPlaceholder"]).toContain("探す");
     expect(ja["new.manualCard.title"]).toBe("リンクから追加");
     expect(ja["new.manualCard.action"]).toBe("開く");
     expect(ja["new.catalog.add"]).toBe("追加");
-    expect(ja["new.store.blocksTitle"]).toBe("保存先と部品");
+    expect(ja["new.store.blocksTitle"]).toBe("部品・保存先");
     expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
     expect(ja["new.advancedImport.open"]).not.toContain("手動");
