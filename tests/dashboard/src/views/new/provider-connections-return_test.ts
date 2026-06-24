@@ -375,6 +375,10 @@ describe("/new Provider Connections return context", () => {
     );
     expect(connectionsTabSource).toContain('"conn.genericEnv.providerName"');
     expect(connectionsTabSource).toContain('"conn.genericEnv.envName"');
+    expect(connectionsTabSource).toContain("const value = pair.value;");
+    expect(connectionsTabSource).not.toContain(
+      "const value = pair.value.trim();",
+    );
     expect(en["conn.genericEnv.option"]).toBe("Any OpenTofu provider");
     expect(en["conn.genericEnv.providerName"]).toBe("Provider source");
     expect(en["conn.genericEnv.providerPlaceholder"]).toBe(

@@ -4064,6 +4064,49 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
   expect(text).not.toContain("SNOWFLAKE_PASSWORD");
 });
 
+test("Connections create: known non-Cloudflare providers are explicit generic env, not compat endpoints", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const create = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      provider: "aws",
+      displayName: "AWS production",
+      values: {
+        AWS_ACCESS_KEY_ID: "key",
+        AWS_SECRET_ACCESS_KEY: "aws-secret",
+        AWS_REGION: "ap-northeast-1",
+      },
+    },
+  });
+  const response = await handleControlRoute({
+    request: create.request,
+    url: create.url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+
+  const passed = operations.calls.createConnection?.[0] as {
+    provider?: string;
+    kind?: string;
+    credentialDriver?: string;
+    scope?: string;
+    values?: Record<string, string>;
+  };
+  expect(passed.provider).toEqual("aws");
+  expect(passed.kind).toEqual("generic_env_provider");
+  expect(passed.credentialDriver).toEqual("generic_env");
+  expect(passed.scope).toEqual("space");
+  expect(passed.values?.AWS_REGION).toEqual("ap-northeast-1");
+
+  const text = await response!.text();
+  expect(text).not.toContain("aws-secret");
+});
+
 test("Connections create: honors explicit generic env for guided providers", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -4139,6 +4182,27 @@ test("Connections create: requires spaceId and values", async () => {
     operations,
   });
   expect(noValuesResp?.status).toEqual(400);
+
+  const noProvider = request("POST", "/api/v1/connections", {
+    cookie,
+    body: {
+      spaceId: "space_a",
+      values: { CLOUDFLARE_API_TOKEN: "t" },
+    },
+  });
+  const noProviderResp = await handleControlRoute({
+    request: noProvider.request,
+    url: noProvider.url,
+    store,
+    operations,
+  });
+  expect(noProviderResp?.status).toEqual(400);
+  await expect(noProviderResp!.json()).resolves.toMatchObject({
+    error: {
+      code: "invalid_request",
+      message: "provider is required",
+    },
+  });
 
   const sourceNoToken = request("POST", "/api/v1/connections", {
     cookie,

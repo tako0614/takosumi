@@ -3813,9 +3813,10 @@ async function createControlConnection(
   const requestedGenericEnv =
     requestedKind === "generic_env_provider" ||
     requestedCredentialDriver === "generic_env";
-  const provider = sourceGitKind
-    ? sourceGitKind
-    : (stringValue(body.provider) ?? "cloudflare");
+  const provider = sourceGitKind ? sourceGitKind : stringValue(body.provider);
+  if (!provider) {
+    return errorJson("invalid_request", "provider is required", 400);
+  }
   const normalizedProvider = isGoogleCloudProvider(provider)
     ? "google"
     : provider;
