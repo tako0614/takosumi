@@ -86,6 +86,15 @@ export interface RootInstallationProviderEnvBinding {
   /** Optional root provider alias selected by this Provider Binding. */
   readonly alias?: string;
   /**
+   * How provider credential material reaches OpenTofu for this binding.
+   *
+   * `generated_root_variable` is the legacy root-only split for providers whose
+   * credentials must be expressed as provider block arguments. `provider_env`
+   * means credentials are already injected into the runner process env/file
+   * material and the generated provider block must stay credential-free.
+   */
+  readonly credentialDelivery?: "provider_env" | "generated_root_variable";
+  /**
    * Optional provider API base URL. The control plane sets this for a managed
    * (platform-hosted) cloudflare run so the provider talks to the Takosumi
    * Gateway provider endpoint (which lands worker scripts in the WfP dispatch namespace) instead
@@ -317,6 +326,7 @@ function appendProviderSections(
     // Sensitive credential variables come first (declared before the alias blocks
     // that consume them), in binding/arg order for deterministic golden output.
     for (const binding of providerEnvBindings) {
+      if (!usesGeneratedRootCredentialVariables(binding)) continue;
       const localProvider = providerLocalName(binding.provider);
       for (const credArg of providerCredentialArgs(binding.provider)) {
         const varName = aliasCredentialVarName(
@@ -337,7 +347,9 @@ function appendProviderSections(
     }
     for (const binding of providerEnvBindings) {
       const localProvider = providerLocalName(binding.provider);
-      const credArgs = providerCredentialArgs(binding.provider);
+      const credArgs = usesGeneratedRootCredentialVariables(binding)
+        ? providerCredentialArgs(binding.provider)
+        : [];
       const aliasLines = [`provider ${hclString(localProvider)} {`];
       if (binding.alias) {
         aliasLines.push(`  alias = ${hclString(binding.alias)}`);
@@ -357,6 +369,12 @@ function appendProviderSections(
       sections.push(aliasLines.join("\n"));
     }
   }
+}
+
+function usesGeneratedRootCredentialVariables(
+  binding: RootInstallationProviderEnvBinding,
+): boolean {
+  return binding.credentialDelivery !== "provider_env";
 }
 
 function renderOutputsTf(template: TemplateDefinition): string {

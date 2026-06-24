@@ -379,6 +379,50 @@ test("opentofu_module install emits provider aliases from resolved provider env 
   expect(mainTf).toContain('appName = "my-worker"');
 });
 
+test("opentofu_module install leaves generic-env provider credentials in runner env", async () => {
+  const { runner, controller } = await installTypeFixture({
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "my-worker", accountId: "acct_123" },
+      policy: {},
+    },
+    connections: [
+      {
+        ...connection("conn_cf", "cloudflare"),
+        kind: "generic_env_provider",
+        authMethod: "generic_env",
+        envNames: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+      },
+    ],
+    providerEnvBindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        envId: "conn_cf",
+      },
+    ],
+    outputs: {
+      worker_name: { sensitive: false, value: "my-worker" },
+      url: { sensitive: false, value: "https://my-worker.workers.dev" },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toEqual("succeeded");
+
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('provider "cloudflare" {');
+  expect(mainTf).toContain('alias = "main"');
+  expect(mainTf).toContain("providers = {");
+  expect(mainTf).toContain("cloudflare = cloudflare.main");
+  expect(mainTf).not.toContain('variable "cloudflare_main_api_token" {');
+  expect(mainTf).not.toContain("  api_token = var.cloudflare_main_api_token");
+});
+
 test("OSS worker install rejects Cloud-only Gateway provider materialization before planning", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const seeded = await seedInstallationModel(store, {
