@@ -58,7 +58,13 @@ test("createSpace rejects an empty handle", async () => {
 
 test("createSpace rejects a handle that violates the grammar", async () => {
   const { service } = build();
-  for (const handle of ["-bad", "a", "Has-Upper", "white space", "x".repeat(40)]) {
+  for (const handle of [
+    "-bad",
+    "a",
+    "Has-Upper",
+    "white space",
+    "x".repeat(40),
+  ]) {
     await expect(
       service.createSpace({
         handle,
@@ -155,6 +161,25 @@ test("updateSpace persists displayName and Space policy", async () => {
     quota: { "resources.total": 10 },
   });
   expect(updated.updatedAt).toBe("2026-06-06T00:00:00.000Z");
+});
+
+test("updateSpace archives and restores a Space without deleting it", async () => {
+  const { service } = build();
+  const space = await service.createSpace({
+    handle: "shota",
+    displayName: "Shota",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
+  const archived = await service.updateSpace(space.id, { archived: true });
+  expect(archived.archivedAt).toBe("2026-06-06T00:00:00.000Z");
+  expect((await service.getSpace(space.id)).archivedAt).toBe(
+    "2026-06-06T00:00:00.000Z",
+  );
+
+  const restored = await service.updateSpace(space.id, { archived: false });
+  expect(restored.archivedAt).toBeUndefined();
+  expect((await service.getSpace(space.id)).archivedAt).toBeUndefined();
 });
 
 test("ensurePersonalSpace creates once and is idempotent by handle", async () => {

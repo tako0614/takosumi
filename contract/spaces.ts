@@ -26,6 +26,12 @@ export interface Space {
   readonly billingAccountId?: string;
   readonly billingSettings?: BillingSettings;
   /**
+   * Soft-archive marker. Archived Spaces remain addressable by id for audit,
+   * restores, and direct admin reads, but default Workspace lists hide them so
+   * old smoke/test Workspaces do not pollute the normal product switcher.
+   */
+  readonly archivedAt?: string;
+  /**
    * Optional Space-wide policy defaults / ceilings. The
    * deploy-control plane composes this with the target InstallConfig policy at
    * plan-completion time; per-run ledgers store only the resulting decision.

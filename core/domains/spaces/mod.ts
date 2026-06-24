@@ -107,6 +107,7 @@ export class SpacesService {
     patch: {
       readonly displayName?: string;
       readonly policy?: Space["policy"];
+      readonly archived?: boolean;
     },
   ): Promise<Space> {
     requireNonEmptyString(id, "id");
@@ -124,21 +125,32 @@ export class SpacesService {
         "policy must be an object",
       );
     }
-    if (patch.displayName === undefined && patch.policy === undefined) {
+    if (
+      patch.displayName === undefined &&
+      patch.policy === undefined &&
+      patch.archived === undefined
+    ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "displayName or policy is required",
+        "displayName, policy, or archived is required",
       );
     }
     const space = await this.getSpace(id);
+    const nowIso = this.#now().toISOString();
     const updated: Space = {
       ...space,
       ...(patch.displayName !== undefined
         ? { displayName: patch.displayName }
         : {}),
       ...(patch.policy !== undefined ? { policy: patch.policy } : {}),
-      updatedAt: this.#now().toISOString(),
+      ...(patch.archived === true
+        ? { archivedAt: space.archivedAt ?? nowIso }
+        : {}),
+      updatedAt: nowIso,
     };
+    if (patch.archived === false) {
+      delete (updated as { archivedAt?: string }).archivedAt;
+    }
     return await this.#store.putSpace(updated);
   }
 

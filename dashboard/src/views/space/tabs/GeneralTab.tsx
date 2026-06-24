@@ -11,6 +11,7 @@ import {
   Show,
 } from "solid-js";
 import { listSpaces, updateSpace } from "../../../lib/control-api.ts";
+import { setCurrentSpaceId } from "../../../lib/space-state.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -30,6 +31,7 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
   );
   const [displayNameDraft, setDisplayNameDraft] = createSignal("");
   const [saving, setSaving] = createSignal(false);
+  const [archiving, setArchiving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [saveMessage, setSaveMessage] = createSignal<string | null>(null);
 
@@ -61,6 +63,37 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const archive = async () => {
+    const current = space();
+    if (!current) return;
+    if ((spaces() ?? []).length <= 1) {
+      setSaveError(t("spaceSettings.general.archiveLastError"));
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(t("spaceSettings.general.archiveConfirm"))
+    ) {
+      return;
+    }
+    setArchiving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    try {
+      await updateSpace(current.id, { archived: true });
+      setCurrentSpaceId("");
+      await refetch();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("takosumi:spaces-changed"));
+      }
+      setSaveMessage(t("spaceSettings.general.archived"));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -109,6 +142,19 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                       },
                     ]}
                   />
+                  <div class="wc-form-actions">
+                    <Button
+                      variant="danger"
+                      type="button"
+                      busy={archiving()}
+                      disabled={archiving() || (spaces() ?? []).length <= 1}
+                      onClick={archive}
+                    >
+                      {archiving()
+                        ? t("common.saving")
+                        : t("spaceSettings.general.archive")}
+                    </Button>
+                  </div>
                 </details>
                 <div class="wc-form-actions">
                   <Button variant="primary" type="submit" busy={saving()}>

@@ -5,9 +5,7 @@
  */
 
 import type { CreateSpaceRequest } from "../domains/spaces/mod.ts";
-import {
-  OpenTofuControllerError,
-} from "../domains/deploy-control/mod.ts";
+import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -26,53 +24,55 @@ import {
 
 const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
 
-export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] = [
-  {
-    method: "POST",
-    path: TAKOSUMI_SPACES_ROUTE,
-    summary:
-      "Creates a Space (owner namespace `@handle`) Installations live directly under.",
-    auth: "deploy-control-token",
-    operationId: "createSpace",
-    openapi: {
-      requestSchema: "CreateSpaceRequest",
-      okStatus: "201",
-      okSchema: "SpaceResponse",
+export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] =
+  [
+    {
+      method: "POST",
+      path: TAKOSUMI_SPACES_ROUTE,
+      summary:
+        "Creates a Space (owner namespace `@handle`) Installations live directly under.",
+      auth: "deploy-control-token",
+      operationId: "createSpace",
+      openapi: {
+        requestSchema: "CreateSpaceRequest",
+        okStatus: "201",
+        okSchema: "SpaceResponse",
+      },
+      notImplementedMessage: "spaces not wired",
     },
-    notImplementedMessage: "spaces not wired",
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_SPACES_ROUTE,
-    summary: "Lists Spaces visible to the principal.",
-    auth: "deploy-control-token",
-    operationId: "listSpaces",
-    openapi: { okSchema: "ListSpacesResponse" },
-    notImplementedMessage: "spaces not wired",
-  },
-  {
-    method: "GET",
-    path: TAKOSUMI_SPACE_ROUTE,
-    summary: "Reads a Space record.",
-    auth: "deploy-control-token",
-    operationId: "getSpace",
-    openapi: { pathParams: ["spaceId"], okSchema: "SpaceResponse" },
-    notImplementedMessage: "spaces not wired",
-  },
-  {
-    method: "PATCH",
-    path: TAKOSUMI_SPACE_ROUTE,
-    summary: "Updates a Space (displayName only for MVP).",
-    auth: "deploy-control-token",
-    operationId: "patchSpace",
-    openapi: {
-      pathParams: ["spaceId"],
-      requestSchema: "PatchSpaceRequest",
-      okSchema: "SpaceResponse",
+    {
+      method: "GET",
+      path: TAKOSUMI_SPACES_ROUTE,
+      summary: "Lists Spaces visible to the principal.",
+      auth: "deploy-control-token",
+      operationId: "listSpaces",
+      openapi: { okSchema: "ListSpacesResponse" },
+      notImplementedMessage: "spaces not wired",
     },
-    notImplementedMessage: "spaces not wired",
-  },
-];
+    {
+      method: "GET",
+      path: TAKOSUMI_SPACE_ROUTE,
+      summary: "Reads a Space record.",
+      auth: "deploy-control-token",
+      operationId: "getSpace",
+      openapi: { pathParams: ["spaceId"], okSchema: "SpaceResponse" },
+      notImplementedMessage: "spaces not wired",
+    },
+    {
+      method: "PATCH",
+      path: TAKOSUMI_SPACE_ROUTE,
+      summary:
+        "Updates mutable Space settings such as displayName or archive state.",
+      auth: "deploy-control-token",
+      operationId: "patchSpace",
+      openapi: {
+        pathParams: ["spaceId"],
+        requestSchema: "PatchSpaceRequest",
+        okSchema: "SpaceResponse",
+      },
+      notImplementedMessage: "spaces not wired",
+    },
+  ];
 
 export function mountDeployControlSpaceRoutes(
   ctx: DeployControlRouteContext,
@@ -107,9 +107,10 @@ export function mountDeployControlSpaceRoutes(
       handler: async ({ c, principal }) => {
         const all = await spaces!.listSpaces();
         // A scoped principal only sees the Spaces it may access.
-        const visible = principal.spaceIds === "*"
-          ? all
-          : all.filter((space) => scopeAllows(principal.spaceIds, space.id));
+        const visible =
+          principal.spaceIds === "*"
+            ? all
+            : all.filter((space) => scopeAllows(principal.spaceIds, space.id));
         return c.json({ spaces: visible }, 200);
       },
     }),
@@ -144,13 +145,12 @@ export function mountDeployControlSpaceRoutes(
         const body = await readJsonBody<{
           readonly displayName?: string;
           readonly policy?: unknown;
-        }>(
-          c,
-          "spacePatch",
-        );
+          readonly archived?: boolean;
+        }>(c, "spacePatch");
         const patch: {
           displayName?: string;
           policy?: Readonly<Record<string, unknown>>;
+          archived?: boolean;
         } = {};
         if (body.displayName !== undefined) {
           if (!nonEmptyString(body.displayName)) {
@@ -174,10 +174,23 @@ export function mountDeployControlSpaceRoutes(
           }
           patch.policy = body.policy as Readonly<Record<string, unknown>>;
         }
-        if (patch.displayName === undefined && patch.policy === undefined) {
+        if (body.archived !== undefined) {
+          if (typeof body.archived !== "boolean") {
+            throw new OpenTofuControllerError(
+              "invalid_argument",
+              "archived must be boolean",
+            );
+          }
+          patch.archived = body.archived;
+        }
+        if (
+          patch.displayName === undefined &&
+          patch.policy === undefined &&
+          patch.archived === undefined
+        ) {
           throw new OpenTofuControllerError(
             "invalid_argument",
-            "displayName or policy is required",
+            "displayName, policy, or archived is required",
           );
         }
         const space = await spaces!.updateSpace(id, patch);
@@ -185,5 +198,4 @@ export function mountDeployControlSpaceRoutes(
       },
     }),
   );
-
 }

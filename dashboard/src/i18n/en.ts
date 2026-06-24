@@ -575,6 +575,12 @@ export const en: Record<keyof typeof ja, string> = {
   "spaceSettings.general.advancedDetails": "Advanced details",
   "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
   "spaceSettings.general.saved": "Workspace settings saved.",
+  "spaceSettings.general.archive": "Archive workspace",
+  "spaceSettings.general.archiveConfirm":
+    "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
+  "spaceSettings.general.archived": "Workspace archived.",
+  "spaceSettings.general.archiveLastError":
+    "You cannot archive the last workspace.",
   "spaceSettings.general.nameRequired": "Enter a display name.",
   "spaceSettings.general.policyObject": "Policy JSON must be an object.",
   "spaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",

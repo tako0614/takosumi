@@ -579,6 +579,12 @@ export const ja = {
   "spaceSettings.general.advancedDetails": "詳細情報",
   "spaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
   "spaceSettings.general.saved": "ワークスペース設定を保存しました。",
+  "spaceSettings.general.archive": "ワークスペースをアーカイブ",
+  "spaceSettings.general.archiveConfirm":
+    "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
+  "spaceSettings.general.archived": "ワークスペースをアーカイブしました。",
+  "spaceSettings.general.archiveLastError":
+    "最後のワークスペースはアーカイブできません。",
   "spaceSettings.general.nameRequired": "表示名を入力してください。",
   "spaceSettings.general.policyObject":
     "ポリシー JSON は object にしてください。",
