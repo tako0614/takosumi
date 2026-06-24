@@ -191,6 +191,44 @@ export function createDefaultRunnerProfiles(
       networkPolicy: networkFor("digitalocean"),
     }),
     defaultProviderRunnerProfile(now, {
+      id: "hcloud-provider-env-candidate",
+      name: "Hetzner Cloud Provider Env candidate",
+      description:
+        "Reference Cloudflare Container runner for OpenTofu modules that use Hetzner Cloud resources.",
+      allowedProviders: providerAddressesFor("hcloud"),
+      labels: candidateRunnerProfileLabels(),
+      networkPolicy: networkFor("hcloud"),
+    }),
+    defaultProviderRunnerProfile(now, {
+      id: "vultr-provider-env-candidate",
+      name: "Vultr Provider Env candidate",
+      description:
+        "Reference Cloudflare Container runner for OpenTofu modules that use Vultr resources.",
+      allowedProviders: providerAddressesFor("vultr"),
+      labels: candidateRunnerProfileLabels(),
+      networkPolicy: networkFor("vultr"),
+    }),
+    defaultProviderRunnerProfile(now, {
+      id: "scaleway-provider-env-candidate",
+      name: "Scaleway Provider Env candidate",
+      description:
+        "Reference Cloudflare Container runner for OpenTofu modules that use Scaleway resources.",
+      allowedProviders: providerAddressesFor("scaleway"),
+      labels: candidateRunnerProfileLabels(),
+      networkPolicy: networkFor("scaleway"),
+    }),
+    defaultProviderRunnerProfile(now, {
+      id: "openstack-provider-env-candidate",
+      name: "OpenStack Provider Env candidate",
+      substrate: "local",
+      description:
+        "Operator-managed OpenTofu runner for OpenStack providers whose API endpoints are deployment-specific.",
+      allowedProviders: providerAddressesFor("openstack"),
+      cloudflareContainer: false,
+      labels: candidateRunnerProfileLabels(),
+      networkPolicy: networkFor("openstack"),
+    }),
+    defaultProviderRunnerProfile(now, {
       id: "docker-custom-example",
       name: "Docker custom example",
       substrate: "local",

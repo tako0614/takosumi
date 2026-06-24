@@ -1,0 +1,70 @@
+id: aws
+display_name: AWS
+provider_rule: aws
+terraform_source:
+  - hashicorp/aws
+  - registry.opentofu.org/hashicorp/aws
+env_names:
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - AWS_SESSION_TOKEN
+  - AWS_WEB_IDENTITY_TOKEN_FILE
+  - AWS_ROLE_ARN
+  - AWS_REGION
+  - AWS_DEFAULT_REGION
+  - AWS_ENDPOINT_URL_S3
+required_env_groups:
+  - [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+  - [AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN]
+auth_modes:
+  static_keys:
+    env:
+      AWS_ACCESS_KEY_ID:
+        from: secret
+        name: access_key_id
+      AWS_SECRET_ACCESS_KEY:
+        from: secret
+        name: secret_access_key
+      AWS_SESSION_TOKEN:
+        from: secret
+        name: session_token
+      AWS_REGION:
+        from: value
+        name: region
+      AWS_DEFAULT_REGION:
+        from: value
+        name: region
+  assume_role:
+    pre_run:
+      type: aws_sts_assume_role
+      inputs:
+        role_arn:
+          from: value
+          name: role_arn
+    env:
+      AWS_ACCESS_KEY_ID:
+        from: generated
+        name: access_key_id
+      AWS_SECRET_ACCESS_KEY:
+        from: generated
+        name: secret_access_key
+      AWS_SESSION_TOKEN:
+        from: generated
+        name: session_token
+      AWS_REGION:
+        from: value
+        name: region
+      AWS_DEFAULT_REGION:
+        from: value
+        name: region
+  web_identity:
+    env:
+      AWS_WEB_IDENTITY_TOKEN_FILE:
+        from: value
+        name: token_file
+      AWS_ROLE_ARN:
+        from: value
+        name: role_arn
+      AWS_REGION:
+        from: value
+        name: region

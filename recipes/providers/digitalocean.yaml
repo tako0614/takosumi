@@ -1,0 +1,29 @@
+id: digitalocean
+display_name: DigitalOcean
+provider_rule: digitalocean
+terraform_source:
+  - digitalocean/digitalocean
+  - registry.opentofu.org/digitalocean/digitalocean
+env_names:
+  - DIGITALOCEAN_TOKEN
+  - SPACES_ACCESS_KEY_ID
+  - SPACES_SECRET_ACCESS_KEY
+required_env_groups:
+  - [DIGITALOCEAN_TOKEN]
+auth_modes:
+  token:
+    env:
+      DIGITALOCEAN_TOKEN:
+        from: secret
+        name: token
+  spaces:
+    env:
+      DIGITALOCEAN_TOKEN:
+        from: secret
+        name: token
+      SPACES_ACCESS_KEY_ID:
+        from: secret
+        name: spaces_access_key_id
+      SPACES_SECRET_ACCESS_KEY:
+        from: secret
+        name: spaces_secret_access_key

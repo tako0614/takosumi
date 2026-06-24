@@ -135,6 +135,11 @@ Runner/runtime-reserved names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and
 A CredentialRecipe defines how a provider credential becomes temporary runtime
 material.
 
+Built-in recipe files are stored under `recipes/providers/*.yaml`. The
+dependency-free runner projection is `contract/provider-env-rules.ts`; tests
+must keep the YAML catalog, provider runtime registry, and runner/vault
+projection in sync.
+
 Cloudflare example:
 
 ```yaml

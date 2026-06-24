@@ -1,0 +1,16 @@
+id: vercel
+display_name: Vercel
+provider_rule: vercel
+terraform_source:
+  - vercel/vercel
+  - registry.opentofu.org/vercel/vercel
+env_names:
+  - VERCEL_API_TOKEN
+required_env_groups:
+  - [VERCEL_API_TOKEN]
+auth_modes:
+  api_token:
+    env:
+      VERCEL_API_TOKEN:
+        from: secret
+        name: api_token

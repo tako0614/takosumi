@@ -1,0 +1,42 @@
+id: cloudflare
+display_name: Cloudflare
+provider_rule: cloudflare
+terraform_source:
+  - cloudflare/cloudflare
+  - registry.opentofu.org/cloudflare/cloudflare
+env_names:
+  - CLOUDFLARE_API_TOKEN
+  - CLOUDFLARE_API_KEY
+  - CLOUDFLARE_EMAIL
+  - CLOUDFLARE_ACCOUNT_ID
+  - CLOUDFLARE_ZONE_ID
+  - CF_API_TOKEN
+required_env_groups:
+  - [CLOUDFLARE_API_TOKEN]
+  - [CF_API_TOKEN]
+  - [CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL]
+auth_modes:
+  api_token:
+    env:
+      CLOUDFLARE_API_TOKEN:
+        from: secret
+        name: api_token
+      CLOUDFLARE_ACCOUNT_ID:
+        from: value
+        name: account_id
+      CLOUDFLARE_ZONE_ID:
+        from: value
+        name: zone_id
+  cf_api_token:
+    env:
+      CF_API_TOKEN:
+        from: secret
+        name: api_token
+  global_key:
+    env:
+      CLOUDFLARE_API_KEY:
+        from: secret
+        name: api_key
+      CLOUDFLARE_EMAIL:
+        from: value
+        name: email

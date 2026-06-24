@@ -71,7 +71,10 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
   {
     id: "gcp",
     displayName: "Google Cloud",
-    providerAddresses: [`${OPENTOFU}/hashicorp/google`],
+    providerAddresses: [
+      `${OPENTOFU}/hashicorp/google`,
+      `${OPENTOFU}/hashicorp/google-beta`,
+    ],
     connectionKinds: [
       "gcp_service_account_json",
       "gcp_oauth_bootstrap",
@@ -148,6 +151,51 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       allowedHosts: [OPENTOFU, "api.digitalocean.com"],
     },
     runnerProfileId: "digitalocean-provider-env-candidate",
+  },
+  {
+    id: "hcloud",
+    displayName: "Hetzner Cloud",
+    providerAddresses: [`${OPENTOFU}/hetznercloud/hcloud`],
+    connectionKinds: ["generic_env_provider"],
+    network: {
+      mode: "egress-allowlist",
+      allowedHosts: [OPENTOFU, "api.hetzner.cloud"],
+    },
+    runnerProfileId: "hcloud-provider-env-candidate",
+  },
+  {
+    id: "vultr",
+    displayName: "Vultr",
+    providerAddresses: [`${OPENTOFU}/vultr/vultr`],
+    connectionKinds: ["generic_env_provider"],
+    network: {
+      mode: "egress-allowlist",
+      allowedHosts: [OPENTOFU, "api.vultr.com"],
+    },
+    runnerProfileId: "vultr-provider-env-candidate",
+  },
+  {
+    id: "scaleway",
+    displayName: "Scaleway",
+    providerAddresses: [`${OPENTOFU}/scaleway/scaleway`],
+    connectionKinds: ["generic_env_provider"],
+    network: {
+      mode: "egress-allowlist",
+      allowedHosts: [OPENTOFU, "api.scaleway.com"],
+      allowedHostPatterns: ["*.scaleway.com"],
+    },
+    runnerProfileId: "scaleway-provider-env-candidate",
+  },
+  {
+    id: "openstack",
+    displayName: "OpenStack",
+    providerAddresses: [`${OPENTOFU}/terraform-provider-openstack/openstack`],
+    connectionKinds: ["generic_env_provider"],
+    network: {
+      mode: "operator-managed",
+      allowedHosts: [OPENTOFU],
+    },
+    runnerProfileId: "openstack-provider-env-candidate",
   },
   {
     id: "docker",
@@ -257,9 +305,7 @@ export function providerCredentialArgsFromRegistry(
   );
 }
 
-export function gatewayCoverageForProvider(
-  _provider: string,
-): readonly [] {
+export function gatewayCoverageForProvider(_provider: string): readonly [] {
   // Compatibility gateways are Takosumi Cloud-only. OSS Takosumi still exposes
   // this legacy helper for migration compatibility, but the OSS registry never
   // advertises gateway coverage.

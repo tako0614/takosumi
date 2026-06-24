@@ -1,0 +1,60 @@
+id: google
+display_name: Google Cloud
+provider_rule: google
+terraform_source:
+  - hashicorp/google
+  - hashicorp/google-beta
+  - registry.opentofu.org/hashicorp/google
+  - registry.opentofu.org/hashicorp/google-beta
+env_names:
+  - GOOGLE_CREDENTIALS
+  - GOOGLE_APPLICATION_CREDENTIALS
+  - GOOGLE_CLOUD_PROJECT
+  - GOOGLE_PROJECT
+  - GOOGLE_REGION
+required_env_groups:
+  - [GOOGLE_CREDENTIALS]
+  - [GOOGLE_APPLICATION_CREDENTIALS]
+auth_modes:
+  service_account_json:
+    env:
+      GOOGLE_CREDENTIALS:
+        from: secret
+        name: service_account_json
+      GOOGLE_CLOUD_PROJECT:
+        from: value
+        name: project_id
+      GOOGLE_PROJECT:
+        from: value
+        name: project_id
+      GOOGLE_REGION:
+        from: value
+        name: region
+  service_account_file:
+    files:
+      google-credentials.json:
+        from: secret
+        name: service_account_json
+        env_name: GOOGLE_APPLICATION_CREDENTIALS
+        mode: 384
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS:
+        from: literal
+        value: /run/takosumi/google-credentials.json
+      GOOGLE_PROJECT:
+        from: value
+        name: project_id
+  impersonation:
+    pre_run:
+      type: gcp_service_account_impersonation
+      inputs:
+        service_account_email:
+          from: value
+          name: service_account_email
+    env:
+      GOOGLE_CREDENTIALS:
+        from: generated
+        name: access_token_json
+      GOOGLE_CLOUD_PROJECT:
+        from: value
+        name: project_id

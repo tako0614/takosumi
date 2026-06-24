@@ -1187,6 +1187,10 @@ test("default runner profile seeds cover provider-env targets and future/custom 
     "kubernetes-provider-env-candidate",
     "github-provider-env-candidate",
     "digitalocean-provider-env-candidate",
+    "hcloud-provider-env-candidate",
+    "vultr-provider-env-candidate",
+    "scaleway-provider-env-candidate",
+    "openstack-provider-env-candidate",
     "docker-custom-example",
     "generic-opentofu-provider",
   ]);
@@ -1205,6 +1209,24 @@ test("default runner profile seeds cover provider-env targets and future/custom 
   expect(
     byId.get("digitalocean-provider-env-candidate")?.allowedProviders,
   ).toEqual(["registry.opentofu.org/digitalocean/digitalocean"]);
+  expect(byId.get("hcloud-provider-env-candidate")?.allowedProviders).toEqual([
+    "registry.opentofu.org/hetznercloud/hcloud",
+  ]);
+  expect(byId.get("vultr-provider-env-candidate")?.allowedProviders).toEqual([
+    "registry.opentofu.org/vultr/vultr",
+  ]);
+  expect(byId.get("scaleway-provider-env-candidate")?.allowedProviders).toEqual(
+    ["registry.opentofu.org/scaleway/scaleway"],
+  );
+  expect(
+    byId.get("openstack-provider-env-candidate")?.allowedProviders,
+  ).toEqual(["registry.opentofu.org/terraform-provider-openstack/openstack"]);
+  expect(byId.get("openstack-provider-env-candidate")?.substrate).toEqual(
+    "local",
+  );
+  expect(
+    byId.get("openstack-provider-env-candidate")?.cloudflareContainer,
+  ).toEqual(undefined);
   expect(byId.get("docker-custom-example")?.substrate).toEqual("local");
   expect(byId.get("docker-custom-example")?.cloudflareContainer).toEqual(
     undefined,
@@ -1233,6 +1255,10 @@ test("default runner profile seeds cover provider-env targets and future/custom 
     "github-provider-env-candidate",
     "azure-provider-env-candidate",
     "digitalocean-provider-env-candidate",
+    "hcloud-provider-env-candidate",
+    "vultr-provider-env-candidate",
+    "scaleway-provider-env-candidate",
+    "openstack-provider-env-candidate",
     "docker-custom-example",
     "generic-opentofu-provider",
   ]) {
@@ -1266,6 +1292,19 @@ test("default runner profile seeds record provider network policy patterns", () 
     byId.get("digitalocean-provider-env-candidate")?.networkPolicy
       ?.allowedHosts,
   ).toContain("api.digitalocean.com");
+  expect(
+    byId.get("hcloud-provider-env-candidate")?.networkPolicy?.allowedHosts,
+  ).toContain("api.hetzner.cloud");
+  expect(
+    byId.get("vultr-provider-env-candidate")?.networkPolicy?.allowedHosts,
+  ).toContain("api.vultr.com");
+  expect(
+    byId.get("scaleway-provider-env-candidate")?.networkPolicy
+      ?.allowedHostPatterns,
+  ).toContain("*.scaleway.com");
+  expect(
+    byId.get("openstack-provider-env-candidate")?.networkPolicy?.mode,
+  ).toEqual("operator-managed");
 });
 
 test("candidate runner profiles are blocked until operator validation enables them", async () => {
