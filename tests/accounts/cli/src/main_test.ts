@@ -1101,6 +1101,52 @@ test("launch-readiness validate accepts complete platform readiness evidence", a
   }
 });
 
+test("launch-readiness validate accepts zero caps for quota guard drills", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun();
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry) =>
+    completePlatformReadinessEntry(entry, rehearsalRun.id),
+  );
+
+  const quotaDomainEvidence = document.domains.find(
+    (entry) => entry.id === "quota-abuse-spend-control",
+  )!.evidence as Record<string, unknown>[];
+  quotaDomainEvidence.find(
+    (entry) => entry.type === "quota-spike-drill",
+  )!.cap = 0;
+  const quotaRehearsalEvidence = document.rehearsal.find(
+    (entry) => entry.id === "quota-abuse-drill",
+  )!.evidence as Record<string, unknown>[];
+  quotaRehearsalEvidence.find(
+    (entry) => entry.type === "quota-exceeded",
+  )!.cap = 0;
+  await writeTextFile(file, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "validate", "--file", file, "--json"],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.ready).toEqual(true);
+  } finally {
+    await removePath(file);
+  }
+});
+
 test("launch-readiness validate accepts rehearsal steps collected across multiple runs", async () => {
   const file = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();

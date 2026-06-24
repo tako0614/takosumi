@@ -787,7 +787,7 @@ function structuredEvidenceBlockingFields(
   for (const field of requirement.fields ?? []) {
     if (
       !hasNonEmptyEvidenceField(reference, field) ||
-      !hasValidStructuredEvidenceFieldShape(reference, field)
+      !hasValidStructuredEvidenceFieldShape(reference, field, type)
     ) {
       fields.add(field);
     }
@@ -797,7 +797,7 @@ function structuredEvidenceBlockingFields(
       !alternatives.some(
         (field) =>
           hasNonEmptyEvidenceField(reference, field) &&
-          hasValidStructuredEvidenceFieldShape(reference, field),
+          hasValidStructuredEvidenceFieldShape(reference, field, type),
       )
     ) {
       fields.add(`anyOf:${alternatives.join("|")}`);
@@ -1041,14 +1041,16 @@ function satisfiesStructuredEvidenceRequirement(
   }
   for (const field of requirement.fields ?? []) {
     if (!hasNonEmptyEvidenceField(reference, field)) return false;
-    if (!hasValidStructuredEvidenceFieldShape(reference, field)) return false;
+    if (!hasValidStructuredEvidenceFieldShape(reference, field, type)) {
+      return false;
+    }
   }
   for (const alternatives of requirement.anyOf ?? []) {
     if (
       !alternatives.some(
         (field) =>
           hasNonEmptyEvidenceField(reference, field) &&
-          hasValidStructuredEvidenceFieldShape(reference, field),
+          hasValidStructuredEvidenceFieldShape(reference, field, type),
       )
     ) {
       return false;
@@ -1073,6 +1075,7 @@ function hasNonEmptyEvidenceField(
 function hasValidStructuredEvidenceFieldShape(
   reference: Record<string, unknown>,
   field: string,
+  type: string,
 ): boolean {
   const value = reference[field];
   if (field.endsWith("Digest") || field.endsWith("Hash")) {
@@ -1108,6 +1111,12 @@ function hasValidStructuredEvidenceFieldShape(
       "healthProbeCount",
     ].includes(field)
   ) {
+    if (
+      field === "cap" &&
+      (type === "quota-spike-drill" || type === "quota-exceeded")
+    ) {
+      return typeof value === "number" && Number.isFinite(value) && value >= 0;
+    }
     return typeof value === "number" && Number.isFinite(value) && value > 0;
   }
   if (field === "coveredEndpoints") {
