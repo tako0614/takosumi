@@ -1549,6 +1549,80 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     };
   }
 
+  async getLatestCapsuleCompatibilityReportForSourceSnapshot(
+    sourceSnapshotId: string,
+    options: {
+      readonly sourceId?: string;
+      readonly installationId?: string;
+    } = {},
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const filters = [
+      eq(
+        pgSchema.capsuleCompatibilityReports.sourceSnapshotId,
+        sourceSnapshotId,
+      ),
+    ];
+    if (options.sourceId) {
+      filters.push(
+        or(
+          isNull(pgSchema.capsuleCompatibilityReports.sourceId),
+          eq(pgSchema.capsuleCompatibilityReports.sourceId, options.sourceId),
+        )!,
+      );
+    }
+    if (options.installationId) {
+      filters.push(
+        or(
+          isNull(pgSchema.capsuleCompatibilityReports.installationId),
+          eq(
+            pgSchema.capsuleCompatibilityReports.installationId,
+            options.installationId,
+          ),
+        )!,
+      );
+    }
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleCompatibilityReports)
+      .where(and(...filters))
+      .orderBy(
+        desc(pgSchema.capsuleCompatibilityReports.createdAt),
+        desc(pgSchema.capsuleCompatibilityReports.id),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      ...(row.sourceId ? { sourceId: row.sourceId } : {}),
+      ...(row.installationId ? { installationId: row.installationId } : {}),
+      sourceSnapshotId: row.sourceSnapshotId,
+      level: row.level as CapsuleCompatibilityReport["level"],
+      findings: parseJson(
+        row.findingsJson,
+      ) as CapsuleCompatibilityReport["findings"],
+      providers: parseJson(
+        row.providersJson,
+      ) as CapsuleCompatibilityReport["providers"],
+      resources: parseJson(
+        row.resourcesJson,
+      ) as CapsuleCompatibilityReport["resources"],
+      dataSources: parseJson(
+        row.dataSourcesJson,
+      ) as CapsuleCompatibilityReport["dataSources"],
+      provisioners: parseJson(
+        row.provisionersJson,
+      ) as CapsuleCompatibilityReport["provisioners"],
+      ...(row.normalizedObjectKey
+        ? { normalizedObjectKey: row.normalizedObjectKey }
+        : {}),
+      ...(row.normalizedDigest
+        ? { normalizedDigest: row.normalizedDigest }
+        : {}),
+      createdAt: row.createdAt,
+    };
+  }
+
   // --- provider env binding sets (§9, keyed (installation_id, environment)) --
 
   async putInstallationProviderEnvBindingSet(

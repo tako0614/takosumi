@@ -909,6 +909,13 @@ export interface CreateInstallationPlanRequest {
 export interface CreateInstallationPlanInternal {
   readonly runGroupId?: string;
   /**
+   * Reuses a pre-install CapsuleCompatibilityReport that was already produced
+   * for the exact SourceSnapshot the plan will use. Public callers may pass this
+   * as a hint; the controller still verifies existence, snapshot/source scope,
+   * and policy before using it.
+   */
+  readonly compatibilityReportId?: string;
+  /**
    * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
    * Source's latest snapshot for its default ref. Used by the §30 deployment
    * rollback-plan path (`POST /internal/v1/deployments/:id/rollback-plan`) to re-plan an
@@ -1317,7 +1324,8 @@ export class OpenTofuDeploymentController {
     const allowNoProviders =
       (templatePlan !== undefined &&
         templatePlan.template.policy.allowedProviders.length === 0) ||
-      (declaredProviders.length === 0 && profile.allowedProviders.includes("*"));
+      (declaredProviders.length === 0 &&
+        profile.allowedProviders.includes("*"));
     const basePolicy = evaluatePolicy({
       profile,
       requiredProviders: declaredProviders,
@@ -1651,11 +1659,18 @@ export class OpenTofuDeploymentController {
         : "create";
     const compatibilityReport = internal.deferCompatibilityReport
       ? undefined
-      : await this.#ensureInstallationCompatibilityReport(
-          installation,
-          source,
-          snapshot,
-        );
+      : internal.compatibilityReportId
+        ? await this.#useInstallationCompatibilityReportHint(
+            installation,
+            source,
+            snapshot,
+            internal.compatibilityReportId,
+          )
+        : await this.#ensureInstallationCompatibilityReport(
+            installation,
+            source,
+            snapshot,
+          );
     const {
       request: planRequest,
       installTypePlan,
@@ -1847,17 +1862,48 @@ export class OpenTofuDeploymentController {
         )
       : undefined;
     const policy = await this.#policyForInstallation(installation);
-    if (existing && existing.sourceSnapshotId === snapshot.id) {
+    if (
+      existing &&
+      this.#isCompatibilityReportScopedToInstallationPlan(
+        existing,
+        installation,
+        source,
+        snapshot,
+      )
+    ) {
       this.#assertCompatibilityReportRunnable(existing, policy);
       return existing;
     }
+    const preflight =
+      await this.#store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+        snapshot.id,
+        {
+          sourceId: source.id,
+          installationId: installation.id,
+        },
+      );
+    if (preflight) {
+      this.#assertCompatibilityReportScopedToInstallationPlan(
+        preflight,
+        installation,
+        source,
+        snapshot,
+      );
+      this.#assertCompatibilityReportRunnable(preflight, policy);
+      await this.#store.patchInstallation(installation.id, {
+        compatibilityReportId: preflight.id,
+        compatibilityStatus: preflight.level,
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+      return preflight;
+    }
     if (!this.#sourcesService) {
-      if (existing && existing.sourceSnapshotId !== snapshot.id) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `compatibility_report_stale: installation ${installation.id} ` +
-            `has report ${existing.id} for SourceSnapshot ` +
-            `${existing.sourceSnapshotId}, but plan uses ${snapshot.id}`,
+      if (existing) {
+        this.#assertCompatibilityReportScopedToInstallationPlan(
+          existing,
+          installation,
+          source,
+          snapshot,
         );
       }
       return undefined;
@@ -1880,6 +1926,81 @@ export class OpenTofuDeploymentController {
     });
     this.#assertCompatibilityReportRunnable(report, policy);
     return report;
+  }
+
+  async #useInstallationCompatibilityReportHint(
+    installation: Installation,
+    source: Source,
+    snapshot: SourceSnapshot,
+    reportId: string,
+  ): Promise<CapsuleCompatibilityReport> {
+    const report = await this.#store.getCapsuleCompatibilityReport(reportId);
+    if (!report) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_missing: ${reportId}`,
+      );
+    }
+    this.#assertCompatibilityReportScopedToInstallationPlan(
+      report,
+      installation,
+      source,
+      snapshot,
+    );
+    const policy = await this.#policyForInstallation(installation);
+    this.#assertCompatibilityReportRunnable(report, policy);
+    if (installation.compatibilityReportId !== report.id) {
+      await this.#store.patchInstallation(installation.id, {
+        compatibilityReportId: report.id,
+        compatibilityStatus: report.level,
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+    }
+    return report;
+  }
+
+  #isCompatibilityReportScopedToInstallationPlan(
+    report: CapsuleCompatibilityReport,
+    installation: Installation,
+    source: Source,
+    snapshot: SourceSnapshot,
+  ): boolean {
+    return (
+      report.sourceSnapshotId === snapshot.id &&
+      (!report.sourceId || report.sourceId === source.id) &&
+      (!report.installationId || report.installationId === installation.id)
+    );
+  }
+
+  #assertCompatibilityReportScopedToInstallationPlan(
+    report: CapsuleCompatibilityReport,
+    installation: Installation,
+    source: Source,
+    snapshot: SourceSnapshot,
+  ): void {
+    if (report.sourceSnapshotId !== snapshot.id) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_snapshot_mismatch: plan uses SourceSnapshot ` +
+          `${snapshot.id} but report ${report.id} was created for ` +
+          `${report.sourceSnapshotId}`,
+      );
+    }
+    if (report.sourceId && report.sourceId !== source.id) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_source_mismatch: plan uses Source ${source.id} ` +
+          `but report ${report.id} was created for ${report.sourceId}`,
+      );
+    }
+    if (report.installationId && report.installationId !== installation.id) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `compatibility_report_installation_mismatch: plan uses Capsule ` +
+          `${installation.id} but report ${report.id} was created for ` +
+          `${report.installationId}`,
+      );
+    }
   }
 
   #assertCompatibilityReportRunnable(
@@ -2126,7 +2247,7 @@ export class OpenTofuDeploymentController {
         ? compatibilityProviders
         : profile.allowedProviders.includes("*")
           ? []
-        : [...profile.allowedProviders];
+          : [...profile.allowedProviders];
     const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
       input.installation,
       input.installConfig,
@@ -2562,9 +2683,7 @@ export class OpenTofuDeploymentController {
     return await runWork();
   }
 
-  async #restoreLeaseTarget(
-    run: Run,
-  ): Promise<{
+  async #restoreLeaseTarget(run: Run): Promise<{
     readonly installationId: string;
     readonly environment: string;
   }> {
@@ -3085,7 +3204,9 @@ export class OpenTofuDeploymentController {
     ) {
       return planRun;
     }
-    const installation = await this.#requireInstallation(planRun.installationId);
+    const installation = await this.#requireInstallation(
+      planRun.installationId,
+    );
     const snapshot = await this.#store.getSourceSnapshot(
       planRun.sourceSnapshotId,
     );

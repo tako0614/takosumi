@@ -647,8 +647,8 @@ function fakeOperations(
     revokeConnection: async (connectionId) => {
       record("revokeConnection", connectionId);
     },
-    createInstallationPlan: async (installationId) => {
-      record("createInstallationPlan", installationId);
+    createInstallationPlan: async (installationId, options) => {
+      record("createInstallationPlan", { installationId, options });
       return { planRun: { id: "plan_1" } } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["createInstallationPlan"]>
       >;
@@ -2769,9 +2769,38 @@ test("POST /api/v1/installations/:id/plan returns 201", async () => {
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as { run: { id: string } };
   expect(body.run.id).toEqual("plan_1");
-  expect(operations.calls.createInstallationPlan?.[0]).toEqual("inst_1");
+  expect(operations.calls.createInstallationPlan?.[0]).toEqual({
+    installationId: "inst_1",
+    options: undefined,
+  });
   expect(operations.calls.getRun).toContain("plan_1");
   expect(operations.calls.getRunCost).toContain("plan_1");
+});
+
+test("POST /api/v1/installations/:id/plan forwards a preflight compatibility report hint", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/installations/inst_1/plan",
+    {
+      cookie,
+      body: { compatibilityReportId: "caprep_ready" },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  expect(operations.calls.createInstallationPlan?.[0]).toEqual({
+    installationId: "inst_1",
+    options: { compatibilityReportId: "caprep_ready" },
+  });
 });
 
 test("GET /api/v1/runs/:id projects provider resolutions to provider connections", async () => {
@@ -2926,9 +2955,7 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
     };
   };
   expect(body.run.providerResolutions?.[0]?.ownership).toEqual("env");
-  expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual(
-    "env",
-  );
+  expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual("env");
 });
 
 test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", async () => {
@@ -3205,6 +3232,94 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
       .listInstallationEvents("inst_upload_pending")
       .map((event) => event.eventType),
   ).toContain("installation.status_changed");
+});
+
+test("DELETE /api/v1/installations/:id abandons unapplied projections when destroy planning cannot resolve provider connections", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAppInstallation({
+    installationId: "inst_pending_provider",
+    accountId: "acct_pending_provider",
+    spaceId: "space_a",
+    appId: "pending-provider",
+    sourceGitUrl: "https://github.com/example/infra.git",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"e".repeat(64)}`,
+    mode: "shared-cell",
+    status: "installing",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const baseOperations = fakeOperations();
+  const pendingInstallation = {
+    id: "inst_pending_provider",
+    spaceId: "space_a",
+    sourceId: "src_pending_provider",
+    name: "pending-provider",
+    slug: "pending-provider",
+    installType: "opentofu_module",
+    installConfigId: "cfg_pending_provider",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getInstallation: async () =>
+        pendingInstallation as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getInstallation"]>
+        >,
+      patchInstallationStatus: async (id, status) =>
+        ({
+          ...pendingInstallation,
+          id,
+          status,
+          updatedAt: "2026-01-02T00:00:00Z",
+        }) as unknown as Awaited<
+          ReturnType<
+            ControlPlaneOperations["installations"]["patchInstallationStatus"]
+          >
+        >,
+    },
+    createInstallationDestroyPlan: async () => {
+      const error = new Error(
+        "Provider Env conn_missing status blocked is not ready",
+      ) as Error & { code: string };
+      error.code = "failed_precondition";
+      throw error;
+    },
+  });
+
+  const { request: req, url } = request(
+    "DELETE",
+    "/api/v1/installations/inst_pending_provider",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(202);
+  const body = (await response!.json()) as {
+    abandoned: boolean;
+    installation: { status: string };
+    projectionStatus: string;
+  };
+  expect(body.abandoned).toEqual(true);
+  expect(body.installation.status).toEqual("error");
+  expect(body.projectionStatus).toEqual("failed");
+  expect(store.findAppInstallation("inst_pending_provider")?.status).toEqual(
+    "failed",
+  );
 });
 
 test("POST /api/v1/installations/:id/dependencies derives spaceId from the consumer", async () => {
@@ -4389,6 +4504,68 @@ test("POST /api/v1/connections/:id/revoke accepts public ProviderConnection ids"
   expect(response?.status).toEqual(204);
   expect(getConnectionCalls).toEqual([publicConnectionId, "conn_cf"]);
   expect(operations.calls.revokeConnection).toEqual(["conn_cf"]);
+});
+
+test("POST /api/v1/connections/:id/revoke resolves public ProviderConnection ids through secretRef-backed ProviderEnv rows", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const publicConnectionId = await publicProviderConnectionIdForTest(
+    "dpf_cf_provider_env",
+  );
+  const notFound = Object.assign(new Error("not found"), {
+    code: "not_found",
+  });
+  const getConnectionCalls: string[] = [];
+  const operations = fakeOperations({
+    getConnection: async (connectionId) => {
+      getConnectionCalls.push(connectionId);
+      if (connectionId === publicConnectionId) throw notFound;
+      return {
+        id: connectionId,
+        spaceId: "space_a",
+        provider: "cloudflare",
+        kind: "cloudflare_api_token",
+        authMethod: "static_secret",
+        scope: "space",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getConnection"]>
+      >;
+    },
+    connections: {
+      listProviderEnvs: async () => [
+        {
+          id: "dpf_cf_provider_env",
+          spaceId: "space_a",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          displayName: "Cloudflare",
+          materialization: "secret",
+          status: "ready",
+          secretRef: "conn_cf_secret",
+          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    `/api/v1/connections/${publicConnectionId}/revoke`,
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(204);
+  expect(getConnectionCalls).toEqual([publicConnectionId, "conn_cf_secret"]);
+  expect(operations.calls.revokeConnection).toEqual(["conn_cf_secret"]);
 });
 
 test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the caller does not own", async () => {

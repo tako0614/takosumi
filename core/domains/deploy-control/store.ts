@@ -589,6 +589,13 @@ export interface OpenTofuDeploymentStore {
   getCapsuleCompatibilityReport(
     id: string,
   ): Promise<CapsuleCompatibilityReport | undefined>;
+  getLatestCapsuleCompatibilityReportForSourceSnapshot(
+    sourceSnapshotId: string,
+    options?: {
+      readonly sourceId?: string;
+      readonly installationId?: string;
+    },
+  ): Promise<CapsuleCompatibilityReport | undefined>;
 
   // Installation provider env binding records, one row per
   // (installation, environment), with that pair as the upsert key.
@@ -1510,6 +1517,31 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     id: string,
   ): Promise<CapsuleCompatibilityReport | undefined> {
     return Promise.resolve(this.#capsuleCompatibilityReports.get(id));
+  }
+
+  getLatestCapsuleCompatibilityReportForSourceSnapshot(
+    sourceSnapshotId: string,
+    options: {
+      readonly sourceId?: string;
+      readonly installationId?: string;
+    } = {},
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const candidates = [...this.#capsuleCompatibilityReports.values()]
+      .filter(
+        (report) =>
+          report.sourceSnapshotId === sourceSnapshotId &&
+          (options.sourceId === undefined ||
+            report.sourceId === undefined ||
+            report.sourceId === options.sourceId) &&
+          (options.installationId === undefined ||
+            report.installationId === undefined ||
+            report.installationId === options.installationId),
+      )
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
+    return Promise.resolve(candidates[0]);
   }
 
   putInstallationProviderEnvBindingSet(

@@ -1030,6 +1030,86 @@ test("CapsuleCompatibilityReport store preserves owner fields", async () => {
   }
 });
 
+test("CapsuleCompatibilityReport latest lookup respects source and installation scope", async () => {
+  for (const [label, store] of await forEachStore()) {
+    const base = {
+      sourceId: "src_1",
+      sourceSnapshotId: "snap_1",
+      level: "ready" as const,
+      findings: [],
+      providers: [],
+      resources: [],
+      dataSources: [],
+      provisioners: [],
+    };
+    await store.putCapsuleCompatibilityReport({
+      ...base,
+      id: "caprep_unscoped_old",
+      createdAt: "2026-06-08T00:00:00.000Z",
+    });
+    await store.putCapsuleCompatibilityReport({
+      ...base,
+      id: "caprep_same_installation_mid",
+      installationId: "inst_1",
+      createdAt: "2026-06-08T00:02:00.000Z",
+    });
+    await store.putCapsuleCompatibilityReport({
+      ...base,
+      id: "caprep_other_installation_new",
+      installationId: "inst_other",
+      createdAt: "2026-06-08T00:03:00.000Z",
+    });
+
+    await store.putCapsuleCompatibilityReport({
+      ...base,
+      id: "caprep_tie_a",
+      sourceSnapshotId: "snap_tie",
+      createdAt: "2026-06-08T00:04:00.000Z",
+    });
+    await store.putCapsuleCompatibilityReport({
+      ...base,
+      id: "caprep_tie_z",
+      sourceSnapshotId: "snap_tie",
+      createdAt: "2026-06-08T00:04:00.000Z",
+    });
+
+    expect(
+      (
+        await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+          "snap_1",
+          { sourceId: "src_1", installationId: "inst_1" },
+        )
+      )?.id,
+      label,
+    ).toBe("caprep_same_installation_mid");
+    expect(
+      (
+        await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+          "snap_1",
+          { sourceId: "src_1", installationId: "inst_missing" },
+        )
+      )?.id,
+      label,
+    ).toBe("caprep_unscoped_old");
+    expect(
+      await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+        "snap_1",
+        { sourceId: "src_2", installationId: "inst_1" },
+      ),
+      label,
+    ).toBeUndefined();
+    expect(
+      (
+        await store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+          "snap_tie",
+          { sourceId: "src_1", installationId: "inst_1" },
+        )
+      )?.id,
+      label,
+    ).toBe("caprep_tie_z");
+  }
+});
+
 test("Installation store: put/get/get-by-name/list/unique are symmetric", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putInstallation(

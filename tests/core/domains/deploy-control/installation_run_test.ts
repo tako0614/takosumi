@@ -868,6 +868,204 @@ output "attachments_bucket" {
   expect(runner.planJobs).toHaveLength(1);
 });
 
+test("installation plan reuses a preflight CompatibilityReport hint without rechecking source files", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_preflight",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_unexpected`,
+    readCapsuleSourceFiles: () => {
+      throw new Error("preflight report hint should avoid source recheck");
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    sourcesService,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    "inst_fixture",
+    {},
+    { compatibilityReportId: "caprep_preflight" },
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.compatibilityReportId).toBe("caprep_preflight");
+  const installation = await store.getInstallation("inst_fixture");
+  expect(installation?.compatibilityReportId).toBe("caprep_preflight");
+  expect(installation?.compatibilityStatus).toBe("ready");
+  expect(runner.planJobs).toHaveLength(1);
+});
+
+test("installation plan reuses the latest matching preflight CompatibilityReport when the client omits the hint", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_preflight",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_unexpected`,
+    readCapsuleSourceFiles: () => {
+      throw new Error("matching preflight report should avoid source recheck");
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    sourcesService,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    "inst_fixture",
+    {},
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.compatibilityReportId).toBe("caprep_preflight");
+  const installation = await store.getInstallation("inst_fixture");
+  expect(installation?.compatibilityReportId).toBe("caprep_preflight");
+  expect(installation?.compatibilityStatus).toBe("ready");
+  expect(runner.planJobs).toHaveLength(1);
+});
+
+test("installation plan ignores a stale cached CompatibilityReport when a matching preflight report exists", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_stale_cached",
+    sourceId: seeded.source.id,
+    installationId: seeded.installation.id,
+    sourceSnapshotId: "snap_old",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: "caprep_stale_cached",
+    compatibilityStatus: "ready",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_current_preflight",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_unexpected`,
+    readCapsuleSourceFiles: () => {
+      throw new Error("matching preflight report should avoid source recheck");
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    sourcesService,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    "inst_fixture",
+    {},
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.compatibilityReportId).toBe("caprep_current_preflight");
+  const installation = await store.getInstallation("inst_fixture");
+  expect(installation?.compatibilityReportId).toBe("caprep_current_preflight");
+  expect(runner.planJobs).toHaveLength(1);
+});
+
 test("installation plan dispatches normalized module files for auto-capsulized CompatibilityReport", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -1136,7 +1334,7 @@ test("generic Capsule plan creation blocks stale CompatibilityReport as policy",
 
   await expect(
     controller.createInstallationPlan(seeded.installation.id),
-  ).rejects.toThrow("compatibility_report_stale");
+  ).rejects.toThrow("compatibility_report_snapshot_mismatch");
   expect(runner.planJobs).toHaveLength(0);
 });
 
@@ -1233,6 +1431,94 @@ test("installation apply revalidates CompatibilityReport before provider credent
   expect(applyRun.status).toBe("failed");
   expect(applyRun.diagnostics?.[0]?.message).toContain(
     "compatibility_report_not_runnable",
+  );
+  expect(counted.mintCount).toBe(mintCountAfterPlan);
+  expect(runner.applyJobs).toHaveLength(0);
+});
+
+test("installation apply rejects a CompatibilityReport scoped to another Capsule before credential mint", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  const report = {
+    id: "caprep_apply_scope_guard",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready" as const,
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    normalizedObjectKey: seeded.snapshot.archiveObjectKey,
+    normalizedDigest: seeded.snapshot.archiveDigest,
+    createdAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.putCapsuleCompatibilityReport(report);
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: report.id,
+    compatibilityStatus: "ready",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_apply_scope_guard",
+    scope: "space",
+    spaceId: seeded.installation.spaceId,
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    displayName: "Apply scope guard Cloudflare",
+    status: "verified",
+    scopeJson: {},
+    secretRef: "sec_apply_scope_guard",
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_apply_scope_guard",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        envId: "conn_apply_scope_guard",
+      },
+    ],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const counted = countingProviderVault();
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    vault: counted.vault as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const mintCountAfterPlan = counted.mintCount;
+  await store.putCapsuleCompatibilityReport({
+    ...report,
+    installationId: "inst_other",
+  });
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics?.[0]?.message).toContain(
+    "compatibility_report_installation_mismatch",
   );
   expect(counted.mintCount).toBe(mintCountAfterPlan);
   expect(runner.applyJobs).toHaveLength(0);
