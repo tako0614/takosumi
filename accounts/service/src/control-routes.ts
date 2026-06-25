@@ -776,7 +776,10 @@ export interface ControlPlaneOperations {
   ): Promise<readonly Run[]>;
   createInstallationPlan(
     installationId: string,
-    options?: { readonly compatibilityReportId?: string },
+    options?: {
+      readonly compatibilityReportId?: string;
+      readonly runnerProfileId?: string;
+    },
   ): Promise<PlanRunResponse>;
   createInstallationDestroyPlan(
     installationId: string,
@@ -1296,9 +1299,18 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         body.compatibilityReportId.trim()
           ? body.compatibilityReportId.trim()
           : undefined;
+      const runnerProfileId =
+        typeof body?.runnerProfileId === "string" && body.runnerProfileId.trim()
+          ? body.runnerProfileId.trim()
+          : undefined;
       const response = await operations.createInstallationPlan(
         installationId,
-        compatibilityReportId ? { compatibilityReportId } : undefined,
+        compatibilityReportId || runnerProfileId
+          ? {
+              ...(compatibilityReportId ? { compatibilityReportId } : {}),
+              ...(runnerProfileId ? { runnerProfileId } : {}),
+            }
+          : undefined,
       );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
@@ -3117,11 +3129,11 @@ async function deployUploadedSnapshot(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  const vars = stringRecordValue(body.vars);
+  const vars = jsonRecordValue(body.vars);
   if (body.vars !== undefined && vars === undefined) {
     return errorJson(
       "invalid_argument",
-      "vars must be an object of string values",
+      "vars must be an object of JSON values keyed by OpenTofu variable names",
       400,
       request,
     );
@@ -3136,6 +3148,7 @@ async function deployUploadedSnapshot(
     );
   }
   const environment = stringValue(body.environment);
+  const runnerProfileId = stringValue(body.runnerProfileId);
   let providerEnvBindings: InstallationProviderEnvBindings | undefined;
   if (body.providerEnvBindings !== undefined) {
     return errorJson(
@@ -3199,6 +3212,7 @@ async function deployUploadedSnapshot(
     name,
     ...(environment ? { environment } : {}),
     snapshotId,
+    ...(runnerProfileId ? { runnerProfileId } : {}),
     ...(vars ? { vars } : {}),
     ...(outputAllowlist ? { outputAllowlist } : {}),
     ...(providerEnvBindings ? { providerEnvBindings } : {}),

@@ -758,6 +758,10 @@ async function runGeneratedRootPlan(
       request,
       runnerProfile,
       preparedCredentials.context,
+      {
+        allowProviderFreeGeneratedRoot:
+          await generatedRootTreeHasNoProviderUsage(workspace.generatedRootDir),
+      },
     );
     return await initPlanAndBuildResponse(
       runId,
@@ -935,6 +939,10 @@ async function runReviewedPlanApply(
       request,
       runnerProfile,
       preparedCredentials.context,
+      {
+        allowProviderFreeGeneratedRoot:
+          await generatedRootTreeHasNoProviderUsage(moduleDir),
+      },
     );
     const strictMirrorInit = await prepareStrictProviderMirrorInit(
       workspace,
@@ -3314,10 +3322,15 @@ function assertBuildEnvHasNoCredentials(
   }
 }
 
+interface RunnerPolicyBeforeInitOptions {
+  readonly allowProviderFreeGeneratedRoot?: boolean;
+}
+
 function assertRunnerPolicyBeforeInit(
   request: unknown,
   runnerProfile: JsonRecord | undefined,
   context: CommandContext,
+  options: RunnerPolicyBeforeInitOptions = {},
 ): void {
   if (!runnerProfile) return;
   const source = parseSource(request);
@@ -3339,7 +3352,11 @@ function assertRunnerPolicyBeforeInit(
   const deniedProviders = stringArray(
     recordField(runnerProfile, "deniedProviders"),
   );
-  if (allowedProviders.length > 0 && requiredProviders.length === 0) {
+  if (
+    allowedProviders.length > 0 &&
+    requiredProviders.length === 0 &&
+    options.allowProviderFreeGeneratedRoot !== true
+  ) {
     throw new Error(
       `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} requires requiredProviders before OpenTofu init`,
     );
@@ -3360,6 +3377,54 @@ function assertRunnerPolicyBeforeInit(
     }
   }
   assertCredentialEnvAvailable(requiredProviders, runnerProfile, context.env);
+}
+
+async function generatedRootTreeHasNoProviderUsage(
+  rootDir: string,
+): Promise<boolean> {
+  let files = 0;
+  let totalBytes = 0;
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (
+        entry.name === ".git" ||
+        entry.name === ".terraform" ||
+        entry.name === "node_modules"
+      ) {
+        continue;
+      }
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      files += 1;
+      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return false;
+      const info = await stat(path);
+      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) return false;
+      totalBytes += info.size;
+      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) return false;
+      const text = await readFile(path, "utf8");
+      if (hasProviderUsageBeforeInit(text)) return false;
+    }
+  }
+  return files > 0;
+}
+
+function hasProviderUsageBeforeInit(text: string): boolean {
+  const normalized = text.replace(/\brequired_providers\s*\{\s*\}/gu, "");
+  return /\brequired_providers\b|\bprovider\s+"|\bresource\s+"|\bdata\s+"|\bbackend\s+"/u.test(
+    normalized,
+  );
 }
 
 function assertCredentialEnvAvailable(

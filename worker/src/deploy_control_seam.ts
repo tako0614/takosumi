@@ -22,6 +22,10 @@ export function createDeployControlService(
 ): Promise<CreatedTakosumiService> {
   return createWorkerServiceApp(env, "takosumi-api", {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env),
+    ...(typeof env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID === "string" &&
+    env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim()
+      ? { defaultRunnerProfileId: env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim() }
+      : {}),
   });
 }
 

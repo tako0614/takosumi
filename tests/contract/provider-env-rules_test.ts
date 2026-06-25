@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   allowedEnvNamesForProvider,
+  canonicalProviderSource,
   cloudFamilyForProvider,
   isProviderEnvName,
   isReservedProviderEnvName,
@@ -50,6 +51,22 @@ test("sameProviderFamily matches arbitrary default-registry sources by registry 
       "hashicorp/random",
     ),
   ).toBe(false);
+});
+
+test("canonicalProviderSource returns fully qualified OpenTofu provider sources", () => {
+  expect(canonicalProviderSource("cloudflare")).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
+  expect(canonicalProviderSource("gcp")).toBe(
+    "registry.opentofu.org/hashicorp/google",
+  );
+  expect(canonicalProviderSource("cloudflare/cloudflare")).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
+  expect(canonicalProviderSource("snowflake-labs/snowflake")).toBe(
+    "registry.opentofu.org/snowflake-labs/snowflake",
+  );
+  expect(canonicalProviderSource("snowflake")).toBe("snowflake");
 });
 
 test("allowedEnvNamesForProvider returns the sorted env-name set", () => {

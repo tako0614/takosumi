@@ -45,6 +45,7 @@ export async function createWorkerServiceApp(
   role: "takosumi-api" | "takosumi-runtime-agent",
   options: {
     readonly runnerProfiles?: readonly RunnerProfile[];
+    readonly defaultRunnerProfileId?: string;
     readonly releaseActivator?: ReleaseActivator;
   } = {},
 ): Promise<CreatedTakosumiService> {
@@ -127,6 +128,9 @@ export async function createWorkerServiceApp(
     ...(installationCoordination ? { installationCoordination } : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }
+      : {}),
+    ...(options.defaultRunnerProfileId
+      ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
       : {}),
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
     ...(backupStateObjectReader ? { backupStateObjectReader } : {}),

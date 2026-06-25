@@ -1975,6 +1975,17 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
     },
     additionalProperties: false,
   };
+  const jsonValue = {
+    oneOf: [
+      { type: "string" },
+      { type: "number" },
+      { type: "integer" },
+      { type: "boolean" },
+      { type: "array" },
+      { type: "object" },
+      { type: "null" },
+    ],
+  };
   return {
     DeployRequest: {
       type: "object",
@@ -1984,9 +1995,10 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
+        runnerProfileId: { type: "string" },
         vars: {
           type: "object",
-          additionalProperties: { type: "string" },
+          additionalProperties: jsonValue,
         },
         outputAllowlist: {
           type: "object",
@@ -2027,9 +2039,10 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
+        runnerProfileId: { type: "string" },
         vars: {
           type: "object",
-          additionalProperties: { type: "string" },
+          additionalProperties: jsonValue,
         },
         outputAllowlist: {
           type: "object",

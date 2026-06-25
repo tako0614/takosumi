@@ -16,6 +16,7 @@ import type {
   OpenTofuPlanResult,
   OpenTofuRunner,
 } from "../../../../core/domains/deploy-control/mod.ts";
+import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import {
   applyExpectedGuardFromPlanRun,
   OpenTofuDeploymentController,
@@ -188,7 +189,13 @@ function fakeProviderVault() {
   };
 }
 
-async function setup(options: { readonly enqueueRun?: EnqueueRun } = {}) {
+async function setup(
+  options: {
+    readonly enqueueRun?: EnqueueRun;
+    readonly runnerProfiles?: readonly RunnerProfile[];
+    readonly defaultRunnerProfileId?: string;
+  } = {},
+) {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   // seedInstallationModel creates the Space (space_test) we deploy into; its git
@@ -210,6 +217,12 @@ async function setup(options: { readonly enqueueRun?: EnqueueRun } = {}) {
     now: sequenceNow(1),
     newId: deterministicIds(),
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),
+    ...(options.runnerProfiles
+      ? { runnerProfiles: options.runnerProfiles }
+      : {}),
+    ...(options.defaultRunnerProfileId
+      ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
+      : {}),
   });
   await store.putConnection({
     id: "conn_upload_cf",
@@ -298,9 +311,14 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   expect(result.run.type).toBe("plan");
   expect(result.run.status).toBe("succeeded");
   expect(result.applyRun).toBeUndefined();
+  const planRun = await store.getPlanRun((result.planRun ?? result.run).id);
+  expect(planRun?.requiredProviders).toEqual([CLOUDFLARE_PROVIDER]);
 
   // The runner received the UPLOAD archive (no git clone).
   expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
+    CLOUDFLARE_PROVIDER,
+  ]);
   expect(runner.applyJobs).toHaveLength(0);
   expect(runner.planJobs[0]?.sourceArchive).toEqual({
     objectKey: uploadArchiveObjectKey("space_test", "snap_up1"),
@@ -318,6 +336,50 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
     endpoint: { from: "url", type: "url", required: true },
     worker_name: { from: "worker_name", type: "string" },
   });
+});
+
+test("deployUpload threads an explicit runnerProfileId into the plan run", async () => {
+  const genericProfile: RunnerProfile = {
+    id: "generic-opentofu-provider",
+    name: "Generic OpenTofu provider",
+    substrate: "cloudflare-containers",
+    allowedProviders: ["*"],
+    stateBackend: { kind: "operator-managed", ref: "r2://state" },
+    networkPolicy: { mode: "operator-managed" },
+    labels: { "takosumi.com/provider-surface": "generic" },
+    createdAt: 1,
+  };
+  const { store, runner, sources, installations, controller } = await setup({
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: genericProfile.id,
+  });
+  const snapshot = await sources.recordUploadSnapshot({
+    spaceId: "space_test",
+    snapshotId: "snap_generic_profile_upload",
+    archiveObjectKey: uploadArchiveObjectKey(
+      "space_test",
+      "snap_generic_profile_upload",
+    ),
+    archiveDigest: UPLOAD_DIGEST,
+    archiveSizeBytes: 512,
+  });
+
+  const result = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "generic-profile-uploaded-app",
+      environment: "preview",
+      snapshotId: snapshot.id,
+      runnerProfileId: genericProfile.id,
+      providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
+    },
+  );
+
+  const planRun = await store.getPlanRun((result.planRun ?? result.run).id);
+  expect(planRun?.runnerProfileId).toBe(genericProfile.id);
+  expect(runner.planJobs[0]?.runnerProfile.id).toBe(genericProfile.id);
+  expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
 });
 
 test("deployUpload returns a queued plan before upload compatibility inspection when a run queue is configured", async () => {

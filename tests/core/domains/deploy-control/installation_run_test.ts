@@ -162,6 +162,35 @@ function controllerWith(
   });
 }
 
+function multiProviderRunnerProfile(
+  providers: readonly string[] = [
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/aws",
+  ],
+): RunnerProfile {
+  return {
+    id: "multi-provider-mirror-test",
+    name: "Multi-provider mirror test",
+    substrate: "cloudflare-containers",
+    allowedProviders: providers,
+    credentialRefs: providers.map((provider) => ({
+      provider,
+      ref: "secret://takosumi/multi-provider-mirror-test",
+      required: true,
+    })),
+    requireCredentialRefs: true,
+    stateBackend: { kind: "operator-managed", ref: "r2://state" },
+    stateLock: { kind: "native" },
+    networkPolicy: { mode: "operator-managed" },
+    secretExposure: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+  };
+}
+
 function activityRecorderFor(store: OpenTofuDeploymentStore): ActivityService {
   let nextId = 1;
   let nextMs = Date.parse("2026-06-07T00:00:00.000Z");
@@ -414,7 +443,11 @@ async function seededController(options: SeedModelOptions = {}): Promise<{
     environment: "preview",
     ...options,
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
   return { store, runner, controller };
 }
 
@@ -503,7 +536,11 @@ test("installation plan does not invent Cloudflare Capsule inputs from scope hin
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } = await controller.createInstallationPlan(
     seeded.installation.id,
@@ -551,7 +588,11 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } = await controller.createInstallationPlan(
     seeded.installation.id,
@@ -1309,6 +1350,96 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
   expect(planRun.policy.status).toEqual("passed");
 });
 
+test("generic OpenTofu runner profile permits direct provider install by default", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner({
+    requiredProviders: [provider],
+    providerInstallation: [
+      {
+        provider,
+        mirrored: false,
+        installationMethod: "direct",
+      },
+    ],
+  });
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_direct_profile",
+    spaceId: seeded.installation.spaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "space",
+    authMethod: "generic_env",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+    verifiedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_vercel_direct_profile",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider,
+        alias: "main",
+        envId: "conn_vercel_direct_profile",
+      },
+    ],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const genericProfile: RunnerProfile = {
+    id: "generic-opentofu-provider",
+    name: "Generic OpenTofu provider",
+    substrate: "cloudflare-containers",
+    allowedProviders: ["*"],
+    stateBackend: { kind: "operator-managed", ref: "r2://state" },
+    stateLock: { kind: "native" },
+    networkPolicy: { mode: "operator-managed" },
+    labels: { "takosumi.com/provider-surface": "generic" },
+    secretExposure: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: genericProfile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.policy.status).toEqual("passed");
+});
+
+test("generic Capsule installation plan allows provider-free modules without ProviderConnection", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
+  await seedInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(planRun.policy.status).toBe("passed");
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+});
+
 test("generic env ProviderBinding blocks low-level plan requests that omit requiredProviders", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -1706,7 +1837,11 @@ test("installation plan blocks when provider mirror evidence is required but mis
       "registry.opentofu.org/hashicorp/aws",
     ],
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
@@ -1789,7 +1924,11 @@ test("installation plan enforces filesystem mirror evidence for every required p
       "registry.opentofu.org/hashicorp/aws",
     ],
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
@@ -1847,7 +1986,11 @@ test("installation plan blocks when mirror evidence omits a required provider", 
       "registry.opentofu.org/hashicorp/aws",
     ],
   });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 

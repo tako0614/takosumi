@@ -541,7 +541,10 @@ export interface TakosumiOperations {
    */
   createInstallationPlan(
     installationId: string,
-    options?: { readonly compatibilityReportId?: string },
+    options?: {
+      readonly compatibilityReportId?: string;
+      readonly runnerProfileId?: string;
+    },
   ): Promise<PlanRunResponse>;
   /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
   createInstallationDestroyPlan(
@@ -1097,8 +1100,15 @@ export async function createTakosumiService(
       opentofuController.createInstallationPlan(
         installationId,
         {},
-        options?.compatibilityReportId
-          ? { compatibilityReportId: options.compatibilityReportId }
+        options?.compatibilityReportId || options?.runnerProfileId
+          ? {
+              ...(options?.compatibilityReportId
+                ? { compatibilityReportId: options.compatibilityReportId }
+                : {}),
+              ...(options?.runnerProfileId
+                ? { runnerProfileId: options.runnerProfileId }
+                : {}),
+            }
           : {},
       ),
     createInstallationDestroyPlan: (installationId) =>

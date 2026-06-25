@@ -274,23 +274,27 @@ test("generateGenericCapsuleRoot normalizes gcp bindings to google provider args
   expect(main).not.toContain('provider "gcp"');
 });
 
-test("generateInstallationRoot rejects multiple aliases for one child provider without configuration_aliases metadata", () => {
-  expect(() =>
-    generateInstallationRoot({
-      template: R2_TEMPLATE,
-      inputs: {
-        bucketName: "my-bucket",
-        accountId: "acct_123",
-        location: "weur",
-      },
-      installType: "opentofu_module",
-      providerEnvBindings: [
-        { provider: "cloudflare/cloudflare", alias: "main" },
-        { provider: "cloudflare", alias: "zone" },
-      ],
-    }),
-  ).toThrow(
-    "rootgen: multiple provider bindings for cloudflare require child module configuration_aliases",
+test("generateInstallationRoot wires multiple aliases for one child provider", () => {
+  const { files } = generateInstallationRoot({
+    template: R2_TEMPLATE,
+    inputs: {
+      bucketName: "my-bucket",
+      accountId: "acct_123",
+      location: "weur",
+    },
+    installType: "opentofu_module",
+    providerEnvBindings: [
+      { provider: "cloudflare/cloudflare", alias: "main" },
+      { provider: "cloudflare", alias: "zone" },
+    ],
+  });
+  expect(files["main.tf"]).toContain(
+    [
+      "  providers = {",
+      "    cloudflare.main = cloudflare.main",
+      "    cloudflare.zone = cloudflare.zone",
+      "  }",
+    ].join("\n"),
   );
 });
 
@@ -470,11 +474,26 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   expect(files["main.tf"]).toContain("cloudflare = cloudflare.main");
   expect(files["main.tf"]).toContain("aws = aws.archive");
   expect(files["outputs.tf"]).toContain(
-    "value = try(module.app.public_url, \"\")",
+    'value = try(module.app.public_url, "")',
   );
   expect(files["outputs.tf"]).toContain(
-    "value = try(module.app.metadata.hostname, \"\")",
+    'value = try(module.app.metadata.hostname, "")',
   );
+});
+
+test("generateGenericCapsuleRoot omits empty required_providers for provider-free capsules", () => {
+  const { files } = generateGenericCapsuleRoot({
+    requiredProviders: [],
+    inputs: {},
+    outputAllowlist: {
+      url: { from: "url", type: "url" },
+    },
+  });
+
+  expect(files["versions.tf"]).toBe("terraform {}\n");
+  expect(files["versions.tf"]).not.toContain("required_providers");
+  expect(files["main.tf"]).toContain('module "app"');
+  expect(files["outputs.tf"]).toContain('value = try(module.app.url, "")');
 });
 
 test("generateGenericCapsuleRoot does not materialize generic env provider blocks", () => {

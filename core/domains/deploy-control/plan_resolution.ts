@@ -53,6 +53,7 @@ import {
 import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.ts";
 import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import { normalizeProviders } from "./validation.ts";
 import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 
 /**
@@ -68,6 +69,8 @@ export interface InstallTypePlanContext {
   readonly installType: GeneratedRootInstallType;
   /** Provider mapping derived from the resolved provider env bindings. */
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
+  /** Fully-qualified provider addresses derived from explicit Provider Bindings. */
+  readonly requiredProvidersFromBindings: readonly string[];
   /**
    * Non-secret provider scope metadata available to fill requested Capsule
    * inputs. The controller only applies these defaults under keys already
@@ -164,6 +167,7 @@ export class PlanResolutionService {
       // core / opentofu_module / app_source map 1:1 to the generated-root types.
       installType: installType as GeneratedRootInstallType,
       providerEnvBindings,
+      requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,
       usesCloudOnlyGatewayMaterialization,
       ...(installConfig.build?.enabled
@@ -291,6 +295,14 @@ export function providerEnvBindingsFromResolved(
     });
   }
   return providers;
+}
+
+function requiredProvidersFromResolved(
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+): readonly string[] {
+  return normalizeProviders(
+    resolved.map((entry) => canonicalProviderAddress(entry.env.providerSource)),
+  );
 }
 
 function providerInputDefaultsFromResolved(

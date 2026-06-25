@@ -1033,6 +1033,12 @@ export interface CreateInstallationPlanRequest {
 export interface CreateInstallationPlanInternal {
   readonly runGroupId?: string;
   /**
+   * Operator-selected runner profile for this plan. Public upload deploy uses
+   * this to opt into an enabled generic OpenTofu runner profile without making
+   * the Capsule source carry Takosumi-specific metadata.
+   */
+  readonly runnerProfileId?: string;
+  /**
    * Reuses a pre-install CapsuleCompatibilityReport that was already produced
    * for the exact SourceSnapshot the plan will use. Public callers may pass this
    * as a hint; the controller still verifies existence, snapshot/source scope,
@@ -1448,6 +1454,9 @@ export class OpenTofuDeploymentController {
     const allowNoProviders =
       (templatePlan !== undefined &&
         templatePlan.template.policy.allowedProviders.length === 0) ||
+      (templatePlan === undefined &&
+        declaredProviders.length === 0 &&
+        internal.genericRootDispatch !== undefined) ||
       (declaredProviders.length === 0 &&
         profile.allowedProviders.includes("*"));
     const basePolicy = evaluatePolicy({
@@ -1806,6 +1815,9 @@ export class OpenTofuDeploymentController {
       source,
       snapshot,
       operation,
+      ...(internal.runnerProfileId
+        ? { runnerProfileId: internal.runnerProfileId }
+        : {}),
       ...(compatibilityReport ? { compatibilityReport } : {}),
     });
     const installationContext: PlanRunInstallationContext = {
@@ -1821,12 +1833,18 @@ export class OpenTofuDeploymentController {
     // BEFORE the run is created. The DependencySnapshot is pinned
     // AFTER the run row exists (runId known), then the planRun is re-put with its
     // id (order: resolve -> inject -> create plan -> snapshot -> re-put).
+    const selectedPlanRequest = internal.runnerProfileId
+      ? { ...planRequest, runnerProfileId: internal.runnerProfileId }
+      : planRequest;
     const resolvedDeps = destroy
       ? undefined
       : await this.#dependencies.resolveConsumerDependencies(installation);
     const injectedRequest = resolvedDeps
-      ? this.#injectDependencyValues(planRequest, resolvedDeps.injectedValues)
-      : planRequest;
+      ? this.#injectDependencyValues(
+          selectedPlanRequest,
+          resolvedDeps.injectedValues,
+        )
+      : selectedPlanRequest;
     const finalizedGenericRoot = genericRootPlan
       ? await this.#genericRootDispatchForRequest(
           injectedRequest,
@@ -2288,6 +2306,7 @@ export class OpenTofuDeploymentController {
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
+    readonly runnerProfileId?: string;
     readonly compatibilityReport?: CapsuleCompatibilityReport;
   }): Promise<{
     readonly request: CreatePlanRunRequest;
@@ -2358,6 +2377,7 @@ export class OpenTofuDeploymentController {
       readonly installation: Installation;
       readonly installConfig: InstallConfig;
       readonly operation: "create" | "update" | "destroy";
+      readonly runnerProfileId?: string;
       readonly compatibilityReport?: CapsuleCompatibilityReport;
     },
     moduleSource: OpenTofuModuleSource,
@@ -2366,32 +2386,21 @@ export class OpenTofuDeploymentController {
     readonly genericRootPlan: GenericRootPlanContext;
   }> {
     const profile = await this.#requireRunnerProfile(
-      this.#defaultRunnerProfileId,
+      input.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const compatibilityProviders = requiredProvidersFromCompatibilityReport(
       input.compatibilityReport,
       profile.allowedProviders,
     );
-    let requiredProviders =
-      compatibilityProviders.length > 0
-        ? compatibilityProviders
-        : profile.allowedProviders.includes("*")
-          ? []
-          : [...profile.allowedProviders];
+    let requiredProviders = compatibilityProviders;
     let installTypePlan = await this.#planResolution.resolveInstallTypePlan(
       input.installation,
       input.installConfig,
       input.installConfig.installType,
       requiredProviders,
     );
-    const bindingProviders = requiredProvidersFromProviderEnvBindings(
-      installTypePlan.providerEnvBindings,
-    );
-    if (
-      requiredProviders.length === 0 &&
-      profile.allowedProviders.includes("*") &&
-      bindingProviders.length > 0
-    ) {
+    const bindingProviders = installTypePlan.requiredProvidersFromBindings;
+    if (requiredProviders.length === 0 && bindingProviders.length > 0) {
       requiredProviders = bindingProviders;
       installTypePlan = await this.#planResolution.resolveInstallTypePlan(
         input.installation,
@@ -5224,11 +5233,13 @@ export class OpenTofuDeploymentController {
     if (!installationId) return undefined;
     const installation = await this.#store.getInstallation(installationId);
     if (!installation) return undefined;
-    return await this.#policyForInstallation(installation);
+    const profile = await this.#store.getRunnerProfile(planRun.runnerProfileId);
+    return await this.#policyForInstallation(installation, profile);
   }
 
   async #policyForInstallation(
     installation: Installation,
+    runnerProfile?: RunnerProfile,
   ): Promise<PolicyConfig | undefined> {
     const [space, installConfig] = await Promise.all([
       this.#store.getSpace(installation.spaceId),
@@ -5236,6 +5247,10 @@ export class OpenTofuDeploymentController {
     ]);
     return withDefaultProviderSupplyChainPolicy(
       mergePolicyConfigs(space?.policy, installConfig?.policy),
+      {
+        providerInstallationRequireMirror:
+          defaultProviderMirrorRequiredForProfile(runnerProfile),
+      },
     );
   }
 
@@ -5345,15 +5360,22 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Whether a plan run targets a provider-free §10 install (a template whose
-   * policy declares zero allowed providers, e.g. `core`). Such a run is allowed
+   * Whether a plan run targets a provider-free §10 install. A provider-free
+   * template (e.g. `core`) declares zero allowed providers, while a generic
+   * OpenTofu Capsule can be provider-free when compatibility preflight found no
+   * required providers and the runner also observed none. Such runs are allowed
    * to declare/observe zero providers without tripping the profile's
-   * "requiredProviders before init" gate. Resolved from the recorded binding;
-   * generic Capsule runs are never provider-free here.
+   * "requiredProviders before init" gate.
    */
   #planAllowsNoProviders(planRun: PlanRun): boolean {
     const binding = planRun.templateBinding;
-    if (!binding) return false;
+    if (!binding) {
+      return (
+        planRun.installationId !== undefined &&
+        planRun.sourceSnapshotId !== undefined &&
+        planRun.requiredProviders.length === 0
+      );
+    }
     const template = this.#templateRegistry.require(
       binding.templateId,
       binding.templateVersion,
@@ -6941,14 +6963,6 @@ function updatedTemplateBinding(
   };
 }
 
-function requiredProvidersFromProviderEnvBindings(
-  bindings: InstallTypePlanContext["providerEnvBindings"],
-): readonly string[] {
-  return normalizeProviders(
-    bindings.map((binding) => canonicalProviderAddress(binding.provider)),
-  );
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -7102,6 +7116,12 @@ function canonicalJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function defaultProviderMirrorRequiredForProfile(
+  profile: RunnerProfile | undefined,
+): boolean {
+  return profile?.labels?.["takosumi.com/provider-surface"] !== "generic";
 }
 
 function auditEvent(

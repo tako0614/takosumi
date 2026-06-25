@@ -24,6 +24,7 @@ import type {
   PublicInstallation,
 } from "takosumi-contract/installations";
 import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
+import type { JsonValue } from "takosumi-contract";
 import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
@@ -130,6 +131,9 @@ export async function deployUpload(
       {
         sourceSnapshotId: snapshot.id,
         deferCompatibilityReport: true,
+        ...(request.runnerProfileId
+          ? { runnerProfileId: request.runnerProfileId }
+          : {}),
       },
     );
     const run = await deps.controller.getRun(planResponse.planRun.id);
@@ -214,7 +218,7 @@ async function markCreatedUploadInstallationError(
 async function refreshInstallConfigVars(
   deps: DeployUploadDependencies,
   installConfigId: string,
-  vars: Readonly<Record<string, string>> | undefined,
+  vars: Readonly<Record<string, JsonValue>> | undefined,
   outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
   now: () => Date,
 ): Promise<void> {
@@ -245,7 +249,7 @@ function buildDefaultInstallConfig(input: {
   readonly id: string;
   readonly spaceId: string;
   readonly name: string;
-  readonly vars: Readonly<Record<string, string>> | undefined;
+  readonly vars: Readonly<Record<string, JsonValue>> | undefined;
   readonly outputAllowlist:
     | InternalDeployRequest["outputAllowlist"]
     | undefined;
