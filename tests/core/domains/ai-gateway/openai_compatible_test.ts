@@ -80,6 +80,29 @@ test("AI Gateway lists public model aliases without exposing upstream keys", asy
   expect(JSON.stringify(body)).not.toContain("zai-secret");
 });
 
+test("AI Gateway model HEAD authorizes but returns no body", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const authRequests: TakosumiAiGatewayAuthRequest[] = [];
+  const url = gatewayUrl("/gateway/ai/v1/models");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, { method: "HEAD" }),
+    url,
+    {
+      config,
+      authorize: async (_request, auth) => {
+        authRequests.push(auth);
+        return { ok: true };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(authRequests).toEqual([
+    { endpoint: "models", requiredScopes: ["ai.models.read"] },
+  ]);
+  expect(await response.text()).toBe("");
+});
+
 test("AI Gateway status reports configured upstreams without exposing keys", async () => {
   const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
   const authRequests: TakosumiAiGatewayAuthRequest[] = [];
@@ -130,6 +153,29 @@ test("AI Gateway status reports configured upstreams without exposing keys", asy
   expect(JSON.stringify(body)).not.toContain("deepseek-secret");
   expect(JSON.stringify(body)).not.toContain("zai-secret");
   expect(JSON.stringify(body)).not.toContain("apiKey");
+});
+
+test("AI Gateway status HEAD authorizes but returns no body", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const authRequests: TakosumiAiGatewayAuthRequest[] = [];
+  const url = gatewayUrl("/gateway/ai/v1/__takosumi/status");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, { method: "HEAD" }),
+    url,
+    {
+      config,
+      authorize: async (_request, auth) => {
+        authRequests.push(auth);
+        return { ok: true };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(authRequests).toEqual([
+    { endpoint: "status", requiredScopes: ["ai.models.read"] },
+  ]);
+  expect(await response.text()).toBe("");
 });
 
 test("AI Gateway forwards chat completions with default alias and safe headers", async () => {

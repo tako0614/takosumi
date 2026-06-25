@@ -144,23 +144,31 @@ export async function handleTakosumiAiGatewayRequest(
   options: TakosumiAiGatewayHandlerOptions,
 ): Promise<Response> {
   const endpoint = endpointFromPath(url.pathname, options.config.basePath);
-  if (!endpoint) return aiGatewayError(404, "not_found", "not found");
+  if (!endpoint) {
+    return withoutBodyForHead(
+      request,
+      aiGatewayError(404, "not_found", "not found"),
+    );
+  }
   if (request.method === "OPTIONS") return optionsResponse();
 
   const methodIssue = methodIssueForEndpoint(request.method, endpoint);
-  if (methodIssue) return methodIssue;
+  if (methodIssue) return withoutBodyForHead(request, methodIssue);
 
   const auth = await options.authorize(request, {
     endpoint,
     requiredScopes: requiredScopesForEndpoint(endpoint),
   });
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) return withoutBodyForHead(request, auth.response);
 
   switch (endpoint) {
     case "status":
-      return handleStatus(options.config, options.workersAi);
+      return withoutBodyForHead(
+        request,
+        handleStatus(options.config, options.workersAi),
+      );
     case "models":
-      return handleModels(options.config);
+      return withoutBodyForHead(request, handleModels(options.config));
     case "chat.completions":
       return await forwardModelRequest({
         request,
@@ -178,6 +186,17 @@ export async function handleTakosumiAiGatewayRequest(
         workersAi: options.workersAi,
       });
   }
+}
+
+function withoutBodyForHead(request: Request, response: Response): Response {
+  if (request.method !== "HEAD") return response;
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export function endpointFromPath(

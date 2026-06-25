@@ -237,8 +237,20 @@ repo.
     TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_PRIVATE/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN")" \
       bun run status:takosumi-completion -- \
         --json \
+        --probe-live
+    ```
+
+    The final hosted-access gate is stricter and must stay red until production
+    readiness evidence, hardening evidence, billing readiness, and the public
+    summaries are accepted:
+
+    ```bash
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_PRIVATE/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN")" \
+      bun run status:takosumi-completion -- \
+        --json \
         --probe-live \
-        --require-complete
+        --require-complete \
+        --require-ga-readiness
     ```
 
 11. Enforce production hardening only after the seven private evidence classes

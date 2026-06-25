@@ -474,7 +474,9 @@ export async function runCloudExtensionSmoke(
       await cloudflareCompatProviderE2ECheck(options, providerE2eRunner),
     );
   }
-  const gaps = cloudExtensionGaps(checks);
+  const gaps = cloudExtensionGaps(checks, {
+    requireAiUpstreamProfile: options.requireAiUpstreamProfile,
+  });
   const gaReady = checks.every((check) => check.ok) && gaps.length === 0;
   const status =
     checks.every((check) => check.ok) &&
@@ -844,6 +846,7 @@ function syntheticCheck(input: {
 
 function cloudExtensionGaps(
   checks: readonly CloudExtensionSmokeCheck[],
+  options: { readonly requireAiUpstreamProfile?: boolean } = {},
 ): string[] {
   const gaps: string[] = [];
   const catalog = checks.find(
@@ -857,6 +860,14 @@ function cloudExtensionGaps(
     aiStatus &&
     aiStatus.ok &&
     aiStatus.summary.mode === "workers_ai_fallback"
+  ) {
+    gaps.push("ai_gateway_external_upstream_not_configured");
+  }
+  if (
+    aiStatus &&
+    aiStatus.ok &&
+    options.requireAiUpstreamProfile === true &&
+    !summaryProviders(aiStatus).some((provider) => provider !== "workers_ai")
   ) {
     gaps.push("ai_gateway_external_upstream_not_configured");
   }
@@ -924,7 +935,16 @@ function cloudExtensionGaps(
       }
     }
   }
-  return gaps;
+  return [...new Set(gaps)];
+}
+
+function summaryProviders(check: CloudExtensionSmokeCheck): readonly string[] {
+  const providers = check.summary.providers;
+  return Array.isArray(providers)
+    ? providers.filter(
+        (provider): provider is string => typeof provider === "string",
+      )
+    : [];
 }
 
 function providerE2EGap(resource: string): string {
@@ -1095,7 +1115,7 @@ async function runCloudflareCompatKvNamespaceRestLifecycle(
     };
   } catch (error) {
     const cleanup = namespaceId
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
           collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
           query: { title },
           idField: "id",
@@ -1164,7 +1184,7 @@ async function runCloudflareCompatD1DatabaseRestLifecycle(
     };
   } catch (error) {
     const cleanup = databaseId
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
           collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
           query: { name },
           idField: "uuid",
@@ -1237,7 +1257,7 @@ async function runCloudflareCompatR2BucketRestLifecycle(
     };
   } catch (error) {
     const cleanup = created
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
           collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/r2/buckets`,
           query: { name },
           idField: "name",
@@ -1335,14 +1355,18 @@ async function runCloudflareCompatWorkerRouteRestLifecycle(
     };
   } catch (error) {
     const routeCleanup = routeId
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
           collectionPath: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
           query: { pattern: routePattern },
           idField: "id",
         })
       : undefined;
     const scriptCleanup = scriptCreated
-      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      ? await cleanupCloudflareCompatWorkerScript(
+          fetchImpl,
+          options,
+          scriptName,
+        )
       : undefined;
     return restLifecycleFailure(
       "cloudflare_workers_script_route_rest",
@@ -1544,7 +1568,7 @@ output "namespace_title" {
     };
   } catch (error) {
     const cleanup = completedSteps.includes("apply")
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetch, options, {
           collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/storage/kv/namespaces`,
           query: { title: namespaceTitle },
           idField: "id",
@@ -1636,7 +1660,7 @@ output "database_name" {
     };
   } catch (error) {
     const cleanup = completedSteps.includes("apply")
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetch, options, {
           collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/d1/database`,
           query: { name: databaseName },
           idField: "uuid",
@@ -1784,7 +1808,7 @@ output "script_name" {
     };
   } catch (error) {
     const cleanup = completedSteps.includes("apply")
-      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      ? await cleanupCloudflareCompatWorkerScript(fetch, options, scriptName)
       : undefined;
     return {
       resource: "cloudflare_workers_script",
@@ -1903,14 +1927,14 @@ output "route_pattern" {
     };
   } catch (error) {
     const routeCleanup = completedSteps.includes("apply")
-      ? await cleanupCloudflareCompatCollectionResource(options, {
+      ? await cleanupCloudflareCompatCollectionResource(fetch, options, {
           collectionPath: `/zones/${CLOUDFLARE_COMPAT_ZONE_ID}/workers/routes`,
           query: { pattern: routePattern },
           idField: "id",
         })
       : undefined;
     const scriptCleanup = completedSteps.includes("apply")
-      ? await cleanupCloudflareCompatWorkerScript(options, scriptName)
+      ? await cleanupCloudflareCompatWorkerScript(fetch, options, scriptName)
       : undefined;
     return {
       resource: "cloudflare_workers_route",
@@ -1929,11 +1953,12 @@ output "route_pattern" {
 }
 
 async function cleanupCloudflareCompatWorkerScript(
+  fetchImpl: FetchLike,
   options: CloudExtensionSmokeOptions,
   scriptName: string,
 ): Promise<Record<string, unknown>> {
   try {
-    const response = await fetch(
+    const response = await fetchImpl(
       `${options.url}/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
       {
         method: "DELETE",
@@ -1963,6 +1988,7 @@ async function cleanupCloudflareCompatWorkerScript(
 }
 
 async function cleanupCloudflareCompatCollectionResource(
+  fetchImpl: FetchLike,
   options: CloudExtensionSmokeOptions,
   input: {
     readonly collectionPath: string;
@@ -1974,7 +2000,7 @@ async function cleanupCloudflareCompatCollectionResource(
   const query = new URLSearchParams(input.query);
   const collectionUrl = `${options.url}/compat/cloudflare/client/v4${input.collectionPath}?${query.toString()}`;
   try {
-    const listed = await fetch(collectionUrl, {
+    const listed = await fetchImpl(collectionUrl, {
       headers: {
         authorization: `Bearer ${options.sessionToken}`,
         accept: "application/json",
@@ -1993,7 +2019,7 @@ async function cleanupCloudflareCompatCollectionResource(
             ? row[input.fallbackIdField]
             : null;
       if (!id) continue;
-      const response = await fetch(
+      const response = await fetchImpl(
         `${options.url}/compat/cloudflare/client/v4${input.collectionPath}/${encodeURIComponent(id)}`,
         {
           method: "DELETE",
@@ -2667,7 +2693,7 @@ Options:
   --out-file <path>                    write redacted JSON evidence to a private file
   --require-compat-materialization     fail if Cloudflare Workers script materialization still returns 501
   --require-provider-e2e               run tofu init/plan/apply/destroy through the Cloudflare compat endpoint
-  --require-ai-upstream-profile        fail when AI Gateway only has the Workers AI fallback configured
+  --require-ai-upstream-profile        fail unless a non-Workers-AI external upstream profile is configured
   --require-ai-service-graph-token     rotate an AI Gateway Service Graph runtime token and use it against /gateway/ai/v1
   --ai-service-installation-id <id>    installation projection id used for Service Graph runtime-token rotation
   --platform-version <id>              include deployed platform version id in evidence

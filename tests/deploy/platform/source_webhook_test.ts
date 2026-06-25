@@ -728,6 +728,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
   const forwarded: {
     authorization: string | null;
     cookie: string | null;
+    proxyAuthorization: string | null;
+    xAuthEmail: string | null;
+    xAuthKey: string | null;
+    xAuthUserServiceKey: string | null;
     session: string | null;
     authenticated: string | null;
     authKind: string | null;
@@ -739,6 +743,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       headers: {
         authorization: "Bearer sess_secret",
         cookie: "takosumi_session=sess_cookie",
+        "proxy-authorization": "Basic proxy_secret",
+        "x-auth-email": "root@example.test",
+        "x-auth-key": "global_api_key",
+        "x-auth-user-service-key": "service_key",
         "x-takosumi-account-session": "sess_header",
         "x-takosumi-cloud-authenticated": "1",
         "x-takosumi-cloud-auth-kind": "spoofed",
@@ -752,6 +760,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
+            proxyAuthorization: request.headers.get("proxy-authorization"),
+            xAuthEmail: request.headers.get("x-auth-email"),
+            xAuthKey: request.headers.get("x-auth-key"),
+            xAuthUserServiceKey: request.headers.get("x-auth-user-service-key"),
             session: request.headers.get("x-takosumi-account-session"),
             authenticated: request.headers.get(
               "x-takosumi-cloud-authenticated",
@@ -784,6 +796,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
     {
       authorization: null,
       cookie: null,
+      proxyAuthorization: null,
+      xAuthEmail: null,
+      xAuthKey: null,
+      xAuthUserServiceKey: null,
       session: null,
       authenticated: "1",
       authKind: "session",
@@ -797,6 +813,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
   const forwarded: {
     authorization: string | null;
     cookie: string | null;
+    proxyAuthorization: string | null;
+    xAuthEmail: string | null;
+    xAuthKey: string | null;
+    xAuthUserServiceKey: string | null;
     session: string | null;
     authenticated: string | null;
     authKind: string | null;
@@ -808,6 +828,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
       headers: {
         authorization: "Bearer taksrv_bad_scope",
         cookie: "takosumi_session=sess_cookie",
+        "proxy-authorization": "Basic proxy_secret",
+        "x-auth-email": "root@example.test",
+        "x-auth-key": "global_api_key",
+        "x-auth-user-service-key": "service_key",
         "x-takosumi-account-session": "sess_header",
         "x-takosumi-cloud-authenticated": "1",
         "x-takosumi-cloud-auth-kind": "spoofed",
@@ -821,6 +845,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
+            proxyAuthorization: request.headers.get("proxy-authorization"),
+            xAuthEmail: request.headers.get("x-auth-email"),
+            xAuthKey: request.headers.get("x-auth-key"),
+            xAuthUserServiceKey: request.headers.get("x-auth-user-service-key"),
             session: request.headers.get("x-takosumi-account-session"),
             authenticated: request.headers.get(
               "x-takosumi-cloud-authenticated",
@@ -857,6 +885,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
     {
       authorization: null,
       cookie: null,
+      proxyAuthorization: null,
+      xAuthEmail: null,
+      xAuthKey: null,
+      xAuthUserServiceKey: null,
       session: null,
       authenticated: null,
       authKind: null,
@@ -1257,6 +1289,18 @@ test("Cloud-only extension catalog is a stable platform endpoint", async () => {
   const body = await response.json();
   expect(body.summary).toEqual({ total: 2, configured: 0, missing: 2 });
   expect(JSON.stringify(body)).not.toContain("bindingName");
+});
+
+test("Cloud-only extension catalog HEAD returns headers without a body", async () => {
+  const url = new URL("https://app.takosumi.com/__takosumi/cloud/extensions");
+  const response = handlePlatformCloudExtensionCatalogRequest(
+    new Request(url, { method: "HEAD" }),
+    url,
+    {} as never,
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.text()).toBe("");
 });
 
 test("Cloud-only extension registry is limited to AI Gateway and Cloudflare compatibility", async () => {
