@@ -8,6 +8,7 @@ import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
   parseInstallPrefill,
+  parseInstallPrefillFromInput,
 } from "../../../../dashboard/src/lib/install-link.ts";
 
 describe("parseInstallPrefill", () => {
@@ -136,6 +137,27 @@ describe("hasInstallPrefillParams", () => {
     expect(hasInstallPrefillParams("?tab=catalog")).toBe(false);
     expect(hasInstallPrefillParams("?git=nonsense")).toBe(true);
     expect(hasInstallPrefillParams("?source=git%3A%3Anonsense")).toBe(true);
+  });
+});
+
+describe("parseInstallPrefillFromInput", () => {
+  test("unwraps a full external install URL pasted into the add form", () => {
+    expect(
+      parseInstallPrefillFromInput(
+        "https://app-staging.takosumi.com/install?git=https%3A%2F%2Fgithub.com%2Ftako0614%2Ftakos.git&ref=b7544ac7890f5c85e6b55d1f869d81f809da3953&path=deploy%2Fopentofu&name=Takos",
+      ),
+    ).toEqual({
+      git: "https://github.com/tako0614/takos.git",
+      ref: "b7544ac7890f5c85e6b55d1f869d81f809da3953",
+      path: "deploy/opentofu",
+      name: "Takos",
+    });
+  });
+
+  test("leaves a plain Git URL on the normal input path", () => {
+    expect(
+      parseInstallPrefillFromInput("https://github.com/acme/repo.git"),
+    ).toBeUndefined();
   });
 });
 
