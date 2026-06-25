@@ -417,8 +417,7 @@ export async function resolveOptions(
         hint: "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
       })
     : ({ value: "", source: "not_required" } as const);
-  const patTokenFile =
-    args.patTokenFile ?? env.TAKOSUMI_ACCOUNT_PAT_TOKEN_FILE;
+  const patTokenFile = args.patTokenFile ?? env.TAKOSUMI_ACCOUNT_PAT_TOKEN_FILE;
   const patTokenValue = env.TAKOSUMI_ACCOUNT_PAT_TOKEN;
   const accountAuthTokenKind = parseAuthTokenKind(
     args.authTokenKind ??
@@ -501,7 +500,7 @@ export async function resolveOptions(
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
-    ...(args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID
+    ...((args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID)
       ? {
           runnerProfileId:
             args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID,
@@ -1358,6 +1357,10 @@ async function createSourceInstallation(
       environment: options.environment,
       sourceId: input.sourceId,
       installConfigId: input.installConfigId,
+      ...(options.runnerProfileId
+        ? { runnerProfileId: options.runnerProfileId }
+        : {}),
+      outputAllowlist: options.outputAllowlist,
       vars: options.vars,
     },
   });

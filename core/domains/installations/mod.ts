@@ -289,7 +289,9 @@ export class InstallationsService {
     spaceId?: string,
   ): Promise<readonly InstallConfig[]> {
     const stored = (await this.#store.listInstallConfigs(spaceId)).filter(
-      (config) => !isRetiredOfficialInstallConfigId(config.id),
+      (config) =>
+        !isRetiredOfficialInstallConfigId(config.id) &&
+        isSelectableInstallConfig(config),
     );
     if (spaceId !== undefined) return stored;
     const byId = new Map<string, InstallConfig>(
@@ -352,6 +354,14 @@ export class InstallationsService {
     }
     return installation;
   }
+}
+
+function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (config.internal?.reason === "per_install_overrides") return false;
+  if (config.spaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+    return false;
+  }
+  return true;
 }
 
 function defaultId(prefix: string): string {

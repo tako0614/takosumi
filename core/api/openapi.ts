@@ -2841,6 +2841,29 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
+        runnerProfileId: { type: "string" },
+        outputAllowlist: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["from", "type"],
+            properties: {
+              from: { type: "string" },
+              type: {
+                enum: [
+                  "string",
+                  "url",
+                  "hostname",
+                  "number",
+                  "boolean",
+                  "json",
+                ],
+              },
+              required: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
         vars: { type: "object", additionalProperties: true },
       },
       additionalProperties: false,

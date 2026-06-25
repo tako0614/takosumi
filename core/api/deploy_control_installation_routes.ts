@@ -22,6 +22,7 @@ import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
+  ensureRunnerProfilePermission,
   ensureSpacePermission,
   errorEnvelope,
   nonEmptyString,
@@ -69,6 +70,8 @@ interface CreateInstallationRouteRequest extends Omit<
   CreateInstallationRequest,
   "spaceId"
 > {
+  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+  readonly runnerProfileId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -94,6 +97,7 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     templateBinding: _templateBinding,
     sourceKind: _sourceKind,
     runnerProfileId: _runnerProfileId,
+    internal: _internal,
     ...publicRecord
   } = config;
   return {
@@ -116,9 +120,9 @@ function publicInstallConfigSourceKind(
   return "generic_capsule";
 }
 
-function runnerProfileIdFromBody(
-  body: InstallationPlanRouteRequest,
-): string | undefined {
+function runnerProfileIdFromBody(body: {
+  readonly runnerProfileId?: unknown;
+}): string | undefined {
   if (body.runnerProfileId === undefined) return undefined;
   if (!nonEmptyString(body.runnerProfileId)) {
     throw new OpenTofuControllerError(
@@ -365,10 +369,29 @@ export function mountDeployControlInstallationRoutes(
           c,
           "installationCreate",
         );
-        const { vars: rawVars, ...request } = body as Omit<
+        const {
+          outputAllowlist: rawOutputAllowlist,
+          vars: rawVars,
+          runnerProfileId: rawRunnerProfileId,
+          ...request
+        } = body as Omit<
           CreateInstallationRouteRequest,
-          "vars"
-        > & { readonly vars?: unknown };
+          "outputAllowlist" | "vars" | "runnerProfileId"
+        > & {
+          readonly outputAllowlist?: unknown;
+          readonly vars?: unknown;
+          readonly runnerProfileId?: unknown;
+        };
+        const outputAllowlist =
+          rawOutputAllowlist === undefined
+            ? undefined
+            : outputAllowlistValue(rawOutputAllowlist);
+        if (rawOutputAllowlist !== undefined && outputAllowlist === undefined) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "outputAllowlist must be an object of { from, type, required? } entries",
+          );
+        }
         const vars =
           rawVars === undefined ? undefined : jsonRecordValue(rawVars);
         if (rawVars !== undefined && vars === undefined) {
@@ -377,15 +400,26 @@ export function mountDeployControlInstallationRoutes(
             "vars must be an object of JSON values keyed by OpenTofu variable names",
           );
         }
+        const runnerProfileId =
+          rawRunnerProfileId === undefined
+            ? undefined
+            : runnerProfileIdFromBody({ runnerProfileId: rawRunnerProfileId });
+        if (runnerProfileId) {
+          ensureRunnerProfilePermission(principal, runnerProfileId);
+        }
         const installConfigId =
-          vars !== undefined && Object.keys(vars).length > 0
+          (vars !== undefined && Object.keys(vars).length > 0) ||
+          runnerProfileId ||
+          outputAllowlist !== undefined
             ? (
-                await createScopedInstallConfigWithVariables({
+                await createScopedInstallConfigForInstallation({
                   installations: installations!,
                   spaceId: id,
                   baseInstallConfigId: request.installConfigId,
                   installationName: request.name,
-                  vars,
+                  vars: vars ?? {},
+                  outputAllowlist,
+                  runnerProfileId,
                 })
               ).id
             : request.installConfigId;
@@ -583,12 +617,15 @@ export function mountDeployControlInstallationRoutes(
         // sorted by (createdAt, id), and bounded with the in-memory keyset pager
         // (a keyset across a UNION query would be unsound).
         const official = (await installations!.listInstallConfigs()).filter(
-          (config) => config.spaceId === undefined,
+          (config) =>
+            config.spaceId === undefined && isSelectableInstallConfig(config),
         );
         const scoped =
           spaceId === undefined
             ? []
-            : await installations!.listInstallConfigs(spaceId);
+            : (await installations!.listInstallConfigs(spaceId)).filter(
+                isSelectableInstallConfig,
+              );
         const merged = (
           view.view === "starter-catalog"
             ? official.filter(isStarterCatalogInstallConfig)
@@ -705,12 +742,14 @@ export function mountDeployControlInstallationRoutes(
   );
 }
 
-async function createScopedInstallConfigWithVariables(input: {
+async function createScopedInstallConfigForInstallation(input: {
   readonly installations: InstallationsService;
   readonly spaceId: string;
   readonly baseInstallConfigId: string;
   readonly installationName: string;
   readonly vars: Readonly<Record<string, JsonValue>>;
+  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+  readonly runnerProfileId?: string;
 }): Promise<InstallConfig> {
   for (const [key, value] of Object.entries(input.vars)) {
     if (!isJsonValue(value)) {
@@ -738,11 +777,24 @@ async function createScopedInstallConfigWithVariables(input: {
     id: `cfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
     spaceId: input.spaceId,
     name: `${input.installationName}-config`,
+    internal: { reason: "per_install_overrides" },
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
-    outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
+    ...(input.runnerProfileId
+      ? { runnerProfileId: input.runnerProfileId }
+      : {}),
+    outputAllowlist:
+      input.outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,
     updatedAt: now,
   });
+}
+
+function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (config.internal?.reason === "per_install_overrides") return false;
+  if (config.spaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+    return false;
+  }
+  return true;
 }
 
 function scopedCloneOutputAllowlist(
@@ -754,6 +806,43 @@ function scopedCloneOutputAllowlist(
   return baseConfig.sourceKind === "generic_capsule"
     ? defaultCapsuleOutputAllowlist()
     : baseConfig.outputAllowlist;
+}
+
+function outputAllowlistValue(
+  value: unknown,
+): InstallConfig["outputAllowlist"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const out: Record<string, InstallConfig["outputAllowlist"][string]> = {};
+  for (const [name, item] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) return undefined;
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const from = typeof record.from === "string" ? record.from.trim() : "";
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    if (!from || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(from)) return undefined;
+    if (
+      type !== "string" &&
+      type !== "url" &&
+      type !== "hostname" &&
+      type !== "number" &&
+      type !== "boolean" &&
+      type !== "json"
+    ) {
+      return undefined;
+    }
+    out[name] = {
+      from,
+      type,
+      ...(typeof record.required === "boolean"
+        ? { required: record.required }
+        : {}),
+    };
+  }
+  return out;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
