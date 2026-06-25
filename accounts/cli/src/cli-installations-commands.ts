@@ -734,17 +734,36 @@ function importApplyProviderConnections(
   if (!raw) return [];
   return raw.split(",").map((pair) => {
     const [providerRaw, ...connectionParts] = pair.split("=");
-    const provider = providerRaw?.trim();
+    const providerWithAlias = providerRaw?.trim();
     const connectionId = connectionParts.join("=").trim();
-    if (!provider || !connectionId) {
-      throw new Error("--provider must be provider=providerConnectionId");
+    if (!providerWithAlias || !connectionId) {
+      throw new Error(
+        "--provider must be provider=providerConnectionId or provider@alias=providerConnectionId",
+      );
     }
+    const { provider, alias } = importApplyProviderAlias(providerWithAlias);
     return {
       provider,
-      alias: "main",
+      alias,
       connectionId,
     };
   });
+}
+
+function importApplyProviderAlias(input: string): {
+  readonly provider: string;
+  readonly alias: string;
+} {
+  const at = input.lastIndexOf("@");
+  if (at <= 0) return { provider: input, alias: "main" };
+  const provider = input.slice(0, at).trim();
+  const alias = input.slice(at + 1).trim();
+  if (!provider || !alias || alias.includes("/") || alias.includes("=")) {
+    throw new Error(
+      "--provider alias syntax must be provider@alias=providerConnectionId",
+    );
+  }
+  return { provider, alias };
 }
 
 function withImportRequiredProvidersFromOptions(

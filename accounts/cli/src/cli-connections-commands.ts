@@ -7,6 +7,7 @@ import {
 } from "./cli-options.ts";
 import {
   connectionsCreateCloudflareHelpText,
+  connectionsCreateGenericEnvHelpText,
   connectionsHelpText,
   connectionsListHelpText,
   connectionsRevokeHelpText,
@@ -14,7 +15,11 @@ import {
 } from "./cli-help.ts";
 import { isRecord, parseJson, stringValue } from "./cli-util.ts";
 import type { CliIo } from "./cli-io.ts";
-import { CONNECTIONS_PATH } from "takosumi-contract/connections";
+import {
+  CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
+  CONNECTIONS_PATH,
+  type CreateConnectionFile,
+} from "takosumi-contract/connections";
 
 export async function runConnections(
   args: string[],
@@ -28,6 +33,9 @@ export async function runConnections(
   if (command === "list") return await runConnectionsList(rest, io);
   if (command === "set-cloudflare-token") {
     return await runConnectionsCreateCloudflareToken(rest, io);
+  }
+  if (command === "create-generic-env") {
+    return await runConnectionsCreateGenericEnv(rest, io);
   }
   if (command === "test") return await runConnectionsTest(rest, io);
   if (command === "revoke") return await runConnectionsRevoke(rest, io);
@@ -71,6 +79,31 @@ export async function runConnectionsCreateCloudflareToken(
     const body = await cloudflareTokenConnectionBody(options);
     const response = await requestDeployControlApi({
       path: `${CONNECTIONS_PATH}/cloudflare/token`,
+      method: "POST",
+      body,
+      options,
+    });
+    io.stdout(formatConnectionCreate(response, booleanOption(options, "json")));
+    return 0;
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return error instanceof TypeError ? 2 : 1;
+  }
+}
+
+export async function runConnectionsCreateGenericEnv(
+  args: string[],
+  io: CliIo,
+): Promise<number> {
+  const options = parseOptions(args);
+  if (options.help) {
+    io.stdout(connectionsCreateGenericEnvHelpText());
+    return 0;
+  }
+  try {
+    const body = await genericEnvProviderConnectionBody(options);
+    const response = await requestDeployControlApi({
+      path: CONNECTIONS_GENERIC_ENV_PROVIDER_PATH,
       method: "POST",
       body,
       options,
@@ -223,6 +256,35 @@ export async function cloudflareTokenConnectionBody(
   });
 }
 
+export async function genericEnvProviderConnectionBody(
+  options: Record<string, string | boolean>,
+): Promise<Record<string, unknown>> {
+  const provider = optionalStringOption(options, "provider");
+  if (!provider) throw new TypeError("--provider is required");
+  const spaceId = optionalStringOption(options, "space");
+  if (!spaceId) throw new TypeError("--space is required");
+  const values = await optionalValuesFromOptions(options);
+  const files = await filesFromOptions(options);
+  if (Object.keys(values).length === 0 && files.length === 0) {
+    throw new TypeError("--values-file or --files-file is required");
+  }
+  const displayName = optionalStringOption(options, "displayName");
+  const expiresAt = optionalStringOption(options, "expiresAt");
+  const scopeHints = await scopeHintsFromOptions(options);
+  return {
+    provider,
+    spaceId,
+    kind: "generic_env_provider",
+    authMethod: "static_secret",
+    scope: "space",
+    ...(displayName ? { displayName } : {}),
+    ...(Object.keys(scopeHints).length > 0 ? { scopeHints } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+    values,
+    ...(files.length > 0 ? { files } : {}),
+  };
+}
+
 function connectionBody(
   options: Record<string, string | boolean>,
   base: {
@@ -256,6 +318,14 @@ function connectionBody(
     ...(expiresAt ? { expiresAt } : {}),
     values: base.values,
   };
+}
+
+async function optionalValuesFromOptions(
+  options: Record<string, string | boolean>,
+): Promise<Record<string, string>> {
+  const valuesFile = optionalStringOption(options, "valuesFile");
+  if (!valuesFile) return {};
+  return await valuesFromOptions(options);
 }
 
 async function valuesFromOptions(
@@ -298,6 +368,70 @@ async function valuesFromOptions(
   }
   if (Object.keys(output).length === 0) {
     throw new TypeError("--values-file must contain at least one value");
+  }
+  return output;
+}
+
+async function filesFromOptions(
+  options: Record<string, string | boolean>,
+): Promise<readonly CreateConnectionFile[]> {
+  const filesFile = optionalStringOption(options, "filesFile");
+  if (!filesFile) return [];
+  const parsed = parseJson(await readFile(filesFile, "utf8"));
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("--files-file must contain a JSON array");
+  }
+  return parsed.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new TypeError(`--files-file entry ${index} must be an object`);
+    }
+    const path = stringValue(entry.path);
+    const content = stringValue(entry.content);
+    if (!path) {
+      throw new TypeError(`--files-file entry ${index}.path is required`);
+    }
+    if (content === undefined) {
+      throw new TypeError(`--files-file entry ${index}.content is required`);
+    }
+    const modeValue = entry.mode;
+    const mode =
+      modeValue === undefined
+        ? undefined
+        : typeof modeValue === "number" && Number.isInteger(modeValue)
+          ? modeValue
+          : undefined;
+    if (modeValue !== undefined && mode === undefined) {
+      throw new TypeError(
+        `--files-file entry ${index}.mode must be an integer`,
+      );
+    }
+    const envName = stringValue(entry.envName);
+    return {
+      path,
+      content,
+      ...(mode !== undefined ? { mode } : {}),
+      ...(envName ? { envName } : {}),
+    };
+  });
+}
+
+async function scopeHintsFromOptions(
+  options: Record<string, string | boolean>,
+): Promise<Record<string, string>> {
+  const scopeHintsFile = optionalStringOption(options, "scopeHintsFile");
+  if (!scopeHintsFile) return {};
+  const parsed = parseJson(await readFile(scopeHintsFile, "utf8"));
+  if (!isRecord(parsed)) {
+    throw new TypeError("--scope-hints-file must contain a JSON object");
+  }
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new TypeError(
+        `--scope-hints-file field ${key} must be a non-empty string`,
+      );
+    }
+    output[key] = value;
   }
   return output;
 }
