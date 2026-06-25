@@ -8,13 +8,13 @@
  * same-origin; the operator-bearer-gated contract is served in-process under
  * the `/internal/v1` seam. Each handler:
  *
- *   1. requires an authenticated account session (anonymous -> 401), and
+ *   1. requires an authenticated account session or PAT (anonymous -> 401), and
  *   2. calls the in-process deploy-control operations facade directly (the same
  *      wired controller + domain services backing the §30 routes), rendering
  *      the controller's typed `OpenTofuControllerError` codes to HTTP via the
  *      contract's code->status map.
  *
- * Authorization: the session subject must own the target deploy-control Space
+ * Authorization: the bearer subject must own the target deploy-control Space
  * (`Space.ownerUserId`) or own the accounts-ledger account that contains that
  * Space (`SpaceRecord.accountId -> LedgerAccount.legalOwnerSubject`). Routes
  * addressing Installation / Run / RunGroup / Source / Dependency first resolve
@@ -147,7 +147,11 @@ import {
   publicBillingPlans,
 } from "./billing-plans.ts";
 import { readEnvVar } from "./read-env.ts";
-import { requireAccountSession } from "./account-session.ts";
+import {
+  requireAccountSession,
+  requireAccountsBearer,
+  type AccountsBearerRequiredScope,
+} from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import {
@@ -941,7 +945,7 @@ function controlPlaneUnavailable(): Response {
 
 /**
  * Single entry point for the `/api/v1/*` family. Authenticates the account
- * session ONCE (anonymous -> 401), then dispatches to the matched sub-route.
+ * session/PAT ONCE (anonymous -> 401), then dispatches to the matched sub-route.
  * Returns `undefined` only when the path is not owned by this family (so the
  * caller can fall through to its own 404).
  */
@@ -971,12 +975,17 @@ export async function handleControlRoute(
     }
   }
 
-  // Authn gate: every other control route requires a live account session. The
-  // dashboard presents the HttpOnly `takosumi_session` cookie; PAT/header
-  // callers are accepted by `requireAccountSession` too. Space authorization is
-  // enforced per route below after the target Space is known.
-  const session = await requireAccountSession({ request, store });
-  if (!session.ok) return session.response;
+  // Authn gate: every other control route requires a live account session or a
+  // scoped personal access token. The dashboard presents the HttpOnly
+  // `takosumi_session` cookie; automation callers present a `takpat_*` bearer.
+  // Space authorization is enforced per route below after the target Space is
+  // known.
+  const bearer = await requireAccountsBearer({
+    request,
+    store,
+    scope: controlRouteRequiredScope(request),
+  });
+  if (!bearer.ok) return bearer.response;
 
   const operations = context.operations;
   if (!operations) return controlPlaneUnavailable();
@@ -989,12 +998,25 @@ export async function handleControlRoute(
       tail,
       operations,
       store,
-      session,
+      session: { subject: bearer.auth.subject },
       sharedCellRuntime: context.sharedCellRuntime,
       billingPlans: context.billingPlans,
     });
   } catch (error) {
     return controllerErrorResponse(error);
+  }
+}
+
+function controlRouteRequiredScope(
+  request: Request,
+): AccountsBearerRequiredScope {
+  switch (request.method.toUpperCase()) {
+    case "GET":
+    case "HEAD":
+    case "OPTIONS":
+      return "read";
+    default:
+      return "write";
   }
 }
 
