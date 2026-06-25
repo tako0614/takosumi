@@ -46,6 +46,7 @@ const TERMINAL_RUN_STATUSES = new Set([
 type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
 type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
+type SmokeAuthTokenKind = "session" | "pat";
 type SecretInputSource = "env" | "file" | "not_required";
 type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
 type JsonSmokeValue =
@@ -70,6 +71,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
   readonly accountSessionToken: string;
   readonly accountSessionTokenSource: "env" | "file";
+  readonly accountAuthTokenKind: SmokeAuthTokenKind;
   readonly cloudflareApiToken: string;
   readonly cloudflareApiTokenSource: SecretInputSource;
   readonly cloudflareAccountId: string;
@@ -147,6 +149,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly nextAction?: string;
   readonly inputs: {
     readonly accountSessionTokenSource: "env" | "file";
+    readonly accountAuthTokenKind: SmokeAuthTokenKind;
     readonly cloudflareApiTokenSource: SecretInputSource;
     readonly cloudflareAccountIdSource: NonSecretInputSource;
     readonly cloudflareAccountIdDigest: string;
@@ -176,6 +179,8 @@ interface CliArgs {
   readonly backupRestoreRehearsal?: boolean;
   readonly url?: string;
   readonly sessionTokenFile?: string;
+  readonly patTokenFile?: string;
+  readonly authTokenKind?: string;
   readonly cloudflareApiTokenFile?: string;
   readonly cloudflareAccountId?: string;
   readonly cloudflareAccountIdFile?: string;
@@ -412,13 +417,30 @@ export async function resolveOptions(
         hint: "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
       })
     : ({ value: "", source: "not_required" } as const);
+  const patTokenFile =
+    args.patTokenFile ?? env.TAKOSUMI_ACCOUNT_PAT_TOKEN_FILE;
+  const patTokenValue = env.TAKOSUMI_ACCOUNT_PAT_TOKEN;
+  const accountAuthTokenKind = parseAuthTokenKind(
+    args.authTokenKind ??
+      env.TAKOSUMI_ACCOUNT_AUTH_TOKEN_KIND ??
+      (patTokenFile || patTokenValue ? "pat" : "session"),
+  );
   const accountSessionToken = await readSecret({
-    file: args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE,
-    envValue: env.TAKOSUMI_ACCOUNT_SESSION_TOKEN,
-    envName: "TAKOSUMI_ACCOUNT_SESSION_TOKEN",
-    label: "account session token",
+    file:
+      patTokenFile ??
+      args.sessionTokenFile ??
+      env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE,
+    envValue: patTokenValue ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN,
+    envName: "TAKOSUMI_ACCOUNT_PAT_TOKEN or TAKOSUMI_ACCOUNT_SESSION_TOKEN",
+    label:
+      accountAuthTokenKind === "pat"
+        ? "account personal access token"
+        : "account session token",
     dryRun: args.dryRun === true,
   });
+  if (!args.dryRun) {
+    assertAccountAuthTokenKind(accountAuthTokenKind, accountSessionToken.value);
+  }
   const cloudflareApiToken = cloudflareInputsRequired
     ? await readSecret({
         file: args.cloudflareApiTokenFile ?? env.CLOUDFLARE_API_TOKEN_FILE,
@@ -471,6 +493,7 @@ export async function resolveOptions(
     url: normalizeBaseUrl(url),
     accountSessionToken: accountSessionToken.value,
     accountSessionTokenSource: accountSessionToken.source,
+    accountAuthTokenKind,
     cloudflareApiToken: cloudflareApiToken.value,
     cloudflareApiTokenSource: cloudflareApiToken.source,
     cloudflareAccountId: cloudflareAccountId.value,
@@ -2401,6 +2424,26 @@ function parseCloudflareConnectionMode(
   );
 }
 
+function parseAuthTokenKind(value: string | undefined): SmokeAuthTokenKind {
+  if (value === undefined || value.trim() === "" || value === "session") {
+    return "session";
+  }
+  if (value === "pat") return "pat";
+  throw new Error("--auth-token-kind must be session or pat");
+}
+
+function assertAccountAuthTokenKind(
+  kind: SmokeAuthTokenKind,
+  token: string,
+): void {
+  if (kind === "pat" && !token.startsWith("takpat_")) {
+    throw new Error("account personal access token must start with takpat_");
+  }
+  if (kind === "session" && !token.startsWith("sess_")) {
+    throw new Error("account session token must start with sess_");
+  }
+}
+
 function parseVerificationMode(
   value: string | undefined,
 ): SmokeVerificationMode {
@@ -2557,6 +2600,7 @@ function capsuleLabel(options: PlatformControlPlaneSmokeOptions): string {
 
 function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly accountSessionTokenSource: "env" | "file";
+  readonly accountAuthTokenKind: SmokeAuthTokenKind;
   readonly cloudflareApiTokenSource: SecretInputSource;
   readonly cloudflareAccountIdSource: NonSecretInputSource;
   readonly cloudflareAccountIdDigest: string;
@@ -2574,6 +2618,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
 } {
   return {
     accountSessionTokenSource: options.accountSessionTokenSource,
+    accountAuthTokenKind: options.accountAuthTokenKind,
     cloudflareApiTokenSource: options.cloudflareApiTokenSource,
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
     cloudflareAccountIdDigest:
@@ -3057,6 +3102,7 @@ Required inputs:
   --url <origin>                                  or TAKOSUMI_PLATFORM_URL
   --workspace <workspace_...|@handle>             or TAKOSUMI_SMOKE_WORKSPACE
   --session-token-file <path>                     or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
+  --pat-token-file <path>                         or TAKOSUMI_ACCOUNT_PAT_TOKEN_FILE / TAKOSUMI_ACCOUNT_PAT_TOKEN
   --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN; not required with --cloudflare-connection-mode none
   --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE; not required with --cloudflare-connection-mode none
   --cloudflare-account-id <id>                    or CLOUDFLARE_ACCOUNT_ID; not required with --cloudflare-connection-mode none
@@ -3070,6 +3116,7 @@ Options:
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
   --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID
+  --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
   --source-ref <ref>                              Git ref for --source-git-url, default main

@@ -60,6 +60,31 @@ function seedSession(
   };
 }
 
+function seedPersonalAccessToken(
+  store: InMemoryAccountsStore,
+  input: {
+    token: string;
+    subject?: string;
+    scopes?: readonly ("read" | "write" | "admin")[];
+  },
+): void {
+  const subject = input.subject ?? "tsub_ctrl";
+  const now = Date.now();
+  store.saveAccount({
+    subject,
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.savePersonalAccessToken(input.token, {
+    tokenId: `pat_${input.token.slice("takpat_".length)}`,
+    tokenPrefix: input.token.slice(0, "takpat_".length + 8),
+    subject,
+    name: "Test automation",
+    scopes: input.scopes ?? ["read", "write"],
+    createdAt: now,
+  });
+}
+
 function seedLedgerSpace(
   store: InMemoryAccountsStore,
   input: { subject: string; accountId: string; spaceId: string },
@@ -933,10 +958,11 @@ function fakeOperations(
 function request(
   method: string,
   path: string,
-  init: { cookie?: string; body?: unknown } = {},
+  init: { authToken?: string; cookie?: string; body?: unknown } = {},
 ): { request: Request; url: URL } {
   const url = new URL(`${ORIGIN}${path}`);
   const headers: Record<string, string> = {};
+  if (init.authToken) headers.authorization = `Bearer ${init.authToken}`;
   if (init.cookie) headers.cookie = init.cookie;
   if (init.body !== undefined) headers["content-type"] = "application/json";
   return {
@@ -985,6 +1011,53 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
     | undefined;
   expect(createCall?.ownerUserId).toEqual("tsub_ctrl");
   expect(createCall?.type).toEqual("personal");
+});
+
+test("GET /api/v1/spaces accepts a personal access token bearer", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "takpat_control_read";
+  seedPersonalAccessToken(store, { token, scopes: ["read"] });
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/spaces", {
+    authToken: token,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as { spaces: unknown[] };
+  expect(body.spaces.length).toEqual(1);
+  expect(operations.calls.listSpacesByOwner).toEqual(["tsub_ctrl"]);
+  // PAT callers are automation clients; they should not trigger the
+  // session-cookie first-login personal Space hook.
+  expect(operations.calls.createSpace).toBeUndefined();
+  expect(typeof store.findPersonalAccessToken(token)?.lastUsedAt).toEqual(
+    "number",
+  );
+});
+
+test("mutation routes reject read-only personal access tokens", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "takpat_control_read_only";
+  seedPersonalAccessToken(store, { token, scopes: ["read"] });
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/spaces", {
+    authToken: token,
+    body: { handle: "blocked", displayName: "Blocked", type: "personal" },
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(403);
+  const body = (await response!.json()) as { error: { code: string } };
+  expect(body.error.code).toEqual("insufficient_scope");
+  expect(operations.calls.createSpace).toBeUndefined();
 });
 
 test("GET /api/v1/workspaces aliases the final Workspace route", async () => {
