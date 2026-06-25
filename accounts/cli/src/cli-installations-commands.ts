@@ -45,6 +45,7 @@ import {
   formatInstallationUninstall,
 } from "./cli-format.ts";
 import {
+  AccountsApiError,
   installationStatusPatchBody,
   requestAccountsApi,
 } from "./cli-accounts-api.ts";
@@ -585,12 +586,15 @@ async function targetDeployControlPlanRequestForImportApply(input: {
   plan: InstallationImportPlan;
   options: Record<string, string | boolean>;
 }): Promise<Record<string, unknown>> {
-  const request = {
-    ...importPlanRecord(
-      input.plan.deployControlPlanRequest,
-      "deployControlPlanRequest",
-    ),
-  };
+  const request = await withImportVariablesFromOptions(
+    {
+      ...importPlanRecord(
+        input.plan.deployControlPlanRequest,
+        "deployControlPlanRequest",
+      ),
+    },
+    input.options,
+  );
   if (stringValue(request.installationId)) {
     return request;
   }
@@ -645,6 +649,96 @@ async function targetDeployControlPlanRequestForImportApply(input: {
   };
 }
 
+async function importVariablesFromOptions(
+  options: Record<string, string | boolean>,
+): Promise<Record<string, unknown> | undefined> {
+  const variablesJson = optionalStringOption(options, "variablesJson");
+  const variablesFile = optionalStringOption(options, "variablesFile");
+  if (variablesJson && variablesFile) {
+    throw new Error(
+      "--variables-json and --variables-file are mutually exclusive",
+    );
+  }
+  if (variablesJson) {
+    return parseImportVariables(
+      parseJsonOption(variablesJson, "--variables-json"),
+      "--variables-json",
+    );
+  }
+  if (variablesFile) {
+    return parseImportVariables(
+      parseJsonFile(await readFile(variablesFile, "utf8"), variablesFile),
+      variablesFile,
+    );
+  }
+  return undefined;
+}
+
+function parseJsonOption(text: string, label: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label} is not valid JSON`);
+  }
+}
+
+function parseImportVariables(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return value;
+}
+
+async function withImportVariablesFromOptions(
+  request: Record<string, unknown>,
+  options: Record<string, string | boolean>,
+): Promise<Record<string, unknown>> {
+  return withImportVariables(
+    request,
+    await importVariablesFromOptions(options),
+  );
+}
+
+function withImportVariables(
+  request: Record<string, unknown>,
+  variables: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!variables) return request;
+  const existingVariables = isRecord(request.variables)
+    ? request.variables
+    : {};
+  return {
+    ...request,
+    variables: {
+      ...existingVariables,
+      ...variables,
+    },
+  };
+}
+
+function importApplyProviderConnections(
+  options: Record<string, string | boolean>,
+): readonly Record<string, string>[] {
+  const raw = optionalStringOption(options, "provider");
+  if (!raw) return [];
+  return raw.split(",").map((pair) => {
+    const [providerRaw, ...connectionParts] = pair.split("=");
+    const provider = providerRaw?.trim();
+    const connectionId = connectionParts.join("=").trim();
+    if (!provider || !connectionId) {
+      throw new Error("--provider must be provider=providerConnectionId");
+    }
+    return {
+      provider,
+      alias: "main",
+      connectionId,
+    };
+  });
+}
+
 async function createTargetSourceForImportApply(input: {
   plan: InstallationImportPlan;
   source: Record<string, unknown>;
@@ -693,22 +787,74 @@ async function createTargetInstallationForImportApply(input: {
   const environment =
     optionalStringOption(input.options, "environment") ??
     DEFAULT_IMPORT_ENVIRONMENT;
-  const created = await requestAccountsApi({
-    method: "POST",
-    path: `/api/v1/spaces/${encodeURIComponent(input.targetSpaceId)}/installations`,
-    body: {
-      name: importApplyName(input.plan, "installation"),
-      environment,
-      sourceId: input.sourceId,
-      installConfigId,
-    },
-    options: input.options,
-  });
+  const path = `/api/v1/spaces/${encodeURIComponent(input.targetSpaceId)}/installations`;
+  const providerConnections = importApplyProviderConnections(input.options);
+  const body = {
+    name: importApplyName(input.plan, "installation"),
+    environment,
+    sourceId: input.sourceId,
+    installConfigId,
+    ...(providerConnections.length > 0 ? { providerConnections } : {}),
+  };
+  let created: unknown;
+  try {
+    created = await requestAccountsApi({
+      method: "POST",
+      path,
+      body,
+      options: input.options,
+    });
+  } catch (error) {
+    const duplicateInstallationId =
+      duplicateInstallationIdFromAccountsError(error);
+    if (!duplicateInstallationId) throw error;
+    if (providerConnections.length > 0) {
+      await putTargetInstallationProviderConnections({
+        installationId: duplicateInstallationId,
+        providerConnections,
+        options: input.options,
+      });
+    }
+    return duplicateInstallationId;
+  }
   const installation = importPlanRecord(
     importPlanRecord(created, "installation create response").installation,
     "installation",
   );
   return stringField(installation, "id", "installation");
+}
+
+async function putTargetInstallationProviderConnections(input: {
+  installationId: string;
+  providerConnections: readonly Record<string, string>[];
+  options: Record<string, string | boolean>;
+}): Promise<void> {
+  await requestAccountsApi({
+    method: "PUT",
+    path: `/api/v1/installations/${encodeURIComponent(input.installationId)}/provider-connections`,
+    body: { connections: input.providerConnections },
+    options: input.options,
+  });
+}
+
+function duplicateInstallationIdFromAccountsError(
+  error: unknown,
+): string | undefined {
+  if (!(error instanceof AccountsApiError) || error.status !== 409) {
+    return undefined;
+  }
+  const body = isRecord(error.body) ? error.body : undefined;
+  const errorRecord = isRecord(body?.error) ? body.error : undefined;
+  if (stringValue(errorRecord?.code) !== "failed_precondition") {
+    return undefined;
+  }
+  const details = isRecord(errorRecord?.details)
+    ? errorRecord.details
+    : undefined;
+  if (stringValue(details?.reason) !== "duplicate_installation") {
+    return undefined;
+  }
+  return stringValue(details?.installationId);
 }
 
 async function waitForImportApplyRun(input: {
@@ -832,7 +978,7 @@ async function buildInstallationImportPlanFromOptions(
   const bundle = parseAccountsInstallationExportBundleInput(
     parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
   );
-  return planInstallationImport({
+  const plan = planInstallationImport({
     bundle,
     targetIssuer,
     targetAccountId,
@@ -841,6 +987,13 @@ async function buildInstallationImportPlanFromOptions(
     targetInstallationId: optionalStringOption(options, "targetInstallationId"),
     mode,
   });
+  return {
+    ...plan,
+    deployControlPlanRequest: await withImportVariablesFromOptions(
+      { ...plan.deployControlPlanRequest },
+      options,
+    ),
+  };
 }
 
 function projectionCreateRequestFromImportPlan(input: {

@@ -26,6 +26,7 @@ import {
   createTakosumiService,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
+import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH } from "@takosjp/takosumi-accounts-contract";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
@@ -111,6 +112,7 @@ export async function buildComposedApp(
   input: ComposedAppInput,
 ): Promise<CreatedTakosumiService> {
   const { runtimeEnv } = embeddedServiceRuntimeEnv(input.runtimeEnv);
+  const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
   const created = await createTakosumiService({
     // Operators add native adapter implementation bindings (Docker Compose / systemd / etc.)
     // here; the reference Bun profile ships none by default but forwards
@@ -127,6 +129,7 @@ export async function buildComposedApp(
     ...(input.defaultRunnerProfileId
       ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
       : {}),
+    secretCrypto,
   });
 
   const serviceApp = created.app;

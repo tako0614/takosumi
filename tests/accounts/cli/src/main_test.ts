@@ -7642,6 +7642,8 @@ test("internal installations import-plan emits a target restore request", async 
         "tsub_target",
         "--mode",
         "shared-cell",
+        "--variables-json",
+        '{"accountId":"acct_cf_target","workersSubdomain":"target-subdomain"}',
       ],
       {
         stdout: (line) => stdout.push(line),
@@ -7664,6 +7666,10 @@ test("internal installations import-plan emits a target restore request", async 
         ref: "v1.2.3",
         commit: "0123456789abcdef0123456789abcdef01234567",
         path: "deploy/opentofu",
+      },
+      variables: {
+        accountId: "acct_cf_target",
+        workersSubdomain: "target-subdomain",
       },
     });
     expect(plan.request.installationId).toEqual(undefined);
@@ -7910,6 +7916,10 @@ test("internal installations import-apply creates a target plan and projection",
         "takpat_write",
         "--idempotency-key",
         "idem-import-apply",
+        "--provider",
+        "cloudflare=pcn_cf_target",
+        "--variables-json",
+        '{"accountId":"acct_cf_target","workersSubdomain":"target-subdomain"}',
         "--json",
       ],
       {
@@ -7918,8 +7928,7 @@ test("internal installations import-apply creates a target plan and projection",
       },
     );
 
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/api/v1/sources",
       "/api/v1/sources/src_import/sync",
@@ -7945,6 +7954,13 @@ test("internal installations import-apply creates a target plan and projection",
       environment: "production",
       sourceId: "src_import",
       installConfigId: "cfg-default-opentofu-capsule",
+      providerConnections: [
+        {
+          provider: "cloudflare",
+          alias: "main",
+          connectionId: "pcn_cf_target",
+        },
+      ],
     });
     expect(await requests[3]?.json()).toEqual({
       spaceId: "space_target",
@@ -7957,6 +7973,10 @@ test("internal installations import-apply creates a target plan and projection",
       },
       installationId: "inst_import_target",
       operation: "create",
+      variables: {
+        accountId: "acct_cf_target",
+        workersSubdomain: "target-subdomain",
+      },
     });
     const projectionRequest = await requests[4]?.json();
     expect(projectionRequest.installationId).toEqual(undefined);
@@ -7973,6 +7993,196 @@ test("internal installations import-apply creates a target plan and projection",
     );
     expect(result.planRunId).toEqual("plan_import");
     expect(result.projection.installation.id).toEqual("inst_target_canonical");
+  } finally {
+    globalThis.fetch = originalFetch;
+    await removePath(bundleFile);
+  }
+});
+
+test("internal installations import-apply reuses duplicate target installation", async () => {
+  const bundleFile = await makeTempFile({ suffix: ".json" });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const requests: Request[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    const url = new URL(request.url);
+    if (url.pathname === "/api/v1/sources") {
+      return Promise.resolve(
+        Response.json({ source: { id: "src_import" } }, { status: 201 }),
+      );
+    }
+    if (url.pathname === "/api/v1/sources/src_import/sync") {
+      return Promise.resolve(
+        Response.json(
+          { run: { id: "ssr_import", status: "succeeded" } },
+          { status: 201 },
+        ),
+      );
+    }
+    if (url.pathname === "/api/v1/spaces/space_target/installations") {
+      return Promise.resolve(
+        Response.json(
+          {
+            error: {
+              code: "failed_precondition",
+              message: "installation already exists",
+              details: {
+                reason: "duplicate_installation",
+                installationId: "inst_existing_target",
+              },
+            },
+          },
+          { status: 409 },
+        ),
+      );
+    }
+    if (
+      url.pathname ===
+      "/api/v1/installations/inst_existing_target/provider-connections"
+    ) {
+      return Promise.resolve(
+        Response.json(
+          {
+            providerConnectionSet: {
+              connections: [
+                {
+                  provider: "cloudflare",
+                  alias: "main",
+                  connectionId: "pcn_cf_target",
+                },
+              ],
+            },
+          },
+          { status: 200 },
+        ),
+      );
+    }
+    if (url.pathname === "/v1/installation-projections/plan-runs") {
+      return Promise.resolve(
+        Response.json(
+          {
+            kind: "takosumi.deploy-control.plan-run@v1",
+            planRunId: "plan_import",
+            planRun: {
+              id: "plan_import",
+              status: "succeeded",
+            },
+            expected: {
+              planRunId: "plan_import",
+              runnerProfileId: "runner_default",
+              sourceDigest: "sha256:source",
+              variablesDigest: "sha256:variables",
+              policyDecisionDigest: "sha256:policy",
+              planDigest: "sha256:plan",
+              planArtifactDigest: "sha256:artifact",
+            },
+          },
+          { status: 201 },
+        ),
+      );
+    }
+    if (url.pathname === "/v1/installation-projections") {
+      return Promise.resolve(
+        Response.json(
+          {
+            status: "ready",
+            installation: { id: "inst_target_canonical" },
+          },
+          { status: 202 },
+        ),
+      );
+    }
+    return Promise.reject(
+      new Error(`unexpected duplicate import request: ${request.url}`),
+    );
+  }) as typeof fetch;
+  await writeTextFile(
+    bundleFile,
+    JSON.stringify({
+      kind: "takosumi.accounts.installation-export-bundle@v1",
+      version: "v1",
+      exportedAt: "2026-06-23T13:00:00.000Z",
+      installation: {
+        installationId: "inst_source",
+        accountId: "acct_source",
+        spaceId: "space_source",
+        appId: "takos.chat",
+        billingAccountId: null,
+        mode: "dedicated",
+        status: "exported",
+      },
+      source: {
+        gitUrl: "https://github.com/takos/takos",
+        ref: "v1.2.3",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "deploy/opentofu",
+        planDigest: "sha256:app",
+        artifactDigest: null,
+      },
+      runtimeTarget: null,
+      oidcClient: null,
+      serviceBindings: [],
+      serviceGrants: [],
+      events: [],
+    }),
+  );
+
+  try {
+    const code = await main(
+      [
+        "internal",
+        "installations",
+        "import-apply",
+        "--bundle-file",
+        bundleFile,
+        "--target-issuer",
+        "https://selfhost.example.test",
+        "--target-account",
+        "acct_target",
+        "--target-space",
+        "space_target",
+        "--created-by-subject",
+        "tsub_target",
+        "--accounts-url",
+        "https://accounts.target.test",
+        "--token",
+        "takpat_write",
+        "--provider",
+        "cloudflare=pcn_cf_target",
+        "--json",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/v1/sources",
+      "/api/v1/sources/src_import/sync",
+      "/api/v1/spaces/space_target/installations",
+      "/api/v1/installations/inst_existing_target/provider-connections",
+      "/v1/installation-projections/plan-runs",
+      "/v1/installation-projections",
+    ]);
+    expect(await requests[3]?.json()).toEqual({
+      connections: [
+        {
+          provider: "cloudflare",
+          alias: "main",
+          connectionId: "pcn_cf_target",
+        },
+      ],
+    });
+    expect(await requests[4]?.json()).toMatchObject({
+      installationId: "inst_existing_target",
+    });
+    const result = JSON.parse(stdout.join("\n"));
+    expect(result.planRunId).toEqual("plan_import");
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(bundleFile);
