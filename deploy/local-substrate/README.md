@@ -16,7 +16,10 @@ Linux native 前提 (systemd-resolved / Docker daemon)。 macOS / WSL / native W
 | 3     | factory で endpoint override + Caddy admin route registrar + 公開面 deny 多重防御           | dynamic subdomain が deploy 直後に hit する + `prove-no-public-leak.sh` pass |
 
 現在 Phase 0–3 まで実装済み。`scripts/smoke.sh` は `app.takosumi.test` の composed platform host と、local-only worker
-probe host 経由の run ledger surface を検証する。
+probe host 経由の run ledger surface を検証する。postgres profile の OpenTofu 実行は、`runner/Dockerfile`
+から建てた `opentofu-runner` service に HTTP dispatch する。これは production Cloudflare Container runner と同じ
+`takosumi.opentofu-run@v1` envelope と provider mirror を使うため、Cloudflare provider を含む self-host import
+rehearsal が provider-free in-process smoke runner に落ちない。
 
 ## Scope — Takosumi-only
 

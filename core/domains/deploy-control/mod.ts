@@ -250,6 +250,7 @@ import {
   installConfigBuildSpec,
   type InstallTypePlanContext,
   PlanResolutionService,
+  providerEnvBindingsFromResolved,
   type ResolvedTemplatePlan,
 } from "./plan_resolution.ts";
 
@@ -2481,10 +2482,14 @@ export class OpenTofuDeploymentController {
     const requiredProviders = normalizeProviders(
       request.requiredProviders ?? installConfig.policy.allowedProviders ?? [],
     );
+    const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
+      installation,
+      requiredProviders,
+    );
     return await this.#genericRootDispatchForRequest(
       request,
       {
-        providerEnvBindings: [],
+        providerEnvBindings: providerEnvBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
         ...(installConfig.build?.enabled
           ? { build: installConfigBuildSpec(installConfig.build) }

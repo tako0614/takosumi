@@ -7820,6 +7820,27 @@ test("internal installations import-apply creates a target plan and projection",
         ),
       );
     }
+    if (
+      url.pathname ===
+      "/api/v1/installations/inst_import_target/provider-connections"
+    ) {
+      return Promise.resolve(
+        Response.json(
+          {
+            providerConnectionSet: {
+              connections: [
+                {
+                  provider: "cloudflare",
+                  alias: "main",
+                  connectionId: "pcn_cf_target",
+                },
+              ],
+            },
+          },
+          { status: 200 },
+        ),
+      );
+    }
     if (url.pathname === "/v1/installation-projections/plan-runs") {
       return Promise.resolve(
         Response.json(
@@ -7933,13 +7954,14 @@ test("internal installations import-apply creates a target plan and projection",
       "/api/v1/sources",
       "/api/v1/sources/src_import/sync",
       "/api/v1/spaces/space_target/installations",
+      "/api/v1/installations/inst_import_target/provider-connections",
       "/v1/installation-projections/plan-runs",
       "/v1/installation-projections",
     ]);
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer takpat_write",
     );
-    expect(requests[4]?.headers.get("idempotency-key")).toEqual(
+    expect(requests[5]?.headers.get("idempotency-key")).toEqual(
       "idem-import-apply",
     );
     expect(await requests[0]?.json()).toEqual({
@@ -7954,7 +7976,9 @@ test("internal installations import-apply creates a target plan and projection",
       environment: "production",
       sourceId: "src_import",
       installConfigId: "cfg-default-opentofu-capsule",
-      providerConnections: [
+    });
+    expect(await requests[3]?.json()).toEqual({
+      connections: [
         {
           provider: "cloudflare",
           alias: "main",
@@ -7962,7 +7986,7 @@ test("internal installations import-apply creates a target plan and projection",
         },
       ],
     });
-    expect(await requests[3]?.json()).toEqual({
+    expect(await requests[4]?.json()).toEqual({
       spaceId: "space_target",
       source: {
         kind: "git",
@@ -7973,12 +7997,13 @@ test("internal installations import-apply creates a target plan and projection",
       },
       installationId: "inst_import_target",
       operation: "create",
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
       variables: {
         accountId: "acct_cf_target",
         workersSubdomain: "target-subdomain",
       },
     });
-    const projectionRequest = await requests[4]?.json();
+    const projectionRequest = await requests[5]?.json();
     expect(projectionRequest.installationId).toEqual(undefined);
     expect(projectionRequest.planRunId).toEqual("plan_import");
     expect(projectionRequest.expected.planArtifactDigest).toEqual(

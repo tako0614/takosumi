@@ -25,6 +25,10 @@ import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
 
+interface RunnerTransport {
+  fetch(path: string, init?: RequestInit): Promise<Response>;
+}
+
 export interface SourceArchiveStore {
   readonly write: SourceArchiveWriter;
   read(key: string): Promise<Uint8Array>;
@@ -46,7 +50,17 @@ export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
 export function createLocalOpenTofuRunner(input: {
   readonly archiveStore: SourceArchiveStore;
 }): OpenTofuRunner {
-  return new LocalOpenTofuRunner(input.archiveStore);
+  return new LocalOpenTofuRunner(input.archiveStore, inProcessRunnerTransport);
+}
+
+export function createHttpOpenTofuRunner(input: {
+  readonly archiveStore: SourceArchiveStore;
+  readonly baseUrl: string;
+}): OpenTofuRunner {
+  return new LocalOpenTofuRunner(
+    input.archiveStore,
+    httpRunnerTransport(input.baseUrl),
+  );
 }
 
 export function createLocalOpenTofuRunnerProfile(
@@ -89,11 +103,14 @@ export function createLocalOpenTofuRunnerProfile(
 }
 
 class LocalOpenTofuRunner implements OpenTofuRunner {
-  constructor(private readonly archiveStore: SourceArchiveStore) {}
+  constructor(
+    private readonly archiveStore: SourceArchiveStore,
+    private readonly transport: RunnerTransport,
+  ) {}
 
   async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
     await this.restoreSourceArchive(job.planRun.id, job.sourceArchive);
-    const result = await runRunner("plan", job.planRun.id, job);
+    const result = await runRunner(this.transport, "plan", job.planRun.id, job);
     const planDigest = requiredString(result, "planDigest");
     return {
       planDigest,
@@ -128,11 +145,17 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   async apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult> {
     await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
     await copyRunnerLocalPlanArtifact(
+      this.transport,
       job.applyRun.id,
       job.planRun.id,
       job.planArtifact,
     );
-    const result = await runRunner("apply", job.applyRun.id, job);
+    const result = await runRunner(
+      this.transport,
+      "apply",
+      job.applyRun.id,
+      job,
+    );
     return {
       ...(recordValue(result, "outputs")
         ? {
@@ -158,11 +181,17 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   async destroy(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult> {
     await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
     await copyRunnerLocalPlanArtifact(
+      this.transport,
       job.applyRun.id,
       job.planRun.id,
       job.planArtifact,
     );
-    const result = await runRunner("destroy", job.applyRun.id, job);
+    const result = await runRunner(
+      this.transport,
+      "destroy",
+      job.applyRun.id,
+      job,
+    );
     return {
       ...(providerInstallation(result)
         ? { providerInstallation: providerInstallation(result) }
@@ -174,7 +203,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   async sourceSync(
     job: OpenTofuSourceSyncJob,
   ): Promise<OpenTofuSourceSyncResult> {
-    const result = await runRunner("source_sync", job.runId, {
+    const result = await runRunner(this.transport, "source_sync", job.runId, {
       action: "source_sync",
       runId: job.runId,
       source: job.source,
@@ -193,6 +222,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       throw new Error(`source_sync ${job.runId} returned no archive metadata`);
     }
     const bytes = await fetchRunnerArtifact(
+      this.transport,
       job.runId,
       `/runs/${encodeURIComponent(job.runId)}/artifacts/source-archive`,
     );
@@ -208,7 +238,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       objectKey: job.sourceSnapshot.archiveObjectKey,
       digest: job.sourceSnapshot.archiveDigest,
     });
-    const result = await runRunner("compatibility_check", job.runId, {});
+    const result = await runRunner(
+      this.transport,
+      "compatibility_check",
+      job.runId,
+      {},
+    );
     const files = result.files;
     if (!Array.isArray(files)) {
       throw new Error(`compatibility_check ${job.runId} returned no files`);
@@ -230,15 +265,13 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     if (!sourceArchive) return;
     const bytes = await this.archiveStore.read(sourceArchive.objectKey);
     await assertDigest(bytes, sourceArchive.digest, "source archive");
-    const response = await handleRunnerRequest(
-      new Request(
-        `https://local-opentofu-runner/runs/${encodeURIComponent(runId)}/source-archive/restore`,
-        {
-          method: "PUT",
-          headers: { "content-type": "application/zstd" },
-          body: arrayBufferFromBytes(bytes),
-        },
-      ),
+    const response = await this.transport.fetch(
+      `/runs/${encodeURIComponent(runId)}/source-archive/restore`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/zstd" },
+        body: arrayBufferFromBytes(bytes),
+      },
     );
     if (!response.ok) {
       throw new Error(
@@ -248,26 +281,57 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   }
 }
 
+const inProcessRunnerTransport: RunnerTransport = {
+  fetch: async (path, init) =>
+    await handleRunnerRequest(
+      new Request(`https://local-opentofu-runner${path}`, init),
+    ),
+};
+
+function httpRunnerTransport(baseUrl: string): RunnerTransport {
+  const endpoint = normalizeRunnerBaseUrl(baseUrl);
+  return {
+    fetch: async (path, init) => await fetch(new URL(path, endpoint), init),
+  };
+}
+
+function normalizeRunnerBaseUrl(baseUrl: string): URL {
+  const trimmed = baseUrl.trim();
+  if (trimmed.length === 0) {
+    throw new Error("OpenTofu runner base URL must not be empty");
+  }
+  const url = new URL(trimmed);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `unsupported OpenTofu runner URL protocol: ${url.protocol}`,
+    );
+  }
+  if (!url.pathname.endsWith("/")) {
+    url.pathname = `${url.pathname}/`;
+  }
+  return url;
+}
+
 async function copyRunnerLocalPlanArtifact(
+  transport: RunnerTransport,
   applyRunId: string,
   planRunId: string,
   artifact: OpenTofuPlanArtifact,
 ): Promise<void> {
   const sourceRunId = runnerLocalPlanRunId(artifact) ?? planRunId;
   const bytes = await fetchRunnerArtifact(
+    transport,
     sourceRunId,
     `/runs/${encodeURIComponent(sourceRunId)}/artifacts/tfplan`,
   );
   await assertDigest(bytes, artifact.digest, "plan artifact");
-  const response = await handleRunnerRequest(
-    new Request(
-      `https://local-opentofu-runner/runs/${encodeURIComponent(applyRunId)}/artifacts/tfplan`,
-      {
-        method: "PUT",
-        headers: { "content-type": "application/vnd.opentofu.plan" },
-        body: arrayBufferFromBytes(bytes),
-      },
-    ),
+  const response = await transport.fetch(
+    `/runs/${encodeURIComponent(applyRunId)}/artifacts/tfplan`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/vnd.opentofu.plan" },
+      body: arrayBufferFromBytes(bytes),
+    },
   );
   if (!response.ok) {
     throw new Error(
@@ -283,26 +347,22 @@ function runnerLocalPlanRunId(
 }
 
 async function runRunner(
+  transport: RunnerTransport,
   action: "plan" | "apply" | "destroy" | "compatibility_check" | "source_sync",
   runId: string,
   request: unknown,
 ): Promise<Record<string, unknown>> {
-  const response = await handleRunnerRequest(
-    new Request(
-      `https://local-opentofu-runner/runs/${encodeURIComponent(runId)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kind: "takosumi.opentofu-run@v1",
-          action,
-          runId,
-          requestedAt: new Date().toISOString(),
-          request,
-        }),
-      },
-    ),
-  );
+  const response = await transport.fetch(`/runs/${encodeURIComponent(runId)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action,
+      runId,
+      requestedAt: new Date().toISOString(),
+      request,
+    }),
+  });
   const text = await response.text();
   const body = text.trim().length > 0 ? parseObject(text) : {};
   if (!response.ok) {
@@ -319,12 +379,11 @@ async function runRunner(
 }
 
 async function fetchRunnerArtifact(
+  transport: RunnerTransport,
   runId: string,
   path: string,
 ): Promise<Uint8Array> {
-  const response = await handleRunnerRequest(
-    new Request(`https://local-opentofu-runner${path}`, { method: "GET" }),
-  );
+  const response = await transport.fetch(path, { method: "GET" });
   if (!response.ok) {
     throw new Error(
       `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,

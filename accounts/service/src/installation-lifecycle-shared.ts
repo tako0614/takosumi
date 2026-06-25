@@ -138,6 +138,7 @@ export interface CoreDeploymentProjection {
 
 export async function applyCoreInstallationForCloudProjection(input: {
   deployControl: DeployControlFacadeOptions;
+  appId: string | undefined;
   spaceId: string | undefined;
   source: Record<string, unknown>;
   expected: Record<string, unknown> | undefined;
@@ -178,7 +179,11 @@ export async function applyCoreInstallationForCloudProjection(input: {
       upstream ? { upstream } : undefined,
     );
   }
-  const projection = coreInstallationProjectionFromApply(result.payload);
+  const projection = coreInstallationProjectionFromApply(result.payload, {
+    appId: input.appId,
+    source: input.source,
+    expected: input.expected,
+  });
   if (projection instanceof Response) return projection;
   return projection;
 }
@@ -345,6 +350,11 @@ export function coreDeployControlSourceFromCloudSource(
 
 export function coreInstallationProjectionFromApply(
   payload: unknown,
+  fallback: {
+    readonly appId?: string;
+    readonly source?: Record<string, unknown>;
+    readonly expected?: Record<string, unknown>;
+  } = {},
 ): CoreInstallationProjection | Response {
   if (!isRecord(payload)) {
     return errorJson(
@@ -360,30 +370,61 @@ export function coreInstallationProjectionFromApply(
     ? payload.deployment
     : undefined;
   const source =
-    deployment && isRecord(deployment.source) ? deployment.source : undefined;
-  const installationId = stringValue(installation?.id);
+    deployment && isRecord(deployment.source)
+      ? deployment.source
+      : isRecord(payload.source)
+        ? payload.source
+        : fallback.source;
+  const applyRun = isRecord(payload.applyRun) ? payload.applyRun : undefined;
+  const expected = isRecord(applyRun?.expected)
+    ? applyRun.expected
+    : fallback.expected;
+  const installationId =
+    stringValue(installation?.id) ??
+    stringValue(deployment?.installationId) ??
+    stringValue(deployment?.installation_id) ??
+    stringValue(applyRun?.installationId) ??
+    stringValue(expected?.installationId);
   const appId =
-    stringValue(installation?.appId) ?? stringValue(installation?.app_id);
-  const sourceUrl = stringValue(source?.url) ?? stringValue(source?.path);
+    stringValue(installation?.appId) ??
+    stringValue(installation?.app_id) ??
+    fallback.appId;
+  const sourceUrl =
+    stringValue(source?.url) ??
+    stringValue(source?.gitUrl) ??
+    stringValue(source?.path);
   const sourceKind = stringValue(source?.kind);
   const sourceRef =
     stringValue(source?.ref) ??
     stringValue(source?.digest) ??
+    stringValue(source?.commit) ??
     (sourceKind === "local" ? "local" : undefined);
   const sourceCommit =
     stringValue(source?.commit) ??
     stringValue(deployment?.sourceCommit) ??
-    stringValue(deployment?.source_commit);
-  const sourceDigest = stringValue(source?.digest);
-  const sourcePath = stringValue(source?.modulePath);
+    stringValue(deployment?.source_commit) ??
+    stringValue(expected?.sourceCommit);
+  const sourceDigest =
+    stringValue(source?.digest) ?? stringValue(expected?.sourceDigest);
+  const sourcePath =
+    stringValue(source?.modulePath) ?? stringValue(source?.path);
   const planDigest =
-    stringValue(deployment?.planDigest) ?? stringValue(deployment?.plan_digest);
+    stringValue(deployment?.planDigest) ??
+    stringValue(deployment?.plan_digest) ??
+    stringValue(payload.planDigest) ??
+    stringValue(payload.plan_digest) ??
+    stringValue(expected?.planDigest);
   const artifactDigest =
     stringValue(deployment?.artifactDigest) ??
-    stringValue(deployment?.artifact_digest);
+    stringValue(deployment?.artifact_digest) ??
+    stringValue(expected?.planArtifactDigest);
   const activatedHttpDomain = activatedHttpDomainProjectionFromCoreOutputs({
     deploymentId: stringValue(deployment?.id),
-    outputs: deployment?.outputs,
+    outputs:
+      deployment?.outputs ??
+      deployment?.outputsPublic ??
+      payload.outputs ??
+      payload.launch,
     now: Date.now(),
   });
   if (!installationId || !appId || !sourceUrl || !sourceRef || !planDigest) {

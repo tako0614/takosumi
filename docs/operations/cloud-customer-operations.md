@@ -262,6 +262,8 @@ bun run cli -- internal installations import-apply \
   --accounts-url https://selfhost.example.com \
   --token "$TAKOSUMI_ACCOUNTS_TOKEN" \
   --idempotency-key import-$(date +%s) \
+  --provider cloudflare=<target-provider-connection-id> \
+  --variables-file target-variables.json \
   --json \
   --out-file import-apply-result.json
 ```

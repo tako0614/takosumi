@@ -50,6 +50,10 @@ import {
   requestAccountsApi,
 } from "./cli-accounts-api.ts";
 import type { CliIo } from "./cli-io.ts";
+import {
+  canonicalProviderAddress,
+  providerForAddress,
+} from "@takosumi/providers";
 
 const installationStatuses = [
   "installing",
@@ -595,11 +599,15 @@ async function targetDeployControlPlanRequestForImportApply(input: {
     },
     input.options,
   );
-  if (stringValue(request.installationId)) {
-    return request;
+  const requestWithRequiredProviders = withImportRequiredProvidersFromOptions(
+    request,
+    input.options,
+  );
+  if (stringValue(requestWithRequiredProviders.installationId)) {
+    return requestWithRequiredProviders;
   }
   const source = importPlanRecord(
-    request.source,
+    requestWithRequiredProviders.source,
     "deployControlPlanRequest.source",
   );
   const sourceUrl = stringField(
@@ -615,7 +623,7 @@ async function targetDeployControlPlanRequestForImportApply(input: {
     );
   }
   const targetSpaceId = stringField(
-    request,
+    requestWithRequiredProviders,
     "spaceId",
     "deployControlPlanRequest",
   );
@@ -643,7 +651,7 @@ async function targetDeployControlPlanRequestForImportApply(input: {
     options: input.options,
   });
   return {
-    ...request,
+    ...requestWithRequiredProviders,
     installationId,
     operation: "create",
   };
@@ -739,6 +747,43 @@ function importApplyProviderConnections(
   });
 }
 
+function withImportRequiredProvidersFromOptions(
+  request: Record<string, unknown>,
+  options: Record<string, string | boolean>,
+): Record<string, unknown> {
+  const requiredProviders = importApplyRequiredProviders(options);
+  if (requiredProviders.length === 0) return request;
+  const existingProviders = Array.isArray(request.requiredProviders)
+    ? request.requiredProviders.filter(
+        (value): value is string =>
+          typeof value === "string" && value.length > 0,
+      )
+    : [];
+  const merged = Array.from(
+    new Set([...existingProviders, ...requiredProviders]),
+  ).sort();
+  return { ...request, requiredProviders: merged };
+}
+
+function importApplyRequiredProviders(
+  options: Record<string, string | boolean>,
+): readonly string[] {
+  return Array.from(
+    new Set(
+      importApplyProviderConnections(options).map((connection) =>
+        importApplyRequiredProviderAddress(connection.provider),
+      ),
+    ),
+  ).sort();
+}
+
+function importApplyRequiredProviderAddress(provider: string): string {
+  return (
+    providerForAddress(provider)?.providerAddresses[0] ??
+    canonicalProviderAddress(provider)
+  );
+}
+
 async function createTargetSourceForImportApply(input: {
   plan: InstallationImportPlan;
   source: Record<string, unknown>;
@@ -794,7 +839,6 @@ async function createTargetInstallationForImportApply(input: {
     environment,
     sourceId: input.sourceId,
     installConfigId,
-    ...(providerConnections.length > 0 ? { providerConnections } : {}),
   };
   let created: unknown;
   try {
@@ -821,7 +865,15 @@ async function createTargetInstallationForImportApply(input: {
     importPlanRecord(created, "installation create response").installation,
     "installation",
   );
-  return stringField(installation, "id", "installation");
+  const installationId = stringField(installation, "id", "installation");
+  if (providerConnections.length > 0) {
+    await putTargetInstallationProviderConnections({
+      installationId,
+      providerConnections,
+      options: input.options,
+    });
+  }
+  return installationId;
 }
 
 async function putTargetInstallationProviderConnections(input: {
