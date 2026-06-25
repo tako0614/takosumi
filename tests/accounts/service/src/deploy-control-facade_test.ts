@@ -97,14 +97,55 @@ test("requestInstallationPlanRun dispatches through typed operations, not fetch"
   expect(result.status).toEqual(201);
   expect(createPlanRunArg?.spaceId).toEqual("space_1");
   expect(createPlanRunArg?.operation).toEqual("create");
-  const payload = result.payload as { kind?: string; planRunId?: string };
+  const payload = result.payload as {
+    kind?: string;
+    planRunId?: string;
+    expected?: { resolvedProviderEnvBindingsDigest?: string };
+  };
   expect(payload.kind).toEqual("takosumi.deploy-control.plan-run@v1");
   expect(payload.planRunId).toEqual("plan_inproc");
+  expect(payload.expected?.resolvedProviderEnvBindingsDigest).toBeUndefined();
+});
+
+test("requestInstallationPlanRun preserves provider env binding digest in expected guard", async () => {
+  const operations = operationsStub({
+    createPlanRun: () =>
+      Promise.resolve<PlanRunResponse>({
+        planRun: planRun({
+          resolvedProviderEnvBindingsDigest: "sha256:provider-env-bindings",
+        }),
+      }),
+  });
+
+  const result = await requestInstallationPlanRun({
+    deployControl: {
+      operations,
+    },
+    body: {
+      spaceId: "space_1",
+      source: {
+        kind: "git",
+        url: "https://github.com/example/hello",
+        ref: "main",
+      },
+    },
+  });
+
+  expect(result.status).toEqual(201);
+  const payload = result.payload as {
+    expected?: { resolvedProviderEnvBindingsDigest?: string };
+  };
+  expect(payload.expected?.resolvedProviderEnvBindingsDigest).toEqual(
+    "sha256:provider-env-bindings",
+  );
 });
 
 test("requestInstallationApply reads the reviewed PlanRun and applies in-process", async () => {
   let appliedRequest: CreateApplyRunRequest | undefined;
-  const reviewed = planRun({ id: "plan_apply" });
+  const reviewed = planRun({
+    id: "plan_apply",
+    resolvedProviderEnvBindingsDigest: "sha256:provider-env-bindings",
+  });
   const operations = operationsStub({
     getPlanRun: (id) => {
       expect(id).toEqual("plan_apply");
@@ -144,12 +185,16 @@ test("requestInstallationApply reads the reviewed PlanRun and applies in-process
         planDigest: "sha256:plan",
         planArtifactDigest: "sha256:plan-artifact",
         sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        resolvedProviderEnvBindingsDigest: "sha256:provider-env-bindings",
       },
     },
   });
 
   expect(result.status).toEqual(201);
   expect(appliedRequest?.planRunId).toEqual("plan_apply");
+  expect(appliedRequest?.expected.resolvedProviderEnvBindingsDigest).toEqual(
+    "sha256:provider-env-bindings",
+  );
   const payload = result.payload as { kind?: string };
   expect(payload.kind).toEqual("takosumi.deploy-control.apply-run@v1");
 });

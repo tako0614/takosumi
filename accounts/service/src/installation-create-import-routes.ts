@@ -198,6 +198,7 @@ export async function handleCreateAppInstallation(input: {
   if (preflightOidcClient instanceof Response) return preflightOidcClient;
   const coreApply = await applyCoreInstallationForCloudProjection({
     deployControl: input.deployControl,
+    appId,
     spaceId,
     source,
     expected,
@@ -253,9 +254,9 @@ export async function handleCreateAppInstallation(input: {
     );
   }
 
-  const status =
-    appInstallationStatusValue(body.status) ??
-    (coreApply ? "ready" : "installing");
+  const status = coreApply
+    ? "ready"
+    : (appInstallationStatusValue(body.status) ?? "installing");
   let runtimeBinding = runtimeBindingFromValue({
     value: body.runtimeTarget,
     installationId,

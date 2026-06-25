@@ -1528,6 +1528,137 @@ test("accounts handler applies installation through space deployControl when con
   );
 });
 
+test("accounts handler projects space-direct apply responses without deployment source fields", async () => {
+  const store = new InMemoryAccountsStore();
+  seedOwnedSpace(store, "tsub_space_direct", "acct_space_direct", "space_core");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    deployControl: {
+      operations: deployControlOperationsStub({
+        getPlanRun: (id) => {
+          expect(id).toEqual("plan_space_direct");
+          return Promise.resolve({
+            planRun: {
+              id: "plan_space_direct",
+              spaceId: "space_core",
+              source: {
+                kind: "git",
+                url: "https://github.com/example/space-direct",
+                ref: "main",
+              },
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              sourceDigest: "sha256:source-space-direct",
+              variablesDigest: "sha256:variables-space-direct",
+              policyDecisionDigest: "sha256:policy-space-direct",
+              planDigest: "sha256:space-direct",
+              planArtifact: {
+                kind: "runner-local",
+                ref: "runner-local://plan_space_direct/tfplan",
+                digest: "sha256:space-direct",
+              },
+              sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+              status: "succeeded",
+              requiredProviders: [],
+              policy: { status: "passed", reasons: [], checkedAt: 1 },
+              createdAt: 1,
+              updatedAt: 1,
+              finishedAt: 1,
+            },
+          } as unknown as PlanRunResponse);
+        },
+        createApplyRun: (request) =>
+          Promise.resolve({
+            applyRun: {
+              id: "apply_space_direct",
+              planRunId: "plan_space_direct",
+              spaceId: "space_core",
+              installationId: "inst_space_direct",
+              deploymentId: "dep_space_direct",
+              operation: "create",
+              runnerProfileId: "cloudflare-default",
+              status: "succeeded",
+              expected: request.expected,
+              auditEvents: [],
+              createdAt: 2,
+              updatedAt: 2,
+            },
+            installation: {
+              id: "inst_space_direct",
+              spaceId: "space_core",
+              name: "space direct",
+              slug: "space-direct",
+              status: "active",
+              createdAt: "2026-06-25T00:00:00.000Z",
+              updatedAt: "2026-06-25T00:00:01.000Z",
+              environment: "production",
+              installConfigId: "cfg-default-opentofu-capsule",
+              currentDeploymentId: "dep_space_direct",
+              currentStateGeneration: 1,
+            },
+            deployment: {
+              id: "dep_space_direct",
+              installationId: "inst_space_direct",
+              status: "active",
+              outputsPublic: {
+                url: "https://space-direct.example.test",
+              },
+              createdAt: "2026-06-25T00:00:01.000Z",
+            },
+          } as unknown as ApplyRunResponse),
+      }),
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/installation-projections", {
+      method: "POST",
+      body: JSON.stringify({
+        accountId: "acct_space_direct",
+        spaceId: "space_core",
+        appId: "example.space-direct",
+        status: "installing",
+        planRunId: "plan_space_direct",
+        expected: {
+          planRunId: "plan_space_direct",
+          runnerProfileId: "cloudflare-default",
+          sourceDigest: "sha256:source-space-direct",
+          variablesDigest: "sha256:variables-space-direct",
+          policyDecisionDigest: "sha256:policy-space-direct",
+          planDigest: "sha256:space-direct",
+          planArtifactDigest: "sha256:space-direct",
+          sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        },
+        source: {
+          kind: "git",
+          url: "https://github.com/example/space-direct",
+          ref: "main",
+        },
+        mode: "shared-cell",
+        createdBySubject: "tsub_space_direct",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(202);
+  const body = await response.json();
+  expect(body.installation.id).toEqual("inst_space_direct");
+  expect(body.installation.status).toEqual("ready");
+  expect(body.installation.capsule_id).toEqual("example.space-direct");
+  expect(body.installation.launch_url).toEqual(
+    "https://space-direct.example.test",
+  );
+  const stored = store.findAppInstallation("inst_space_direct");
+  expect(stored?.sourceGitUrl).toEqual(
+    "https://github.com/example/space-direct",
+  );
+  expect(stored?.sourceCommit).toEqual(
+    "0123456789abcdef0123456789abcdef01234567",
+  );
+  expect(stored?.planDigest).toEqual("sha256:space-direct");
+});
+
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
   let dispatched = false;
   const store = new InMemoryAccountsStore();
@@ -7624,8 +7755,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
         headers: {
           authorization: "Bearer invalid_session",
           "Idempotency-Key": "idem-materialize-drill-invalid-session",
-          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]:
-            "materialize_drill_token",
+          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]: "materialize_drill_token",
         },
         body: JSON.stringify(body),
       },
@@ -7641,8 +7771,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
         method: "POST",
         headers: {
           "Idempotency-Key": "idem-materialize-drill",
-          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]:
-            "materialize_drill_token",
+          [TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER]: "materialize_drill_token",
         },
         body: JSON.stringify(body),
       },

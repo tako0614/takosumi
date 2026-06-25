@@ -180,6 +180,33 @@ services:
         aliases:
           - agent
 
+  # ---- OpenTofu runner container (postgres profile) ----
+  #
+  # Runs the same HTTP envelope as the production Cloudflare Container runner,
+  # including the baked provider mirror from runner/Dockerfile. The Bun/Postgres
+  # cloud process remains the control plane; this service is only the execution
+  # sandbox for source sync / plan / apply / destroy.
+  opentofu-runner:
+    profiles: ["postgres"]
+    build:
+      context: ../../../takosumi
+      dockerfile: runner/Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:8080/healthz
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+    networks:
+      takos-local-internal:
+        aliases:
+          - opentofu-runner
+
   # ---- Takosumi cloud control plane (postgres profile) ----
   #
   # The ONE composed app this profile serves at app.takosumi.test: account
@@ -200,12 +227,18 @@ services:
         condition: service_completed_successfully
       agent:
         condition: service_healthy
+      opentofu-runner:
+        condition: service_healthy
     working_dir: /workspace
     command:
       - bun
       - /wrappers/cloud.ts
     env_file:
       - env/cloud.env
+    environment:
+      TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: http://opentofu-runner:8080
+      TAKOSUMI_ENABLED_RUNNER_PROFILES: cloudflare-default,generic-opentofu-provider
+      TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: cloudflare-default
     volumes:
       - ../../../takosumi:/workspace
       - ../../../takosumi:/takosumi:ro

@@ -187,6 +187,27 @@ test("local-substrate service image includes OpenTofu runner dependencies", () =
   expect(serviceDockerfile).toContain("zstd");
 });
 
+test("local-substrate postgres profile runs OpenTofu through the mirrored runner container", () => {
+  const runnerBlock = compose.match(
+    /opentofu-runner:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+  const cloudBlock = compose.match(
+    /cloud:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,
+  )?.[0];
+
+  expect(runnerBlock).toBeDefined();
+  expect(runnerBlock).toContain("dockerfile: runner/Dockerfile");
+  expect(runnerBlock).toContain("http://127.0.0.1:8080/healthz");
+  expect(runnerBlock).toContain("- opentofu-runner");
+  expect(cloudBlock).toContain("opentofu-runner:");
+  expect(cloudBlock).toContain(
+    "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: http://opentofu-runner:8080",
+  );
+  expect(cloudBlock).toContain(
+    "TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: cloudflare-default",
+  );
+});
+
 test("local-substrate cloud service uses the OpenTofu-capable service image", () => {
   const cloudBlock = compose.match(
     /cloud:[\s\S]*?(?=\n  [a-zA-Z0-9_-]+:|\n?$)/,

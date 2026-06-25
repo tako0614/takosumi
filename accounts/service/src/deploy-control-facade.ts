@@ -457,6 +457,10 @@ function applyRequestFromExpectedGuard(input: {
   const providerLockDigest = input.planRun.providerLockDigest
     ? requiredExpectedString(expected, "providerLockDigest")
     : undefined;
+  const resolvedProviderEnvBindingsDigest = input.planRun
+    .resolvedProviderEnvBindingsDigest
+    ? requiredExpectedString(expected, "resolvedProviderEnvBindingsDigest")
+    : undefined;
   const installationId = input.planRun.installationId
     ? requiredExpectedString(expected, "installationId")
     : undefined;
@@ -484,6 +488,9 @@ function applyRequestFromExpectedGuard(input: {
       ),
       ...(sourceCommit ? { sourceCommit } : {}),
       ...(providerLockDigest ? { providerLockDigest } : {}),
+      ...(resolvedProviderEnvBindingsDigest
+        ? { resolvedProviderEnvBindingsDigest }
+        : {}),
     },
   };
 }
@@ -603,6 +610,8 @@ function adaptPlanRunResult(input: {
         planArtifactDigest: planRun.planArtifact?.digest,
         sourceCommit: planRun.sourceCommit,
         providerLockDigest: planRun.providerLockDigest,
+        resolvedProviderEnvBindingsDigest:
+          planRun.resolvedProviderEnvBindingsDigest,
       },
       changes: [
         {

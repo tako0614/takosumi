@@ -274,7 +274,7 @@ export class PlanResolutionService {
   }
 }
 
-function providerEnvBindingsFromResolved(
+export function providerEnvBindingsFromResolved(
   resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): readonly RootInstallationProviderEnvBinding[] {
   const providers: RootInstallationProviderEnvBinding[] = [];
