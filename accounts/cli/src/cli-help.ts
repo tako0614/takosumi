@@ -169,13 +169,13 @@ export function connectionsHelpText(): string {
       "コマンド:",
       "  list",
       "  set-cloudflare-token",
+      "  create-generic-env",
       "  test <connection-id>",
       "  revoke <connection-id>",
       "",
       "`--url` に Takosumi platform origin、`--token` に deploy-control bearer を渡します。",
       "credential 値は file からだけ読み、CLI には表示しません。",
-      "この CLI は operator-only です。operator-scope Provider Connection backing material を扱います。",
-      "Space 用 Provider Connection helper は dashboard/API flow で作成します。",
+      "set-cloudflare-token は operator-scope、create-generic-env は明示的な Space-scoped Provider Connection を作成します。",
     ].join("\n");
   }
   return [
@@ -184,14 +184,14 @@ export function connectionsHelpText(): string {
     "Commands:",
     "  list",
     "  set-cloudflare-token",
+    "  create-generic-env",
     "  test <connection-id>",
     "  revoke <connection-id>",
     "",
     "Use --url with the Takosumi platform origin and --token with the",
     "deploy-control bearer. Credential values are accepted only through files",
-    "and are never printed by the CLI. This CLI is operator-only: it manages",
-    "operator-scope Provider Connection backing material. Space Provider Connection",
-    "helpers are created through dashboard/API flows.",
+    "and are never printed by the CLI. set-cloudflare-token creates operator-scope",
+    "material; create-generic-env creates explicit Space-scoped Provider Connections.",
   ].join("\n");
 }
 
@@ -250,6 +250,47 @@ export function connectionsCreateCloudflareHelpText(): string {
     "  --display-name <name>",
     "  --account-id <id>",
     "  --zone-id <id>",
+    "  --expires-at <iso8601>",
+    "  --url <deploy-control-url>",
+    "  --token <deploy-control-bearer>",
+    "  --json",
+  ].join("\n");
+}
+
+export function connectionsCreateGenericEnvHelpText(): string {
+  if (isJapaneseCli()) {
+    return [
+      "takosumi connections create-generic-env",
+      "",
+      "任意 OpenTofu/Terraform provider 用の Space-scoped Provider Connection を作成します。",
+      "credential値はfileからだけ読み、CLIには表示しません。",
+      "",
+      "オプション:",
+      "  --space <space-id>      必須。Connection を所有する Space",
+      "  --provider <source>     必須。例: registry.opentofu.org/hashicorp/aws",
+      '  --values-file <path>    JSON object。例: {"AWS_REGION":"ap-northeast-1"}',
+      '  --files-file <path>     JSON array。例: [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
+      "  --scope-hints-file <path>  任意の非secret JSON object",
+      "  --display-name <name>",
+      "  --expires-at <iso8601>",
+      "  --url <deploy-control-url>",
+      "  --token <deploy-control-bearer>",
+      "  --json",
+    ].join("\n");
+  }
+  return [
+    "takosumi connections create-generic-env",
+    "",
+    "Creates a Space-scoped Provider Connection for any OpenTofu/Terraform provider.",
+    "Credential values are read only from files and are never printed by the CLI.",
+    "",
+    "Options:",
+    "  --space <space-id>      required Space owner",
+    "  --provider <source>     required, e.g. registry.opentofu.org/hashicorp/aws",
+    '  --values-file <path>    JSON object, e.g. {"AWS_REGION":"ap-northeast-1"}',
+    '  --files-file <path>     JSON array, e.g. [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
+    "  --scope-hints-file <path>  optional non-secret JSON object",
+    "  --display-name <name>",
     "  --expires-at <iso8601>",
     "  --url <deploy-control-url>",
     "  --token <deploy-control-bearer>",

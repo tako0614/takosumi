@@ -7834,6 +7834,11 @@ test("internal installations import-apply creates a target plan and projection",
                   alias: "main",
                   connectionId: "pcn_cf_target",
                 },
+                {
+                  provider: "registry.opentofu.org/vercel/vercel",
+                  alias: "edge",
+                  connectionId: "pcn_vercel_target",
+                },
               ],
             },
           },
@@ -7938,7 +7943,7 @@ test("internal installations import-apply creates a target plan and projection",
         "--idempotency-key",
         "idem-import-apply",
         "--provider",
-        "cloudflare=pcn_cf_target",
+        "cloudflare=pcn_cf_target,registry.opentofu.org/vercel/vercel@edge=pcn_vercel_target",
         "--variables-json",
         '{"accountId":"acct_cf_target","workersSubdomain":"target-subdomain"}',
         "--json",
@@ -7984,6 +7989,11 @@ test("internal installations import-apply creates a target plan and projection",
           alias: "main",
           connectionId: "pcn_cf_target",
         },
+        {
+          provider: "registry.opentofu.org/vercel/vercel",
+          alias: "edge",
+          connectionId: "pcn_vercel_target",
+        },
       ],
     });
     expect(await requests[4]?.json()).toEqual({
@@ -7997,7 +8007,10 @@ test("internal installations import-apply creates a target plan and projection",
       },
       installationId: "inst_import_target",
       operation: "create",
-      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      requiredProviders: [
+        "registry.opentofu.org/cloudflare/cloudflare",
+        "registry.opentofu.org/vercel/vercel",
+      ],
       variables: {
         accountId: "acct_cf_target",
         workersSubdomain: "target-subdomain",
@@ -8761,12 +8774,57 @@ test("operator CLI help supports Japanese output", async () => {
   }
 });
 
-test("connections CLI does not expose user-owned generic env helper creation", async () => {
+test("connections create-generic-env creates a Space-owned arbitrary provider connection", async () => {
+  const valuesFile = await makeTempFile({ suffix: ".json" });
+  const filesFile = await makeTempFile({ suffix: ".json" });
+  const scopeHintsFile = await makeTempFile({ suffix: ".json" });
+  await writeTextFile(
+    valuesFile,
+    JSON.stringify({
+      VERCEL_API_TOKEN: "vercel_secret",
+      VERCEL_TEAM_ID: "team_1",
+    }),
+  );
+  await writeTextFile(
+    filesFile,
+    JSON.stringify([
+      {
+        path: "vercel-credentials.json",
+        content: '{"token":"file_secret"}',
+        envName: "VERCEL_CREDENTIALS_FILE",
+        mode: 384,
+      },
+    ]),
+  );
+  await writeTextFile(
+    scopeHintsFile,
+    JSON.stringify({ templateId: "vercel-project" }),
+  );
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const requests: { request: Request; body: string }[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (() => {
-    throw new Error("fetch must not be called");
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const body = await request.text();
+    requests.push({ request, body });
+    return Response.json(
+      {
+        connection: {
+          id: "conn_vercel",
+          scope: "space",
+          provider: "registry.opentofu.org/vercel/vercel",
+          kind: "generic_env_provider",
+          status: "verified",
+          envNames: [
+            "VERCEL_API_TOKEN",
+            "VERCEL_CREDENTIALS_FILE",
+            "VERCEL_TEAM_ID",
+          ],
+        },
+      },
+      { status: 201 },
+    );
   }) as typeof fetch;
 
   try {
@@ -8778,6 +8836,16 @@ test("connections CLI does not expose user-owned generic env helper creation", a
         "https://app.takosumi.test",
         "--token",
         "operator-bearer",
+        "--space",
+        "space_1",
+        "--provider",
+        "registry.opentofu.org/vercel/vercel",
+        "--values-file",
+        valuesFile,
+        "--files-file",
+        filesFile,
+        "--scope-hints-file",
+        scopeHintsFile,
       ],
       {
         stdout: (line) => stdout.push(line),
@@ -8785,14 +8853,44 @@ test("connections CLI does not expose user-owned generic env helper creation", a
       },
     );
 
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("set-cloudflare-token");
-    expect(stderr.join("\n")).toContain(
-      "Unknown connections command: create-generic-env",
+    expect({ code, stderr }).toEqual({ code: 0, stderr: [] });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request.url).toEqual(
+      "https://app.takosumi.test/internal/v1/connections/generic-env-provider",
     );
+    expect(requests[0]?.request.headers.get("authorization")).toEqual(
+      "Bearer operator-bearer",
+    );
+    const createBody = JSON.parse(requests[0]!.body);
+    expect(createBody).toEqual({
+      provider: "registry.opentofu.org/vercel/vercel",
+      spaceId: "space_1",
+      kind: "generic_env_provider",
+      authMethod: "static_secret",
+      scope: "space",
+      scopeHints: { templateId: "vercel-project" },
+      values: {
+        VERCEL_API_TOKEN: "vercel_secret",
+        VERCEL_TEAM_ID: "team_1",
+      },
+      files: [
+        {
+          path: "vercel-credentials.json",
+          content: '{"token":"file_secret"}',
+          envName: "VERCEL_CREDENTIALS_FILE",
+          mode: 384,
+        },
+      ],
+    });
+    const output = stdout.concat(stderr).join("\n");
+    expect(output).toContain("Connection conn_vercel created");
+    expect(output).not.toContain("vercel_secret");
+    expect(output).not.toContain("file_secret");
   } finally {
     globalThis.fetch = originalFetch;
+    await removePath(valuesFile);
+    await removePath(filesFile);
+    await removePath(scopeHintsFile);
   }
 });
 
