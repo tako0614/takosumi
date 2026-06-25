@@ -199,52 +199,6 @@ const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
       },
     ],
   },
-  "cloudflare-static-site": {
-    sourcePath: "providers/cloudflare/modules/cloudflare-static-site/module",
-    order: 90,
-    surface: "example",
-    kind: "site",
-    provider: "cloudflare",
-    suggestedName: "website",
-    badge: text("Pages", "Pages"),
-    name: text("Pagesサイトを作成", "Create a Pages site"),
-    description: text(
-      "Cloudflare Pages projectを作る取得元付きサイトの例です。",
-      "Example source-backed site that creates a Cloudflare Pages project.",
-    ),
-    inputs: [
-      {
-        name: "projectName",
-        type: "string",
-        required: true,
-        defaultValue: "service-name-with-space",
-        label: text("プロジェクト名", "Project name"),
-        helper: text(
-          "*.pages.dev の名前にも使われます。",
-          "Also used for the *.pages.dev subdomain label.",
-        ),
-        placeholder: "my-site",
-      },
-      {
-        name: "accountId",
-        type: "string",
-        required: true,
-        label: text("Cloudflare アカウント", "Cloudflare account"),
-        helper: text(
-          "接続済みアカウントから分かる場合は自動入力されます。手入力する場合は Cloudflare のアカウント ID を使います。",
-          "Filled automatically when a connected account provides it. If entering it manually, use the Cloudflare account ID.",
-        ),
-        placeholder: "0123abcd...",
-      },
-      {
-        name: "productionBranch",
-        type: "string",
-        defaultValue: "main",
-        label: text("本番ブランチ", "Production branch"),
-        placeholder: "main",
-      },
-    ],
-  },
   "aws-s3-storage": {
     sourcePath: "providers/aws/modules/aws-s3-storage/module",
     order: 40,

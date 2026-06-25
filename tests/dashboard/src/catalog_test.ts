@@ -44,13 +44,12 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("catalog keeps Cloud-compatible hostable services first and Pages as an example", () => {
+  test("catalog keeps the runnable web app first and storage as building blocks", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
       (entry) => entry.surface === "building_block",
     );
-    const examples = entries.filter((entry) => entry.surface === "example");
     expect(
       services
         .sort((a, b) => a.order - b.order)
@@ -61,9 +60,7 @@ describe("dashboard catalog", () => {
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
     ).toEqual(["cloudflare-r2-storage", "aws-s3-storage"]);
-    expect(examples.map((entry) => entry.templateId)).toEqual([
-      "cloudflare-static-site",
-    ]);
+    expect(entries.some((entry) => entry.surface === "example")).toBe(false);
   });
 
   test("primary catalog services stay inside the Cloudflare compat MVP surface", () => {
