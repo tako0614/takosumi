@@ -137,6 +137,77 @@ test("cloud extension smoke fails readiness when AI Gateway only has Workers AI 
   });
 });
 
+test("cloud extension smoke requires a non-Workers-AI upstream only when requested", async () => {
+  const workersAiConfiguredStatus = json({
+    kind: "takosumi.ai-gateway-status@v1",
+    mode: "configured_upstreams",
+    defaultModel: "workers-ai/llama-3.1-8b-instruct-fast",
+    summary: {
+      profileCount: 1,
+      publicModelCount: 2,
+      providers: ["workers_ai"],
+    },
+    upstreamProfiles: [
+      {
+        id: "workers-ai",
+        provider: "workers_ai",
+        type: "workers_ai_binding",
+        endpointOrigin: "cloudflare:workers-ai-binding",
+        modelCount: 2,
+        publicModels: [
+          {
+            publicModel: "workers-ai/llama-3.1-8b-instruct-fast",
+            endpoints: ["chat.completions"],
+            default: true,
+          },
+          {
+            publicModel: "workers-ai/bge-base-en-v1.5",
+            endpoints: ["embeddings"],
+          },
+        ],
+      },
+    ],
+  });
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    const parsed = new URL(url.toString());
+    if (parsed.pathname === "/gateway/ai/v1/__takosumi/status") {
+      return workersAiConfiguredStatus.clone();
+    }
+    return responseForImplementedCompat(
+      parsed.pathname,
+      init?.method ?? "GET",
+      authorization(init) !== undefined,
+      "configured_upstreams",
+      requestBodyText(init),
+      parsed.searchParams,
+    );
+  };
+
+  const relaxed = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiUpstreamProfile: false,
+    },
+    fetchImpl,
+  );
+  const strict = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiUpstreamProfile: true,
+    },
+    fetchImpl,
+  );
+
+  expect(relaxed.status).toBe("passed");
+  expect(relaxed.gaps).not.toContain(
+    "ai_gateway_external_upstream_not_configured",
+  );
+  expect(strict.status).toBe("failed");
+  expect(strict.gaps).toContain("ai_gateway_external_upstream_not_configured");
+});
+
 test("cloud extension smoke fails readiness when catalog bindings are missing", async () => {
   const result = await runCloudExtensionSmoke(
     { ...BASE_OPTIONS, requireCompatMaterialization: true },
@@ -159,6 +230,78 @@ test("cloud extension smoke fails readiness when catalog bindings are missing", 
   expect(result.status).toBe("failed");
   expect(result.gaReady).toBe(false);
   expect(result.gaps).toContain("cloud_extension_catalog_not_ready");
+});
+
+test("cloud extension smoke cleanup uses the injected fetch implementation", async () => {
+  const requests: { path: string; method: string }[] = [];
+  const result = await runCloudExtensionSmoke(
+    { ...BASE_OPTIONS, requireCompatMaterialization: true },
+    async (url, init) => {
+      const parsed = new URL(url);
+      const method = init?.method ?? "GET";
+      requests.push({ path: parsed.pathname, method });
+      if (
+        parsed.pathname ===
+          "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/storage/kv/namespaces" &&
+        method === "POST"
+      ) {
+        return cloudflare(true, { id: "kv_cleanup", title: "cleanup" }, 201);
+      }
+      if (
+        parsed.pathname ===
+          "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/storage/kv/namespaces/kv_cleanup" &&
+        method === "GET"
+      ) {
+        return cloudflare(false, null, 500, [9999]);
+      }
+      if (
+        parsed.pathname ===
+          "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/storage/kv/namespaces" &&
+        method === "GET" &&
+        parsed.searchParams.has("title")
+      ) {
+        return cloudflare(true, [{ id: "kv_cleanup", title: "cleanup" }]);
+      }
+      if (
+        parsed.pathname ===
+          "/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/storage/kv/namespaces/kv_cleanup" &&
+        method === "DELETE"
+      ) {
+        return cloudflare(true, { id: "kv_cleanup", deleted: true });
+      }
+      return responseForImplementedCompat(
+        parsed.pathname,
+        method,
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+  );
+
+  const rest = result.checks.find(
+    (check) => check.name === "cloudflareCompatRestLifecycle",
+  );
+  const resources = (rest?.summary.resources ?? []) as {
+    resource: string;
+    cleanup?: { deleted?: { id: string; ok: boolean }[] };
+  }[];
+  const kv = resources.find(
+    (resource) => resource.resource === "cloudflare_workers_kv_namespace_rest",
+  );
+
+  expect(rest?.ok).toBe(false);
+  expect(kv?.cleanup?.deleted?.[0]).toMatchObject({
+    id: "kv_cleanup",
+    ok: true,
+  });
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "DELETE" && request.path.endsWith("/kv_cleanup"),
+    ),
+  ).toBe(true);
 });
 
 test("cloud extension smoke supports PAT auth and provider E2E evidence", async () => {

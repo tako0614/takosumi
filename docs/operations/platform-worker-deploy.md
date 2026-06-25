@@ -304,10 +304,11 @@ Cloudflare compatibility envelope、および Cloudflare Workers script の
 AI Gateway status が `workers_ai_fallback` の場合、基礎の managed AI は
 動作しているが、明示 profile としてはまだ固定されていない。Production Cloud
 AI Gateway は `workers_ai_binding` または `openai_compatible` の profile を
-少なくとも1つ設定し、`--require-ai-upstream-profile` 付き smoke で確認する。
-DeepSeek / Z.AI GLM / Gemini / OpenAI などの外部 provider を Cloud の提供機能
-として告知する release では、`openai_compatible` profile と upstream key を
-設定したうえで `--require-ai-upstream-profile` を付ける。
+少なくとも1つ設定する。GA runtime 証跡は keyless な `workers_ai_binding`
+だけでも成立する。DeepSeek / Z.AI GLM / Gemini / OpenAI などの外部 provider
+を Cloud の提供機能として告知する release では、`openai_compatible`
+profile と upstream key を設定したうえで `--require-ai-upstream-profile` を
+付ける。
 Cloudflare Workers script materialization がまだ 501 の場合、script は `status: "passed"` でも
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
@@ -335,7 +336,7 @@ bun run smoke:cloud-extensions -- \
   --require-provider-e2e \
   --json
 
-# GA strict + external AI upstream claim:
+# GA strict + external AI upstream claim only:
 bun run smoke:cloud-extensions -- \
   --url https://app.takosumi.com \
   --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \

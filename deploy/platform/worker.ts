@@ -914,8 +914,13 @@ export function handlePlatformCloudExtensionCatalogRequest(
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
+  const headers = {
+    "cache-control": "no-store",
+    "content-type": "application/json",
+  };
+  if (request.method === "HEAD") return new Response(null, { headers });
   return Response.json(platformCloudExtensionCatalog(env, url.origin), {
-    headers: { "cache-control": "no-store" },
+    headers,
   });
 }
 
@@ -967,6 +972,10 @@ const PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER = "x-takosumi-cloud-scopes";
 const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "authorization",
   "cookie",
+  "proxy-authorization",
+  "x-auth-email",
+  "x-auth-key",
+  "x-auth-user-service-key",
   "x-takosumi-account-session",
 ] as const;
 const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
