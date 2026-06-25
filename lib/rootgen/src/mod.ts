@@ -15,6 +15,9 @@
  *   - main.tf     : `module "app" { source = "./template-module"; <inputs> }`.
  *   - outputs.tf  : passthrough of template.outputs.public:
  *                   `output "<public>" { value = module.app.<from> }`.
+ *                   Generic Capsule roots also pass through Takosumi control
+ *                   outputs used by post-apply release activation; those are
+ *                   later filtered out of the public deployment projection.
  *
  * Inputs are emitted as literal HCL values (string/number/bool); strings are
  * escaped so a value can never break out of its quotes or inject HCL.
@@ -129,6 +132,7 @@ export interface GenerateGenericCapsuleRootInput {
 const ARTIFACT_PATH_INPUT = "artifact_path";
 /** Path the runner copies the credential-free build artifact to (invariant 3). */
 const ARTIFACT_PATH_VALUE = "/work/artifact";
+const GENERIC_CONTROL_OUTPUTS = ["takosumi_release", "takos_app"] as const;
 
 export function generateRootModule(
   template: TemplateDefinition,
@@ -497,6 +501,16 @@ function renderGenericOutputsTf(
       "}",
     ].join("\n");
   });
+  for (const name of GENERIC_CONTROL_OUTPUTS) {
+    if (name in outputAllowlist) continue;
+    blocks.push(
+      [
+        `output ${hclString(name)} {`,
+        `  value = try(module.app.${name}, null)`,
+        "}",
+      ].join("\n"),
+    );
+  }
   return blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
 }
 
