@@ -413,6 +413,32 @@ export function requiredEnvGroupsForProvider(
   return providerEnvRule(provider)?.requiredGroups ?? [];
 }
 
+const CANONICAL_PROVIDER_SOURCES: Readonly<Record<string, string>> = {
+  cloudflare: "registry.opentofu.org/cloudflare/cloudflare",
+  aws: "registry.opentofu.org/hashicorp/aws",
+  google: "registry.opentofu.org/hashicorp/google",
+  azurerm: "registry.opentofu.org/hashicorp/azurerm",
+  github: "registry.opentofu.org/integrations/github",
+  digitalocean: "registry.opentofu.org/digitalocean/digitalocean",
+  hcloud: "registry.opentofu.org/hetznercloud/hcloud",
+  vultr: "registry.opentofu.org/vultr/vultr",
+  scaleway: "registry.opentofu.org/scaleway/scaleway",
+  openstack: "registry.opentofu.org/terraform-provider-openstack/openstack",
+  vercel: "registry.opentofu.org/vercel/vercel",
+  kubernetes: "registry.opentofu.org/hashicorp/kubernetes",
+  helm: "registry.opentofu.org/hashicorp/helm",
+};
+
+export function canonicalProviderSource(provider: string): string {
+  const normalized = provider.trim();
+  const rule = providerEnvRule(normalized);
+  if (rule) {
+    return CANONICAL_PROVIDER_SOURCES[rule.shortName] ?? normalized;
+  }
+  const identity = defaultRegistryProviderIdentity(normalized);
+  return identity ? `${DEFAULT_OPENTOFU_REGISTRY}${identity}` : normalized;
+}
+
 // ---------------------------------------------------------------------------
 // Per-alias credential split for Takosumi generated root modules.
 // ---------------------------------------------------------------------------

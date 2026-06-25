@@ -43,6 +43,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
   /**
+   * Optional default profile for generic Capsule plans when the public request
+   * does not pass runnerProfileId. Must be one of the enabled runner profiles;
+   * omitted keeps the conservative Cloudflare default.
+   */
+  readonly TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID?: string;
+  /**
    * Maximum time the request path waits for the runner-backed Capsule
    * compatibility source-file extraction. Compatibility checks are still
    * recorded as Runs by the control plane; this prevents a stuck runner DO from

@@ -32,6 +32,7 @@ import {
 } from "takosumi-contract/sources";
 import {
   allowedEnvNamesForProvider,
+  canonicalProviderSource,
   cloudFamilyForProvider,
   providerCredentialArgs,
   providerEnvRule,
@@ -513,7 +514,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       await this.#store.putProviderEnv({
         id: connection.id,
         spaceId: connection.spaceId,
-        providerSource: connection.provider,
+        providerSource: canonicalProviderSource(connection.provider),
         displayName: connection.displayName ?? connection.provider,
         materialization: isOAuthCredentialDriver(connection.credentialDriver)
           ? "oauth"
@@ -1100,7 +1101,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     await this.#store.putProviderEnv({
       id: connection.id,
       spaceId: connection.spaceId,
-      providerSource: connection.provider,
+      providerSource: canonicalProviderSource(connection.provider),
       displayName: connection.displayName ?? connection.provider,
       materialization: isOAuthCredentialDriver(connection.credentialDriver)
         ? "oauth"

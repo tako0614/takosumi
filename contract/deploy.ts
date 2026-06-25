@@ -19,6 +19,7 @@ import type {
   OutputAllowlistEntry,
   PublicInstallation,
 } from "./installations.ts";
+import type { JsonValue } from "./types.ts";
 import type { InstallationProviderConnectionBindings } from "./connections.ts";
 import type { InstallationProviderEnvBindings } from "./provider-envs.ts";
 import type { PublicRun, Run } from "./runs.ts";
@@ -35,7 +36,7 @@ export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
  *
  * `snapshotId` is an upload-origin {@link SourceSnapshot} previously created via
  * `SPACE_UPLOADS_PATH`. `vars` becomes the InstallConfig variable mapping
- * (string values only; secret material never travels here — providers are bound
+ * (JSON values only; secret material never travels here — providers are bound
  * through Provider Connections). `outputAllowlist` is an explicit, service-side
  * projection contract for non-secret OpenTofu outputs; omitted means no public
  * outputs are projected. `providerConnections` binds required OpenTofu
@@ -44,6 +45,10 @@ export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
  * `planOnly` stops after the plan Run. `autoApprove` is accepted for
  * compatibility with older CLI callers, but public clients should follow the
  * returned plan Run and call the reviewed apply route when the plan is ready.
+ * `runnerProfileId` is operator policy, not Capsule metadata: public clients
+ * may request one of the enabled runner profiles, and the control plane still
+ * validates the profile, provider allowlist, source policy, and credential
+ * binding before any OpenTofu execution starts.
  */
 export interface DeployRequest {
   readonly spaceId: string;
@@ -51,7 +56,8 @@ export interface DeployRequest {
   /** Defaults to `"production"` when omitted. */
   readonly environment?: string;
   readonly snapshotId: string;
-  readonly vars?: Readonly<Record<string, string>>;
+  readonly runnerProfileId?: string;
+  readonly vars?: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerConnections?: InstallationProviderConnectionBindings;
   readonly planOnly?: boolean;

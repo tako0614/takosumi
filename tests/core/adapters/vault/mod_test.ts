@@ -82,6 +82,11 @@ test("register seals values and returns a public Connection with no secret mater
   const blob = await store.getSecretBlob(connection.id);
   expect(blob).toBeDefined();
   expect(JSON.stringify(blob)).not.toContain("cf-secret-token");
+
+  const providerEnv = await store.getProviderEnv(connection.id);
+  expect(providerEnv?.providerSource).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
 });
 
 test("register rejects unknown env names and unsatisfied required groups", async () => {

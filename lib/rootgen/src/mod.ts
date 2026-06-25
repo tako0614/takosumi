@@ -191,10 +191,7 @@ export function generateGenericCapsuleRoot(
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(input.requiredProviders),
-      "main.tf": renderGenericMainTf(
-        input.inputs,
-        providerEnvBindings,
-      ),
+      "main.tf": renderGenericMainTf(input.inputs, providerEnvBindings),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
   };
@@ -205,6 +202,9 @@ function renderVersionsTf(template: TemplateDefinition): string {
 }
 
 function renderProviderVersionsTf(providers: readonly string[]): string {
+  if (providers.length === 0) {
+    return ["terraform {}", ""].join("\n");
+  }
   const entries = providers.map((rule) => {
     const localName = providerLocalName(rule);
     const source =
@@ -430,24 +430,50 @@ interface ProviderMapEntry {
 function providerMapEntries(
   providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
 ): ProviderMapEntry[] {
-  const byChildLocalProvider = new Map<string, ProviderMapEntry>();
+  const byLocalProvider = new Map<
+    string,
+    RootInstallationProviderEnvBinding[]
+  >();
   for (const binding of providerEnvBindings) {
     const localProvider = providerLocalName(binding.provider);
-    const rootRef = rootProviderRef(localProvider, binding.alias);
-    const existing = byChildLocalProvider.get(localProvider);
-    if (existing) {
-      if (existing.rootRef === rootRef) continue;
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `rootgen: multiple provider bindings for ${localProvider} require child module configuration_aliases`,
-      );
-    }
-    byChildLocalProvider.set(localProvider, {
-      childRef: localProvider,
-      rootRef,
-    });
+    byLocalProvider.set(localProvider, [
+      ...(byLocalProvider.get(localProvider) ?? []),
+      binding,
+    ]);
   }
-  return Array.from(byChildLocalProvider.values());
+  const byChildRef = new Map<string, ProviderMapEntry>();
+  for (const [localProvider, bindings] of byLocalProvider) {
+    const singleAliasDefault =
+      bindings.length === 1 && bindings[0]?.alias !== undefined;
+    for (const binding of bindings) {
+      const childRef = singleAliasDefault
+        ? localProvider
+        : childProviderRef(localProvider, binding.alias);
+      const rootRef = rootProviderRef(localProvider, binding.alias);
+      const existing = byChildRef.get(childRef);
+      if (existing) {
+        if (existing.rootRef === rootRef) continue;
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `rootgen: conflicting provider bindings for ${childRef}`,
+        );
+      }
+      byChildRef.set(childRef, {
+        childRef,
+        rootRef,
+      });
+    }
+  }
+  return Array.from(byChildRef.values());
+}
+
+function childProviderRef(
+  localProvider: string,
+  alias: string | undefined,
+): string {
+  if (!alias) return localProvider;
+  assertIdentifier(alias, "rootgen: provider alias");
+  return `${localProvider}.${alias}`;
 }
 
 function rootProviderRef(

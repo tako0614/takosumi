@@ -65,6 +65,58 @@ test("runner redacts bare run-scoped credential values from plan output", async 
   });
 });
 
+test("runner allows provider-free generated roots under an allowed-provider profile", async () => {
+  const fixture = await createFakeTofuFixture();
+  await withFakeTofu(fixture.binDir, async () => {
+    const response = await handleRunnerRequest(
+      runRequest("provider_free_profile_plan", "plan", {
+        generatedRoot: providerFreeGeneratedRootWithEmptyProviderBlock(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "create",
+          requiredProviders: [],
+        },
+        runnerProfile: {
+          id: "cloudflare-default",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["cloudflare/cloudflare"],
+        },
+      }),
+    );
+
+    const payload = (await response.json()) as { requiredProviders?: unknown };
+    expect(response.status).toBe(200);
+    expect(payload.requiredProviders).toEqual([]);
+  });
+});
+
+test("runner rejects provider-using generated roots that omit requiredProviders", async () => {
+  const fixture = await createFakeTofuFixture(undefined, {
+    moduleMain: 'resource "null_resource" "example" {}\n',
+  });
+  await withFakeTofu(fixture.binDir, async () => {
+    const response = await handleRunnerRequest(
+      runRequest("missing_required_providers_plan", "plan", {
+        generatedRoot: minimalGeneratedRoot(),
+        planRun: {
+          source: { kind: "local", path: fixture.sourceDir },
+          operation: "create",
+          requiredProviders: [],
+        },
+        runnerProfile: {
+          id: "cloudflare-default",
+          sourcePolicy: { allowLocalSource: true },
+          allowedProviders: ["cloudflare/cloudflare"],
+        },
+      }),
+    );
+
+    const payload = (await response.json()) as { stderr?: string };
+    expect(response.status).toBe(500);
+    expect(payload.stderr ?? "").toContain("requires requiredProviders");
+  });
+});
+
 test("runner materializes generic provider credential files for plan and cleans them up", async () => {
   const fixture = await createProviderCredentialFileFixture();
   const envSecret = "generic-env-secret-123456789";
@@ -398,7 +450,21 @@ function minimalGeneratedRoot(): { readonly files: Record<string, string> } {
   };
 }
 
-async function createFakeTofuFixture(fail?: "plan" | "apply"): Promise<{
+function providerFreeGeneratedRootWithEmptyProviderBlock(): {
+  readonly files: Record<string, string>;
+} {
+  return {
+    files: {
+      "versions.tf": "terraform {\n  required_providers {}\n}\n",
+      "main.tf": 'module "service" { source = "./template-module" }\n',
+    },
+  };
+}
+
+async function createFakeTofuFixture(
+  fail?: "plan" | "apply",
+  options: { readonly moduleMain?: string } = {},
+): Promise<{
   readonly binDir: string;
   readonly sourceDir: string;
 }> {
@@ -407,7 +473,10 @@ async function createFakeTofuFixture(fail?: "plan" | "apply"): Promise<{
   const sourceDir = join(root, "source");
   await mkdir(binDir, { recursive: true });
   await mkdir(sourceDir, { recursive: true });
-  await writeFile(join(sourceDir, "main.tf"), "terraform {}\n");
+  await writeFile(
+    join(sourceDir, "main.tf"),
+    options.moduleMain ?? "terraform {}\n",
+  );
   const tofuPath = join(binDir, "tofu");
   await writeFile(tofuPath, fakeTofuScript(fail));
   await chmod(tofuPath, 0o755);

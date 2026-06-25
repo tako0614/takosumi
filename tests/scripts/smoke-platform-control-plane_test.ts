@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
   dryRunResult,
+  isSmokeProviderConnectionMatch,
   resolveOptions,
   shouldMarkPendingSmokeInstallationError,
 } from "../../scripts/smoke-platform-control-plane.ts";
@@ -70,6 +71,44 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(json).not.toContain("CLOUDFLARE_ACCOUNT_ID");
   expect(json).not.toContain("TAKOSUMI_ACCOUNT_SESSION_TOKEN");
   expect(json).not.toContain("CLOUDFLARE_API_TOKEN");
+});
+
+test("platform control-plane smoke matches canonical provider connection sources", () => {
+  const expected = {
+    provider: "cloudflare",
+    displayName: "Layer-2 smoke canonical",
+  };
+
+  expect(
+    isSmokeProviderConnectionMatch(
+      {
+        id: "pcn_test",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        displayName: "Layer-2 smoke canonical",
+      },
+      expected,
+    ),
+  ).toBe(true);
+  expect(
+    isSmokeProviderConnectionMatch(
+      {
+        id: "pcn_test",
+        providerSource: "cloudflare",
+        displayName: "Layer-2 smoke canonical",
+      },
+      expected,
+    ),
+  ).toBe(true);
+  expect(
+    isSmokeProviderConnectionMatch(
+      {
+        id: "pcn_test",
+        providerSource: "registry.opentofu.org/hashicorp/aws",
+        displayName: "Layer-2 smoke canonical",
+      },
+      expected,
+    ),
+  ).toBe(false);
 });
 
 test("platform control-plane smoke infers production environment from URL", async () => {

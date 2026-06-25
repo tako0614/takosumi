@@ -246,17 +246,25 @@ function mergeProviderLockfilePolicy(
 
 export function withDefaultProviderSupplyChainPolicy(
   policy: PolicyConfig | undefined,
+  defaults: {
+    readonly providerLockfileRequireDigest?: boolean;
+    readonly providerInstallationRequireMirror?: boolean;
+  } = {},
 ): PolicyConfig {
+  const providerLockfileRequireDigest =
+    defaults.providerLockfileRequireDigest ?? true;
+  const providerInstallationRequireMirror =
+    defaults.providerInstallationRequireMirror ?? true;
   return {
     ...(policy ?? {}),
-    providerLockfile: mergeProviderLockfilePolicy(
-      { requireDigest: true },
-      policy?.providerLockfile,
-    ),
-    providerInstallation: mergeProviderInstallationPolicy(
-      { requireMirror: true },
-      policy?.providerInstallation,
-    ),
+    providerLockfile:
+      policy?.providerLockfile ??
+      (providerLockfileRequireDigest ? { requireDigest: true } : undefined),
+    providerInstallation:
+      policy?.providerInstallation ??
+      (providerInstallationRequireMirror
+        ? { requireMirror: true }
+        : { requireMirror: false }),
     ...(policy?.providerCredentials
       ? { providerCredentials: policy.providerCredentials }
       : {}),

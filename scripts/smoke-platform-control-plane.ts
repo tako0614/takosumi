@@ -24,6 +24,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v1" as const;
@@ -43,23 +44,48 @@ const TERMINAL_RUN_STATUSES = new Set([
   "waiting_approval",
 ]);
 type SmokeCheckStatus = "passed" | "denied" | "not_reached";
+type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
+type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
+type SecretInputSource = "env" | "file" | "not_required";
+type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
+type JsonSmokeValue =
+  | null
+  | string
+  | number
+  | boolean
+  | readonly JsonSmokeValue[]
+  | { readonly [key: string]: JsonSmokeValue };
+type SmokeOutputAllowlist = Readonly<
+  Record<
+    string,
+    {
+      readonly from: string;
+      readonly type?: string;
+      readonly required?: boolean;
+    }
+  >
+>;
 
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
   readonly accountSessionToken: string;
   readonly accountSessionTokenSource: "env" | "file";
   readonly cloudflareApiToken: string;
-  readonly cloudflareApiTokenSource: "env" | "file";
+  readonly cloudflareApiTokenSource: SecretInputSource;
   readonly cloudflareAccountId: string;
-  readonly cloudflareAccountIdSource: "env" | "file" | "arg";
+  readonly cloudflareAccountIdSource: NonSecretInputSource;
   readonly cloudflareWorkersSubdomain: string;
-  readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
-  readonly cloudflareConnectionMode: "guided" | "generic-env";
+  readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
+  readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  readonly runnerProfileId?: string;
   readonly space: string;
   readonly appName: string;
   readonly environment: string;
   readonly sourceMode: "upload" | "git";
   readonly capsuleDir: string;
+  readonly verificationMode: SmokeVerificationMode;
+  readonly vars: Readonly<Record<string, JsonSmokeValue>>;
+  readonly outputAllowlist: SmokeOutputAllowlist;
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
@@ -82,9 +108,10 @@ export interface PlatformControlPlaneSmokeResult {
   readonly generatedAt: string;
   readonly serviceUrl: string;
   readonly scratchSpaceId: string;
-  readonly capsuleModule: "cloudflare-hello-worker";
-  readonly credentialPath: "space_scoped_provider_connection";
-  readonly providerConnectionMode: "guided" | "generic-env";
+  readonly capsuleModule: string;
+  readonly verificationMode: SmokeVerificationMode;
+  readonly credentialPath: "space_scoped_provider_connection" | "none";
+  readonly providerConnectionMode: SmokeProviderConnectionMode;
   /** Required end-to-end checkpoints for this smoke shape. */
   readonly steps: readonly string[];
   /** Checkpoints that were actually completed before the result was written. */
@@ -120,12 +147,16 @@ export interface PlatformControlPlaneSmokeResult {
   readonly nextAction?: string;
   readonly inputs: {
     readonly accountSessionTokenSource: "env" | "file";
-    readonly cloudflareApiTokenSource: "env" | "file";
-    readonly cloudflareAccountIdSource: "env" | "file" | "arg";
+    readonly cloudflareApiTokenSource: SecretInputSource;
+    readonly cloudflareAccountIdSource: NonSecretInputSource;
     readonly cloudflareAccountIdDigest: string;
-    readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
-    readonly cloudflareConnectionMode: "guided" | "generic-env";
+    readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
+    readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+    readonly runnerProfileId?: string;
     readonly sourceMode: "upload" | "git";
+    readonly verificationMode: SmokeVerificationMode;
+    readonly varsDigest: string;
+    readonly outputAllowlistNames: readonly string[];
     readonly capsuleDir?: string;
     readonly sourceGitUrlDigest?: string;
     readonly sourceRef?: string;
@@ -151,6 +182,7 @@ interface CliArgs {
   readonly cloudflareWorkersSubdomain?: string;
   readonly cloudflareWorkersSubdomainFile?: string;
   readonly cloudflareConnectionMode?: string;
+  readonly runnerProfileId?: string;
   readonly space?: string;
   readonly workspace?: string;
   readonly spaceDisplayName?: string;
@@ -162,6 +194,11 @@ interface CliArgs {
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly sourceName?: string;
+  readonly verificationMode?: string;
+  readonly varsJson?: string;
+  readonly varsJsonFile?: string;
+  readonly outputAllowlistJson?: string;
+  readonly outputAllowlistJsonFile?: string;
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
@@ -223,6 +260,12 @@ interface InstallConfigRecord {
   readonly id?: string;
   readonly sourceKind?: string;
   readonly name?: string;
+}
+
+export interface SmokeProviderConnectionListEntry {
+  readonly id?: string;
+  readonly providerSource?: string;
+  readonly displayName?: string;
 }
 
 interface InstallationRecord {
@@ -327,26 +370,48 @@ export async function resolveOptions(
   if (!space) {
     throw new Error("--workspace or TAKOSUMI_SMOKE_WORKSPACE is required");
   }
-  const cloudflareAccountId = await readNonSecretInput({
-    file: args.cloudflareAccountIdFile ?? env.CLOUDFLARE_ACCOUNT_ID_FILE,
-    value: args.cloudflareAccountId,
-    envValue: env.CLOUDFLARE_ACCOUNT_ID,
-    envName: "CLOUDFLARE_ACCOUNT_ID",
-    label: "Cloudflare account id",
-    dryRun: args.dryRun === true,
-    hint: "pass --cloudflare-account-id-file, --cloudflare-account-id, or set CLOUDFLARE_ACCOUNT_ID",
-  });
-  const cloudflareWorkersSubdomain = await readNonSecretInput({
-    file:
-      args.cloudflareWorkersSubdomainFile ??
-      env.CLOUDFLARE_WORKERS_SUBDOMAIN_FILE,
-    value: args.cloudflareWorkersSubdomain,
-    envValue: env.CLOUDFLARE_WORKERS_SUBDOMAIN,
-    envName: "CLOUDFLARE_WORKERS_SUBDOMAIN",
-    label: "Cloudflare Workers subdomain",
-    dryRun: args.dryRun === true,
-    hint: "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
-  });
+  const cloudflareConnectionMode = parseCloudflareConnectionMode(
+    args.cloudflareConnectionMode ??
+      env.TAKOSUMI_SMOKE_CLOUDFLARE_CONNECTION_MODE,
+  );
+  const verificationMode = parseVerificationMode(
+    args.verificationMode ?? env.TAKOSUMI_SMOKE_VERIFICATION_MODE,
+  );
+  if (
+    cloudflareConnectionMode === "none" &&
+    verificationMode === "cloudflare-worker"
+  ) {
+    throw new Error(
+      "--cloudflare-connection-mode none requires --verification-mode opentofu",
+    );
+  }
+  const cloudflareInputsRequired =
+    cloudflareConnectionMode !== "none" ||
+    verificationMode === "cloudflare-worker";
+  const cloudflareAccountId = cloudflareInputsRequired
+    ? await readNonSecretInput({
+        file: args.cloudflareAccountIdFile ?? env.CLOUDFLARE_ACCOUNT_ID_FILE,
+        value: args.cloudflareAccountId,
+        envValue: env.CLOUDFLARE_ACCOUNT_ID,
+        envName: "CLOUDFLARE_ACCOUNT_ID",
+        label: "Cloudflare account id",
+        dryRun: args.dryRun === true,
+        hint: "pass --cloudflare-account-id-file, --cloudflare-account-id, or set CLOUDFLARE_ACCOUNT_ID",
+      })
+    : ({ value: "", source: "not_required" } as const);
+  const cloudflareWorkersSubdomain = cloudflareInputsRequired
+    ? await readNonSecretInput({
+        file:
+          args.cloudflareWorkersSubdomainFile ??
+          env.CLOUDFLARE_WORKERS_SUBDOMAIN_FILE,
+        value: args.cloudflareWorkersSubdomain,
+        envValue: env.CLOUDFLARE_WORKERS_SUBDOMAIN,
+        envName: "CLOUDFLARE_WORKERS_SUBDOMAIN",
+        label: "Cloudflare Workers subdomain",
+        dryRun: args.dryRun === true,
+        hint: "pass --cloudflare-workers-subdomain-file, --cloudflare-workers-subdomain, or set CLOUDFLARE_WORKERS_SUBDOMAIN",
+      })
+    : ({ value: "", source: "not_required" } as const);
   const accountSessionToken = await readSecret({
     file: args.sessionTokenFile ?? env.TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE,
     envValue: env.TAKOSUMI_ACCOUNT_SESSION_TOKEN,
@@ -354,27 +419,23 @@ export async function resolveOptions(
     label: "account session token",
     dryRun: args.dryRun === true,
   });
-  const cloudflareApiToken = await readSecret({
-    file: args.cloudflareApiTokenFile ?? env.CLOUDFLARE_API_TOKEN_FILE,
-    envValue: env.CLOUDFLARE_API_TOKEN,
-    envName: "CLOUDFLARE_API_TOKEN",
-    label: "Cloudflare API token",
-    dryRun: args.dryRun === true,
-  });
-  const cloudflareConnectionMode = parseCloudflareConnectionMode(
-    args.cloudflareConnectionMode ??
-      env.TAKOSUMI_SMOKE_CLOUDFLARE_CONNECTION_MODE,
-  );
+  const cloudflareApiToken = cloudflareInputsRequired
+    ? await readSecret({
+        file: args.cloudflareApiTokenFile ?? env.CLOUDFLARE_API_TOKEN_FILE,
+        envValue: env.CLOUDFLARE_API_TOKEN,
+        envName: "CLOUDFLARE_API_TOKEN",
+        label: "Cloudflare API token",
+        dryRun: args.dryRun === true,
+      })
+    : ({ value: "", source: "not_required" } as const);
   const rawSourceGitUrl =
     args.sourceGitUrl ?? env.TAKOSUMI_SMOKE_SOURCE_GIT_URL;
   const sourceGitUrl =
     rawSourceGitUrl !== undefined
       ? normalizeSmokeSourceGitUrl(rawSourceGitUrl)
       : undefined;
-  const sourceRef =
-    args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
-  const sourcePath =
-    args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
+  const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
+  const sourcePath = args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
   const sourceMode = sourceGitUrl ? "git" : "upload";
@@ -382,6 +443,30 @@ export async function resolveOptions(
   if (args.dryRun !== true && sourceMode === "upload") {
     await access(capsuleDir);
   }
+  const resolvedAppName = args.appName ?? defaultAppName();
+  const vars = await readJsonRecordInput({
+    inline: args.varsJson ?? env.TAKOSUMI_SMOKE_VARS_JSON,
+    file: args.varsJsonFile ?? env.TAKOSUMI_SMOKE_VARS_JSON_FILE,
+    label: "vars",
+    fallback: defaultSmokeVars({
+      accountId: cloudflareAccountId.value,
+      appName: resolvedAppName,
+      workersSubdomain: cloudflareWorkersSubdomain.value,
+    }),
+  });
+  const outputAllowlist = parseOutputAllowlist(
+    await readJsonRecordInput({
+      inline:
+        args.outputAllowlistJson ?? env.TAKOSUMI_SMOKE_OUTPUT_ALLOWLIST_JSON,
+      file:
+        args.outputAllowlistJsonFile ??
+        env.TAKOSUMI_SMOKE_OUTPUT_ALLOWLIST_JSON_FILE,
+      label: "output allowlist",
+      fallback: defaultSmokeOutputAllowlist(),
+    }),
+  );
+  const appName =
+    args.appName ?? stringRecordValue(vars, "appName") ?? resolvedAppName;
   return {
     url: normalizeBaseUrl(url),
     accountSessionToken: accountSessionToken.value,
@@ -393,11 +478,20 @@ export async function resolveOptions(
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
+    ...(args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID
+      ? {
+          runnerProfileId:
+            args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID,
+        }
+      : {}),
     space,
-    appName: args.appName ?? defaultAppName(),
+    appName,
     environment: args.environment ?? defaultSmokeEnvironment(url),
     sourceMode,
     capsuleDir,
+    verificationMode,
+    vars,
+    outputAllowlist,
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
     ...(sourceGitUrl ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
@@ -438,8 +532,12 @@ export function dryRunResult(
     generatedAt: new Date().toISOString(),
     serviceUrl: options.url,
     scratchSpaceId: options.space,
-    capsuleModule: "cloudflare-hello-worker",
-    credentialPath: "space_scoped_provider_connection",
+    capsuleModule: capsuleLabel(options),
+    verificationMode: options.verificationMode,
+    credentialPath:
+      options.cloudflareConnectionMode === "none"
+        ? "none"
+        : "space_scoped_provider_connection",
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
@@ -462,18 +560,24 @@ export function dryRunResult(
       : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
-    workerUrl: publicWorkerUrl(options),
+    workerUrl:
+      options.verificationMode === "cloudflare-worker"
+        ? publicWorkerUrl(options)
+        : "",
     deploymentVerified: true,
-    publicUrlVerified: true,
+    publicUrlVerified: options.verificationMode === "cloudflare-worker",
     deploymentLedgerVerified: true,
     destroyVerified: true,
-    connectionRevoked: options.keepConnection ? undefined : true,
+    connectionRevoked:
+      options.keepConnection || options.cloudflareConnectionMode === "none"
+        ? undefined
+        : true,
     deploymentLedger: {
       installationStatus: "active",
       deploymentId: "dep_dry_run",
       stateGeneration: 1,
       applyRunId: "apply_dry_run",
-      publicOutputNames: ["url", "worker_name"],
+      publicOutputNames: Object.keys(options.outputAllowlist).sort(),
       publicOutputDigest: `sha256:${"0".repeat(64)}`,
     },
     inputs: publicInputSummary(options),
@@ -515,23 +619,30 @@ export async function runPlatformControlPlaneSmoke(
   let failure: unknown;
 
   try {
-    const connection = await createSpaceCloudflareConnection(options, spaceId);
-    connectionId = connection.rawConnectionId;
-    providerConnectionId = connection.providerConnectionId;
-    completeStep("spaceScopedProviderConnection");
-    if (options.cloudflareConnectionMode === "generic-env") {
-      completeStep("genericEnvProviderConnection");
+    if (options.cloudflareConnectionMode !== "none") {
+      const connection = await createSpaceCloudflareConnection(
+        options,
+        spaceId,
+      );
+      connectionId = connection.rawConnectionId;
+      providerConnectionId = connection.providerConnectionId;
+      completeStep("spaceScopedProviderConnection");
+      if (options.cloudflareConnectionMode === "generic-env") {
+        completeStep("genericEnvProviderConnection");
+      }
+      completeStep("connectionVerified");
+    } else {
+      completeStep("providerConnectionNotRequired");
     }
-    completeStep("connectionVerified");
     const deploy =
       options.sourceMode === "git"
         ? await deployGitSourceCapsule(options, {
             spaceId,
-            providerConnectionId,
+            ...(providerConnectionId ? { providerConnectionId } : {}),
           })
         : await deployUploadedCapsule(options, {
             spaceId,
-            providerConnectionId,
+            ...(providerConnectionId ? { providerConnectionId } : {}),
           });
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
@@ -564,15 +675,24 @@ export async function runPlatformControlPlaneSmoke(
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     completeStep("apply");
-    await assertCloudflareWorkerExists(options);
-    completeStep("deploymentVerified");
-    await assertPublicWorkerUrl(options);
-    completeStep("publicUrlVerified");
-    deploymentLedger = await assertDeploymentLedger(options, {
-      spaceId,
-      installationId,
-      applyRunId,
-    });
+    if (options.verificationMode === "cloudflare-worker") {
+      await assertCloudflareWorkerExists(options);
+      completeStep("deploymentVerified");
+      await assertPublicWorkerUrl(options);
+      completeStep("publicUrlVerified");
+      deploymentLedger = await assertDeploymentLedger(options, {
+        spaceId,
+        installationId,
+        applyRunId,
+      });
+    } else {
+      completeStep("opentofuApplyVerified");
+      deploymentLedger = await assertGenericDeploymentLedger(options, {
+        spaceId,
+        installationId,
+        applyRunId,
+      });
+    }
     completeStep("deploymentLedgerVerified");
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
@@ -613,11 +733,13 @@ export async function runPlatformControlPlaneSmoke(
     const completedDestroy = await pollRun(options, destroyApplyRunId);
     policyStatus = publicPolicyStatus(completedDestroy);
     assertRunSucceeded(completedDestroy, "destroy apply");
-    await assertCloudflareWorkerGone(options);
-    await assertPublicWorkerUrlGone(options);
+    if (options.verificationMode === "cloudflare-worker") {
+      await assertCloudflareWorkerGone(options);
+      await assertPublicWorkerUrlGone(options);
+    }
     completeStep("destroy");
 
-    if (!options.keepConnection) {
+    if (connectionId && !options.keepConnection) {
       connectionRevoked = await revokeConnection(options, connectionId);
       if (!connectionRevoked) {
         throw new Error(
@@ -632,8 +754,12 @@ export async function runPlatformControlPlaneSmoke(
       generatedAt: new Date().toISOString(),
       serviceUrl: options.url,
       scratchSpaceId: spaceId,
-      capsuleModule: "cloudflare-hello-worker",
-      credentialPath: "space_scoped_provider_connection",
+      capsuleModule: capsuleLabel(options),
+      verificationMode: options.verificationMode,
+      credentialPath:
+        options.cloudflareConnectionMode === "none"
+          ? "none"
+          : "space_scoped_provider_connection",
       providerConnectionMode: options.cloudflareConnectionMode,
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
@@ -658,12 +784,15 @@ export async function runPlatformControlPlaneSmoke(
         completedDestroy.policyStatus === "deny"
           ? failPolicy()
           : "passed",
-      workerUrl: publicWorkerUrl(options),
+      workerUrl:
+        options.verificationMode === "cloudflare-worker"
+          ? publicWorkerUrl(options)
+          : "",
       deploymentVerified: true,
-      publicUrlVerified: true,
+      publicUrlVerified: options.verificationMode === "cloudflare-worker",
       deploymentLedgerVerified: true,
       destroyVerified: true,
-      connectionRevoked,
+      ...(connectionId ? { connectionRevoked } : {}),
       inputs: publicInputSummary(options),
     };
   } catch (error) {
@@ -680,7 +809,12 @@ export async function runPlatformControlPlaneSmoke(
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
-    if (installationId && applyRunId && !destroyApplyRunId) {
+    if (
+      options.verificationMode === "cloudflare-worker" &&
+      installationId &&
+      applyRunId &&
+      !destroyApplyRunId
+    ) {
       failureCleanup = await cleanupAppliedSmokeFailure(options, {
         installationId,
       });
@@ -766,8 +900,12 @@ function failedResult(
     generatedAt: new Date().toISOString(),
     serviceUrl: options.url,
     scratchSpaceId: input.spaceId,
-    capsuleModule: "cloudflare-hello-worker",
-    credentialPath: "space_scoped_provider_connection",
+    capsuleModule: capsuleLabel(options),
+    verificationMode: options.verificationMode,
+    credentialPath:
+      options.cloudflareConnectionMode === "none"
+        ? "none"
+        : "space_scoped_provider_connection",
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
@@ -788,14 +926,21 @@ function failedResult(
     deploymentLedger: input.deploymentLedger,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
-    workerUrl: publicWorkerUrl(options),
-    deploymentVerified: input.completedSteps.includes("deploymentVerified"),
+    workerUrl:
+      options.verificationMode === "cloudflare-worker"
+        ? publicWorkerUrl(options)
+        : "",
+    deploymentVerified:
+      input.completedSteps.includes("deploymentVerified") ||
+      input.completedSteps.includes("opentofuApplyVerified"),
     publicUrlVerified: input.completedSteps.includes("publicUrlVerified"),
     deploymentLedgerVerified: input.completedSteps.includes(
       "deploymentLedgerVerified",
     ),
     destroyVerified: input.completedSteps.includes("destroy"),
-    connectionRevoked: input.connectionRevoked,
+    ...(input.connectionId
+      ? { connectionRevoked: input.connectionRevoked }
+      : {}),
     timedOutRunId: input.timedOutRunId,
     runCancellationStatus: input.runCancellationStatus,
     runCancellationError: input.runCancellationError,
@@ -962,21 +1107,17 @@ async function lookupPublicProviderConnectionId(
   displayName: string,
 ): Promise<string> {
   const response = await requestJson<{
-    readonly providerConnections?: readonly {
-      readonly id?: string;
-      readonly providerSource?: string;
-      readonly displayName?: string;
-    }[];
+    readonly providerConnections?: readonly SmokeProviderConnectionListEntry[];
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
     path: `${API_PREFIX}/provider-connections?spaceId=${encodeURIComponent(spaceId)}`,
   });
-  const match = (response.providerConnections ?? []).find(
-    (connection) =>
-      connection.providerSource === "cloudflare" &&
-      connection.displayName === displayName &&
-      typeof connection.id === "string",
+  const match = (response.providerConnections ?? []).find((connection) =>
+    isSmokeProviderConnectionMatch(connection, {
+      provider: "cloudflare",
+      displayName,
+    }),
   );
   if (!match?.id) {
     throw new Error(
@@ -984,6 +1125,19 @@ async function lookupPublicProviderConnectionId(
     );
   }
   return match.id;
+}
+
+export function isSmokeProviderConnectionMatch(
+  connection: SmokeProviderConnectionListEntry,
+  expected: { readonly provider: string; readonly displayName: string },
+): boolean {
+  return (
+    typeof connection.id === "string" &&
+    connection.displayName === expected.displayName &&
+    connection.providerSource !== undefined &&
+    canonicalProviderSource(connection.providerSource) ===
+      canonicalProviderSource(expected.provider)
+  );
 }
 
 async function uploadCapsule(
@@ -1009,7 +1163,7 @@ async function deployUploadedCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly spaceId: string;
-    readonly providerConnectionId: string;
+    readonly providerConnectionId?: string;
   },
 ): Promise<
   DeployResponse & {
@@ -1029,7 +1183,7 @@ async function deployGitSourceCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly spaceId: string;
-    readonly providerConnectionId: string;
+    readonly providerConnectionId?: string;
   },
 ): Promise<
   DeployResponse & {
@@ -1058,10 +1212,12 @@ async function deployGitSourceCapsule(
     sourceId: source.id,
     installConfigId,
   });
-  await putInstallationProviderConnections(options, {
-    installationId: installation.id,
-    providerConnectionId: input.providerConnectionId,
-  });
+  if (input.providerConnectionId) {
+    await putInstallationProviderConnections(options, {
+      installationId: installation.id,
+      providerConnectionId: input.providerConnectionId,
+    });
+  }
   const plan = await requestJson<{ readonly run: RunRecord }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
@@ -1070,7 +1226,11 @@ async function deployGitSourceCapsule(
       installation.id,
     )}/plan`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
-    body: {},
+    body: {
+      ...(options.runnerProfileId
+        ? { runnerProfileId: options.runnerProfileId }
+        : {}),
+    },
   });
   return {
     installation,
@@ -1143,8 +1303,7 @@ async function findGenericCapsuleInstallConfigId(
   });
   const match = (response.installConfigs ?? []).find(
     (config) =>
-      typeof config.id === "string" &&
-      config.sourceKind === "generic_capsule",
+      typeof config.id === "string" && config.sourceKind === "generic_capsule",
   );
   if (!match?.id) {
     throw new Error(
@@ -1176,11 +1335,7 @@ async function createSourceInstallation(
       environment: options.environment,
       sourceId: input.sourceId,
       installConfigId: input.installConfigId,
-      vars: {
-        accountId: options.cloudflareAccountId,
-        appName: options.appName,
-        workersSubdomain: options.cloudflareWorkersSubdomain,
-      },
+      vars: options.vars,
     },
   });
   const id = response.installation?.id;
@@ -1189,7 +1344,9 @@ async function createSourceInstallation(
   }
   return {
     id,
-    ...(response.installation?.name ? { name: response.installation.name } : {}),
+    ...(response.installation?.name
+      ? { name: response.installation.name }
+      : {}),
   };
 }
 
@@ -1241,7 +1398,7 @@ async function deploySnapshot(
   input: {
     readonly spaceId: string;
     readonly snapshotId: string;
-    readonly providerConnectionId: string;
+    readonly providerConnectionId?: string;
   },
 ): Promise<DeployResponse> {
   return await requestJson<DeployResponse>({
@@ -1255,22 +1412,22 @@ async function deploySnapshot(
       name: options.appName,
       environment: options.environment,
       snapshotId: input.snapshotId,
-      vars: {
-        accountId: options.cloudflareAccountId,
-        appName: options.appName,
-        workersSubdomain: options.cloudflareWorkersSubdomain,
-      },
-      outputAllowlist: {
-        worker_name: { from: "worker_name", type: "string", required: true },
-        url: { from: "url", type: "url", required: true },
-      },
-      providerConnections: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          connectionId: input.providerConnectionId,
-        },
-      ],
+      ...(options.runnerProfileId
+        ? { runnerProfileId: options.runnerProfileId }
+        : {}),
+      vars: options.vars,
+      outputAllowlist: options.outputAllowlist,
+      ...(input.providerConnectionId
+        ? {
+            providerConnections: [
+              {
+                provider: "cloudflare",
+                alias: "main",
+                connectionId: input.providerConnectionId,
+              },
+            ],
+          }
+        : {}),
       autoApprove: true,
     },
   });
@@ -1746,6 +1903,142 @@ async function assertDeploymentLedger(
   };
 }
 
+async function assertGenericDeploymentLedger(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly installationId: string;
+    readonly applyRunId: string;
+  },
+): Promise<DeploymentLedgerVerificationResult> {
+  const installationResponse = await requestJson<{
+    readonly installation?: {
+      readonly id?: string;
+      readonly spaceId?: string;
+      readonly status?: string;
+      readonly currentDeploymentId?: string;
+      readonly currentStateGeneration?: number;
+    };
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      input.installationId,
+    )}`,
+  });
+  const installation = installationResponse.installation;
+  if (!installation) {
+    throw new Error(
+      "installation ledger response did not include installation",
+    );
+  }
+  if (installation.id !== input.installationId) {
+    throw new Error(
+      "installation ledger returned an unexpected installation id",
+    );
+  }
+  if (installation.spaceId !== input.spaceId) {
+    throw new Error("installation ledger returned an unexpected Workspace id");
+  }
+  if (installation.status !== "active") {
+    throw new Error(
+      `installation ledger status was ${installation.status ?? "unknown"}; expected active`,
+    );
+  }
+  if (
+    !Number.isInteger(installation.currentStateGeneration) ||
+    Number(installation.currentStateGeneration) < 1
+  ) {
+    throw new Error("installation ledger did not advance state generation");
+  }
+  if (!installation.currentDeploymentId) {
+    throw new Error("installation ledger did not expose currentDeploymentId");
+  }
+  const currentDeploymentId = installation.currentDeploymentId;
+  const currentStateGeneration = installation.currentStateGeneration;
+
+  const deploymentsResponse = await requestJson<{
+    readonly deployments?: readonly {
+      readonly id?: string;
+      readonly spaceId?: string;
+      readonly installationId?: string;
+      readonly environment?: string;
+      readonly applyRunId?: string;
+      readonly stateGeneration?: number;
+      readonly outputsPublic?: Record<string, unknown>;
+      readonly status?: string;
+    }[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/installations/${encodeURIComponent(
+      input.installationId,
+    )}/deployments`,
+  });
+  const deployments = deploymentsResponse.deployments ?? [];
+  const deployment =
+    deployments.find((item) => item.id === currentDeploymentId) ??
+    deployments.find((item) => item.applyRunId === input.applyRunId);
+  if (!deployment) {
+    throw new Error("deployment ledger did not include the applied deployment");
+  }
+  if (!deployment.id || deployment.id !== currentDeploymentId) {
+    throw new Error("deployment ledger does not match currentDeploymentId");
+  }
+  const deploymentId = deployment.id;
+  if (deployment.spaceId !== input.spaceId) {
+    throw new Error("deployment ledger returned an unexpected Workspace id");
+  }
+  if (deployment.installationId !== input.installationId) {
+    throw new Error("deployment ledger returned an unexpected installation id");
+  }
+  if (deployment.environment !== options.environment) {
+    throw new Error(
+      `deployment ledger environment was ${deployment.environment ?? "unknown"}; expected ${options.environment}`,
+    );
+  }
+  if (deployment.applyRunId !== input.applyRunId) {
+    throw new Error("deployment ledger returned an unexpected applyRunId");
+  }
+  if (deployment.status !== "active") {
+    throw new Error(
+      `deployment ledger status was ${deployment.status ?? "unknown"}; expected active`,
+    );
+  }
+  if (
+    !Number.isInteger(deployment.stateGeneration) ||
+    deployment.stateGeneration !== currentStateGeneration
+  ) {
+    throw new Error(
+      "deployment ledger state generation did not match installation",
+    );
+  }
+  const outputsPublic = deployment.outputsPublic;
+  if (!isRecord(outputsPublic)) {
+    throw new Error("deployment ledger did not expose outputsPublic");
+  }
+  const publicOutputNames = Object.keys(outputsPublic).sort();
+  const missingRequiredOutputs = Object.entries(options.outputAllowlist)
+    .filter(([, spec]) => spec.required === true)
+    .map(([name]) => name)
+    .filter((name) => !publicOutputNames.includes(name));
+  if (missingRequiredOutputs.length > 0) {
+    throw new Error(
+      `deployment outputsPublic did not include required output(s): ${missingRequiredOutputs.join(
+        ", ",
+      )}`,
+    );
+  }
+  return {
+    installationStatus: installation.status,
+    deploymentId,
+    stateGeneration: deployment.stateGeneration,
+    applyRunId: input.applyRunId,
+    publicOutputNames,
+    publicOutputDigest: digestJson(outputsPublic),
+  };
+}
+
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -1876,7 +2169,10 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
     if (timeout) clearTimeout(timeout);
   }
   const text = await response.text();
-  const body = text.trim().length > 0 ? JSON.parse(text) : undefined;
+  const body = parseResponseBody(
+    text,
+    `${options.method ?? "GET"} ${options.path}`,
+  );
   if (!response.ok) {
     throw new Error(
       `${options.method ?? "GET"} ${options.path} failed (${response.status}): ${apiErrorMessage(
@@ -1892,6 +2188,31 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
     );
   }
   return body as T;
+}
+
+function parseResponseBody(text: string, label: string): unknown {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return undefined;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      throw new Error(
+        `${label} returned invalid JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  return {
+    message: `${label} returned non-JSON response: ${redactResponseSnippet(
+      trimmed,
+    )}`,
+  };
+}
+
+function redactResponseSnippet(value: string): string {
+  return publicErrorMessage(value.replace(/\s+/g, " ").slice(0, 240));
 }
 
 function apiErrorMessage(body: unknown, fallback: string): string {
@@ -1921,9 +2242,24 @@ function publicErrorMessage(error: unknown): string {
 
 function tarZstd(dir: string): Promise<Uint8Array> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("tar", ["--zstd", "-cf", "-", "-C", dir, "."], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "tar",
+      [
+        "--zstd",
+        "--exclude=.git",
+        "--exclude=.terraform",
+        "--exclude=.wrangler",
+        "--exclude=node_modules",
+        "-cf",
+        "-",
+        "-C",
+        dir,
+        ".",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -2054,14 +2390,145 @@ function normalizeBaseUrl(value: string): string {
 
 function parseCloudflareConnectionMode(
   value: string | undefined,
-): "guided" | "generic-env" {
+): SmokeProviderConnectionMode {
   if (value === undefined || value.trim() === "" || value === "guided") {
     return "guided";
   }
   if (value === "generic-env") return "generic-env";
+  if (value === "none") return "none";
   throw new Error(
-    "--cloudflare-connection-mode must be guided or generic-env",
+    "--cloudflare-connection-mode must be guided, generic-env, or none",
   );
+}
+
+function parseVerificationMode(
+  value: string | undefined,
+): SmokeVerificationMode {
+  if (
+    value === undefined ||
+    value.trim() === "" ||
+    value === "cloudflare-worker"
+  ) {
+    return "cloudflare-worker";
+  }
+  if (value === "opentofu") return "opentofu";
+  throw new Error("--verification-mode must be cloudflare-worker or opentofu");
+}
+
+function defaultSmokeVars(input: {
+  readonly accountId: string;
+  readonly appName: string;
+  readonly workersSubdomain: string;
+}): Readonly<Record<string, JsonSmokeValue>> {
+  return {
+    accountId: input.accountId,
+    appName: input.appName,
+    workersSubdomain: input.workersSubdomain,
+  };
+}
+
+function defaultSmokeOutputAllowlist(): SmokeOutputAllowlist {
+  return {
+    worker_name: { from: "worker_name", type: "string", required: true },
+    url: { from: "url", type: "url", required: true },
+  };
+}
+
+async function readJsonRecordInput(input: {
+  readonly inline?: string;
+  readonly file?: string;
+  readonly label: string;
+  readonly fallback: Readonly<Record<string, JsonSmokeValue>>;
+}): Promise<Readonly<Record<string, JsonSmokeValue>>> {
+  if (input.inline !== undefined) {
+    return parseJsonRecord(input.inline, input.label);
+  }
+  if (input.file !== undefined) {
+    return parseJsonRecord(await readFile(input.file, "utf8"), input.label);
+  }
+  return input.fallback;
+}
+
+function parseJsonRecord(
+  raw: string,
+  label: string,
+): Readonly<Record<string, JsonSmokeValue>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `${label} must be valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!isJsonRecord(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed;
+}
+
+function parseOutputAllowlist(
+  value: Readonly<Record<string, JsonSmokeValue>>,
+): SmokeOutputAllowlist {
+  const out: Record<
+    string,
+    { from: string; type?: string; required?: boolean }
+  > = {};
+  for (const [name, spec] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error(
+        `output allowlist key ${JSON.stringify(name)} must be an OpenTofu identifier`,
+      );
+    }
+    if (!isRecord(spec) || typeof spec.from !== "string" || !spec.from) {
+      throw new Error(
+        `output allowlist ${name} must include a non-empty string "from" field`,
+      );
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(spec.from)) {
+      throw new Error(
+        `output allowlist ${name}.from must be an OpenTofu output identifier`,
+      );
+    }
+    out[name] = {
+      from: spec.from,
+      ...(typeof spec.type === "string" ? { type: spec.type } : {}),
+      ...(typeof spec.required === "boolean"
+        ? { required: spec.required }
+        : {}),
+    };
+  }
+  return out;
+}
+
+function isJsonRecord(
+  value: unknown,
+): value is Readonly<Record<string, JsonSmokeValue>> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isJsonSmokeValue);
+}
+
+function isJsonSmokeValue(value: unknown): value is JsonSmokeValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return Number.isFinite(value as number) || typeof value !== "number";
+  }
+  if (Array.isArray(value)) return value.every(isJsonSmokeValue);
+  return isJsonRecord(value);
+}
+
+function stringRecordValue(
+  record: Readonly<Record<string, JsonSmokeValue>>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeSmokeSourceGitUrl(value: string): string {
@@ -2080,14 +2547,26 @@ function defaultAppName(): string {
   return `takosumi-smoke-${suffix}`;
 }
 
+function capsuleLabel(options: PlatformControlPlaneSmokeOptions): string {
+  if (options.capsuleDir === DEFAULT_CAPSULE_DIR) {
+    return "cloudflare-hello-worker";
+  }
+  if (options.sourceMode === "git") return "git-opentofu-capsule";
+  return "uploaded-opentofu-capsule";
+}
+
 function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly accountSessionTokenSource: "env" | "file";
-  readonly cloudflareApiTokenSource: "env" | "file";
-  readonly cloudflareAccountIdSource: "env" | "file" | "arg";
+  readonly cloudflareApiTokenSource: SecretInputSource;
+  readonly cloudflareAccountIdSource: NonSecretInputSource;
   readonly cloudflareAccountIdDigest: string;
-  readonly cloudflareWorkersSubdomainSource: "env" | "file" | "arg";
-  readonly cloudflareConnectionMode: "guided" | "generic-env";
+  readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
+  readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  readonly runnerProfileId?: string;
   readonly sourceMode: "upload" | "git";
+  readonly verificationMode: SmokeVerificationMode;
+  readonly varsDigest: string;
+  readonly outputAllowlistNames: readonly string[];
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
@@ -2097,10 +2576,19 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     accountSessionTokenSource: options.accountSessionTokenSource,
     cloudflareApiTokenSource: options.cloudflareApiTokenSource,
     cloudflareAccountIdSource: options.cloudflareAccountIdSource,
-    cloudflareAccountIdDigest: sha256(options.cloudflareAccountId),
+    cloudflareAccountIdDigest:
+      options.cloudflareAccountIdSource === "not_required"
+        ? "not_required"
+        : sha256(options.cloudflareAccountId),
     cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
     cloudflareConnectionMode: options.cloudflareConnectionMode,
+    ...(options.runnerProfileId
+      ? { runnerProfileId: options.runnerProfileId }
+      : {}),
     sourceMode: options.sourceMode,
+    verificationMode: options.verificationMode,
+    varsDigest: digestJson(options.vars),
+    outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     ...(options.sourceMode === "upload"
       ? { capsuleDir: options.capsuleDir }
       : {}),
@@ -2146,28 +2634,38 @@ function requiredSteps(
     | "keepConnection"
     | "sourceMode"
     | "cloudflareConnectionMode"
+    | "verificationMode"
   >,
 ): readonly string[] {
   const steps = [
-    "spaceScopedProviderConnection",
+    ...(options?.cloudflareConnectionMode === "none"
+      ? ["providerConnectionNotRequired"]
+      : ["spaceScopedProviderConnection"]),
     ...(options?.cloudflareConnectionMode === "generic-env"
       ? ["genericEnvProviderConnection"]
       : []),
-    "connectionVerified",
+    ...(options?.cloudflareConnectionMode === "none"
+      ? []
+      : ["connectionVerified"]),
     ...(options?.sourceMode === "git" ? ["sourceRegistered"] : []),
     ...(options?.sourceMode === "git" ? ["sourceSynced"] : []),
     "scratchInstall",
     "plan",
     "apply",
-    "deploymentVerified",
-    "publicUrlVerified",
+    ...(options?.verificationMode === "opentofu"
+      ? ["opentofuApplyVerified"]
+      : ["deploymentVerified", "publicUrlVerified"]),
     "deploymentLedgerVerified",
   ];
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");
   }
   steps.push("destroy");
-  if (options && !options.keepConnection) {
+  if (
+    options &&
+    !options.keepConnection &&
+    options.cloudflareConnectionMode !== "none"
+  ) {
     steps.push("connectionRevoked");
   }
   return steps;
@@ -2195,9 +2693,12 @@ async function writeResult(
   console.log(`workspace: ${result.scratchSpaceId}`);
   console.log(`provider connection: ${result.providerConnectionMode}`);
   console.log(`source mode: ${result.sourceMode}`);
+  console.log(`verification mode: ${result.verificationMode}`);
   console.log(`capsule: ${result.capsuleModule}`);
   console.log(`app: ${result.appName}`);
-  console.log(`worker URL: ${result.workerUrl}`);
+  if (result.verificationMode === "cloudflare-worker") {
+    console.log(`worker URL: ${result.workerUrl}`);
+  }
   console.log(
     `public URL verified: ${result.publicUrlVerified ? "yes" : "no"}`,
   );
@@ -2314,6 +2815,85 @@ async function runSelfTest(): Promise<void> {
     serializedGenericEnv.includes("cloudflare-account-id")
   ) {
     throw new Error("generic-env self-test leaked secret file names");
+  }
+  const opentofuOnlyOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      capsuleDir: "/private/custom-opentofu-module",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      verificationMode: "opentofu",
+      varsJson:
+        '{"target":"cloudflare","project_name":"takosumi-smoke-selftest","environment":"selftest","cloudflare":{"account_id":"acc_selftest"}}',
+      outputAllowlistJson:
+        '{"target":{"from":"target","type":"string","required":true}}',
+    },
+    {},
+  );
+  const opentofuOnlyResult = dryRunResult(opentofuOnlyOptions);
+  const serializedOpenTofuOnly = JSON.stringify(opentofuOnlyResult);
+  if (opentofuOnlyResult.verificationMode !== "opentofu") {
+    throw new Error("self-test did not enable OpenTofu-only verification");
+  }
+  if (!opentofuOnlyResult.steps.includes("opentofuApplyVerified")) {
+    throw new Error("OpenTofu-only self-test result is missing apply proof");
+  }
+  if (opentofuOnlyResult.steps.includes("publicUrlVerified")) {
+    throw new Error("OpenTofu-only self-test should not require public URL");
+  }
+  if (opentofuOnlyResult.publicUrlVerified !== false) {
+    throw new Error("OpenTofu-only self-test should not report public URL");
+  }
+  if (serializedOpenTofuOnly.includes("acc_selftest")) {
+    throw new Error("OpenTofu-only self-test leaked vars content");
+  }
+  const providerlessOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      capsuleDir: "/private/keyless-opentofu-module",
+      appName: "takosumi-smoke-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      varsJson:
+        '{"name":"takosumi-keyless-selftest","base_url":"https://example.invalid/keyless"}',
+      outputAllowlistJson:
+        '{"url":{"from":"url","type":"url","required":true},"worker_name":{"from":"worker_name","type":"string","required":true}}',
+    },
+    {},
+  );
+  const providerlessResult = dryRunResult(providerlessOptions);
+  const serializedProviderless = JSON.stringify(providerlessResult);
+  if (providerlessResult.providerConnectionMode !== "none") {
+    throw new Error("providerless self-test did not enable none mode");
+  }
+  if (providerlessResult.credentialPath !== "none") {
+    throw new Error("providerless self-test should not report credentials");
+  }
+  if (!providerlessResult.steps.includes("providerConnectionNotRequired")) {
+    throw new Error("providerless self-test is missing no-connection step");
+  }
+  if (
+    providerlessResult.steps.includes("spaceScopedProviderConnection") ||
+    providerlessResult.steps.includes("connectionVerified") ||
+    providerlessResult.steps.includes("connectionRevoked")
+  ) {
+    throw new Error("providerless self-test should not require connections");
+  }
+  if (providerlessResult.connectionRevoked !== undefined) {
+    throw new Error("providerless self-test should not report revocation");
+  }
+  if (serializedProviderless.includes("keyless-selftest")) {
+    throw new Error("providerless self-test leaked vars content");
   }
   const gitOptions = await resolveOptions(
     {
@@ -2477,23 +3057,29 @@ Required inputs:
   --url <origin>                                  or TAKOSUMI_PLATFORM_URL
   --workspace <workspace_...|@handle>             or TAKOSUMI_SMOKE_WORKSPACE
   --session-token-file <path>                     or TAKOSUMI_ACCOUNT_SESSION_TOKEN_FILE / TAKOSUMI_ACCOUNT_SESSION_TOKEN
-  --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN
-  --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE
-  --cloudflare-account-id <id>                    or CLOUDFLARE_ACCOUNT_ID
-  --cloudflare-workers-subdomain-file <path>      or CLOUDFLARE_WORKERS_SUBDOMAIN_FILE
-  --cloudflare-workers-subdomain <name>           or CLOUDFLARE_WORKERS_SUBDOMAIN
+  --cloudflare-api-token-file <path>              or CLOUDFLARE_API_TOKEN_FILE / CLOUDFLARE_API_TOKEN; not required with --cloudflare-connection-mode none
+  --cloudflare-account-id-file <path>             or CLOUDFLARE_ACCOUNT_ID_FILE; not required with --cloudflare-connection-mode none
+  --cloudflare-account-id <id>                    or CLOUDFLARE_ACCOUNT_ID; not required with --cloudflare-connection-mode none
+  --cloudflare-workers-subdomain-file <path>      or CLOUDFLARE_WORKERS_SUBDOMAIN_FILE; only required for cloudflare-worker verification
+  --cloudflare-workers-subdomain <name>           or CLOUDFLARE_WORKERS_SUBDOMAIN; only required for cloudflare-worker verification
 
 Options:
   --app-name <name>                               default takosumi-smoke-<random>
   --environment <name>                            default inferred from --url
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
-  --cloudflare-connection-mode <guided|generic-env> default guided; generic-env proves the explicit env-name Provider Connection path
+  --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
+  --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
   --source-ref <ref>                              Git ref for --source-git-url, default main
   --source-path <path>                            Capsule path inside the Git repo, default .
   --source-name <name>                            Source display name, default <app-name>-source
+  --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
+  --vars-json <json>                              OpenTofu variable object passed to the generated root
+  --vars-json-file <path>                         read OpenTofu variable object from a JSON file
+  --output-allowlist-json <json>                  output projection object; default url + worker_name for the hello-worker smoke
+  --output-allowlist-json-file <path>             read output projection object from a JSON file
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
