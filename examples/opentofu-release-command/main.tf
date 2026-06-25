@@ -31,7 +31,7 @@ output "takosumi_release" {
       {
         id                = "activate"
         executor          = "runner"
-        command           = ["bun", "-e", "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON || '{}'); if (!outputs.url) process.exit(12); console.log('activated ' + outputs.url);"]
+        command           = ["bun", "-e", "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON || '{}'); const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON || '{}'); if (!outputs.url || context.outputs?.url !== outputs.url || context.kind !== 'takosumi.release-context@v1') process.exit(12); console.log('activated ' + context.outputs.url);"]
         working_directory = "."
       },
     ]
