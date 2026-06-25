@@ -26,8 +26,8 @@ export interface WebhookReleaseActivatorOptions {
 /**
  * Builds the operator/Cloud release activation bridge. The platform Worker
  * stays generic: it posts minimal, non-secret apply evidence to an external
- * materializer that owns product-specific publication such as wrangler upload
- * or Cloudflare API calls.
+ * materializer that owns product-specific publication outside the OpenTofu
+ * apply ledger.
  */
 export function createWebhookReleaseActivator(
   options: WebhookReleaseActivatorOptions,
@@ -71,15 +71,16 @@ export function createRunnerReleaseActivator(
         (command) => command.executor === "operator",
       );
       if (operatorCommands.length > 0) {
+        const metadata: Readonly<Record<string, JsonValue>> = {
+          commandCount: input.commands.length,
+          operatorCommandCount: operatorCommands.length,
+        };
         return {
           status: "pending",
           kind: "takosumi.operator.release-activation@v1",
           message:
             "post-apply release commands require an operator release activator",
-          metadata: {
-            commandCount: input.commands.length,
-            operatorCommandCount: operatorCommands.length,
-          },
+          metadata,
         };
       }
       if (!input.sourceSnapshot) {
@@ -99,14 +100,15 @@ export function createRunnerReleaseActivator(
         installationId: input.installation.id,
         deploymentId: input.deployment.id,
       });
+      const metadata: Readonly<Record<string, JsonValue>> = {
+        releaseRunId: result.runId,
+        commandCount: result.commandCount,
+      };
       return {
         status: "succeeded",
         kind: "takosumi.release-commands@v1",
         message: `ran ${result.commandCount} post-apply release command(s)`,
-        metadata: {
-          releaseRunId: result.runId,
-          commandCount: result.commandCount,
-        },
+        metadata,
       };
     },
   };

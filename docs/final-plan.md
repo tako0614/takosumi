@@ -1208,11 +1208,11 @@ Cloudflare compatibility is not required for the first hosted launch.
 
 OpenTofu apply success is only the infrastructure/state ledger. App readiness
 comes from a generic post-apply release activation step: Capsules can output
-opaque argv commands such as `takosumi_release.post_apply` or
-`takos_app.release.post_apply`, and Cloud/Operator activators run them in the
-appropriate execution boundary. Takosumi core must not grow DB-specific
-migration executors; database migrations, Worker uploads, index setup, and
-bootstrap tasks are just app/operator commands with logs and activation status.
+opaque argv commands through `takosumi_release.post_apply`, and Cloud/Operator
+activators run them in the appropriate execution boundary. Takosumi core must
+not grow DB-specific migration executors; database migrations, Worker uploads,
+index setup, and bootstrap tasks are just app/operator commands with logs and
+activation status.
 The built-in runner activator can run `executor = "runner"` commands inside the
 restored source snapshot sandbox and inject non-sensitive metadata and outputs
 (`TAKOSUMI_OUTPUTS_JSON`, run/deployment ids) into the command environment, but

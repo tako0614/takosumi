@@ -294,19 +294,18 @@ Sensitive outputs remain encrypted and are not projected into public views.
 ## Post-Apply Release Commands
 
 OpenTofu apply is not the same thing as an application being ready. A Capsule may
-declare generic post-apply release commands in an output such as
-`takosumi_release` or `takos_app.release`; Takosumi core treats those commands as
-opaque argv arrays and never adds DB-specific, Worker-specific, or provider-
-specific migration code.
+declare generic post-apply release commands in the neutral `takosumi_release`
+output; Takosumi core treats those commands as opaque argv arrays and never adds
+DB-specific, Worker-specific, or provider-specific migration code.
 
 ```hcl
 output "takosumi_release" {
   value = {
     post_apply = [
       {
-        id       = "migrate"
+        id       = "activate"
         executor = "runner"
-        command  = ["bun", "run", "takos:migrate"]
+        command  = ["bun", "run", "app:activate"]
       }
     ]
   }

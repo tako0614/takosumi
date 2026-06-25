@@ -16,7 +16,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       capturedRequest = new Request(input, init);
       return Response.json({
         status: "succeeded",
-        kind: "takos.cloudflare.worker",
+        kind: "operator.release",
         launchUrl: "https://app.example.test",
         metadata: { route: "app.example.test/*" },
       });
@@ -27,7 +27,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
 
   expect(result).toEqual({
     status: "succeeded",
-    kind: "takos.cloudflare.worker",
+    kind: "operator.release",
     launchUrl: "https://app.example.test",
     metadata: { route: "app.example.test/*" },
   });
@@ -79,7 +79,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       {
         id: "migrate",
         phase: "post_apply",
-        command: ["bun", "run", "takos:migrate"],
+        command: ["bun", "run", "app:activate"],
       },
     ],
   });
@@ -136,7 +136,7 @@ test("runner release activator runs opaque post-apply commands", async () => {
       {
         id: "migrate",
         phase: "post_apply",
-        command: ["bun", "run", "takos:migrate"],
+        command: ["bun", "run", "app:activate"],
       },
     ],
   });
@@ -344,7 +344,7 @@ function fakeActivationInput(): ReleaseActivationInput {
       {
         id: "migrate",
         phase: "post_apply",
-        command: ["bun", "run", "takos:migrate"],
+        command: ["bun", "run", "app:activate"],
       },
     ],
   } as unknown as ReleaseActivationInput;

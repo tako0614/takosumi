@@ -2108,9 +2108,9 @@ test("release activator runs after apply with only non-sensitive outputs", async
         activations.push(input);
         return Promise.resolve({
           status: "pending",
-          kind: "takos.cloudflare.worker",
+          kind: "operator.release",
           launchUrl: "https://x.example",
-          metadata: { workerName: "takos-preview" },
+          metadata: { artifactName: "preview" },
         });
       },
     },
@@ -2144,46 +2144,35 @@ test("release activator runs after apply with only non-sensitive outputs", async
       installationId: "inst_fixture",
       applyRunId: applyRun.id,
       outputCount: 3,
-      activationKind: "takos.cloudflare.worker",
+      activationKind: "operator.release",
       hasLaunchUrl: true,
       hasHealthUrl: false,
-      metadataKeys: ["workerName"],
+      metadataKeys: ["artifactName"],
     },
   });
   expect(JSON.stringify(activity)).not.toContain("https://x.example");
   expect(JSON.stringify(activity)).not.toContain("super-secret-token");
 });
 
-test("release activator receives app-declared post-apply commands as opaque argv", async () => {
+test("release activator receives neutral post-apply commands as opaque argv", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(
     {},
     {
-      takos_app: {
+      takosumi_release: {
         sensitive: false,
         value: {
-          release: {
-            post_apply: [
-              {
-                id: "migrate",
-                command: [
-                  "bun",
-                  "run",
-                  "takos:migrate",
-                  "--resource",
-                  "database",
-                ],
-                working_directory: ".",
-                env: {
-                  TAKOS_RESOURCE: "database",
-                  API_TOKEN: "sk-should-not-leak",
-                },
+          post_apply: [
+            {
+              id: "activate",
+              command: ["bun", "run", "app:activate", "--target", "runtime"],
+              working_directory: ".",
+              env: {
+                APP_RELEASE_TARGET: "runtime",
+                API_TOKEN: "sk-should-not-leak",
               },
-            ],
-          },
-          resources: {
-            encryption_key: { type: "secret" },
-          },
+            },
+          ],
         },
       },
       launch_url: { sensitive: false, value: "https://x.example" },
@@ -2211,11 +2200,11 @@ test("release activator receives app-declared post-apply commands as opaque argv
   expect(activations).toHaveLength(1);
   expect(activations[0]?.commands).toEqual([
     {
-      id: "migrate",
+      id: "activate",
       phase: "post_apply",
-      command: ["bun", "run", "takos:migrate", "--resource", "database"],
+      command: ["bun", "run", "app:activate", "--target", "runtime"],
       workingDirectory: ".",
-      env: { TAKOS_RESOURCE: "database" },
+      env: { APP_RELEASE_TARGET: "runtime" },
     },
   ]);
   expect(JSON.stringify(activations[0])).not.toContain("sk-should-not-leak");

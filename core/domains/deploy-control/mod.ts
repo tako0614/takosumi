@@ -486,10 +486,10 @@ export interface ReleaseActivationInput {
    */
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   /**
-   * App-declared release commands extracted from projected outputs such as
-   * `takosumi_release.post_apply` or `takos_app.release.post_apply`.
-   * Takosumi core treats them as opaque argv arrays; DB migrations, worker
-   * uploads, index creation, or app bootstrap all stay app/operator code.
+   * App-declared release commands extracted from the neutral
+   * `takosumi_release.post_apply` output. Takosumi core treats them as opaque
+   * argv arrays; DB migrations, worker uploads, index creation, or app
+   * bootstrap all stay app/operator code.
    */
   readonly commands: readonly ReleaseActivationCommand[];
   readonly sourceSnapshot?: SourceSnapshot;
@@ -497,7 +497,7 @@ export interface ReleaseActivationInput {
 
 export interface ReleaseActivationResult {
   readonly status: ReleaseActivationStatus;
-  /** Operator-defined activation kind, for example `takos.cloudflare.worker`. */
+  /** Operator-defined activation kind, for example `operator.release`. */
   readonly kind?: string;
   readonly message?: string;
   readonly launchUrl?: string;
@@ -984,9 +984,8 @@ export interface OpenTofuDeploymentControllerDependencies {
   /**
    * Operator/Cloud-only post-apply seam. OSS core records OpenTofu apply as the
    * Deployment of infrastructure/state. A host may additionally publish an
-   * application artifact (for example the Takos Worker script/assets) and report
-   * that release activation here. The hook receives no credential material and
-   * no sensitive outputs.
+   * application artifact and report that release activation here. The hook
+   * receives no credential material and no sensitive outputs.
    */
   readonly releaseActivator?: ReleaseActivator;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
@@ -7117,14 +7116,8 @@ function releaseActivationCommands(
   const commands: ReleaseActivationCommand[] = [];
   const visit = (name: string, value: JsonValue, sensitive?: boolean): void => {
     if (sensitive === true) return;
-    const descriptors =
-      name === "takosumi_release"
-        ? [value]
-        : name === "takos_app"
-          ? takosAppReleaseDescriptors(value)
-          : [];
-    for (const descriptor of descriptors) {
-      commands.push(...parseReleaseCommandDescriptor(descriptor));
+    if (name === "takosumi_release") {
+      commands.push(...parseReleaseCommandDescriptor(value));
     }
   };
   if (Array.isArray(outputs)) {
@@ -7137,15 +7130,6 @@ function releaseActivationCommands(
     }
   }
   return commands.slice(0, 20);
-}
-
-function takosAppReleaseDescriptors(value: JsonValue): readonly JsonValue[] {
-  if (!isRecord(value)) return [];
-  const release = value.release;
-  const lifecycle = value.lifecycle;
-  return [release, lifecycle].filter((entry): entry is JsonValue =>
-    isJsonValue(entry),
-  );
 }
 
 function parseReleaseCommandDescriptor(
