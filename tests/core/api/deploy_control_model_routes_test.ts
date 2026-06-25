@@ -225,6 +225,7 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
     installation.installConfigId,
   );
   expect(config.spaceId).toBe(spaceId);
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.variableMapping).toEqual({
     project_name: "takos-vars",
     cloudflare: {},
@@ -233,6 +234,63 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
     url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
   });
+});
+
+test("model e2e: create Installation with runnerProfileId and outputAllowlist stores a scoped InstallConfig", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "runner-profile");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "generic",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        runnerProfileId: "generic-opentofu-provider",
+        outputAllowlist: {
+          takos_app: { from: "takos_app", type: "json", required: true },
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const installation = (await createRes.json()).installation as {
+    installConfigId: string;
+    runnerProfileId?: string;
+  };
+  expect(installation.installConfigId).not.toBe(installConfigId);
+  expect(installation.runnerProfileId).toBeUndefined();
+
+  const config = await operations.installations.getInstallConfig(
+    installation.installConfigId,
+  );
+  expect(config.spaceId).toBe(spaceId);
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(config.variableMapping).toEqual({});
+  expect(config.outputAllowlist).toEqual({
+    takos_app: { from: "takos_app", type: "json", required: true },
+  });
+
+  const listRes = await app.request(
+    `/internal/v1/install-configs?spaceId=${spaceId}`,
+    { headers: headers() },
+  );
+  expect(listRes.status).toBe(200);
+  const listed = (await listRes.json()).installConfigs as Array<{
+    id: string;
+    internal?: unknown;
+    runnerProfileId?: string;
+  }>;
+  expect(listed.some((item) => item.id === config.id)).toBe(false);
+  expect(listed.every((item) => item.internal === undefined)).toBe(true);
+  expect(listed.every((item) => item.runnerProfileId === undefined)).toBe(true);
 });
 
 test("model e2e: create Installation rejects non-object vars", async () => {

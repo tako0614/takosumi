@@ -168,7 +168,9 @@ export function projectOutputAllowlistSpaceOutputs(
         `output ${spec.from} does not match declared projection type ${spec.type}`,
       );
     }
-    if (!isPublishableDeploymentOutputValue(projectedName, spec.type, entry.value)) {
+    if (
+      !isPublishableDeploymentOutputValue(projectedName, spec.type, entry.value)
+    ) {
       if (spec.required) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -354,6 +356,9 @@ function isPublishableDeploymentOutputValue(
 ): boolean {
   if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
   if (typeof value !== "string") {
+    if (name === "takos_app" && kind === "json") {
+      return !containsSecretLikeTakosAppDescriptorValue(value);
+    }
     return !containsSecretLikeJsonValue(value);
   }
   if (containsSecretLikeString(value) || redactString(value) !== value) {
@@ -372,6 +377,34 @@ function isPublishableDeploymentOutputValue(
     if (SECRET_QUERY_RE.test(key)) return false;
   }
   return true;
+}
+
+function containsSecretLikeTakosAppDescriptorValue(value: JsonValue): boolean {
+  const stack: JsonValue[] = [value];
+  let inspected = 0;
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    inspected += 1;
+    if (inspected > 1_000) return true;
+    if (typeof current === "string") {
+      if (
+        containsSecretLikeString(current) ||
+        redactString(current) !== current
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (current === null || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    for (const nested of Object.values(current)) {
+      stack.push(nested);
+    }
+  }
+  return false;
 }
 
 function containsSecretLikeJsonValue(value: JsonValue): boolean {

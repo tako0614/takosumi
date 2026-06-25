@@ -191,6 +191,8 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     installType: _installType,
     templateBinding: _templateBinding,
     sourceKind: _sourceKind,
+    runnerProfileId: _runnerProfileId,
+    internal: _internal,
     ...publicRecord
   } = config;
   return {
@@ -2627,6 +2629,15 @@ async function createInstallation(
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
+  const runnerProfileId = stringValue(body.runnerProfileId);
+  const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
+  if (body.outputAllowlist !== undefined && outputAllowlist === undefined) {
+    return errorJson(
+      "invalid_request",
+      "outputAllowlist must be an object of { from, type, required? } entries",
+      400,
+    );
+  }
   const vars = jsonRecordValue(body.vars);
   if (body.vars !== undefined && vars === undefined) {
     return errorJson(
@@ -2658,7 +2669,11 @@ async function createInstallation(
     );
   }
   let resolvedInstallConfigId = installConfigId;
-  if (vars !== undefined && Object.keys(vars).length > 0) {
+  if (
+    (vars !== undefined && Object.keys(vars).length > 0) ||
+    runnerProfileId ||
+    outputAllowlist !== undefined
+  ) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
     if (baseConfig.spaceId !== undefined && baseConfig.spaceId !== spaceId) {
@@ -2674,8 +2689,11 @@ async function createInstallation(
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       spaceId,
       name: `${name}-config`,
-      variableMapping: { ...baseConfig.variableMapping, ...vars },
-      outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
+      internal: { reason: "per_install_overrides" },
+      variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
+      ...(runnerProfileId ? { runnerProfileId } : {}),
+      outputAllowlist:
+        outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
     });
@@ -2849,7 +2867,8 @@ async function listInstallConfigs(
   // scoped union is a small set, so it is materialized, merge-sorted by
   // (createdAt, id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
-    (config) => config.spaceId === undefined,
+    (config) =>
+      config.spaceId === undefined && isSelectableInstallConfig(config),
   );
   if (spaceId !== undefined) {
     const auth = await requireSpaceAccess({
@@ -2863,7 +2882,9 @@ async function listInstallConfigs(
   const scoped =
     spaceId === undefined
       ? []
-      : await operations.installations.listInstallConfigs(spaceId);
+      : (await operations.installations.listInstallConfigs(spaceId)).filter(
+          isSelectableInstallConfig,
+        );
   const merged = (
     view.view === "starter-catalog"
       ? official.filter(isStarterCatalogInstallConfig)
@@ -2877,6 +2898,14 @@ async function listInstallConfigs(
     installConfigs: items.map(publicInstallConfig),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
+}
+
+function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (config.internal?.reason === "per_install_overrides") return false;
+  if (config.spaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+    return false;
+  }
+  return true;
 }
 
 // --- Graph -----------------------------------------------------------------

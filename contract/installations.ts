@@ -235,6 +235,10 @@ export interface InstallConfig {
    * selected at install/deploy time, not repo metadata.
    */
   readonly runnerProfileId?: string;
+  /** Internal service-side config rows are addressable by id but not selectable. */
+  readonly internal?: {
+    readonly reason: "per_install_overrides";
+  };
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
@@ -257,7 +261,11 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  "installType" | "templateBinding" | "sourceKind" | "runnerProfileId"
+  | "installType"
+  | "templateBinding"
+  | "sourceKind"
+  | "runnerProfileId"
+  | "internal"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
 };

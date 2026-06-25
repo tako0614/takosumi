@@ -232,6 +232,8 @@ export const ALLOWED_KEYS: Record<
     "environment",
     "sourceId",
     "installConfigId",
+    "runnerProfileId",
+    "outputAllowlist",
     "vars",
   ]),
   installationPatch: new Set(["status"]),
@@ -793,7 +795,7 @@ function ensureOperationPermission(
   );
 }
 
-function ensureRunnerProfilePermission(
+export function ensureRunnerProfilePermission(
   principal: DeployControlPrincipal,
   runnerProfileId: string,
 ): void {

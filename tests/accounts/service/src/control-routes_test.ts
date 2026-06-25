@@ -2658,15 +2658,67 @@ test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped 
   const config = operations.calls.putInstallConfig?.[0] as {
     id: string;
     spaceId: string;
+    internal?: unknown;
     variableMapping: Record<string, unknown>;
     outputAllowlist: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.spaceId).toEqual("space_a");
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.variableMapping).toEqual({ project_name: "takos-space-a" });
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
+  });
+  const createCall = operations.calls.createInstallation?.[0] as {
+    installConfigId: string;
+  };
+  expect(createCall.installConfigId).toEqual(config.id);
+});
+
+test("POST /api/v1/spaces/:id/installations stores runnerProfileId and outputAllowlist in a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "generic",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        runnerProfileId: "generic-opentofu-provider",
+        outputAllowlist: {
+          takos_app: { from: "takos_app", type: "json", required: true },
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    spaceId: string;
+    internal?: unknown;
+    runnerProfileId?: string;
+    variableMapping: Record<string, unknown>;
+    outputAllowlist: Record<string, unknown>;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.spaceId).toEqual("space_a");
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.runnerProfileId).toEqual("generic-opentofu-provider");
+  expect(config.variableMapping).toEqual({});
+  expect(config.outputAllowlist).toEqual({
+    takos_app: { from: "takos_app", type: "json", required: true },
   });
   const createCall = operations.calls.createInstallation?.[0] as {
     installConfigId: string;
@@ -3553,7 +3605,40 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
   operations.installations.listInstallConfigs = async (spaceId) => {
-    operations.calls.listInstallConfigs = [spaceId];
+    operations.calls.listInstallConfigs ??= [];
+    operations.calls.listInstallConfigs.push(spaceId);
+    if (spaceId === "space_a") {
+      return [
+        {
+          id: "icfg_internal",
+          spaceId: "space_a",
+          name: "takos-config",
+          internal: { reason: "per_install_overrides" },
+          sourceKind: "generic_capsule",
+          installType: "opentofu_module",
+          trustLevel: "trusted",
+          runnerProfileId: "generic-opentofu-provider",
+          variableMapping: { project_name: "leaked" },
+          outputAllowlist: {},
+          policy: {},
+          createdAt: "2026-01-01T00:00:01Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        },
+        {
+          id: "icfg_0123456789abcdef",
+          spaceId: "space_a",
+          name: "legacy-config",
+          sourceKind: "generic_capsule",
+          installType: "opentofu_module",
+          trustLevel: "trusted",
+          variableMapping: { project_name: "old-leak" },
+          outputAllowlist: {},
+          policy: {},
+          createdAt: "2026-01-01T00:00:02Z",
+          updatedAt: "2026-01-01T00:00:02Z",
+        },
+      ];
+    }
     return [
       {
         id: "cfg_default",
@@ -3583,15 +3668,23 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
     installConfigs: Array<{
+      id: string;
       sourceKind?: string;
       installType?: string;
       templateBinding?: unknown;
+      internal?: unknown;
+      runnerProfileId?: string;
     }>;
   };
   expect(Array.isArray(body.installConfigs)).toEqual(true);
+  expect(body.installConfigs.map((config) => config.id)).toEqual([
+    "cfg_default",
+  ]);
   expect(body.installConfigs[0]?.sourceKind).toBe("generic_capsule");
   expect(body.installConfigs[0]?.installType).toBeUndefined();
   expect(body.installConfigs[0]?.templateBinding).toBeUndefined();
+  expect(body.installConfigs[0]?.internal).toBeUndefined();
+  expect(body.installConfigs[0]?.runnerProfileId).toBeUndefined();
 
   const get = request("GET", "/api/v1/capsule-configs/cfg_default", {
     cookie,
