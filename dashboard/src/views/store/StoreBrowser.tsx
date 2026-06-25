@@ -30,7 +30,6 @@ import {
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
 import {
-  tcsBadgeLabel,
   tcsCategoryLabel,
   tcsKindLabel,
   tcsProviderLabel,
@@ -436,11 +435,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   <span class="tcs-badge">
                     {pick(listing.badge, props.locale)}
                   </span>
-                  <Show when={listing.badges?.includes("official")}>
-                    <span class="tcs-badge tcs-official">
-                      {tcsBadgeLabel("official", props.locale)}
-                    </span>
-                  </Show>
                 </div>
                 <button
                   type="button"

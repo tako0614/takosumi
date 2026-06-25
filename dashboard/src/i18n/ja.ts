@@ -43,7 +43,7 @@ export const ja = {
   "nav.store": "ストア",
   "store.title": "ストア",
   "store.subtitle":
-    "追加できるサービスを探します。公式スターターと外部ストアをまとめて表示します。",
+    "追加できるサービスを探します。まずは公式スターターから選べます。",
   "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.runs": "更新履歴",
   "nav.connections": "ホスト接続",

@@ -60,7 +60,6 @@ function asTcsListing(config: CatalogInstallConfig): TcsListing {
     inputs: catalog.inputs,
     outputAllowlist: [],
     publisher: { handle: "takosumi", displayName: "Takosumi" },
-    badges: ["official"],
     createdAt: config.createdAt,
     updatedAt: config.updatedAt,
   };
