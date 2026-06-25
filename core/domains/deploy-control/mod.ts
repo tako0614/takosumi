@@ -451,6 +451,7 @@ export interface ReleaseActivationCommand {
   readonly command: readonly string[];
   readonly workingDirectory?: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly executor?: "runner" | "operator";
 }
 
 export interface ReleaseCommandRunJob {
@@ -7181,13 +7182,21 @@ function parseReleaseCommand(
     nonEmptyString(value.workingDirectory) ??
     nonEmptyString(value.working_directory);
   const env = releaseCommandEnv(value.env);
+  const executor = releaseCommandExecutor(value.executor);
   return {
     id,
     phase: "post_apply",
     command: argv,
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(env ? { env } : {}),
+    ...(executor ? { executor } : {}),
   };
+}
+
+function releaseCommandExecutor(
+  value: unknown,
+): "runner" | "operator" | undefined {
+  return value === "runner" || value === "operator" ? value : undefined;
 }
 
 function releaseCommandEnv(
