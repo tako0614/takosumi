@@ -77,6 +77,11 @@
   flex-direction: column;
   gap: var(--tg-s-1);
 }
+.sidebar-nav-manage {
+  margin-top: var(--tg-s-5);
+  padding-top: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
+}
 .sidebar-section-label {
   padding: 0 var(--tg-s-3) var(--tg-s-2);
   color: var(--tg-fg-subtle);
@@ -377,7 +382,7 @@
     min-height: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
     z-index: 40;

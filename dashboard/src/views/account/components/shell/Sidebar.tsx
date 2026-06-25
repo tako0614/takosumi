@@ -1,8 +1,6 @@
 /**
- * Primary navigation: a persistent left rail. It leads with the everyday
- * surfaces (home launcher / provider connections / settings) so management is always
- * one click away — the launcher home stays app-like, the rail keeps wayfinding
- * (where am I, what else is there) that the chromeless shell had lost.
+ * Primary navigation: a persistent left rail. It leads with the everyday app
+ * surfaces, while hosting internals stay available in a lower management group.
  */
 import { A, useLocation } from "@solidjs/router";
 import {
@@ -36,9 +34,12 @@ type NavItem = {
 
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.apps", icon: LayoutGrid, end: true },
-  { href: "/services", labelKey: "nav.services", icon: Server },
   { href: "/new", labelKey: "nav.add", icon: Plus },
   { href: "/store", labelKey: "nav.store", icon: Store },
+];
+
+const MANAGE: NavItem[] = [
+  { href: "/services", labelKey: "nav.services", icon: Server },
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   {
     href: "/advanced/workspace",
@@ -79,8 +80,21 @@ export default function Sidebar() {
           <SpaceSwitcher />
         </div>
       </Show>
-      <nav class="sidebar-nav" aria-label={t("nav.manage")}>
+      <nav class="sidebar-nav" aria-label={t("nav.primary")}>
         {PRIMARY.map((item) => (
+          <A
+            href={item.href}
+            class="sidebar-link"
+            classList={{ active: isActive(item) }}
+          >
+            <item.icon size={18} />
+            <span class="sidebar-link-label">{t(item.labelKey)}</span>
+          </A>
+        ))}
+      </nav>
+      <nav class="sidebar-nav sidebar-nav-manage" aria-label={t("nav.manage")}>
+        <span class="sidebar-section-label">{t("nav.manage")}</span>
+        {MANAGE.map((item) => (
           <A
             href={item.href}
             class="sidebar-link"
