@@ -453,6 +453,22 @@ export interface ReleaseActivationCommand {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+export interface ReleaseCommandRunJob {
+  readonly runId: string;
+  readonly commands: readonly ReleaseActivationCommand[];
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly applyRunId: string;
+  readonly installationId: string;
+  readonly deploymentId: string;
+}
+
+export interface ReleaseCommandRunResult {
+  readonly status: "succeeded";
+  readonly runId: string;
+  readonly commandCount: number;
+  readonly stdout?: string;
+}
+
 export interface ReleaseActivationInput {
   readonly planRun: PlanRun;
   readonly applyRun: ApplyRun;
@@ -474,6 +490,7 @@ export interface ReleaseActivationInput {
    * uploads, index creation, or app bootstrap all stay app/operator code.
    */
   readonly commands: readonly ReleaseActivationCommand[];
+  readonly sourceSnapshot?: SourceSnapshot;
 }
 
 export interface ReleaseActivationResult {
@@ -527,6 +544,7 @@ export interface OpenTofuRunner {
   plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult>;
   apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult>;
   destroy?(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult>;
+  release?(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult>;
   restore?(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult>;
   restoreServiceData?(
     job: OpenTofuServiceDataRestoreJob,
@@ -6049,6 +6067,10 @@ export class OpenTofuDeploymentController {
   }): Promise<void> {
     const nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
     const commands = releaseActivationCommands(input.result.outputs);
+    const sourceSnapshot =
+      commands.length > 0
+        ? await this.#store.getSourceSnapshot(input.deployment.sourceSnapshotId)
+        : undefined;
     if (!this.#releaseActivator) {
       if (commands.length > 0) {
         await this.#recordReleaseActivationActivity({
@@ -6073,6 +6095,7 @@ export class OpenTofuDeploymentController {
         outputSnapshot: input.outputSnapshot,
         nonSensitiveOutputs,
         commands,
+        ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
     } catch (error) {
       await this.#recordReleaseActivationActivity({

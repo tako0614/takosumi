@@ -31,7 +31,8 @@ type OpenTofuRunAction =
   | "apply"
   | "destroy"
   | "compatibility_check"
-  | "backup";
+  | "backup"
+  | "release";
 type OpenTofuOperation = "create" | "update" | "destroy";
 type JsonRecord = Record<string, unknown>;
 
@@ -114,6 +115,17 @@ interface BackupSpec {
   readonly command?: readonly string[];
   readonly outputPath: string;
   readonly provider?: string;
+}
+
+interface ReleaseCommandSpec {
+  readonly id: string;
+  readonly command: readonly string[];
+  readonly workingDirectory?: string;
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+interface ReleaseSpec {
+  readonly commands: readonly ReleaseCommandSpec[];
 }
 
 export interface CommandContext {
@@ -285,9 +297,11 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           ? await runCompatibilityCheck(runId)
           : action === "backup"
             ? await runBackup(runId, body.request)
-            : action === "plan"
-              ? await runPlan(runId, body.request)
-              : await runReviewedPlanApply(runId, action, body.request);
+            : action === "release"
+              ? await runRelease(runId, body.request)
+              : action === "plan"
+                ? await runPlan(runId, body.request)
+                : await runReviewedPlanApply(runId, action, body.request);
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
       });
@@ -367,6 +381,61 @@ async function runBackup(runId: string, request: unknown): Promise<JsonRecord> {
     stdout: logs.join("\n"),
     outputPath: backup.outputPath,
     artifact,
+  };
+}
+
+async function runRelease(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
+  const release = parseRelease(request);
+  const workspace = workspaceForRun(runId);
+  await assertDirectory(workspace.sourceRoot, "release source root");
+  const logs: string[] = [];
+  for (const command of release.commands) {
+    const cwd = releaseCommandCwd(workspace, command);
+    await assertDirectory(
+      cwd,
+      `release command ${command.id} working directory`,
+    );
+    await assertRealPathInsideSourceRoot(
+      cwd,
+      workspace.sourceRoot,
+      `release command ${command.id} working directory`,
+    );
+    const context: CommandContext = {
+      env: { ...buildPhaseEnv(), ...(command.env ?? {}) },
+      timeoutMs: 10 * 60 * 1000,
+    };
+    assertBuildEnvHasNoCredentials(context.env);
+    const result = await runCommand(command.command, { cwd, context });
+    logs.push(
+      redactBuildOutput(
+        `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
+      ),
+    );
+    if (result.exitCode !== 0) {
+      return {
+        runId,
+        action: "release",
+        status: "failed",
+        exitCode: result.exitCode,
+        phase: "release",
+        failedCommandId: command.id,
+        stdout: logs.join("\n"),
+        stderr: redactBuildOutput(
+          `release command failed (${result.exitCode}): ${command.id}\n${result.stderr}`,
+        ),
+      };
+    }
+  }
+  return {
+    runId,
+    action: "release",
+    status: "succeeded",
+    exitCode: 0,
+    commandCount: release.commands.length,
+    stdout: logs.join("\n"),
   };
 }
 
@@ -2968,6 +3037,62 @@ function parseBackup(request: unknown): BackupSpec {
   };
 }
 
+function parseRelease(request: unknown): ReleaseSpec {
+  const release = recordField(request, "release");
+  if (!isRecord(release)) {
+    throw new Error("release request requires release object");
+  }
+  const rawCommands = release.commands;
+  if (!Array.isArray(rawCommands) || rawCommands.length === 0) {
+    throw new Error("release.commands must be a non-empty array");
+  }
+  return {
+    commands: rawCommands.map((entry, index): ReleaseCommandSpec => {
+      if (!isRecord(entry)) {
+        throw new Error(`release.commands[${index}] must be an object`);
+      }
+      const id = stringField(entry, "id")?.trim() || `post_apply_${index + 1}`;
+      const command = stringArray(entry.command);
+      if (command.length === 0) {
+        throw new Error(`release.commands[${index}].command is required`);
+      }
+      const workingDirectory = stringField(entry, "workingDirectory")?.trim();
+      if (workingDirectory) {
+        assertSafeRelativePath(
+          workingDirectory,
+          `release.commands[${index}].workingDirectory`,
+        );
+      }
+      const env = releaseCommandEnv(recordField(entry, "env"));
+      return {
+        id,
+        command,
+        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(env ? { env } : {}),
+      };
+    }),
+  };
+}
+
+function releaseCommandEnv(
+  envRecord: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (!isRecord(envRecord)) return undefined;
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(envRecord)) {
+    if (typeof value === "string") env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function releaseCommandCwd(
+  workspace: RunWorkspace,
+  command: ReleaseCommandSpec,
+): string {
+  if (!command.workingDirectory) return workspace.sourceRoot;
+  return join(workspace.sourceRoot, command.workingDirectory);
+}
+
 function parseBackupArtifactPointer(stdout: string): JsonRecord | undefined {
   for (const line of stdout.trim().split(/\r?\n/u).reverse()) {
     const candidate = line.trim();
@@ -4187,7 +4312,8 @@ function parseAction(value: unknown): OpenTofuRunAction | undefined {
     value === "apply" ||
     value === "destroy" ||
     value === "compatibility_check" ||
-    value === "backup"
+    value === "backup" ||
+    value === "release"
   ) {
     return value;
   }

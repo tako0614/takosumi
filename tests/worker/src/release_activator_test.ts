@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { ReleaseActivationInput } from "../../../core/domains/deploy-control/mod.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
+  createRunnerReleaseActivator,
   createWebhookReleaseActivator,
   releaseActivatorFromEnv,
 } from "../../../worker/src/release_activator.ts";
@@ -61,6 +62,15 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       stateGeneration: 3,
       outputDigest: "sha256:outputs",
     },
+    sourceSnapshot: {
+      id: "snap_1",
+      origin: "git",
+      archiveObjectKey:
+        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`,
+      resolvedCommit: "abc123",
+      path: ".",
+    },
     nonSensitiveOutputs: {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
@@ -75,6 +85,79 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   });
   expect(payload).not.toHaveProperty("planRun");
   expect(payload).not.toHaveProperty("applyRun");
+});
+
+test("runner release activator runs opaque post-apply commands", async () => {
+  let capturedJob:
+    | Parameters<
+        NonNullable<
+          Parameters<typeof createRunnerReleaseActivator>[0]["release"]
+        >
+      >[0]
+    | undefined;
+  const activator = createRunnerReleaseActivator({
+    release: async (job) => {
+      capturedJob = job;
+      return {
+        status: "succeeded",
+        runId: job.runId,
+        commandCount: job.commands.length,
+      };
+    },
+  });
+
+  expect(activator).toBeDefined();
+  const result = await activator!.activate(fakeActivationInput());
+
+  expect(result).toEqual({
+    status: "succeeded",
+    kind: "takosumi.release-commands@v1",
+    message: "ran 1 post-apply release command(s)",
+    metadata: {
+      releaseRunId: "release_run_apply_1",
+      commandCount: 1,
+    },
+  });
+  expect(capturedJob).toMatchObject({
+    runId: "release_run_apply_1",
+    applyRunId: "run_apply_1",
+    installationId: "inst_1",
+    deploymentId: "dep_1",
+    sourceSnapshot: {
+      id: "snap_1",
+      archiveObjectKey:
+        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    },
+    commands: [
+      {
+        id: "migrate",
+        phase: "post_apply",
+        command: ["bun", "run", "takos:migrate"],
+      },
+    ],
+  });
+});
+
+test("runner release activator leaves commands pending without source archive", async () => {
+  let called = false;
+  const activator = createRunnerReleaseActivator({
+    release: async () => {
+      called = true;
+      throw new Error("runner should not be called");
+    },
+  });
+
+  const result = await activator!.activate({
+    ...fakeActivationInput(),
+    sourceSnapshot: undefined,
+  });
+
+  expect(called).toBe(false);
+  expect(result).toEqual({
+    status: "pending",
+    kind: "takosumi.release-commands@v1",
+    message: "post-apply release commands require a source snapshot archive",
+  });
 });
 
 test("webhook release activator treats 204 as succeeded", async () => {
@@ -198,6 +281,22 @@ function fakeActivationInput(): ReleaseActivationInput {
       id: "out_1",
       stateGeneration: 3,
       outputDigest: "sha256:outputs",
+    },
+    sourceSnapshot: {
+      id: "snap_1",
+      origin: "git",
+      spaceId: "space_1",
+      sourceId: "src_1",
+      url: "https://github.com/acme/site.git",
+      ref: "main",
+      resolvedCommit: "abc123",
+      path: ".",
+      archiveObjectKey:
+        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`,
+      archiveSizeBytes: 128,
+      fetchedByRunId: "source_sync_1",
+      fetchedAt: "2026-06-07T00:00:00.000Z",
     },
     nonSensitiveOutputs: {
       public_url: "https://app.example.test",

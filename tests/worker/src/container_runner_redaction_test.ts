@@ -369,6 +369,80 @@ test("container runner dispatches custom_command service-data backups to the bac
   });
 });
 
+test("container runner dispatches post-apply release commands to the release action", async () => {
+  let captured: Record<string, unknown> | undefined;
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "succeeded",
+        commandCount: 1,
+        stdout: "$ bun run takos:migrate\nok",
+      },
+      (body) => {
+        captured = body;
+      },
+    ),
+  );
+
+  const result = await runner.release({
+    runId: "release_run_apply_1",
+    applyRunId: "run_apply_1",
+    installationId: "inst_1",
+    deploymentId: "dep_1",
+    sourceSnapshot: {
+      id: "snap_1",
+      sourceId: "src_1",
+      url: "https://github.com/acme/repo.git",
+      ref: "main",
+      resolvedCommit: "abc123",
+      path: ".",
+      archiveObjectKey:
+        "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`,
+      archiveSizeBytes: 128,
+      fetchedByRunId: "ssr_1",
+      fetchedAt: "2026-06-07T00:00:00.000Z",
+    },
+    commands: [
+      {
+        id: "migrate",
+        phase: "post_apply",
+        command: ["bun", "run", "takos:migrate"],
+        workingDirectory: ".",
+        env: { TAKOS_RESOURCE: "database" },
+      },
+    ],
+  } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0]);
+
+  expect(result).toEqual({
+    status: "succeeded",
+    runId: "release_run_apply_1",
+    commandCount: 1,
+    stdout: "$ bun run takos:migrate\nok",
+  });
+  expect(captured?.action).toEqual("release");
+  expect(captured?.runId).toEqual("release_run_apply_1");
+  expect((captured?.request as Record<string, unknown>).release).toEqual({
+    commands: [
+      {
+        id: "migrate",
+        command: ["bun", "run", "takos:migrate"],
+        workingDirectory: ".",
+        env: { TAKOS_RESOURCE: "database" },
+      },
+    ],
+  });
+  expect((captured?.request as Record<string, unknown>).sourceArchive).toEqual({
+    objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    digest: `sha256:${"a".repeat(64)}`,
+  });
+  expect((captured?.request as Record<string, unknown>).activation).toEqual({
+    applyRunId: "run_apply_1",
+    installationId: "inst_1",
+    deploymentId: "dep_1",
+  });
+});
+
 test("container runner dispatches provider_snapshot service-data backups without source archive", async () => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(
