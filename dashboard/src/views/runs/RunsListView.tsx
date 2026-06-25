@@ -1,8 +1,6 @@
 /**
- * Run history (`/runs`) — real Workspace activity projected into a plain run
- * list. The control API does not expose a dedicated list-runs endpoint yet, so
- * this view uses the Activity ledger rows that already carry public-safe run
- * ids and metadata, then links each row to the canonical `/runs/:id` detail.
+ * Run history (`/runs`) — real Workspace Run ledger rows rendered as a plain
+ * end-user update list, linking each row to the canonical `/runs/:id` detail.
  */
 import "../../styles/app-views.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
@@ -11,11 +9,11 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentSpaceId } from "../../lib/space-state.ts";
 import {
-  type ActivityEvent,
   type ControlApiError,
-  listActivity,
   listInstallations,
+  listRuns,
   type Installation,
+  type Run,
   type RunStatus,
 } from "../../lib/control-api.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
@@ -30,18 +28,10 @@ import {
   Toast,
 } from "../../components/ui/index.ts";
 
-const RUN_ACTIVITY_LIMIT = 200;
-const RUN_ACTIONS = new Set([
-  "run.plan_created",
-  "run.approved",
-  "run.applied",
-  "run.destroyed",
-  "run.failed",
-]);
+const RUN_LIST_LIMIT = 200;
 
 interface RunHistoryRow {
   readonly runId: string;
-  readonly action: string;
   readonly status: RunStatus;
   readonly operation: string;
   readonly installationId?: string;
@@ -56,9 +46,7 @@ export default function RunsListView() {
 
 function Inner() {
   const spaceId = () => currentSpaceId() || null;
-  const [events] = createResource(spaceId, (id) =>
-    listActivity(id, RUN_ACTIVITY_LIMIT),
-  );
+  const [runs] = createResource(spaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
   const [installations] = createResource(spaceId, listInstallations);
   const installationNames = createMemo(() => {
     const map = new Map<string, string>();
@@ -68,11 +56,7 @@ function Inner() {
     return map;
   });
   const rows = createMemo(() =>
-    rowsFromActivity(
-      events() ?? [],
-      installations() ?? [],
-      installationNames(),
-    ),
+    rowsFromRuns(runs() ?? [], installations() ?? [], installationNames()),
   );
 
   return (
@@ -89,15 +73,15 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={events.loading || installations.loading}>
+          <Match when={runs.loading || installations.loading}>
             <Card>
               <Skeleton variant="row" count={6} />
             </Card>
           </Match>
-          <Match when={events.error || installations.error}>
+          <Match when={runs.error || installations.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: errorMessage(events.error ?? installations.error),
+                message: errorMessage(runs.error ?? installations.error),
               })}
             </Toast>
           </Match>
@@ -162,99 +146,45 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
   );
 }
 
-function rowsFromActivity(
-  events: readonly ActivityEvent[],
+function rowsFromRuns(
+  runs: readonly Run[],
   installations: readonly Installation[],
   names: ReadonlyMap<string, string>,
 ): readonly RunHistoryRow[] {
-  const rows = new Map<string, RunHistoryRow>();
   const fallbackNames = new Map(
     installations.map((installation) => [installation.id, installation.name]),
   );
-  for (const event of events) {
-    if (!RUN_ACTIONS.has(event.action)) continue;
-    const runId = runIdFromEvent(event);
-    if (!runId) continue;
-    const installationId = metaString(event.metadata, "installationId");
-    const row: RunHistoryRow = {
-      runId,
-      action: event.action,
-      status: statusFromAction(event.action),
-      operation: operationFromEvent(event),
-      ...(installationId ? { installationId } : {}),
-      ...(installationId
-        ? {
-            serviceName:
-              names.get(installationId) ?? fallbackNames.get(installationId),
-          }
-        : {}),
-      createdAt: event.createdAt,
-      ...(metaString(event.metadata, "errorCode")
-        ? { errorCode: metaString(event.metadata, "errorCode") }
-        : {}),
-    };
-    const previous = rows.get(runId);
-    if (!previous || previous.createdAt < row.createdAt) {
-      rows.set(runId, row);
-    }
-  }
-  return [...rows.values()].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  );
-}
-
-function runIdFromEvent(event: ActivityEvent): string | undefined {
-  if (event.runId) return event.runId;
-  if (event.targetType === "run") return event.targetId;
-  return (
-    metaString(event.metadata, "runId") ??
-    metaString(event.metadata, "planRunId") ??
-    metaString(event.metadata, "applyRunId")
-  );
-}
-
-function statusFromAction(action: string): RunStatus {
-  switch (action) {
-    case "run.failed":
-      return "failed";
-    case "run.plan_created":
-      return "waiting_approval";
-    case "run.approved":
-      return "running";
-    case "run.applied":
-    case "run.destroyed":
-      return "succeeded";
-    default:
-      return "queued";
-  }
-}
-
-function operationFromEvent(event: ActivityEvent): string {
-  return (
-    metaString(event.metadata, "operation") ??
-    metaString(event.metadata, "phase") ??
-    event.action
-  );
+  return [...runs]
+    .map((run): RunHistoryRow => {
+      const installationId = run.installationId;
+      return {
+        runId: run.id,
+        status: run.status,
+        operation: run.type,
+        ...(installationId ? { installationId } : {}),
+        ...(installationId
+          ? {
+              serviceName:
+                names.get(installationId) ?? fallbackNames.get(installationId),
+            }
+          : {}),
+        createdAt: run.createdAt,
+        ...(run.errorCode ? { errorCode: run.errorCode } : {}),
+      };
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 function titleForRow(row: RunHistoryRow): string {
-  if (row.action === "run.failed" && row.errorCode) {
+  if (row.status === "failed" && row.errorCode) {
     return t("runList.failedWithCode", {
       operation: operationLabel(row.operation),
       code: row.errorCode,
     });
   }
-  if (row.action === "run.applied") return t("runList.applied");
-  if (row.action === "run.destroyed") return t("runList.destroyed");
+  if (row.operation === "apply") return t("runList.applied");
+  if (row.operation === "destroy_apply") return t("runList.destroyed");
   return operationLabel(row.operation);
-}
-
-function metaString(
-  metadata: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = metadata[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function errorMessage(error: unknown): string {

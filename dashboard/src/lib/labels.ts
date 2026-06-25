@@ -102,6 +102,8 @@ const OPERATION: Record<string, MessageKey> = {
   drift_check: "op.drift_check",
   source_sync: "op.source_sync",
   compatibility_check: "op.compatibility_check",
+  backup: "op.backup",
+  restore: "op.restore",
 };
 export function operationLabel(operation: string | undefined): string {
   if (!operation) return t("op.generic");

@@ -391,6 +391,11 @@ describe("/new Provider Connections return context", () => {
     );
     expect(connectionsTabSource).toContain('"conn.genericEnv.providerName"');
     expect(connectionsTabSource).toContain('"conn.genericEnv.envName"');
+    expect(connectionsTabSource).toContain("isProviderEnvName(envName)");
+    expect(connectionsTabSource).toContain(
+      "isReservedProviderEnvName(envName)",
+    );
+    expect(connectionsTabSource).toContain("seenEnvNames.has(envName)");
     expect(connectionsTabSource).toContain("const value = pair.value;");
     expect(connectionsTabSource).not.toContain(
       "const value = pair.value.trim();",
@@ -402,8 +407,14 @@ describe("/new Provider Connections return context", () => {
     );
     expect(en["conn.genericEnv.envName"]).toBe("Env name");
     expect(en["conn.genericEnv.envNamePlaceholder"]).toBe("SNOWFLAKE_PASSWORD");
+    expect(en["conn.genericEnv.invalidName"]).toContain("uppercase env name");
+    expect(en["conn.genericEnv.reservedName"]).toContain(
+      "reserved for the runner",
+    );
+    expect(en["conn.genericEnv.duplicateName"]).toContain("already added");
     expect(ja["conn.genericEnv.option"]).toBe("任意の OpenTofu provider");
     expect(ja["conn.genericEnv.envName"]).toBe("env 名");
+    expect(ja["conn.genericEnv.reservedName"]).toContain("予約名");
     expect(connectionsTabSource).not.toContain('placeholder="private-api"');
     expect(connectionsTabSource).not.toContain('placeholder="API_TOKEN"');
     expect(connectionsTabSource).not.toContain(

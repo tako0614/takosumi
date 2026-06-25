@@ -59,7 +59,13 @@ import type {
   OutputShare,
   OutputSnapshot,
 } from "takosumi-contract/output-snapshots";
-import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
+import {
+  RUN_LIST_DEFAULT_LIMIT,
+  RUN_LIST_MAX_LIMIT,
+  type ArtifactRecord,
+  type Run,
+  type RunGroup,
+} from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
@@ -389,6 +395,8 @@ export interface TransitionRunResult {
   readonly run?: PlanRun | ApplyRun | SourceSyncRun | Run;
 }
 
+export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
+
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
@@ -426,6 +434,10 @@ export interface OpenTofuDeploymentStore {
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
   putBackupRun(run: Run): Promise<Run>;
   getBackupRun(id: string): Promise<Run | undefined>;
+  listRunsBySpace(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly StoredRunRecord[]>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
   // storage; these rows keep non-secret run-scoped pointers for audit and
@@ -1015,6 +1027,23 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   getBackupRun(id: string): Promise<Run | undefined> {
     return Promise.resolve(this.#backupRuns.get(id));
+  }
+
+  listRunsBySpace(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly StoredRunRecord[]> {
+    const limit = clampRunListLimit(options.limit);
+    const rows: StoredRunRecord[] = [
+      ...this.#planRuns.values(),
+      ...this.#applyRuns.values(),
+      ...this.#sourceSyncRuns.values(),
+      ...this.#compatibilityCheckRuns.values(),
+      ...this.#backupRuns.values(),
+    ].filter((row) => row.spaceId === spaceId);
+    return Promise.resolve(
+      rows.sort(compareStoredRunRecordsDesc).slice(0, limit),
+    );
   }
 
   putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {
@@ -2079,6 +2108,36 @@ export function clampActivityLimit(limit: number | undefined): number {
   if (floored < 1) return 1;
   if (floored > ACTIVITY_MAX_LIMIT) return ACTIVITY_MAX_LIMIT;
   return floored;
+}
+
+/** Store-side clamp for Workspace Run listings. Route layers reject bad input. */
+export function clampRunListLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return RUN_LIST_DEFAULT_LIMIT;
+  }
+  const floored = Math.floor(limit);
+  if (floored < 1) return 1;
+  if (floored > RUN_LIST_MAX_LIMIT) return RUN_LIST_MAX_LIMIT;
+  return floored;
+}
+
+/** Newest-first sort across internal numeric timestamps and ISO public rows. */
+export function compareStoredRunRecordsDesc(
+  a: StoredRunRecord,
+  b: StoredRunRecord,
+): number {
+  return (
+    runRecordTimestamp(b) - runRecordTimestamp(a) || b.id.localeCompare(a.id)
+  );
+}
+
+function runRecordTimestamp(row: StoredRunRecord): number {
+  const value = row.createdAt;
+  if (typeof value === "number") return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {

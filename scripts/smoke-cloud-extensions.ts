@@ -2451,7 +2451,7 @@ async function runSelfTest(): Promise<void> {
       });
     }
     if (parsed.pathname === TAKOSUMI_AI_GATEWAY_STATUS_PATH) {
-      return aiGatewayStatusResponse("workers_ai_fallback");
+      return aiGatewayStatusResponse("configured_upstreams");
     }
     if (parsed.pathname === "/gateway/ai/v1/chat/completions") {
       return jsonResponse({ choices: [{ index: 0 }] });
@@ -2541,7 +2541,7 @@ function jsonResponseForSelfTest(
     });
   }
   if (url.pathname === TAKOSUMI_AI_GATEWAY_STATUS_PATH) {
-    return aiGatewayStatusResponse("workers_ai_fallback");
+    return aiGatewayStatusResponse("configured_upstreams");
   }
   if (url.pathname === "/gateway/ai/v1/chat/completions") {
     return jsonResponse({ choices: [{ index: 0 }] });

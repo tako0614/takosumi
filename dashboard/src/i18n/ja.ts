@@ -175,6 +175,8 @@ export const ja = {
   "op.drift_check": "ズレの確認",
   "op.source_sync": "内容の取得",
   "op.compatibility_check": "追加前の確認",
+  "op.backup": "バックアップ",
+  "op.restore": "復元",
   "op.generic": "操作",
 
   // --- Service list (home) --------------------------------------------------
@@ -756,6 +758,11 @@ export const ja = {
   "conn.genericEnv.addRow": "値を追加",
   "conn.genericEnv.providerRequired": "OpenTofu provider を入力してください。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
+  "conn.genericEnv.invalidName":
+    "SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
+  "conn.genericEnv.reservedName":
+    "“{name}” は runner が使う予約名です。provider 固有の env 名を使ってください。",
+  "conn.genericEnv.duplicateName": "“{name}” はすでに追加されています。",
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "Provider が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",

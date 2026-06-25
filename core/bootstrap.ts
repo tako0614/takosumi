@@ -577,6 +577,11 @@ export interface TakosumiOperations {
   createDeploymentRollbackPlan(deploymentId: string): Promise<PlanRunResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
+  /** Lists a Workspace's unified Runs newest first (spec §19 / §30). */
+  listRuns(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly Run[]>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
   /** Reads a Run's run-level audit event trail (spec §30). */
@@ -871,7 +876,7 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     activity: activityService,
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
-    ...(options.providerEnvRunner ?? options.ownKeyProviderRunner
+    ...((options.providerEnvRunner ?? options.ownKeyProviderRunner)
       ? {
           providerEnvRunner:
             options.providerEnvRunner ?? options.ownKeyProviderRunner,
@@ -1112,6 +1117,8 @@ export async function createTakosumiService(
     createDeploymentRollbackPlan: (deploymentId) =>
       opentofuController.createDeploymentRollbackPlan(deploymentId),
     getRun: (id) => opentofuController.getRun(id),
+    listRuns: (spaceId, options) =>
+      opentofuController.listRuns(spaceId, options),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
     getRunEvents: (id) => opentofuController.getRunEvents(id),
     getRunCost: (id) => opentofuController.getRunCost(id),

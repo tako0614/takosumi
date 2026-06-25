@@ -1772,6 +1772,24 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
       startedAt: "2026-06-07T00:00:00.000Z",
       finishedAt: "2026-06-07T00:00:00.000Z",
     });
+    await store.putCompatibilityCheckRun({
+      id: "ccr_latest",
+      spaceId: "space_1",
+      sourceId: "src_1",
+      type: "compatibility_check",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-08T00:00:00.000Z",
+    });
+    await store.putCompatibilityCheckRun({
+      id: "ccr_other_space",
+      spaceId: "space_other",
+      sourceId: "src_other",
+      type: "compatibility_check",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-09T00:00:00.000Z",
+    });
     expect((await store.getPlanRun("run_plan_1"))?.id, label).toBe(
       "run_plan_1",
     );
@@ -1815,6 +1833,13 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
       forSource.map((r) => r.id),
       label,
     ).toEqual(["ssr_a", "ssr_b"]);
+    const forSpace = await store.listRunsBySpace("space_1", { limit: 2 });
+    expect(forSpace.length, label).toBe(2);
+    expect(forSpace[0]?.id, label).toBe("ccr_latest");
+    expect(
+      forSpace.some((run) => run.id === "ccr_other_space"),
+      label,
+    ).toBe(false);
 
     // A PlanRun created as a RunGroup member round-trips its runGroupId (§19).
     await store.putPlanRun(makePlanRun("run_plan_grp", { runGroupId: "rg_x" }));

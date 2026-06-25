@@ -127,6 +127,47 @@ test("getRun projects a succeeded plan + its apply run", async () => {
   expect(applyView.status).toBe("succeeded");
 });
 
+test("listRuns returns unified Workspace Runs newest first", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: sequenceNow(1000),
+    newId: deterministicIds(),
+    runner: succeedingRunner(),
+    vault: fakeProviderVault() as never,
+  });
+  const request = await seedUpdatableInstallation(store, {
+    installationId: "inst_list",
+  });
+  const { planRun } = await controller.createPlanRun(request);
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  await store.putCompatibilityCheckRun({
+    id: "ccr_list",
+    spaceId: request.spaceId,
+    sourceId: "src_list",
+    type: "compatibility_check",
+    status: "succeeded",
+    createdBy: "system",
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const runs = await controller.listRuns(request.spaceId);
+  expect(runs.map((run) => run.id)).toEqual([
+    "ccr_list",
+    applyRun.id,
+    planRun.id,
+  ]);
+  expect(runs.map((run) => run.type)).toEqual([
+    "compatibility_check",
+    "apply",
+    "plan",
+  ]);
+  expect(runs.every((run) => run.spaceId === request.spaceId)).toBe(true);
+});
+
 test("getRun returns a source-scoped compatibility_check run", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await store.putCompatibilityCheckRun({
