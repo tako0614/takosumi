@@ -376,7 +376,7 @@ test("container runner dispatches post-apply release commands to the release act
       {
         status: "succeeded",
         commandCount: 1,
-        stdout: "$ bun run takos:migrate\nok",
+        stdout: "$ bun run app:activate\nok",
       },
       (body) => {
         captured = body;
@@ -411,9 +411,9 @@ test("container runner dispatches post-apply release commands to the release act
       {
         id: "migrate",
         phase: "post_apply",
-        command: ["bun", "run", "takos:migrate"],
+        command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
-        env: { TAKOS_RESOURCE: "database" },
+        env: { APP_RELEASE_TARGET: "runtime" },
       },
     ],
   } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0]);
@@ -422,7 +422,7 @@ test("container runner dispatches post-apply release commands to the release act
     status: "succeeded",
     runId: "release_run_apply_1",
     commandCount: 1,
-    stdout: "$ bun run takos:migrate\nok",
+    stdout: "$ bun run app:activate\nok",
   });
   expect(captured?.action).toEqual("release");
   expect(captured?.runId).toEqual("release_run_apply_1");
@@ -430,9 +430,9 @@ test("container runner dispatches post-apply release commands to the release act
     commands: [
       {
         id: "migrate",
-        command: ["bun", "run", "takos:migrate"],
+        command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
-        env: { TAKOS_RESOURCE: "database" },
+        env: { APP_RELEASE_TARGET: "runtime" },
       },
     ],
   });
