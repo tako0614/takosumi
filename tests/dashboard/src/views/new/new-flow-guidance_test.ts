@@ -200,7 +200,6 @@ describe("/new flow guidance", () => {
     );
     expect(officialSeedSource).toContain('"cloudflare-hello-worker"');
     expect(officialSeedSource).toContain('"cloudflare-r2-storage"');
-    expect(officialSeedSource).toContain('"cloudflare-static-site"');
     expect(officialSeedSource).toContain('"aws-s3-storage"');
     expect(officialSeedSource).toContain("catalogMetadataForTemplate");
     expect(officialSeedSource).toContain("officialCatalogSource");

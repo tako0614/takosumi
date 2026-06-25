@@ -87,14 +87,13 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(catalogTemplateIds).toEqual([
     "cloudflare-hello-worker",
     "cloudflare-r2-storage",
-    "cloudflare-static-site",
     "aws-s3-storage",
   ]);
   expect(
     configs
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined),
-  ).toEqual([10, 30, 90, 40]);
+  ).toEqual([10, 30, 40]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -112,12 +111,6 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(hello?.catalog?.name.ja).toBe("Webアプリを公開");
   expect(hello?.catalog?.surface).toBe("service");
 
-  const site = configs.find(
-    (config) => config.catalog?.templateId === "cloudflare-static-site",
-  );
-  expect(site?.catalog?.surface).toBe("example");
-  expect(site?.catalog?.name.en).toBe("Create a Pages site");
-
   const hidden = configs.find((config) => config.name === "core");
   expect(hidden?.catalog).toBeUndefined();
 });
@@ -130,13 +123,13 @@ test("official catalog source can be operator-selected without changing template
       ref: "0123456789abcdef0123456789abcdef01234567",
     },
   });
-  const site = configs.find(
-    (config) => config.catalog?.templateId === "cloudflare-static-site",
+  const hello = configs.find(
+    (config) => config.catalog?.templateId === "cloudflare-hello-worker",
   );
-  expect(site?.catalog?.source?.git).toBe(
+  expect(hello?.catalog?.source?.git).toBe(
     "https://github.com/example/takosumi-release.git",
   );
-  expect(site?.catalog?.source?.ref).toBe(
+  expect(hello?.catalog?.source?.ref).toBe(
     "0123456789abcdef0123456789abcdef01234567",
   );
 });
