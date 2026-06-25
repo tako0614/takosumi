@@ -365,9 +365,11 @@ function runReleaseCommand(
     ? resolve(sourceRoot, command.workingDirectory)
     : sourceRoot;
   assertInside(cwd, sourceRoot, `release command ${command.id} cwd`);
+  const releaseRunId = `operator_${payload.applyRunId}_${randomUUID()}`;
+  const outputs = payload.nonSensitiveOutputs ?? {};
   const env = {
     ...materializerBaseEnv(parentEnv),
-    TAKOSUMI_RELEASE_RUN_ID: `operator_${payload.applyRunId}_${randomUUID()}`,
+    TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
     ...(payload.installation?.id
       ? { TAKOSUMI_INSTALLATION_ID: payload.installation.id }
@@ -375,7 +377,17 @@ function runReleaseCommand(
     ...(payload.deployment?.id
       ? { TAKOSUMI_DEPLOYMENT_ID: payload.deployment.id }
       : {}),
-    TAKOSUMI_OUTPUTS_JSON: JSON.stringify(payload.nonSensitiveOutputs ?? {}),
+    TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
+    TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
+      kind: "takosumi.release-context@v1",
+      releaseRunId,
+      ...(payload.planRunId ? { planRunId: payload.planRunId } : {}),
+      applyRunId: payload.applyRunId,
+      ...(payload.spaceId ? { workspaceId: payload.spaceId } : {}),
+      ...(payload.installation ? { installation: payload.installation } : {}),
+      ...(payload.deployment ? { deployment: payload.deployment } : {}),
+      outputs,
+    }),
     ...(command.env ?? {}),
   };
   assertNoCredentialEnv(env);

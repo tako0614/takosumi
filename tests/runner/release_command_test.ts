@@ -24,7 +24,8 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
                 "-e",
                 [
                   `const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)`,
-                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, Bun.env.TAKOSUMI_APPLY_RUN_ID].join(":"))`,
+                  `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
+                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.deploymentId].join(":"))`,
                   `console.log("release ok")`,
                 ].join(";"),
               ],
@@ -54,13 +55,15 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
     expect(body.stdout).toContain("release ok");
     await expect(
       readFile(join(sourceRoot, "scripts", "release-output.txt"), "utf8"),
-    ).resolves.toBe("public:scripts:https://app.example.test:run_apply_1");
+    ).resolves.toBe(
+      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:dep_1",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("release action rejects provider credential env", async () => {
+test("release action rejects provider credential and reserved env", async () => {
   const runId = `release_secret_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));
   const sourceRoot = join(root, "source");
@@ -96,6 +99,32 @@ test("release action rejects provider credential env", async () => {
     expect(JSON.stringify(body)).not.toContain(secret);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+
+  const reservedRunId = `release_reserved_${crypto.randomUUID().replace(/-/g, "")}`;
+  const reservedRoot = join(RUN_ROOT, safeRunId(reservedRunId));
+  try {
+    await mkdir(join(reservedRoot, "source"), { recursive: true });
+    const response = await handleRunnerRequest(
+      runnerRequest(reservedRunId, {
+        release: {
+          commands: [
+            {
+              id: "should-not-run",
+              command: [process.execPath, "-e", `console.log("ran")`],
+              env: { TAKOSUMI_OUTPUTS_JSON: "{}" },
+            },
+          ],
+        },
+      }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.stderr).toContain(
+      "release command env must not override reserved TAKOSUMI_OUTPUTS_JSON",
+    );
+  } finally {
+    await rm(reservedRoot, { recursive: true, force: true });
   }
 });
 
