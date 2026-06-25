@@ -69,25 +69,27 @@ test("output allowlist projection fails closed for required nested JSON secret m
   ).toThrow("cannot be projected");
 });
 
-test("output allowlist projection accepts takos_app secret resource descriptors without secret values", () => {
+test("output allowlist projection accepts takos_app service projection without resources", () => {
   const outputs = {
     takos_app: {
       sensitive: false,
       value: {
         name: "yurucommu",
         version: "2.0.0",
-        resources: {
-          auth_password_hash: {
-            type: "secret",
-            bind: "AUTH_PASSWORD_HASH",
-            to: ["web"],
-            generate: true,
-          },
-          session_hash_salt: {
-            type: "secret",
-            bind: "YURUCOMMU_SESSION_HASH_SALT",
-            to: ["web"],
-            generate: true,
+        compute: {
+          web: {
+            kind: "worker",
+            consume: [
+              {
+                publication: "identity.oidc",
+                inject: {
+                  env: {
+                    issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                    clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                  },
+                },
+              },
+            ],
           },
         },
         publish: [
@@ -116,6 +118,35 @@ test("output allowlist projection accepts takos_app secret resource descriptors 
       sensitive: false,
     },
   ]);
+});
+
+test("output allowlist projection rejects takos_app resource descriptors", () => {
+  const outputs = {
+    takos_app: {
+      sensitive: false,
+      value: {
+        name: "resource-app",
+        resources: {
+          database: {
+            type: "sql",
+            bindings: {
+              web: "DB",
+            },
+          },
+        },
+        publish: [],
+      },
+    },
+  };
+
+  expect(() =>
+    projectOutputAllowlistSpaceOutputs(
+      {
+        takos_app: { from: "takos_app", type: "json", required: true },
+      },
+      outputs,
+    ),
+  ).toThrow("cannot be projected");
 });
 
 test("output allowlist projection still rejects takos_app values with concrete secret material", () => {

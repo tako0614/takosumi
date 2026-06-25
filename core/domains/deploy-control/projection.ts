@@ -357,7 +357,7 @@ function isPublishableDeploymentOutputValue(
   if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
   if (typeof value !== "string") {
     if (name === "takos_app" && kind === "json") {
-      return !containsSecretLikeTakosAppDescriptorValue(value);
+      return !containsUnsafeTakosAppDescriptorValue(value);
     }
     return !containsSecretLikeJsonValue(value);
   }
@@ -377,6 +377,33 @@ function isPublishableDeploymentOutputValue(
     if (SECRET_QUERY_RE.test(key)) return false;
   }
   return true;
+}
+
+function containsUnsafeTakosAppDescriptorValue(value: JsonValue): boolean {
+  return (
+    containsTakosAppResourceDescriptor(value) ||
+    containsSecretLikeTakosAppDescriptorValue(value)
+  );
+}
+
+function containsTakosAppResourceDescriptor(value: JsonValue): boolean {
+  const stack: JsonValue[] = [value];
+  let inspected = 0;
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    inspected += 1;
+    if (inspected > 1_000) return true;
+    if (current === null || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    if (Object.hasOwn(current, "resources")) return true;
+    for (const nested of Object.values(current)) {
+      stack.push(nested);
+    }
+  }
+  return false;
 }
 
 function containsSecretLikeTakosAppDescriptorValue(value: JsonValue): boolean {
