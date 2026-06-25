@@ -2229,9 +2229,9 @@ test("release command descriptor validates only generic command shape", async ()
         value: {
           post_apply: [
             {
-              id: "db-activation-is-opaque",
+              id: "app-activation-is-opaque",
               executor: "operator",
-              command: ["bun", "run", "db:migrate"],
+              command: ["bun", "run", "app:activate"],
               working_directory: "backend",
               env: {
                 APP_RELEASE_TARGET: "production",
@@ -2286,9 +2286,9 @@ test("release command descriptor validates only generic command shape", async ()
   expect(activations).toHaveLength(1);
   expect(activations[0]?.commands).toEqual([
     {
-      id: "db-activation-is-opaque",
+      id: "app-activation-is-opaque",
       phase: "post_apply",
-      command: ["bun", "run", "db:migrate"],
+      command: ["bun", "run", "app:activate"],
       workingDirectory: "backend",
       env: {
         APP_RELEASE_TARGET: "production",

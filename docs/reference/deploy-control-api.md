@@ -129,7 +129,7 @@ and receive only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`. Operator
 commands are not attempted by the built-in runner activator; they remain pending
 unless the host configures an operator/Cloud release activator that owns the
 credential boundary for work such as artifact upload, provider-side
-publication, migrations, or external index setup.
+publication, app-owned setup, or external index setup.
 
 The platform Worker can enable the generic webhook bridge with:
 
