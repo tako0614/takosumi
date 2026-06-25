@@ -705,6 +705,46 @@ test("AI Gateway route delegates only to the Cloud extension binding", async () 
   ]);
 });
 
+test("AI Gateway HEAD delegates as GET and returns no body", async () => {
+  const forwarded: { method: string; url: string }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      method: "HEAD",
+      headers: { cookie: "takosumi_session=sess_cookie" },
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async (request: Request) => {
+          forwarded.push({ method: request.method, url: request.url });
+          return Response.json({ object: "list", data: [] });
+        },
+      },
+    } as never,
+    {
+      id: "ai.openai_compatible.v1",
+      kind: "ai_gateway",
+      basePath: "/gateway/ai/v1",
+      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
+      protocol: "openai-compatible",
+      capabilities: ["models"],
+      smokeChecks: ["aiModelsAuth"],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud_extension_head",
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe("");
+  expect(forwarded).toEqual([
+    {
+      method: "GET",
+      url: "https://app.takosumi.com/gateway/ai/v1/models",
+    },
+  ]);
+});
+
 test("AI Gateway route delegates through the platform worker fetch registry", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: string[] = [];
