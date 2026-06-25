@@ -124,6 +124,14 @@ back the OpenTofu apply ledger; callers must surface it as "infrastructure
 applied, application activation failed/pending" rather than as a generic apply
 failure.
 
+Capsules may mark individual post-apply commands with `executor = "runner"` or
+`executor = "operator"`. Runner commands are restored into the source snapshot
+and receive only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`. Operator
+commands are not attempted by the built-in runner activator; they remain pending
+unless the host configures an operator/Cloud release activator that owns the
+credential boundary for work such as Worker artifact upload, provider-side
+publication, or external index setup.
+
 The platform Worker can enable the generic webhook bridge with:
 
 ```text

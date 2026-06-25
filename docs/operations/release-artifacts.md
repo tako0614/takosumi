@@ -86,6 +86,13 @@ platform readiness `open` also requires the validator output's four
 `TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` pairs in realized
 operator config.
 
+Use the built-in runner activator only for `executor = "runner"` commands that
+can run without cloud provider credentials inside the restored source snapshot,
+for example app-owned schema bootstrap or local build metadata checks. Commands
+that require a provider token, an operator checkout of the full repository, or
+publication outside the source snapshot should declare `executor = "operator"`
+and be handled by the configured release activator materializer.
+
 ## Promotion Record
 
 Release sign-off record includes:
