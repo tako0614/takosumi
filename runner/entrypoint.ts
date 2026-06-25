@@ -343,7 +343,7 @@ async function runBackup(runId: string, request: unknown): Promise<JsonRecord> {
     env: buildPhaseEnv(),
     timeoutMs: 10 * 60 * 1000,
   };
-  assertBuildEnvHasNoCredentials(context.env);
+  assertCommandEnvHasNoProviderCredentials(context.env);
   const logs: string[] = [];
   let stdout = "";
   let stderr = "";
@@ -419,7 +419,7 @@ async function runRelease(
       },
       timeoutMs: 10 * 60 * 1000,
     };
-    assertBuildEnvHasNoCredentials(context.env);
+    assertCommandEnvHasNoProviderCredentials(context.env);
     const result = await runCommand(command.command, { cwd, context });
     logs.push(
       redactBuildOutput(
@@ -1136,7 +1136,7 @@ async function runBuildPhase(
 > {
   const buildContext: CommandContext = { env: buildPhaseEnv() };
   // Hard invariant: the build phase env must carry no provider credential.
-  assertBuildEnvHasNoCredentials(buildContext.env);
+  assertCommandEnvHasNoProviderCredentials(buildContext.env);
   await ensureSourceAvailable(source, workspace.sourceRoot, buildContext);
   const sourceCommit =
     source.kind === "git"
@@ -1377,7 +1377,7 @@ async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
   const context: CommandContext = { env: buildPhaseEnv() };
-  assertBuildEnvHasNoCredentials(context.env);
+  assertCommandEnvHasNoProviderCredentials(context.env);
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
     cwd: workspace.sourceRoot,
     context,
@@ -3607,14 +3607,14 @@ export function buildPhaseEnv(): Record<string, string> {
   return env;
 }
 
-function assertBuildEnvHasNoCredentials(
+function assertCommandEnvHasNoProviderCredentials(
   env: Readonly<Record<string, string>>,
 ): void {
   const credentialNames = allKnownCredentialEnvNames();
   for (const name of Object.keys(env)) {
     if (credentialNames.has(name)) {
       throw new Error(
-        `build phase env unexpectedly carries credential env name ${name}`,
+        `command env unexpectedly carries provider credential env name ${name}`,
       );
     }
   }
