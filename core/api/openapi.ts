@@ -2853,6 +2853,13 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    InstallationPlanRequest: {
+      type: "object",
+      properties: {
+        runnerProfileId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     InstallationResponse: {
       type: "object",
       required: ["installation"],

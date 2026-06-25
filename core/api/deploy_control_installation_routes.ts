@@ -24,8 +24,10 @@ import {
   type DeployControlRouteContext,
   ensureSpacePermission,
   errorEnvelope,
+  nonEmptyString,
   parsePageParams,
   readJsonBody,
+  readOptionalJsonBody,
   DEPLOYMENT_ID_PATTERN,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -70,6 +72,10 @@ interface CreateInstallationRouteRequest extends Omit<
   readonly vars?: Readonly<Record<string, JsonValue>>;
 }
 
+interface InstallationPlanRouteRequest {
+  readonly runnerProfileId?: string;
+}
+
 const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
   new Set(["active", "stale", "error"]);
 
@@ -87,6 +93,7 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     installType: _installType,
     templateBinding: _templateBinding,
     sourceKind: _sourceKind,
+    runnerProfileId: _runnerProfileId,
     ...publicRecord
   } = config;
   return {
@@ -107,6 +114,19 @@ function publicInstallConfigSourceKind(
     return "first_party_capsule";
   }
   return "generic_capsule";
+}
+
+function runnerProfileIdFromBody(
+  body: InstallationPlanRouteRequest,
+): string | undefined {
+  if (body.runnerProfileId === undefined) return undefined;
+  if (!nonEmptyString(body.runnerProfileId)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "runnerProfileId must be a non-empty string",
+    );
+  }
+  return body.runnerProfileId.trim();
 }
 
 type InstallConfigListView = "all" | "starter-catalog";
@@ -284,6 +304,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
       operationId: "createInstallationPlan",
       openapi: {
         pathParams: ["installationId"],
+        requestSchema: "InstallationPlanRequest",
         okStatus: "201",
         okSchema: "RunResponse",
       },
@@ -298,6 +319,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
       operationId: "createInstallationDestroyPlan",
       openapi: {
         pathParams: ["installationId"],
+        requestSchema: "InstallationPlanRequest",
         okStatus: "201",
         okSchema: "RunResponse",
       },
@@ -597,9 +619,18 @@ export function mountDeployControlInstallationRoutes(
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.installation.spaceId);
-        const response = await controller.createInstallationPlan(id, {
-          actor: principal.actor,
-        });
+        const body = await readOptionalJsonBody<InstallationPlanRouteRequest>(
+          c,
+          "installationPlan",
+        );
+        const runnerProfileId = runnerProfileIdFromBody(body);
+        const response = await controller.createInstallationPlan(
+          id,
+          {
+            actor: principal.actor,
+          },
+          runnerProfileId ? { runnerProfileId } : {},
+        );
         return c.json(
           { run: await controller.getRun(response.planRun.id) },
           201,
@@ -632,9 +663,18 @@ export function mountDeployControlInstallationRoutes(
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.installation.spaceId);
-        const response = await controller.createInstallationDestroyPlan(id, {
-          actor: principal.actor,
-        });
+        const body = await readOptionalJsonBody<InstallationPlanRouteRequest>(
+          c,
+          "installationDestroyPlan",
+        );
+        const runnerProfileId = runnerProfileIdFromBody(body);
+        const response = await controller.createInstallationDestroyPlan(
+          id,
+          {
+            actor: principal.actor,
+          },
+          runnerProfileId ? { runnerProfileId } : {},
+        );
         return c.json(
           { run: await controller.getRun(response.planRun.id) },
           201,

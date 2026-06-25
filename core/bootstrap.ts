@@ -549,6 +549,9 @@ export interface TakosumiOperations {
   /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
   createInstallationDestroyPlan(
     installationId: string,
+    options?: {
+      readonly runnerProfileId?: string;
+    },
   ): Promise<PlanRunResponse>;
   /**
    * Installation-driven drift check (spec §19 `drift_check`; Phase 8): a
@@ -1111,8 +1114,14 @@ export async function createTakosumiService(
             }
           : {},
       ),
-    createInstallationDestroyPlan: (installationId) =>
-      opentofuController.createInstallationDestroyPlan(installationId),
+    createInstallationDestroyPlan: (installationId, options) =>
+      opentofuController.createInstallationDestroyPlan(
+        installationId,
+        {},
+        options?.runnerProfileId
+          ? { runnerProfileId: options.runnerProfileId }
+          : {},
+      ),
     createInstallationDriftCheck: (installationId) =>
       opentofuController.createInstallationDriftCheck(installationId),
     getPlanRun: (id) => opentofuController.getPlanRun(id),

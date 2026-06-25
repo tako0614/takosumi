@@ -230,6 +230,11 @@ export interface InstallConfig {
   readonly modulePath?: string;
   readonly normalization?: NormalizationConfig;
   readonly build?: InstallBuildConfig;
+  /**
+   * Service-side runner preference for this Capsule. This is operator policy
+   * selected at install/deploy time, not repo metadata.
+   */
+  readonly runnerProfileId?: string;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
@@ -252,7 +257,7 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  "installType" | "templateBinding" | "sourceKind"
+  "installType" | "templateBinding" | "sourceKind" | "runnerProfileId"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
 };

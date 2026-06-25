@@ -787,6 +787,9 @@ export interface ControlPlaneOperations {
   ): Promise<PlanRunResponse>;
   createInstallationDestroyPlan(
     installationId: string,
+    options?: {
+      readonly runnerProfileId?: string;
+    },
   ): Promise<PlanRunResponse>;
   createInstallationDriftCheck(
     installationId: string,
@@ -1341,8 +1344,15 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response =
-        await operations.createInstallationDestroyPlan(installationId);
+      const body = await readJsonObject(request.clone()).catch(() => null);
+      const runnerProfileId =
+        typeof body?.runnerProfileId === "string" && body.runnerProfileId.trim()
+          ? body.runnerProfileId.trim()
+          : undefined;
+      const response = await operations.createInstallationDestroyPlan(
+        installationId,
+        runnerProfileId ? { runnerProfileId } : undefined,
+      );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,
