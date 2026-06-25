@@ -91,10 +91,7 @@ import type {
   SourceSyncRun,
   SourceSnapshot,
 } from "takosumi-contract/sources";
-import type {
-  DeployResponse,
-  InternalDeployRequest,
-} from "takosumi-contract/deploy";
+import type { DeployResponse } from "takosumi-contract/deploy";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -114,6 +111,7 @@ import type {
   ListDeploymentOutputsResponse,
   ListDeploymentsResponse,
   ListRunnerProfilesResponse,
+  InternalDeployRequest,
   PlanRunResponse,
   RunnerProfile,
   TestConnectionResponse,

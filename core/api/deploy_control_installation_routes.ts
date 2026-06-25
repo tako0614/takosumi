@@ -71,12 +71,12 @@ interface CreateInstallationRouteRequest extends Omit<
   "spaceId"
 > {
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-  readonly runnerProfileId?: string;
+  readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
 }
 
 interface InstallationPlanRouteRequest {
-  readonly runnerProfileId?: string;
+  readonly runnerId?: string;
 }
 
 const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
@@ -96,7 +96,7 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     installType: _installType,
     templateBinding: _templateBinding,
     sourceKind: _sourceKind,
-    runnerProfileId: _runnerProfileId,
+    runnerId: _runnerId,
     internal: _internal,
     ...publicRecord
   } = config;
@@ -120,17 +120,17 @@ function publicInstallConfigSourceKind(
   return "generic_capsule";
 }
 
-function runnerProfileIdFromBody(body: {
-  readonly runnerProfileId?: unknown;
+function runnerIdFromBody(body: {
+  readonly runnerId?: unknown;
 }): string | undefined {
-  if (body.runnerProfileId === undefined) return undefined;
-  if (!nonEmptyString(body.runnerProfileId)) {
+  if (body.runnerId === undefined) return undefined;
+  if (!nonEmptyString(body.runnerId)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "runnerProfileId must be a non-empty string",
+      "runnerId must be a non-empty string",
     );
   }
-  return body.runnerProfileId.trim();
+  return body.runnerId.trim();
 }
 
 type InstallConfigListView = "all" | "starter-catalog";
@@ -372,15 +372,15 @@ export function mountDeployControlInstallationRoutes(
         const {
           outputAllowlist: rawOutputAllowlist,
           vars: rawVars,
-          runnerProfileId: rawRunnerProfileId,
+          runnerId: rawRunnerId,
           ...request
         } = body as Omit<
           CreateInstallationRouteRequest,
-          "outputAllowlist" | "vars" | "runnerProfileId"
+          "outputAllowlist" | "vars" | "runnerId"
         > & {
           readonly outputAllowlist?: unknown;
           readonly vars?: unknown;
-          readonly runnerProfileId?: unknown;
+          readonly runnerId?: unknown;
         };
         const outputAllowlist =
           rawOutputAllowlist === undefined
@@ -401,9 +401,9 @@ export function mountDeployControlInstallationRoutes(
           );
         }
         const runnerProfileId =
-          rawRunnerProfileId === undefined
+          rawRunnerId === undefined
             ? undefined
-            : runnerProfileIdFromBody({ runnerProfileId: rawRunnerProfileId });
+            : runnerIdFromBody({ runnerId: rawRunnerId });
         if (runnerProfileId) {
           ensureRunnerProfilePermission(principal, runnerProfileId);
         }
@@ -660,7 +660,7 @@ export function mountDeployControlInstallationRoutes(
           c,
           "installationPlan",
         );
-        const runnerProfileId = runnerProfileIdFromBody(body);
+        const runnerProfileId = runnerIdFromBody(body);
         const response = await controller.createInstallationPlan(
           id,
           {
@@ -704,7 +704,7 @@ export function mountDeployControlInstallationRoutes(
           c,
           "installationDestroyPlan",
         );
-        const runnerProfileId = runnerProfileIdFromBody(body);
+        const runnerProfileId = runnerIdFromBody(body);
         const response = await controller.createInstallationDestroyPlan(
           id,
           {
@@ -779,9 +779,7 @@ async function createScopedInstallConfigForInstallation(input: {
     name: `${input.installationName}-config`,
     internal: { reason: "per_install_overrides" },
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
-    ...(input.runnerProfileId
-      ? { runnerProfileId: input.runnerProfileId }
-      : {}),
+    ...(input.runnerProfileId ? { runnerId: input.runnerProfileId } : {}),
     outputAllowlist:
       input.outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,

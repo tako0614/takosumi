@@ -1995,7 +1995,7 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
         vars: {
           type: "object",
           additionalProperties: jsonValue,
@@ -2039,7 +2039,7 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
         vars: {
           type: "object",
           additionalProperties: jsonValue,
@@ -2841,7 +2841,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
         outputAllowlist: {
           type: "object",
           additionalProperties: {
@@ -2879,7 +2879,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
     InstallationPlanRequest: {
       type: "object",
       properties: {
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
       },
       additionalProperties: false,
     },

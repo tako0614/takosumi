@@ -34,6 +34,7 @@ import type {
   CreateConnectionRequest,
   DeployControlErrorCode,
   Deployment,
+  InternalDeployRequest,
   ListConnectionsResponse,
   ListDeploymentsResponse,
   ListRunnerProfilesResponse,
@@ -54,7 +55,6 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   DeployResponse,
-  InternalDeployRequest,
   PublicDeployResponse,
 } from "takosumi-contract/deploy";
 import type {
@@ -191,7 +191,7 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     installType: _installType,
     templateBinding: _templateBinding,
     sourceKind: _sourceKind,
-    runnerProfileId: _runnerProfileId,
+    runnerId: _runnerId,
     internal: _internal,
     ...publicRecord
   } = config;
@@ -1327,9 +1327,12 @@ async function dispatch(input: DispatchInput): Promise<Response> {
           ? body.compatibilityReportId.trim()
           : undefined;
       const runnerProfileId =
-        typeof body?.runnerProfileId === "string" && body.runnerProfileId.trim()
-          ? body.runnerProfileId.trim()
-          : undefined;
+        typeof body?.runnerId === "string" && body.runnerId.trim()
+          ? body.runnerId.trim()
+          : typeof body?.runnerProfileId === "string" &&
+              body.runnerProfileId.trim()
+            ? body.runnerProfileId.trim()
+            : undefined;
       const response = await operations.createInstallationPlan(
         installationId,
         compatibilityReportId || runnerProfileId
@@ -1348,9 +1351,12 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       if (method !== "POST") return methodNotAllowed("POST");
       const body = await readJsonObject(request.clone()).catch(() => null);
       const runnerProfileId =
-        typeof body?.runnerProfileId === "string" && body.runnerProfileId.trim()
-          ? body.runnerProfileId.trim()
-          : undefined;
+        typeof body?.runnerId === "string" && body.runnerId.trim()
+          ? body.runnerId.trim()
+          : typeof body?.runnerProfileId === "string" &&
+              body.runnerProfileId.trim()
+            ? body.runnerProfileId.trim()
+            : undefined;
       const response = await operations.createInstallationDestroyPlan(
         installationId,
         runnerProfileId ? { runnerProfileId } : undefined,
@@ -2629,7 +2635,8 @@ async function createInstallation(
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
-  const runnerProfileId = stringValue(body.runnerProfileId);
+  const runnerProfileId =
+    stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
   if (body.outputAllowlist !== undefined && outputAllowlist === undefined) {
     return errorJson(
@@ -2691,7 +2698,7 @@ async function createInstallation(
       name: `${name}-config`,
       internal: { reason: "per_install_overrides" },
       variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
-      ...(runnerProfileId ? { runnerProfileId } : {}),
+      ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       outputAllowlist:
         outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
@@ -3209,7 +3216,8 @@ async function deployUploadedSnapshot(
     );
   }
   const environment = stringValue(body.environment);
-  const runnerProfileId = stringValue(body.runnerProfileId);
+  const runnerProfileId =
+    stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   let providerEnvBindings: InstallationProviderEnvBindings | undefined;
   if (body.providerEnvBindings !== undefined) {
     return errorJson(

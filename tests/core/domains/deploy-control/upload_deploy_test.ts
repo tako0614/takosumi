@@ -411,7 +411,7 @@ test("deployUpload preflights explicit generic runner uploads before dispatch", 
   const installation = await store.getInstallation(result.installation.id);
   expect(installation?.compatibilityReportId).toBeDefined();
   const installConfig = await store.getInstallConfig(result.installConfigId);
-  expect(installConfig?.runnerProfileId).toBe(genericProfile.id);
+  expect(installConfig?.runnerId).toBe(genericProfile.id);
   expect(runner.planJobs[0]?.runnerProfile.id).toBe(genericProfile.id);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
     NULL_PROVIDER,
