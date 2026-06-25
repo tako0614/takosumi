@@ -67,6 +67,21 @@ export function createRunnerReleaseActivator(
   return {
     async activate(input) {
       if (input.commands.length === 0) return { status: "skipped" };
+      const operatorCommands = input.commands.filter(
+        (command) => command.executor === "operator",
+      );
+      if (operatorCommands.length > 0) {
+        return {
+          status: "pending",
+          kind: "takosumi.operator.release-activation@v1",
+          message:
+            "post-apply release commands require an operator release activator",
+          metadata: {
+            commandCount: input.commands.length,
+            operatorCommandCount: operatorCommands.length,
+          },
+        };
+      }
       if (!input.sourceSnapshot) {
         return {
           status: "pending",

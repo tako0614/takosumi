@@ -164,6 +164,40 @@ test("runner release activator leaves commands pending without source archive", 
   });
 });
 
+test("runner release activator leaves operator commands pending", async () => {
+  let called = false;
+  const activator = createRunnerReleaseActivator({
+    release: async () => {
+      called = true;
+      throw new Error("runner should not be called");
+    },
+  });
+
+  const result = await activator!.activate({
+    ...fakeActivationInput(),
+    commands: [
+      {
+        id: "publish-worker",
+        phase: "post_apply",
+        command: ["bunx", "wrangler", "deploy"],
+        executor: "operator",
+      },
+    ],
+  });
+
+  expect(called).toBe(false);
+  expect(result).toEqual({
+    status: "pending",
+    kind: "takosumi.operator.release-activation@v1",
+    message:
+      "post-apply release commands require an operator release activator",
+    metadata: {
+      commandCount: 1,
+      operatorCommandCount: 1,
+    },
+  });
+});
+
 test("webhook release activator treats 204 as succeeded", async () => {
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",
