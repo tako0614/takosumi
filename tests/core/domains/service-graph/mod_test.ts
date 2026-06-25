@@ -138,6 +138,114 @@ test("ServiceGraphService projects exports, resolves bindings fail-closed, and i
   expect(grant.serviceExportId).toBe(projected[0]?.id);
 });
 
+test("ServiceGraphService projects takos_app publish and consume declarations", async () => {
+  const stores = {
+    exports: new InMemoryServiceExportStore(),
+    bindings: new InMemoryServiceBindingStore(),
+    grants: new InMemoryServiceGraphGrantStore(),
+  };
+  const service = new ServiceGraphService({
+    stores,
+    clock: () => "2026-06-14T01:00:00.000Z",
+  });
+
+  const projected = await service.projectFromOutputSnapshot({
+    workspaceId: "ws_1",
+    producerCapsuleId: "cap_yurucommu",
+    applyRunId: "run_apply_1",
+    outputId: "out_1",
+    outputGeneration: 1,
+    outputs: {
+      takos_app: {
+        name: "yurucommu",
+        version: "2.0.0",
+        compute: {
+          web: {
+            kind: "worker",
+            consume: [
+              {
+                publication: "launcher",
+                inject: { env: { url: "APP_URL" } },
+              },
+              {
+                publication: "identity.oidc",
+                inject: {
+                  env: {
+                    issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                    clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        publish: [
+          {
+            name: "launcher",
+            publisher: "web",
+            type: "UiSurface",
+            outputs: { url: { kind: "url", routeRef: "root" } },
+            display: {
+              title: "Yurucommu",
+              category: "social",
+            },
+            spec: { launcher: true },
+          },
+        ],
+      },
+    },
+  });
+
+  expect(projected.serviceExports).toHaveLength(1);
+  expect(projected.serviceExports[0]?.name).toBe("launcher");
+  expect(projected.serviceExports[0]?.capabilities).toEqual([
+    "interface.ui.surface",
+  ]);
+  expect(projected.serviceExports[0]?.labels).toEqual({
+    app: "yurucommu",
+    version: "2.0.0",
+    publisher: "web",
+  });
+  expect(projected.serviceExports[0]?.metadata?.display).toEqual({
+    title: "Yurucommu",
+    category: "social",
+  });
+
+  expect(projected.serviceBindings).toHaveLength(2);
+  const launcher = projected.serviceBindings.find(
+    (binding) => binding.selector.name === "launcher",
+  );
+  expect(launcher?.selector).toEqual({
+    capabilities: ["interface.ui.surface"],
+    name: "launcher",
+    producerCapsuleId: "cap_yurucommu",
+  });
+  expect(launcher?.grantRequest.env).toEqual(["APP_URL"]);
+
+  const oidc = projected.serviceBindings.find(
+    (binding) => binding.selector.name === "identity.oidc",
+  );
+  expect(oidc?.selector.capabilities).toEqual(["identity.oidc"]);
+  expect(oidc?.target).toEqual({
+    kind: "workload",
+    name: "web",
+    metadata: {
+      source: "takos_app.compute",
+      appName: "yurucommu",
+      componentName: "web",
+      componentKind: "worker",
+    },
+  });
+  expect(oidc?.grantRequest.env).toEqual([
+    "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  ]);
+  expect(oidc?.grantRequest.scopes).toEqual(["openid", "profile", "email"]);
+  expect(oidc?.grantRequest.metadata?.sourceRef).toEqual(
+    "takosumi.identity.oidc",
+  );
+});
+
 test("ServiceGraphService enforces grant ttl and requested env material", async () => {
   const service = seededBoundServiceGraph();
 

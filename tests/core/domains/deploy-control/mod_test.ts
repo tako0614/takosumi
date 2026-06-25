@@ -387,6 +387,103 @@ test("apply projects allowlisted service_exports into the Service Graph", async 
   );
 });
 
+test("apply projects allowlisted takos_app output into Service Graph exports and bindings", async () => {
+  const { store, request } = await seedUpdatableInstallation();
+  const installConfig = await store.getInstallConfig("cfg_fixture");
+  await store.putInstallConfig({
+    ...installConfig!,
+    outputAllowlist: {
+      ...installConfig!.outputAllowlist,
+      takos_app: { from: "takos_app", type: "json" },
+    },
+  });
+  const serviceGraphService = new ServiceGraphService({
+    stores: {
+      exports: new InMemoryServiceExportStore(),
+      bindings: new InMemoryServiceBindingStore(),
+      grants: new InMemoryServiceGraphGrantStore(),
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(50),
+    newId: deterministicIds(),
+    runner: fakeRunner({
+      launch_url: {
+        sensitive: false,
+        value: "https://app.example.test",
+      },
+      takos_app: {
+        sensitive: false,
+        value: {
+          name: "yurucommu",
+          version: "2.0.0",
+          compute: {
+            web: {
+              kind: "worker",
+              consume: [
+                {
+                  publication: "identity.oidc",
+                  inject: {
+                    env: {
+                      issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                      clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+          publish: [
+            {
+              name: "launcher",
+              publisher: "web",
+              type: "UiSurface",
+              outputs: { url: { kind: "url", routeRef: "root" } },
+              display: { title: "Yurucommu" },
+              spec: { launcher: true },
+            },
+          ],
+        },
+      },
+    }),
+    serviceGraphService,
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const serviceExports = await serviceGraphService.listExportsByWorkspace(
+    applied.installation!.spaceId,
+  );
+  const serviceBindings =
+    await serviceGraphService.listBindingsByConsumerCapsule(
+      applied.installation!.id,
+    );
+
+  expect(serviceExports.map((serviceExport) => serviceExport.name)).toEqual([
+    "launcher",
+  ]);
+  expect(serviceExports[0]?.capabilities).toEqual(["interface.ui.surface"]);
+  expect(serviceExports[0]?.producerCapsuleId).toBe(applied.installation!.id);
+  expect(serviceExports[0]?.outputId).toBe(
+    applied.deployment!.outputSnapshotId,
+  );
+  expect(serviceBindings).toHaveLength(1);
+  expect(serviceBindings[0]?.selector).toEqual({
+    capabilities: ["identity.oidc"],
+    name: "identity.oidc",
+  });
+  expect(serviceBindings[0]?.target.name).toBe("web");
+  expect(serviceBindings[0]?.grantRequest.env).toEqual([
+    "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  ]);
+});
+
 test("PlanRun rejects installation operations outside the requested space", async () => {
   const { store, installationId } = await seedUpdatableInstallation({
     spaceId: "space_a",

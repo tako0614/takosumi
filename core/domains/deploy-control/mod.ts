@@ -5965,7 +5965,7 @@ export class OpenTofuDeploymentController {
   }): Promise<void> {
     if (!this.#serviceGraphService) return;
     try {
-      await this.#serviceGraphService.projectExportsFromOutputSnapshot({
+      await this.#serviceGraphService.projectFromOutputSnapshot({
         workspaceId: input.installation.spaceId,
         producerCapsuleId: input.installation.id,
         applyRunId: input.deployment.applyRunId,
