@@ -941,13 +941,19 @@ export async function handlePlatformCloudExtensionRouteRequest(
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
-  return await binding.fetch(
-    await requestWithPlatformCloudExtensionAuthContext(
-      request,
-      env,
-      route,
-      sessionVerifier,
-    ),
+  const authenticatedRequest = await requestWithPlatformCloudExtensionAuthContext(
+    request,
+    env,
+    route,
+    sessionVerifier,
+  );
+  const upstreamResponse = await binding.fetch(
+    requestForPlatformCloudExtensionBinding(authenticatedRequest, route),
+  );
+  return responseForPlatformCloudExtensionClient(
+    request,
+    route,
+    upstreamResponse,
   );
 }
 
@@ -1036,6 +1042,37 @@ function clonePlatformCloudExtensionRequest(
         ? undefined
         : request.body,
     redirect: request.redirect,
+  });
+}
+
+function requestForPlatformCloudExtensionBinding(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+): Request {
+  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
+    return request;
+  }
+  return new Request(request.url, {
+    method: "GET",
+    headers: request.headers,
+    redirect: request.redirect,
+  });
+}
+
+function responseForPlatformCloudExtensionClient(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+  response: Response,
+): Response {
+  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
