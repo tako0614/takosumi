@@ -326,7 +326,7 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
   ]);
 });
 
-test("apply projects allowlisted service_exports into the Service Graph", async () => {
+test("apply projects allowlisted service_exports and service_bindings into the Service Graph", async () => {
   const { store, request } = await seedUpdatableInstallation();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
@@ -334,6 +334,7 @@ test("apply projects allowlisted service_exports into the Service Graph", async 
     outputAllowlist: {
       ...installConfig!.outputAllowlist,
       service_exports: { from: "service_exports", type: "json" },
+      service_bindings: { from: "service_bindings", type: "json" },
     },
   });
   const serviceGraphService = new ServiceGraphService({
@@ -364,6 +365,24 @@ test("apply projects allowlisted service_exports into the Service Graph", async 
           },
         ],
       },
+      service_bindings: {
+        sensitive: false,
+        value: [
+          {
+            name: "agent_tools",
+            target: { kind: "workload", name: "agent-runtime" },
+            selector: {
+              name: "tools",
+              capabilities: ["protocol.mcp.server"],
+            },
+            grant_request: {
+              scopes: ["mcp.invoke"],
+              audience: ["agent-runtime"],
+              env: ["MCP_BASE_URL", "MCP_TOKEN"],
+            },
+          },
+        ],
+      },
     }),
     serviceGraphService,
   });
@@ -385,6 +404,20 @@ test("apply projects allowlisted service_exports into the Service Graph", async 
   expect(serviceExports[0]?.outputId).toBe(
     applied.deployment!.outputSnapshotId,
   );
+
+  const serviceBindings =
+    await serviceGraphService.listBindingsByConsumerCapsule(
+      applied.installation!.id,
+    );
+  expect(serviceBindings).toHaveLength(1);
+  expect(serviceBindings[0]?.selector).toEqual({
+    capabilities: ["protocol.mcp.server"],
+    name: "tools",
+  });
+  expect(serviceBindings[0]?.grantRequest.env).toEqual([
+    "MCP_BASE_URL",
+    "MCP_TOKEN",
+  ]);
 });
 
 test("apply projects allowlisted takos_app output into Service Graph exports and bindings", async () => {

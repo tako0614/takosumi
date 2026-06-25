@@ -17,6 +17,8 @@ import {
   assertValidServiceBinding,
   assertValidServiceExport,
   assertValidServiceGrant,
+  isServiceBindingDependencyMode,
+  isServiceBindingTargetKind,
   isServiceExportVisibility,
   isServiceGraphCapability,
   isStandardServiceGraphCapability,
@@ -477,12 +479,29 @@ function normalizeProjectedBindings(
   outputs: Readonly<Record<string, JsonValue>>,
   allowExtensionCapabilities: boolean,
 ): readonly NormalizedProjectedBindingInput[] {
-  const projected = normalizeTakosAppConsumeBindings(outputs.takos_app);
+  const projected: NormalizedProjectedBindingInput[] = [];
+  const rawBindings = outputs.service_bindings;
+  if (rawBindings !== undefined) {
+    if (!Array.isArray(rawBindings)) {
+      throw new TypeError("service_bindings output must be an array");
+    }
+    for (const [index, value] of rawBindings.entries()) {
+      const normalized = normalizeProjectedBinding(value, index);
+      assertCapabilitiesAllowed(
+        normalized.selector.capabilities,
+        allowExtensionCapabilities,
+        `service_bindings[${index}].selector.capabilities`,
+      );
+      projected.push(normalized);
+    }
+  }
+
+  projected.push(...normalizeTakosAppConsumeBindings(outputs.takos_app));
   for (const [index, normalized] of projected.entries()) {
     assertCapabilitiesAllowed(
       normalized.selector.capabilities,
       allowExtensionCapabilities,
-      `takos_app.compute.consume[${index}].selector.capabilities`,
+      `projected service binding[${index}].selector.capabilities`,
     );
   }
   return projected;
@@ -644,6 +663,195 @@ function normalizeProjectedExport(
     auth: optionalAuthArrayField(value, "auth", index),
     labels: optionalStringRecordField(value, "labels", index),
     metadata: optionalJsonObjectField(value, "metadata", index),
+  };
+}
+
+function normalizeProjectedBinding(
+  value: JsonValue,
+  index: number,
+): NormalizedProjectedBindingInput {
+  if (!isJsonObject(value)) {
+    throw new TypeError(`service_bindings[${index}] must be an object`);
+  }
+  const stableName = stringFieldFor("service_bindings", value, "name", index);
+  const selectorResult = normalizeProjectedBindingSelector(
+    value.selector,
+    index,
+  );
+  return {
+    stableName,
+    target: normalizeProjectedBindingTarget(value.target, index),
+    selector: selectorResult.selector,
+    selectorProducerIsSelf: selectorResult.producerIsSelf,
+    dependencyMode: optionalDependencyModeField(value, index),
+    grantRequest: normalizeProjectedGrantRequest(
+      value.grant_request ?? value.grantRequest,
+      index,
+    ),
+  };
+}
+
+function normalizeProjectedBindingTarget(
+  value: JsonValue | undefined,
+  index: number,
+): ServiceBindingTarget {
+  if (!isJsonObject(value)) {
+    throw new TypeError(`service_bindings[${index}].target must be an object`);
+  }
+  const kind = stringFieldFor(
+    "service_bindings",
+    value,
+    "kind",
+    index,
+    ".target",
+  );
+  if (!isServiceBindingTargetKind(kind)) {
+    throw new TypeError(
+      `service_bindings[${index}].target.kind must be generated_root, workload, or runtime`,
+    );
+  }
+  return {
+    kind,
+    name: optionalStringFor(
+      "service_bindings",
+      value,
+      "name",
+      index,
+      ".target",
+    ),
+    metadata: optionalJsonObjectFieldFor(
+      "service_bindings",
+      value,
+      "metadata",
+      index,
+      ".target",
+    ),
+  };
+}
+
+function normalizeProjectedBindingSelector(
+  value: JsonValue | undefined,
+  index: number,
+): {
+  readonly selector: ServiceBindingSelector;
+  readonly producerIsSelf?: boolean;
+} {
+  if (!isJsonObject(value)) {
+    throw new TypeError(`service_bindings[${index}].selector must be an object`);
+  }
+  const capabilities = capabilityArrayFieldFor(
+    "service_bindings",
+    value,
+    "capabilities",
+    index,
+    ".selector",
+  );
+  const producerRaw =
+    value.producer ??
+    value.producer_capsule_id ??
+    value.producerCapsuleId;
+  const producer =
+    producerRaw === undefined
+      ? undefined
+      : requiredString(
+          producerRaw,
+          `service_bindings[${index}].selector.producer`,
+        );
+  const producerIsSelf = producer === "self";
+  return {
+    selector: {
+      capabilities,
+      name: optionalStringFor(
+        "service_bindings",
+        value,
+        "name",
+        index,
+        ".selector",
+      ),
+      serviceExportId:
+        optionalStringFor(
+          "service_bindings",
+          value,
+          "service_export_id",
+          index,
+          ".selector",
+        ) ??
+        optionalStringFor(
+          "service_bindings",
+          value,
+          "serviceExportId",
+          index,
+          ".selector",
+        ),
+      producerCapsuleId: producerIsSelf ? undefined : producer,
+      labels: optionalStringRecordFieldFor(
+        "service_bindings",
+        value,
+        "labels",
+        index,
+        ".selector",
+      ),
+    },
+    producerIsSelf: producerIsSelf || undefined,
+  };
+}
+
+function optionalDependencyModeField(
+  value: JsonObject,
+  index: number,
+): ServiceBindingDependencyMode | undefined {
+  const raw = value.dependency_mode ?? value.dependencyMode;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || !isServiceBindingDependencyMode(raw)) {
+    throw new TypeError(
+      `service_bindings[${index}].dependency_mode must be variable_injection, remote_state, or published_output`,
+    );
+  }
+  return raw;
+}
+
+function normalizeProjectedGrantRequest(
+  value: JsonValue | undefined,
+  index: number,
+): ServiceGrantRequest {
+  if (!isJsonObject(value)) {
+    throw new TypeError(
+      `service_bindings[${index}].grant_request must be an object`,
+    );
+  }
+  const ttlRaw = value.ttl_seconds ?? value.ttlSeconds;
+  const ttlSeconds =
+    ttlRaw === undefined ? undefined : numericTtlSeconds(ttlRaw, index);
+  return {
+    scopes: optionalStringArrayFieldFor(
+      "service_bindings",
+      value,
+      "scopes",
+      index,
+      ".grant_request",
+    ) ?? [],
+    audience: optionalStringArrayFieldFor(
+      "service_bindings",
+      value,
+      "audience",
+      index,
+      ".grant_request",
+    ),
+    env: optionalStringArrayFieldFor(
+      "service_bindings",
+      value,
+      "env",
+      index,
+      ".grant_request",
+    ),
+    ttlSeconds,
+    metadata: optionalJsonObjectFieldFor(
+      "service_bindings",
+      value,
+      "metadata",
+      index,
+      ".grant_request",
+    ),
   };
 }
 
@@ -980,6 +1188,37 @@ function stringField(value: JsonObject, field: string, index: number): string {
   return item;
 }
 
+function stringFieldFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): string {
+  const item = value[field];
+  if (typeof item !== "string" || item.length === 0) {
+    throw new TypeError(`${outputName}[${index}]${prefix}.${field} is required`);
+  }
+  return item;
+}
+
+function optionalStringFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): string | undefined {
+  const item = value[field];
+  if (item === undefined) return undefined;
+  if (typeof item !== "string" || item.length === 0) {
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} must be a non-empty string`,
+    );
+  }
+  return item;
+}
+
 function optionalStringField(
   value: JsonObject,
   field: string,
@@ -1013,6 +1252,32 @@ function capabilityArrayField(
     ) {
       throw new TypeError(
         `service_exports[${index}].${field}[${capabilityIndex}] must be a dotted capability token`,
+      );
+    }
+    return capability;
+  });
+}
+
+function capabilityArrayFieldFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): readonly ServiceGraphCapability[] {
+  const item = value[field];
+  if (!Array.isArray(item) || item.length === 0) {
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} must contain at least one capability`,
+    );
+  }
+  return item.map((capability, capabilityIndex) => {
+    if (
+      typeof capability !== "string" ||
+      !isServiceGraphCapability(capability)
+    ) {
+      throw new TypeError(
+        `${outputName}[${index}]${prefix}.${field}[${capabilityIndex}] must be a dotted capability token`,
       );
     }
     return capability;
@@ -1079,6 +1344,30 @@ function optionalStringRecordField(
   return item as Readonly<Record<string, string>>;
 }
 
+function optionalStringRecordFieldFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): Readonly<Record<string, string>> | undefined {
+  const item = value[field];
+  if (item === undefined) return undefined;
+  if (!isJsonObject(item)) {
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} must be an object`,
+    );
+  }
+  for (const [key, entry] of Object.entries(item)) {
+    if (key.length === 0 || typeof entry !== "string") {
+      throw new TypeError(
+        `${outputName}[${index}]${prefix}.${field} entries must be string:string`,
+      );
+    }
+  }
+  return item as Readonly<Record<string, string>>;
+}
+
 function optionalJsonObjectField(
   value: JsonObject,
   field: string,
@@ -1090,6 +1379,56 @@ function optionalJsonObjectField(
     throw new TypeError(`service_exports[${index}].${field} must be an object`);
   }
   return item;
+}
+
+function optionalJsonObjectFieldFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): JsonObject | undefined {
+  const item = value[field];
+  if (item === undefined) return undefined;
+  if (!isJsonObject(item)) {
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} must be an object`,
+    );
+  }
+  return item;
+}
+
+function optionalStringArrayFieldFor(
+  outputName: string,
+  value: JsonObject,
+  field: string,
+  index: number,
+  prefix = "",
+): readonly string[] | undefined {
+  const item = value[field];
+  if (item === undefined) return undefined;
+  if (
+    !Array.isArray(item) ||
+    item.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} must be string[]`,
+    );
+  }
+  return [...new Set(item as string[])];
+}
+
+function numericTtlSeconds(value: JsonValue, index: number): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    throw new TypeError(
+      `service_bindings[${index}].grant_request.ttl_seconds must be a positive integer`,
+    );
+  }
+  return value;
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
