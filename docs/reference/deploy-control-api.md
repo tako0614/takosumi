@@ -104,9 +104,8 @@ Takosumi OSS treats a successful `apply` as an OpenTofu/Terraform ledger commit:
 state versions, outputs, run history, and AuditEvent evidence are persisted.
 
 Application publication is a separate operator/Cloud extension step. A host may
-inject a post-apply release activator to publish a product artifact, such as a
-Takos distribution Worker script/assets/container bundle, after the apply ledger
-commit succeeds.
+inject a post-apply release activator to publish a product artifact after the
+apply ledger commit succeeds.
 
 The seam is intentionally generic:
 
@@ -129,8 +128,8 @@ Capsules may mark individual post-apply commands with `executor = "runner"` or
 and receive only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`. Operator
 commands are not attempted by the built-in runner activator; they remain pending
 unless the host configures an operator/Cloud release activator that owns the
-credential boundary for work such as Worker artifact upload, provider-side
-publication, or external index setup.
+credential boundary for work such as artifact upload, provider-side
+publication, migrations, or external index setup.
 
 The platform Worker can enable the generic webhook bridge with:
 
@@ -157,10 +156,11 @@ one of:
 { "status": "failed", "message": "publication failed" }
 ```
 
-The webhook materializer is where product-specific publication lives:
-Cloudflare Worker upload, asset publishing, container promotion, route updates,
-or closed Takosumi Cloud managed-resource activation. Those implementations do
-not live in OSS Takosumi Core.
+The webhook materializer is where product-specific publication lives. Takosumi
+Core only forwards the SourceSnapshot reference, non-sensitive outputs, and
+declared opaque argv commands. It does not inspect whether those commands migrate
+a database, publish an artifact, update an index, or perform another app-owned
+activation task.
 
 ## Cloud-Only Exclusions
 

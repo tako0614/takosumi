@@ -93,6 +93,23 @@ that require a provider token, an operator checkout of the full repository, or
 publication outside the source snapshot should declare `executor = "operator"`
 and be handled by the configured release activator materializer.
 
+The bundled Cloudflare-hosted operator helper is intentionally small:
+
+```bash
+cd takosumi
+bun run operator:release-activator -- serve \
+  --source-bucket "$TAKOSUMI_RELEASE_SOURCE_BUCKET" \
+  --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG"
+```
+
+It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
+extracts it into a temporary directory, and runs the opaque `post_apply` argv.
+Takosumi does not add database-specific migration resources or product-specific
+publication code. Database migrations, Worker uploads, route promotion, search
+index bootstrap, and similar steps are commands owned by the Capsule/operator.
+Credentials required by this helper itself, such as R2 archive fetch auth, remain
+materializer tooling env and are not forwarded to the restored source commands.
+
 ## Promotion Record
 
 Release sign-off record includes:

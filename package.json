@@ -25,6 +25,7 @@
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
     "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "test:scripts": "bun test ./tests/scripts",
+    "operator:release-activator": "bun scripts/operator-release-activator.ts",
     "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
