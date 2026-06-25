@@ -10,6 +10,7 @@ import {
   type TakosumiAiGatewayRoute,
   type TakosumiAiGatewayScope,
   type TakosumiAiGatewayStatusResponse,
+  type TakosumiWorkersAiBindingProfile,
 } from "takosumi-contract/ai-gateway";
 import type { JsonObject, JsonValue } from "takosumi-contract";
 import {
@@ -24,12 +25,24 @@ export interface TakosumiAiGatewayConfig {
   readonly profiles: readonly ResolvedAiGatewayUpstreamProfile[];
 }
 
-export interface ResolvedAiGatewayUpstreamProfile extends Omit<
+export interface ResolvedOpenAiCompatibleProfile extends Omit<
   TakosumiOpenAiCompatibleProfile,
   "apiKeyEnv"
 > {
   readonly type: "openai_compatible";
   readonly apiKey: string;
+}
+
+export interface ResolvedWorkersAiBindingProfile extends TakosumiWorkersAiBindingProfile {
+  readonly type: "workers_ai_binding";
+}
+
+export type ResolvedAiGatewayUpstreamProfile =
+  | ResolvedOpenAiCompatibleProfile
+  | ResolvedWorkersAiBindingProfile;
+
+export interface TakosumiWorkersAiBinding {
+  run(model: string, input: unknown): Promise<unknown>;
 }
 
 export interface TakosumiAiGatewayAuthContext {
@@ -56,6 +69,7 @@ export interface TakosumiAiGatewayHandlerOptions {
   readonly config: TakosumiAiGatewayConfig;
   readonly authorize: TakosumiAiGatewayAuthorize;
   readonly fetcher?: typeof fetch;
+  readonly workersAi?: TakosumiWorkersAiBinding;
 }
 
 type JsonRecord = Record<string, JsonValue>;
@@ -139,22 +153,24 @@ export async function handleTakosumiAiGatewayRequest(
 
   switch (endpoint) {
     case "status":
-      return handleStatus(options.config);
+      return handleStatus(options.config, options.workersAi);
     case "models":
       return handleModels(options.config);
     case "chat.completions":
-      return await forwardOpenAiCompatibleRequest({
+      return await forwardModelRequest({
         request,
         endpoint,
         config: options.config,
         fetcher: options.fetcher ?? fetch,
+        workersAi: options.workersAi,
       });
     case "embeddings":
-      return await forwardOpenAiCompatibleRequest({
+      return await forwardModelRequest({
         request,
         endpoint,
         config: options.config,
         fetcher: options.fetcher ?? fetch,
+        workersAi: options.workersAi,
       });
   }
 }
@@ -186,7 +202,10 @@ export function requiredScopesForEndpoint(
   }
 }
 
-function handleStatus(config: TakosumiAiGatewayConfig): Response {
+function handleStatus(
+  config: TakosumiAiGatewayConfig,
+  workersAi?: TakosumiWorkersAiBinding,
+): Response {
   const models = allModels(config);
   const response: TakosumiAiGatewayStatusResponse = {
     kind: "takosumi.ai-gateway-status@v1",
@@ -204,7 +223,7 @@ function handleStatus(config: TakosumiAiGatewayConfig): Response {
       id: profile.id,
       provider: profile.provider,
       type: profile.type,
-      endpointOrigin: new URL(profile.baseUrl).origin,
+      endpointOrigin: profileEndpointOrigin(profile),
       modelCount: profile.models.length,
       publicModels: profile.models.map((model) => ({
         publicModel: model.publicModel,
@@ -218,7 +237,7 @@ function handleStatus(config: TakosumiAiGatewayConfig): Response {
     })),
     workersAiFallback: {
       enabled: false,
-      aiBindingConfigured: false,
+      aiBindingConfigured: Boolean(workersAi),
       chatModel: "",
       embeddingModel: "",
     },
@@ -262,11 +281,12 @@ function handleModels(config: TakosumiAiGatewayConfig): Response {
   return jsonResponse(response);
 }
 
-async function forwardOpenAiCompatibleRequest(input: {
+async function forwardModelRequest(input: {
   readonly request: Request;
   readonly endpoint: "chat.completions" | "embeddings";
   readonly config: TakosumiAiGatewayConfig;
   readonly fetcher: typeof fetch;
+  readonly workersAi?: TakosumiWorkersAiBinding;
 }): Promise<Response> {
   const body = await readJsonRecord(input.request);
   if (!body) {
@@ -289,23 +309,51 @@ async function forwardOpenAiCompatibleRequest(input: {
     );
   }
 
+  if (selected.profile.type === "workers_ai_binding") {
+    return await forwardWorkersAiBindingRequest({
+      body,
+      endpoint: input.endpoint,
+      profile: selected.profile,
+      model: selected.model,
+      workersAi: input.workersAi,
+    });
+  }
+
+  return await forwardOpenAiCompatibleRequest({
+    request: input.request,
+    body,
+    endpoint: input.endpoint,
+    profile: selected.profile,
+    model: selected.model,
+    fetcher: input.fetcher,
+  });
+}
+
+async function forwardOpenAiCompatibleRequest(input: {
+  readonly request: Request;
+  readonly body: JsonRecord;
+  readonly endpoint: "chat.completions" | "embeddings";
+  readonly profile: ResolvedOpenAiCompatibleProfile;
+  readonly model: TakosumiAiGatewayModelAlias;
+  readonly fetcher: typeof fetch;
+}): Promise<Response> {
   const upstreamBody = {
-    ...body,
-    model: selected.model.upstreamModel,
+    ...input.body,
+    model: input.model.upstreamModel,
   };
-  const upstreamUrl = upstreamEndpointUrl(selected.profile, input.endpoint);
+  const upstreamUrl = upstreamEndpointUrl(input.profile, input.endpoint);
   const upstreamHeaders = new Headers();
   upstreamHeaders.set("content-type", "application/json");
   const accept = input.request.headers.get("accept");
   if (accept) upstreamHeaders.set("accept", accept);
-  for (const [name, value] of Object.entries(selected.profile.headers ?? {})) {
+  for (const [name, value] of Object.entries(input.profile.headers ?? {})) {
     upstreamHeaders.set(name, value);
   }
-  const apiKeyHeader = selected.profile.apiKeyHeader ?? "authorization";
+  const apiKeyHeader = input.profile.apiKeyHeader ?? "authorization";
   if (apiKeyHeader.toLowerCase() === "authorization") {
-    upstreamHeaders.set("authorization", `Bearer ${selected.profile.apiKey}`);
+    upstreamHeaders.set("authorization", `Bearer ${input.profile.apiKey}`);
   } else {
-    upstreamHeaders.set(apiKeyHeader, selected.profile.apiKey);
+    upstreamHeaders.set(apiKeyHeader, input.profile.apiKey);
   }
 
   let upstreamResponse: Response;
@@ -327,14 +375,68 @@ async function forwardOpenAiCompatibleRequest(input: {
 
   if (!upstreamResponse.ok) {
     return upstreamErrorResponse(upstreamResponse, {
-      provider: selected.profile.provider,
-      publicModel: selected.model.publicModel,
+      provider: input.profile.provider,
+      publicModel: input.model.publicModel,
     });
   }
 
   return upstreamPassthroughResponse(upstreamResponse, {
-    provider: selected.profile.provider,
-    publicModel: selected.model.publicModel,
+    provider: input.profile.provider,
+    publicModel: input.model.publicModel,
+  });
+}
+
+async function forwardWorkersAiBindingRequest(input: {
+  readonly body: JsonRecord;
+  readonly endpoint: "chat.completions" | "embeddings";
+  readonly profile: ResolvedWorkersAiBindingProfile;
+  readonly model: TakosumiAiGatewayModelAlias;
+  readonly workersAi?: TakosumiWorkersAiBinding;
+}): Promise<Response> {
+  if (!input.workersAi) {
+    return aiGatewayError(
+      503,
+      "workers_ai_unconfigured",
+      "Workers AI binding is not configured",
+    );
+  }
+  if (input.body.stream === true) {
+    return aiGatewayError(
+      400,
+      "streaming_not_supported",
+      "Workers AI binding profiles do not expose OpenAI-compatible streaming yet",
+    );
+  }
+  const workersAiInput = workersAiInputForEndpoint(input.body, input.endpoint);
+  let result: unknown;
+  try {
+    result = await input.workersAi.run(
+      input.model.upstreamModel,
+      workersAiInput,
+    );
+  } catch {
+    return aiGatewayError(
+      502,
+      "upstream_unavailable",
+      "upstream model provider is unavailable",
+    );
+  }
+  const normalized =
+    input.endpoint === "chat.completions"
+      ? workersAiChatCompletionResponse(result, input.model.publicModel)
+      : workersAiEmbeddingsResponse(result, input.model.publicModel);
+  if (!normalized) {
+    return aiGatewayError(
+      502,
+      "invalid_upstream_response",
+      "upstream model provider returned an invalid response",
+    );
+  }
+  return jsonResponse(normalized, {
+    headers: aiGatewayProviderHeaders({
+      provider: input.profile.provider,
+      publicModel: input.model.publicModel,
+    }),
   });
 }
 
@@ -368,7 +470,7 @@ function allModels(config: TakosumiAiGatewayConfig): readonly {
 }
 
 function upstreamEndpointUrl(
-  profile: ResolvedAiGatewayUpstreamProfile,
+  profile: ResolvedOpenAiCompatibleProfile,
   endpoint: "chat.completions" | "embeddings",
 ): string {
   const base = profile.baseUrl.replace(/\/+$/, "");
@@ -378,6 +480,123 @@ function upstreamEndpointUrl(
     case "embeddings":
       return `${base}/embeddings`;
   }
+}
+
+function profileEndpointOrigin(
+  profile: ResolvedAiGatewayUpstreamProfile,
+): string {
+  return profile.type === "workers_ai_binding"
+    ? "cloudflare:workers-ai"
+    : new URL(profile.baseUrl).origin;
+}
+
+function workersAiInputForEndpoint(
+  body: JsonRecord,
+  endpoint: "chat.completions" | "embeddings",
+): JsonRecord {
+  if (endpoint === "embeddings") {
+    const { model: _model, input, ...rest } = body;
+    const output: JsonRecord = { ...rest };
+    if (!("text" in output) && input !== undefined) {
+      output.text = input;
+    }
+    return output;
+  }
+  const { model: _model, ...rest } = body;
+  return rest;
+}
+
+function workersAiChatCompletionResponse(
+  result: unknown,
+  publicModel: string,
+): unknown | undefined {
+  if (!isPlainRecord(result)) return undefined;
+  if (Array.isArray(result.choices)) {
+    return {
+      ...result,
+      model: publicModel,
+    };
+  }
+  const content =
+    typeof result.response === "string"
+      ? result.response
+      : typeof result.text === "string"
+        ? result.text
+        : undefined;
+  if (content === undefined) return undefined;
+  return {
+    id: `chatcmpl_workers_ai_${stableResponseSuffix(content)}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: publicModel,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content,
+        },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
+function workersAiEmbeddingsResponse(
+  result: unknown,
+  publicModel: string,
+): unknown | undefined {
+  if (!isPlainRecord(result)) return undefined;
+  const data = result.data;
+  const embeddings = isNumberArray(data)
+    ? [data]
+    : Array.isArray(data)
+      ? data
+          .map((entry) =>
+            isNumberArray(entry)
+              ? entry
+              : isPlainRecord(entry) && isNumberArray(entry.embedding)
+                ? entry.embedding
+                : undefined,
+          )
+          .filter((entry): entry is number[] => entry !== undefined)
+      : undefined;
+  if (!embeddings || embeddings.length === 0) return undefined;
+  return {
+    object: "list",
+    data: embeddings.map((embedding, index) => ({
+      object: "embedding",
+      embedding,
+      index,
+    })),
+    model: publicModel,
+  };
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
+function stableResponseSuffix(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function aiGatewayProviderHeaders(metadata: {
+  readonly provider: TakosumiAiGatewayProvider;
+  readonly publicModel: string;
+}): Headers {
+  const headers = new Headers();
+  headers.set("x-takosumi-ai-gateway-provider", metadata.provider);
+  headers.set("x-takosumi-ai-gateway-model", metadata.publicModel);
+  return headers;
 }
 
 function upstreamPassthroughResponse(
@@ -508,6 +727,22 @@ function parseProfile(
   ) as TakosumiAiGatewayProvider;
   const profileType =
     entry.type === undefined ? "openai_compatible" : entry.type;
+  if (profileType === "workers_ai_binding") {
+    for (const field of ["baseUrl", "apiKeyEnv", "apiKeyHeader", "headers"]) {
+      if (field in entry) {
+        throw new TypeError(
+          `AI Gateway profile ${id}.${field} is not valid for workers_ai_binding`,
+        );
+      }
+    }
+    const models = parseModels(entry.models, id);
+    return {
+      type: "workers_ai_binding",
+      id,
+      provider,
+      models,
+    };
+  }
   if (profileType !== "openai_compatible") {
     throw new TypeError(
       `AI Gateway profile ${id}.type is not supported by the OpenAI-compatible handler`,

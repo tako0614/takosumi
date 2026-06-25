@@ -339,7 +339,181 @@ test("AI Gateway config rejects embedded key values", () => {
   ).toThrow("must not be embedded");
 });
 
-test("AI Gateway OpenAI-compatible handler rejects Workers AI binding profiles", () => {
+test("AI Gateway supports Workers AI binding profiles without upstream keys", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv({
+    TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+      {
+        type: "workers_ai_binding",
+        id: "workers-ai",
+        provider: "workers_ai",
+        models: [
+          {
+            publicModel: "workers-ai/chat",
+            upstreamModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+            endpoints: ["chat.completions"],
+            default: true,
+          },
+          {
+            publicModel: "workers-ai/embedding",
+            upstreamModel: "@cf/baai/bge-base-en-v1.5",
+            endpoints: ["embeddings"],
+          },
+        ],
+      },
+    ]),
+  });
+
+  const modelsUrl = gatewayUrl("/gateway/ai/v1/models");
+  const models = await handleTakosumiAiGatewayRequest(
+    new Request(modelsUrl),
+    modelsUrl,
+    {
+      config,
+      authorize: async () => ({ ok: true }),
+    },
+  );
+  expect(models.status).toBe(200);
+  const modelsBody = await models.json();
+  expect(modelsBody.data.map((model: { id: string }) => model.id)).toEqual([
+    "takosumi/default",
+    "workers-ai/chat",
+    "workers-ai/embedding",
+  ]);
+
+  const statusUrl = gatewayUrl("/gateway/ai/v1/__takosumi/status");
+  const status = await handleTakosumiAiGatewayRequest(
+    new Request(statusUrl),
+    statusUrl,
+    {
+      config,
+      workersAi: { run: async () => ({ response: "unused" }) },
+      authorize: async () => ({ ok: true }),
+    },
+  );
+  expect(status.status).toBe(200);
+  expect(await status.json()).toMatchObject({
+    mode: "configured_upstreams",
+    summary: { providers: ["workers_ai"] },
+    upstreamProfiles: [
+      {
+        id: "workers-ai",
+        provider: "workers_ai",
+        type: "workers_ai_binding",
+        endpointOrigin: "cloudflare:workers-ai",
+      },
+    ],
+    workersAiFallback: {
+      enabled: false,
+      aiBindingConfigured: true,
+    },
+  });
+
+  const chatUrl = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const calls: { model: string; input: unknown }[] = [];
+  const chat = await handleTakosumiAiGatewayRequest(
+    new Request(chatUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "takosumi/default",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    chatUrl,
+    {
+      config,
+      workersAi: {
+        run: async (model, input) => {
+          calls.push({ model, input });
+          return { response: "hello from Workers AI" };
+        },
+      },
+      authorize: async (_request, auth) => {
+        expect(auth.requiredScopes).toEqual(["ai.chat"]);
+        return { ok: true };
+      },
+    },
+  );
+  expect(chat.status).toBe(200);
+  expect(calls).toEqual([
+    {
+      model: "@cf/meta/llama-3.1-8b-instruct-fast",
+      input: { messages: [{ role: "user", content: "hello" }] },
+    },
+  ]);
+  expect(await chat.json()).toMatchObject({
+    object: "chat.completion",
+    model: "workers-ai/chat",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "hello from Workers AI",
+        },
+      },
+    ],
+  });
+
+  const embeddingsUrl = gatewayUrl("/gateway/ai/v1/embeddings");
+  const embeddings = await handleTakosumiAiGatewayRequest(
+    new Request(embeddingsUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "workers-ai/embedding",
+        input: ["a", "b"],
+      }),
+    }),
+    embeddingsUrl,
+    {
+      config,
+      workersAi: {
+        run: async (model, input) => {
+          calls.push({ model, input });
+          return {
+            data: [
+              [0.1, 0.2],
+              [0.3, 0.4],
+            ],
+          };
+        },
+      },
+      authorize: async (_request, auth) => {
+        expect(auth.requiredScopes).toEqual(["ai.embeddings"]);
+        return { ok: true };
+      },
+    },
+  );
+  expect(embeddings.status).toBe(200);
+  expect(await embeddings.json()).toEqual({
+    object: "list",
+    data: [
+      { object: "embedding", embedding: [0.1, 0.2], index: 0 },
+      { object: "embedding", embedding: [0.3, 0.4], index: 1 },
+    ],
+    model: "workers-ai/embedding",
+  });
+
+  const unconfigured = await handleTakosumiAiGatewayRequest(
+    new Request(chatUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "workers-ai/chat",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    chatUrl,
+    {
+      config,
+      authorize: async () => ({ ok: true }),
+    },
+  );
+  expect(unconfigured.status).toBe(503);
+  expect((await unconfigured.json()).error.code).toBe(
+    "workers_ai_unconfigured",
+  );
+});
+
+test("AI Gateway rejects secrets on Workers AI binding profiles", () => {
   expect(() =>
     createTakosumiAiGatewayConfigFromEnv({
       TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
@@ -347,6 +521,7 @@ test("AI Gateway OpenAI-compatible handler rejects Workers AI binding profiles",
           type: "workers_ai_binding",
           id: "workers-ai",
           provider: "workers_ai",
+          apiKeyEnv: "TAKOSUMI_AI_GATEWAY_UNSAFE_KEY",
           models: [
             {
               publicModel: "workers-ai/chat",
@@ -356,8 +531,9 @@ test("AI Gateway OpenAI-compatible handler rejects Workers AI binding profiles",
           ],
         },
       ]),
+      TAKOSUMI_AI_GATEWAY_UNSAFE_KEY: "secret",
     }),
-  ).toThrow("not supported by the OpenAI-compatible handler");
+  ).toThrow("apiKeyEnv is not valid for workers_ai_binding");
 });
 
 test("AI Gateway config rejects secret-bearing static upstream headers", () => {

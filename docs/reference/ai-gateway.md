@@ -197,16 +197,16 @@ Workers AI uses `type: "workers_ai_binding"` when Takosumi Cloud calls the
 Worker `AI` binding directly without issuing or storing a REST API token.
 
 `GET /gateway/ai/v1/__takosumi/status` returns only public readiness
-metadata. It reports whether the gateway is using `configured_upstreams` or
-`workers_ai_fallback`, the public providers/model aliases, and whether the
-Workers AI fallback binding exists. It never returns upstream keys, `apiKeyEnv`
-names, raw `Authorization` material, or service-binding names. Takosumi Cloud
-GA smoke may pass in fallback mode for the base managed AI capability, but a
-production Cloud AI Gateway should configure at least one explicit profile.
-Any launch claim that includes DeepSeek, Z.AI/GLM, Gemini, OpenAI, or another
-external upstream must use `type: "openai_compatible"` with a real upstream key
-behind `apiKeyEnv` and run `smoke:cloud-extensions` with
-`--require-ai-upstream-profile`.
+metadata. Explicitly configured profiles report `configured_upstreams`, the
+public providers/model aliases, and whether the Cloud worker has a Workers AI
+binding available for `workers_ai_binding` profiles. It never returns upstream
+keys, `apiKeyEnv` names, raw `Authorization` material, or service-binding
+names. Takosumi Cloud should configure at least one explicit profile before
+claiming AI Gateway readiness. Use `type: "workers_ai_binding"` for the base
+Cloudflare Workers AI capability, and use `type: "openai_compatible"` with a
+real upstream key behind `apiKeyEnv` for DeepSeek, Z.AI/GLM, Gemini, OpenAI, or
+another external upstream. Any launch claim for external upstreams must run
+`smoke:cloud-extensions` with `--require-ai-upstream-profile`.
 
 ## Secret Boundary
 
