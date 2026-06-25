@@ -23,7 +23,8 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
                 process.execPath,
                 "-e",
                 [
-                  `await Bun.write("release-output.txt", Bun.env.RELEASE_LABEL + ":" + process.cwd().split("/").pop())`,
+                  `const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)`,
+                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, Bun.env.TAKOSUMI_APPLY_RUN_ID].join(":"))`,
                   `console.log("release ok")`,
                 ].join(";"),
               ],
@@ -31,6 +32,12 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
               env: { RELEASE_LABEL: "public" },
             },
           ],
+        },
+        outputs: { public_url: "https://app.example.test" },
+        activation: {
+          applyRunId: "run_apply_1",
+          installationId: "inst_1",
+          deploymentId: "dep_1",
         },
       }),
     );
@@ -47,7 +54,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
     expect(body.stdout).toContain("release ok");
     await expect(
       readFile(join(sourceRoot, "scripts", "release-output.txt"), "utf8"),
-    ).resolves.toBe("public:scripts");
+    ).resolves.toBe("public:scripts:https://app.example.test:run_apply_1");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

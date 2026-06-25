@@ -79,6 +79,7 @@ export function createRunnerReleaseActivator(
         runId: releaseCommandRunId(input.applyRun.id),
         commands: input.commands,
         sourceSnapshot: input.sourceSnapshot,
+        nonSensitiveOutputs: input.nonSensitiveOutputs,
         applyRunId: input.applyRun.id,
         installationId: input.installation.id,
         deploymentId: input.deployment.id,

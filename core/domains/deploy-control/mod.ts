@@ -457,6 +457,7 @@ export interface ReleaseCommandRunJob {
   readonly runId: string;
   readonly commands: readonly ReleaseActivationCommand[];
   readonly sourceSnapshot: SourceSnapshot;
+  readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   readonly applyRunId: string;
   readonly installationId: string;
   readonly deploymentId: string;

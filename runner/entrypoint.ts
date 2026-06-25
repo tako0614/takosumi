@@ -126,6 +126,14 @@ interface ReleaseCommandSpec {
 
 interface ReleaseSpec {
   readonly commands: readonly ReleaseCommandSpec[];
+  readonly outputs?: JsonRecord;
+  readonly activation?: ReleaseActivationSpec;
+}
+
+interface ReleaseActivationSpec {
+  readonly applyRunId?: string;
+  readonly installationId?: string;
+  readonly deploymentId?: string;
 }
 
 export interface CommandContext {
@@ -404,7 +412,11 @@ async function runRelease(
       `release command ${command.id} working directory`,
     );
     const context: CommandContext = {
-      env: { ...buildPhaseEnv(), ...(command.env ?? {}) },
+      env: {
+        ...buildPhaseEnv(),
+        ...releaseBaseEnv(runId, release),
+        ...(command.env ?? {}),
+      },
       timeoutMs: 10 * 60 * 1000,
     };
     assertBuildEnvHasNoCredentials(context.env);
@@ -3071,7 +3083,33 @@ function parseRelease(request: unknown): ReleaseSpec {
         ...(env ? { env } : {}),
       };
     }),
+    ...releaseOutputs(recordField(request, "outputs")),
+    ...releaseActivation(recordField(request, "activation")),
   };
+}
+
+function releaseOutputs(
+  value: unknown,
+): { readonly outputs: JsonRecord } | Record<string, never> {
+  return isRecord(value) ? { outputs: value } : {};
+}
+
+function releaseActivation(
+  value: unknown,
+): { readonly activation: ReleaseActivationSpec } | Record<string, never> {
+  if (!isRecord(value)) return {};
+  const activation: ReleaseActivationSpec = {
+    ...(stringField(value, "applyRunId")
+      ? { applyRunId: stringField(value, "applyRunId") }
+      : {}),
+    ...(stringField(value, "installationId")
+      ? { installationId: stringField(value, "installationId") }
+      : {}),
+    ...(stringField(value, "deploymentId")
+      ? { deploymentId: stringField(value, "deploymentId") }
+      : {}),
+  };
+  return Object.keys(activation).length > 0 ? { activation } : {};
 }
 
 function releaseCommandEnv(
@@ -3091,6 +3129,27 @@ function releaseCommandCwd(
 ): string {
   if (!command.workingDirectory) return workspace.sourceRoot;
   return join(workspace.sourceRoot, command.workingDirectory);
+}
+
+function releaseBaseEnv(
+  runId: string,
+  release: ReleaseSpec,
+): Record<string, string> {
+  return {
+    TAKOSUMI_RELEASE_RUN_ID: runId,
+    ...(release.activation?.applyRunId
+      ? { TAKOSUMI_APPLY_RUN_ID: release.activation.applyRunId }
+      : {}),
+    ...(release.activation?.installationId
+      ? { TAKOSUMI_INSTALLATION_ID: release.activation.installationId }
+      : {}),
+    ...(release.activation?.deploymentId
+      ? { TAKOSUMI_DEPLOYMENT_ID: release.activation.deploymentId }
+      : {}),
+    ...(release.outputs
+      ? { TAKOSUMI_OUTPUTS_JSON: JSON.stringify(release.outputs) }
+      : {}),
+  };
 }
 
 function parseBackupArtifactPointer(stdout: string): JsonRecord | undefined {

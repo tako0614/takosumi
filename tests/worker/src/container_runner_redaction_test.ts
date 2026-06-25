@@ -403,6 +403,10 @@ test("container runner dispatches post-apply release commands to the release act
       fetchedByRunId: "ssr_1",
       fetchedAt: "2026-06-07T00:00:00.000Z",
     },
+    nonSensitiveOutputs: {
+      public_url: "https://app.example.test",
+      worker_script_name: "site-worker",
+    },
     commands: [
       {
         id: "migrate",
@@ -435,6 +439,10 @@ test("container runner dispatches post-apply release commands to the release act
   expect((captured?.request as Record<string, unknown>).sourceArchive).toEqual({
     objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     digest: `sha256:${"a".repeat(64)}`,
+  });
+  expect((captured?.request as Record<string, unknown>).outputs).toEqual({
+    public_url: "https://app.example.test",
+    worker_script_name: "site-worker",
   });
   expect((captured?.request as Record<string, unknown>).activation).toEqual({
     applyRunId: "run_apply_1",
