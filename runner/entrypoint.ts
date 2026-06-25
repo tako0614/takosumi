@@ -754,6 +754,10 @@ async function runGeneratedRootPlan(
     workspace,
   );
   try {
+    const requiredProviders = await requiredProvidersForGeneratedRoot(
+      request,
+      workspace.generatedRootDir,
+    );
     assertRunnerPolicyBeforeInit(
       request,
       runnerProfile,
@@ -761,6 +765,7 @@ async function runGeneratedRootPlan(
       {
         allowProviderFreeGeneratedRoot:
           await generatedRootTreeHasNoProviderUsage(workspace.generatedRootDir),
+        requiredProviders,
       },
     );
     return await initPlanAndBuildResponse(
@@ -771,7 +776,7 @@ async function runGeneratedRootPlan(
         operation,
         commandContext: preparedCredentials.context,
         buildLog,
-        requiredProviders: parseRequiredProviders(request),
+        requiredProviders,
         ...(parseProviderInstallationPolicy(request)
           ? {
               providerInstallationPolicy:
@@ -935,6 +940,10 @@ async function runReviewedPlanApply(
     workspace,
   );
   try {
+    const requiredProviders = await requiredProvidersForGeneratedRoot(
+      request,
+      moduleDir,
+    );
     assertRunnerPolicyBeforeInit(
       request,
       runnerProfile,
@@ -942,12 +951,13 @@ async function runReviewedPlanApply(
       {
         allowProviderFreeGeneratedRoot:
           await generatedRootTreeHasNoProviderUsage(moduleDir),
+        requiredProviders,
       },
     );
     const strictMirrorInit = await prepareStrictProviderMirrorInit(
       workspace,
       preparedCredentials.context,
-      parseRequiredProviders(request),
+      requiredProviders,
       parseProviderInstallationPolicy(request),
     );
     const applyContext =
@@ -3112,6 +3122,94 @@ export function assertRunnerPolicyForRequest(
   );
 }
 
+async function requiredProvidersForGeneratedRoot(
+  request: unknown,
+  rootDir: string,
+): Promise<readonly string[]> {
+  const declared = parseRequiredProviders(request);
+  const observed = await requiredProviderSourcesFromTerraformTree(rootDir);
+  return normalizedProviderList([...declared, ...observed]);
+}
+
+async function requiredProviderSourcesFromTerraformTree(
+  rootDir: string,
+): Promise<readonly string[]> {
+  let files = 0;
+  let totalBytes = 0;
+  const providers: string[] = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    for (const entry of entries) {
+      if (
+        entry.name === ".git" ||
+        entry.name === ".terraform" ||
+        entry.name === "node_modules"
+      ) {
+        continue;
+      }
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".tf")) continue;
+      files += 1;
+      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return [];
+      const info = await stat(path);
+      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) return [];
+      totalBytes += info.size;
+      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) return [];
+      providers.push(
+        ...requiredProviderSourcesFromTerraformText(
+          await readFile(path, "utf8"),
+        ),
+      );
+    }
+  }
+  return normalizedProviderList(providers);
+}
+
+export function requiredProviderSourcesFromTerraformText(
+  text: string,
+): readonly string[] {
+  const providers: string[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const keyword = text.indexOf("required_providers", searchFrom);
+    if (keyword === -1) break;
+    const open = text.indexOf("{", keyword);
+    if (open === -1) break;
+    let depth = 0;
+    let close = -1;
+    for (let index = open; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          close = index;
+          break;
+        }
+      }
+    }
+    if (close === -1) break;
+    const body = text.slice(open + 1, close);
+    for (const match of body.matchAll(/\bsource\s*=\s*"([^"]+)"/gu)) {
+      const source = match[1]?.trim();
+      if (source && source.includes("/")) providers.push(source);
+    }
+    searchFrom = close + 1;
+  }
+  return normalizedProviderList(providers);
+}
+
 /**
  * Extracts the minted credential env map from the dispatch payload's
  * `credentials` field. §13 per-alias tofu variables (`TF_VAR_...`) are admitted
@@ -3324,6 +3422,7 @@ function assertBuildEnvHasNoCredentials(
 
 interface RunnerPolicyBeforeInitOptions {
   readonly allowProviderFreeGeneratedRoot?: boolean;
+  readonly requiredProviders?: readonly string[];
 }
 
 function assertRunnerPolicyBeforeInit(
@@ -3345,7 +3444,8 @@ function assertRunnerPolicyBeforeInit(
       `runner profile ${stringField(runnerProfile, "id") ?? "<unknown>"} does not allow local source paths`,
     );
   }
-  const requiredProviders = parseRequiredProviders(request);
+  const requiredProviders =
+    options.requiredProviders ?? parseRequiredProviders(request);
   const allowedProviders = stringArray(
     recordField(runnerProfile, "allowedProviders"),
   );

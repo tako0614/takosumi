@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   assertRunnerPolicyForRequest,
   assertSourceUrlPolicy,
+  requiredProviderSourcesFromTerraformText,
 } from "../../runner/entrypoint.ts";
 
 const REQUEST = {
@@ -77,6 +78,31 @@ test("pre-init policy accepts declared-env provider credentials under real env n
       },
     ),
   ).not.toThrow();
+});
+
+test("required provider extraction reads only required_providers sources", () => {
+  expect(
+    requiredProviderSourcesFromTerraformText(`
+      module "child" {
+        source = "./module"
+      }
+
+      terraform {
+        required_providers {
+          null = {
+            source = "hashicorp/null"
+            version = "~> 3.2"
+          }
+          cloudflare = {
+            source = "cloudflare/cloudflare"
+          }
+        }
+      }
+    `),
+  ).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/null",
+  ]);
 });
 
 test("pre-init policy ignores runner-reserved declared-env names", () => {
