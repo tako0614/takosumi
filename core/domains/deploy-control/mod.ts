@@ -7088,9 +7088,9 @@ function providerInstallationAuditEvents(
 }
 
 const RELEASE_ACTIVATION_SECRET_NAME_RE =
-  /(?:^|[_-])(token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])/i;
+  /(?:^|[_-])(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])|(?:^|[_-])(?:database|db|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite)[_-]?(?:url|uri|dsn)(?:$|[_-])|(?:^|[_-])(?:dsn|connection[_-]?string)(?:$|[_-])/i;
 const RELEASE_ACTIVATION_SECRET_VALUE_RE =
-  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)/i;
+  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key|database[_-]?url|connection[_-]?string|\bdsn\b|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@)/i;
 
 function releaseActivationOutputs(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,

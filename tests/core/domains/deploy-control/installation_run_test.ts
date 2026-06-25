@@ -2170,6 +2170,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
               env: {
                 APP_RELEASE_TARGET: "runtime",
                 API_TOKEN: "sk-should-not-leak",
+                DATABASE_URL: "postgres://user:pass@db.example/app",
               },
             },
           ],
@@ -2208,6 +2209,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
     },
   ]);
   expect(JSON.stringify(activations[0])).not.toContain("sk-should-not-leak");
+  expect(JSON.stringify(activations[0])).not.toContain("postgres://");
 
   const activity = (await store.listActivityEvents("space_test")).find(
     (event) => event.action === "release_activation.succeeded",

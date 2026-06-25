@@ -104,6 +104,10 @@ const WRANGLER_AUTH_ENV_NAMES = [
   "CF_API_TOKEN",
   "CF_ACCOUNT_ID",
 ] as const;
+const SECRET_ENV_NAME_RE =
+  /(?:^|[_-])(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])|(?:^|[_-])(?:database|db|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite)[_-]?(?:url|uri|dsn)(?:$|[_-])|(?:^|[_-])(?:dsn|connection[_-]?string)(?:$|[_-])/i;
+const SECRET_ENV_VALUE_RE =
+  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key|database[_-]?url|connection[_-]?string|\bdsn\b|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@)/i;
 
 export function buildWranglerR2GetArgs(input: WranglerR2GetInput): string[] {
   const args = [
@@ -275,10 +279,20 @@ function parseCommandEnv(
     if (name === "TAKOSUMI_RELEASE_ACTIVATOR_TOKEN") {
       throw new Error("release command env must not include activator token");
     }
+    if (SECRET_ENV_NAME_RE.test(name)) {
+      throw new Error(`release command env must not include secret-like ${name}`);
+    }
     if (isReservedProviderEnvName(name)) {
       throw new Error(`release command env must not override reserved ${name}`);
     }
-    if (typeof value === "string") env[name] = value;
+    if (typeof value === "string") {
+      if (SECRET_ENV_VALUE_RE.test(value)) {
+        throw new Error(
+          `release command env value for ${name} looks secret-like`,
+        );
+      }
+      env[name] = value;
+    }
   }
   return Object.keys(env).length > 0 ? env : undefined;
 }
