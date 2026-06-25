@@ -1459,6 +1459,7 @@ export class OpenTofuDeploymentController {
       await this.#evaluateGenericEnvProviderExecutionPolicy({
         profile,
         installation,
+        requiredProviders: declaredProviders,
         hasProviderEnvRunner: this.#providerEnvRunner !== undefined,
       });
     const policyReasons = [
@@ -2144,6 +2145,7 @@ export class OpenTofuDeploymentController {
   async #evaluateGenericEnvProviderExecutionPolicy(input: {
     readonly profile: RunnerProfile;
     readonly installation?: Installation;
+    readonly requiredProviders: readonly string[];
     readonly hasProviderEnvRunner?: boolean;
   }): Promise<{ readonly reasons: readonly string[] }> {
     if (!input.installation) return { reasons: [] };
@@ -2164,8 +2166,12 @@ export class OpenTofuDeploymentController {
     if (genericEnvConnections.length === 0) return { reasons: [] };
 
     const reasons: string[] = [];
-    void input.profile;
     void input.hasProviderEnvRunner;
+    if (input.requiredProviders.length === 0) {
+      reasons.push(
+        `generic-env provider bindings on runner profile ${input.profile.id} require requiredProviders before OpenTofu init`,
+      );
+    }
     for (const connection of genericEnvConnections) {
       if (connection.scope !== "space") {
         reasons.push(
@@ -2365,18 +2371,34 @@ export class OpenTofuDeploymentController {
       input.compatibilityReport,
       profile.allowedProviders,
     );
-    const requiredProviders =
+    let requiredProviders =
       compatibilityProviders.length > 0
         ? compatibilityProviders
         : profile.allowedProviders.includes("*")
           ? []
           : [...profile.allowedProviders];
-    const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
+    let installTypePlan = await this.#planResolution.resolveInstallTypePlan(
       input.installation,
       input.installConfig,
       input.installConfig.installType,
       requiredProviders,
     );
+    const bindingProviders = requiredProvidersFromProviderEnvBindings(
+      installTypePlan.providerEnvBindings,
+    );
+    if (
+      requiredProviders.length === 0 &&
+      profile.allowedProviders.includes("*") &&
+      bindingProviders.length > 0
+    ) {
+      requiredProviders = bindingProviders;
+      installTypePlan = await this.#planResolution.resolveInstallTypePlan(
+        input.installation,
+        input.installConfig,
+        input.installConfig.installType,
+        requiredProviders,
+      );
+    }
     const variables = normalizeVariables(
       mergeJsonVariableDefaults(
         installTypePlan.providerInputDefaults,
@@ -6905,6 +6927,14 @@ function updatedTemplateBinding(
     ...binding,
     requiresConfirmation: templatePolicy.requiresConfirmation,
   };
+}
+
+function requiredProvidersFromProviderEnvBindings(
+  bindings: InstallTypePlanContext["providerEnvBindings"],
+): readonly string[] {
+  return normalizeProviders(
+    bindings.map((binding) => canonicalProviderAddress(binding.provider)),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

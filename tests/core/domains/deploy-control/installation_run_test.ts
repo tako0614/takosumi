@@ -1234,7 +1234,7 @@ test("generic Capsule installation plan derives pre-init requiredProviders from 
   ]);
 });
 
-test("generic OpenTofu runner profile does not persist wildcard as a required provider before provider discovery", async () => {
+test("generic OpenTofu runner profile derives pre-init requiredProviders from ProviderBinding before dispatch", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner({
@@ -1304,9 +1304,85 @@ test("generic OpenTofu runner profile does not persist wildcard as a required pr
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([provider]);
   expect(planRun.requiredProviders).toEqual([provider]);
   expect(planRun.policy.status).toEqual("passed");
+});
+
+test("generic env ProviderBinding blocks low-level plan requests that omit requiredProviders", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_direct",
+    spaceId: seeded.installation.spaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "space",
+    authMethod: "generic_env",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+    verifiedAt: "2026-06-07T00:00:00.000Z",
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_vercel_direct",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider,
+        alias: "main",
+        envId: "conn_vercel_direct",
+      },
+    ],
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+  const genericProfile: RunnerProfile = {
+    id: "generic-opentofu-provider",
+    name: "Generic OpenTofu provider",
+    substrate: "cloudflare-containers",
+    allowedProviders: ["*"],
+    stateBackend: { kind: "operator-managed", ref: "r2://state" },
+    stateLock: { kind: "native" },
+    networkPolicy: { mode: "operator-managed" },
+    secretExposure: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: genericProfile.id,
+  });
+
+  const { planRun } = await controller.createPlanRun({
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    source: {
+      kind: "git",
+      url: seeded.source.url,
+      ref: seeded.source.defaultRef,
+      modulePath: seeded.source.defaultPath,
+    },
+    runnerProfileId: genericProfile.id,
+    requiredProviders: [],
+  });
+
+  expect(planRun.status).toEqual("failed");
+  expect(planRun.policy.status).toEqual("blocked");
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "generic-env provider bindings on runner profile generic-opentofu-provider require requiredProviders before OpenTofu init",
+  );
+  expect(runner.planJobs).toHaveLength(0);
 });
 
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {
