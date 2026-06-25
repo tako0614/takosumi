@@ -4,13 +4,14 @@
  * destination name on the accessible label. The top bar names the screen.
  */
 import { A, useLocation } from "@solidjs/router";
-import { LayoutGrid, Plug, Plus, Settings, Store } from "lucide-solid";
+import { LayoutGrid, Plug, Plus, Server, Settings, Store } from "lucide-solid";
 import { t } from "../../../../i18n/index.ts";
 
 export default function MobileTabs() {
   const loc = useLocation();
   const TABS = [
     { href: "/", label: () => t("nav.apps"), icon: LayoutGrid, end: true },
+    { href: "/services", label: () => t("nav.services"), icon: Server },
     { href: "/store", label: () => t("nav.store"), icon: Store },
     { href: "/new", label: () => t("nav.add"), icon: Plus },
     { href: "/connections", label: () => t("nav.connections"), icon: Plug },

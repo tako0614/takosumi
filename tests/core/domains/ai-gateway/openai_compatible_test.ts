@@ -339,6 +339,14 @@ test("AI Gateway config rejects embedded key values", () => {
   ).toThrow("must not be embedded");
 });
 
+test("AI Gateway config rejects an empty upstream profile catalog", () => {
+  expect(() =>
+    createTakosumiAiGatewayConfigFromEnv({
+      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([]),
+    }),
+  ).toThrow("must define at least one upstream profile");
+});
+
 test("AI Gateway supports Workers AI binding profiles without upstream keys", async () => {
   const config = createTakosumiAiGatewayConfigFromEnv({
     TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([

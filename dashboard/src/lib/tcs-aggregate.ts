@@ -82,6 +82,11 @@ function isBetterPrimary(
   candidate: AggregatedTcsListing,
   current: AggregatedTcsListing,
 ): boolean {
+  const candidateHasInstallConfig = Boolean(candidate.installConfigId);
+  const currentHasInstallConfig = Boolean(current.installConfigId);
+  if (candidateHasInstallConfig !== currentHasInstallConfig) {
+    return candidateHasInstallConfig;
+  }
   const c = Boolean(candidate.source.resolvedCommit);
   const cur = Boolean(current.source.resolvedCommit);
   if (c !== cur) return c;

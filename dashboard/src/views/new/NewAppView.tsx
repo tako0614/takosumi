@@ -1099,7 +1099,7 @@ function Inner() {
       resetCompatibility();
     } catch (err) {
       const apiError = err instanceof ControlApiError ? err : undefined;
-      setSourceTokenError(apiError?.message ?? String(err));
+      setSourceTokenError(apiError?.message ?? t("new.error.generic"));
     } finally {
       setSavingSourceToken(false);
     }
@@ -1509,7 +1509,7 @@ function Inner() {
             ? t("new.error.sourceFetchFailed", {
                 message: apiError.message,
               })
-            : (apiError?.message ?? String(err)),
+            : t("new.error.generic"),
       );
     } finally {
       if (isCurrentFlow(flow)) {
@@ -1698,7 +1698,7 @@ function Inner() {
           setError(t("new.error.alreadyExists", { name: flowInput.name }));
         }
       } else {
-        setError(apiError?.message ?? String(err));
+        setError(t("new.error.generic"));
       }
       if (stepPlan() === "running") setStepPlan("error");
       else if (stepInstall() === "running") setStepInstall("error");

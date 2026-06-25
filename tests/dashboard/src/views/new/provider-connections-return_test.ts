@@ -133,7 +133,7 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new keeps provider setup on explicit Provider Connections", () => {
+  test("/new presents provider setup as connected accounts for normal add flows", () => {
     expect(newAppViewSource).not.toContain("rowRequiresOperatorManagedOnly");
     expect(newAppViewSource).not.toContain(
       "missingOperatorManagedProviderRows",
@@ -141,8 +141,12 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain("missingOwnKeyProviderRows");
     expect(newAppViewSource).not.toContain("operator" + "Missing");
     expect(newAppViewSource).not.toContain("error" + "OperatorManaged");
-    expect(en["new.providers.missingBody"]).toContain("provider connection");
-    expect(ja["new.providers.missingBody"]).toContain("Provider 接続");
+    expect(en["new.providers.missingBody"]).toContain("connected account");
+    expect(ja["new.providers.missingBody"]).toContain("接続済みアカウント");
+    expect(en["conn.providerConnections.title"]).toContain(
+      "Provider connection",
+    );
+    expect(ja["conn.providerConnections.title"]).toContain("Provider 接続");
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {

@@ -282,20 +282,19 @@ export async function runCloudExtensionSmoke(
   const aiGatewayStatus = await requestCheck(fetchImpl, options, {
     name: "aiGatewayStatus",
     path: TAKOSUMI_AI_GATEWAY_STATUS_PATH,
-    expected: options.requireAiUpstreamProfile
-      ? "authenticated AI Gateway status reports at least one configured upstream profile"
-      : "authenticated AI Gateway status reports configured upstreams or the explicit Workers AI fallback",
+    expected:
+      "authenticated AI Gateway status reports configured upstream profiles, public models, and an embeddings-capable model",
     headers: authHeaders,
     pass: (response, body) => {
       if (response.status !== 200) return false;
       const mode = record(body).mode;
-      if (options.requireAiUpstreamProfile) {
-        return (
-          mode === "configured_upstreams" &&
-          positiveNumber(record(record(body).summary).profileCount)
-        );
-      }
-      return mode === "configured_upstreams" || mode === "workers_ai_fallback";
+      const summary = record(record(body).summary);
+      return (
+        mode === "configured_upstreams" &&
+        positiveNumber(summary.profileCount) &&
+        positiveNumber(summary.publicModelCount) &&
+        aiGatewayEmbeddingModels(record(body)).length > 0
+      );
     },
     summarize: summarizeAiGatewayStatus,
   });
@@ -608,9 +607,8 @@ async function aiServiceGraphTokenCheck(
 
   const completedSteps: string[] = [];
   try {
-    const servicesPath = takosumiAccountsInstallationServicesPath(
-      installationId,
-    );
+    const servicesPath =
+      takosumiAccountsInstallationServicesPath(installationId);
     const servicesResponse = await fetchImpl(`${options.url}${servicesPath}`, {
       headers: ownerAuthHeaders,
     });
@@ -680,13 +678,17 @@ async function aiServiceGraphTokenCheck(
     );
     const statusBody = await readJson(statusResponse);
     const serviceEmbeddingsModel =
-      embeddingsModelFromAiGatewayStatus(summarizeAiGatewayStatus(statusBody)) ??
-      embeddingsModel;
+      embeddingsModelFromAiGatewayStatus(
+        summarizeAiGatewayStatus(statusBody),
+      ) ?? embeddingsModel;
     completedSteps.push("status");
 
-    const modelsResponse = await fetchImpl(`${options.url}/gateway/ai/v1/models`, {
-      headers: serviceAuthHeaders,
-    });
+    const modelsResponse = await fetchImpl(
+      `${options.url}/gateway/ai/v1/models`,
+      {
+        headers: serviceAuthHeaders,
+      },
+    );
     const modelsBody = await readJson(modelsResponse);
     completedSteps.push("models");
 

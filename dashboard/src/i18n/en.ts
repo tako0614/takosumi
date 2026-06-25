@@ -557,16 +557,16 @@ export const en: Record<keyof typeof ja, string> = {
   "new.existing.body":
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
   "new.existing.open": "Open existing service",
-  "new.providers.title": "Provider connection to use",
+  "new.providers.title": "Connected account to use",
   "new.providers.alias": "Target: {alias}",
-  "new.providers.selectConnection": "Select provider connection",
+  "new.providers.selectConnection": "Select connected account",
   "new.providers.errorConnection":
-    "Select a ready provider connection for {provider}.",
-  "new.providers.missingTitle": "Provider connection is required",
-  "new.providers.missingBody": "Set up a provider connection to continue.",
-  "new.providers.setupMissing": "Set up required provider connection",
+    "Select a ready connected account for {provider}.",
+  "new.providers.missingTitle": "Connected account is required",
+  "new.providers.missingBody": "Set up a connected account to continue.",
+  "new.providers.setupMissing": "Set up required connected account",
   "new.providers.returnNote":
-    "After you save the provider connection, you return here to finish adding.",
+    "After you save the connection, you return here to finish adding.",
   "new.step.technical": "Detailed progress",
   "new.step.register": "Prepare service",
   "new.step.sync": "Fetch content",
@@ -581,7 +581,9 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceFetchFailed":
-    "The app contents could not be fetched. Check the link, version, folder, or private link access. Detail: {message}",
+    "The app contents could not be fetched. Check the link, version, folder, or private link access.",
+  "new.error.generic":
+    "The service could not be added. Check the details and try again.",
   "new.error.alreadyExists":
     "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":
