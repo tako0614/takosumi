@@ -12,6 +12,8 @@ import type { JsonValue } from "./types.ts";
 import type { PublicInstallation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
+import type { DeployRequest } from "./deploy.ts";
+import type { InstallationProviderEnvBindings } from "./provider-envs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   ListProviderCatalogEntriesResponse,
@@ -43,6 +45,20 @@ export const INSTALLATION_DEPLOYMENT_OUTPUTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
     id,
   )}/deployment-outputs`;
+export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
+
+/**
+ * Internal in-process deploy-control request. The account-plane public deploy
+ * facade converts public Provider Connection ids and runner hints into this
+ * operator-policy shape after authorization. Public callers must not send it.
+ */
+export interface InternalDeployRequest extends Omit<
+  DeployRequest,
+  "providerConnections" | "runnerId"
+> {
+  readonly runnerProfileId?: string;
+  readonly providerEnvBindings?: InstallationProviderEnvBindings;
+}
 
 export type OpenTofuModuleSourceKind = "git" | "local" | "prepared";
 

@@ -12,7 +12,7 @@
  * Run vocabulary.
  */
 
-import type { InternalDeployRequest } from "takosumi-contract/deploy";
+import type { InternalDeployRequest } from "@takosumi/internal/deploy-control-api";
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { uploadArchiveObjectKey } from "../domains/sources/mod.ts";

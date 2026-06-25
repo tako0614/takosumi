@@ -236,7 +236,7 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
   });
 });
 
-test("model e2e: create Installation with runnerProfileId and outputAllowlist stores a scoped InstallConfig", async () => {
+test("model e2e: create Installation with runnerId and outputAllowlist stores a scoped InstallConfig", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "runner-profile");
   const sourceId = await createSource(app, spaceId);
@@ -252,7 +252,7 @@ test("model e2e: create Installation with runnerProfileId and outputAllowlist st
         environment: "production",
         sourceId,
         installConfigId,
-        runnerProfileId: "generic-opentofu-provider",
+        runnerId: "generic-opentofu-provider",
         outputAllowlist: {
           takos_app: { from: "takos_app", type: "json", required: true },
         },
@@ -262,17 +262,17 @@ test("model e2e: create Installation with runnerProfileId and outputAllowlist st
   expect(createRes.status).toBe(201);
   const installation = (await createRes.json()).installation as {
     installConfigId: string;
-    runnerProfileId?: string;
+    runnerId?: string;
   };
   expect(installation.installConfigId).not.toBe(installConfigId);
-  expect(installation.runnerProfileId).toBeUndefined();
+  expect(installation.runnerId).toBeUndefined();
 
   const config = await operations.installations.getInstallConfig(
     installation.installConfigId,
   );
   expect(config.spaceId).toBe(spaceId);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(config.runnerId).toBe("generic-opentofu-provider");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     takos_app: { from: "takos_app", type: "json", required: true },
@@ -286,11 +286,11 @@ test("model e2e: create Installation with runnerProfileId and outputAllowlist st
   const listed = (await listRes.json()).installConfigs as Array<{
     id: string;
     internal?: unknown;
-    runnerProfileId?: string;
+    runnerId?: string;
   }>;
   expect(listed.some((item) => item.id === config.id)).toBe(false);
   expect(listed.every((item) => item.internal === undefined)).toBe(true);
-  expect(listed.every((item) => item.runnerProfileId === undefined)).toBe(true);
+  expect(listed.every((item) => item.runnerId === undefined)).toBe(true);
 });
 
 test("model e2e: create Installation rejects non-object vars", async () => {

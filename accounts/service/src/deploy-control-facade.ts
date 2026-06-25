@@ -372,8 +372,13 @@ async function createPlanRunForFacadeRequest(input: {
     source,
     operation: input.operation,
     ...(installationId ? { installationId } : {}),
-    ...(stringValue(input.body.runnerProfileId)
-      ? { runnerProfileId: stringValue(input.body.runnerProfileId) }
+    ...((stringValue(input.body.runnerId) ??
+    stringValue(input.body.runnerProfileId))
+      ? {
+          runnerProfileId:
+            stringValue(input.body.runnerId) ??
+            stringValue(input.body.runnerProfileId)!,
+        }
       : {}),
     ...(isRecord(input.body.variables)
       ? {

@@ -2676,7 +2676,7 @@ test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped 
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
-test("POST /api/v1/spaces/:id/installations stores runnerProfileId and outputAllowlist in a scoped InstallConfig", async () => {
+test("POST /api/v1/spaces/:id/installations stores runnerId and outputAllowlist in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2690,7 +2690,7 @@ test("POST /api/v1/spaces/:id/installations stores runnerProfileId and outputAll
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
-        runnerProfileId: "generic-opentofu-provider",
+        runnerId: "generic-opentofu-provider",
         outputAllowlist: {
           takos_app: { from: "takos_app", type: "json", required: true },
         },
@@ -2708,14 +2708,14 @@ test("POST /api/v1/spaces/:id/installations stores runnerProfileId and outputAll
     id: string;
     spaceId: string;
     internal?: unknown;
-    runnerProfileId?: string;
+    runnerId?: string;
     variableMapping: Record<string, unknown>;
     outputAllowlist: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.spaceId).toEqual("space_a");
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.runnerProfileId).toEqual("generic-opentofu-provider");
+  expect(config.runnerId).toEqual("generic-opentofu-provider");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     takos_app: { from: "takos_app", type: "json", required: true },
@@ -3282,7 +3282,7 @@ test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   expect(operations.calls.getRunCost).toContain("plan_destroy");
 });
 
-test("POST /api/v1/installations/:id/destroy-plan forwards runnerProfileId", async () => {
+test("POST /api/v1/installations/:id/destroy-plan forwards runnerId to internal runner policy", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3291,7 +3291,7 @@ test("POST /api/v1/installations/:id/destroy-plan forwards runnerProfileId", asy
     "/api/v1/installations/inst_1/destroy-plan",
     {
       cookie,
-      body: { runnerProfileId: "generic-opentofu-provider" },
+      body: { runnerId: "generic-opentofu-provider" },
     },
   );
   const response = await handleControlRoute({
@@ -3673,7 +3673,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
       installType?: string;
       templateBinding?: unknown;
       internal?: unknown;
-      runnerProfileId?: string;
+      runnerId?: string;
     }>;
   };
   expect(Array.isArray(body.installConfigs)).toEqual(true);
@@ -3684,7 +3684,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(body.installConfigs[0]?.installType).toBeUndefined();
   expect(body.installConfigs[0]?.templateBinding).toBeUndefined();
   expect(body.installConfigs[0]?.internal).toBeUndefined();
-  expect(body.installConfigs[0]?.runnerProfileId).toBeUndefined();
+  expect(body.installConfigs[0]?.runnerId).toBeUndefined();
 
   const get = request("GET", "/api/v1/capsule-configs/cfg_default", {
     cookie,

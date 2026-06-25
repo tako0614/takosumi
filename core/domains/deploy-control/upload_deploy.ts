@@ -14,10 +14,8 @@
  * policy.
  */
 
-import type {
-  DeployResponse,
-  InternalDeployRequest,
-} from "takosumi-contract/deploy";
+import type { DeployResponse } from "takosumi-contract/deploy";
+import type { InternalDeployRequest } from "@takosumi/internal/deploy-control-api";
 import type {
   InstallConfig,
   Installation,
@@ -94,7 +92,7 @@ export async function deployUpload(
       request.runnerProfileId,
       now,
     );
-    effectiveRunnerProfileId = refreshed.runnerProfileId;
+    effectiveRunnerProfileId = refreshed.runnerId;
   } else {
     const config = buildDefaultInstallConfig({
       id: newId("icfg"),
@@ -114,7 +112,7 @@ export async function deployUpload(
     });
     installConfigId = config.id;
     created = true;
-    effectiveRunnerProfileId = config.runnerProfileId;
+    effectiveRunnerProfileId = config.runnerId;
   }
   try {
     if (providerEnvBindings !== undefined) {
@@ -238,7 +236,7 @@ async function refreshInstallConfigVars(
     ...existing,
     variableMapping: { ...(vars ?? {}) },
     outputAllowlist: refreshedOutputAllowlist(existing, outputAllowlist),
-    ...(runnerProfileId !== undefined ? { runnerProfileId } : {}),
+    ...(runnerProfileId !== undefined ? { runnerId: runnerProfileId } : {}),
     updatedAt: now().toISOString(),
   });
 }
@@ -283,7 +281,7 @@ function buildDefaultInstallConfig(input: {
       allowAliasInjection: true,
     },
     ...(input.runnerProfileId !== undefined
-      ? { runnerProfileId: input.runnerProfileId }
+      ? { runnerId: input.runnerProfileId }
       : {}),
     variableMapping: { ...(input.vars ?? {}) },
     outputAllowlist: input.outputAllowlist ?? defaultCapsuleOutputAllowlist(),

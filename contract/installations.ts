@@ -234,7 +234,7 @@ export interface InstallConfig {
    * Service-side runner preference for this Capsule. This is operator policy
    * selected at install/deploy time, not repo metadata.
    */
-  readonly runnerProfileId?: string;
+  readonly runnerId?: string;
   /** Internal service-side config rows are addressable by id but not selectable. */
   readonly internal?: {
     readonly reason: "per_install_overrides";
@@ -261,11 +261,7 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  | "installType"
-  | "templateBinding"
-  | "sourceKind"
-  | "runnerProfileId"
-  | "internal"
+  "installType" | "templateBinding" | "sourceKind" | "runnerId" | "internal"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
 };

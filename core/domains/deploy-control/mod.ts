@@ -1769,8 +1769,7 @@ export class OpenTofuDeploymentController {
           `installation ${installationId}`,
       );
     }
-    const runnerProfileId =
-      internal.runnerProfileId ?? installConfig.runnerProfileId;
+    const runnerProfileId = internal.runnerProfileId ?? installConfig.runnerId;
     // Two snapshot-resolution paths share the rest of the pipeline:
     //   - git installations resolve their registered Source's snapshot;
     //   - upload installations (no Source) pin the upload snapshot the deploy
