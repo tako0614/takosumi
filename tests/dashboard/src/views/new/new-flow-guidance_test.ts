@@ -55,73 +55,54 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).not.toContain(".av-new-flow-step");
   });
 
-  test("keeps the service catalog app-like and the source form advanced", () => {
-    expect(newAppViewSource).toContain('class="av-store"');
-    expect(newAppViewSource).toContain('class="av-store-hero"');
-    expect(newAppViewSource).toContain('class="av-store-search"');
-    expect(newAppViewSource).toContain('class="av-catalog-grid"');
-    expect(newAppViewSource).toContain('class="av-catalog-card"');
+  test("keeps /new as a focused add form while browsing lives in the store", () => {
+    expect(newAppViewSource).not.toContain('class="av-store"');
+    expect(newAppViewSource).not.toContain('class="av-store-hero"');
+    expect(newAppViewSource).not.toContain('class="av-store-search"');
+    expect(newAppViewSource).not.toContain('class="av-catalog-grid"');
+    expect(newAppViewSource).not.toContain('class="av-catalog-card"');
     expect(newAppViewSource).toContain("function CatalogIcon");
-    expect(newAppViewSource).toContain("function catalogKindLabel");
-    expect(newAppViewSource).toContain("function CatalogCard");
-    expect(newAppViewSource).toContain("function ManualImportCard");
-    expect(newAppViewSource).toContain("const [catalogQuery");
+    expect(newAppViewSource).not.toContain("function catalogKindLabel");
+    expect(newAppViewSource).not.toContain("function CatalogCard");
+    expect(newAppViewSource).not.toContain("function ManualImportCard");
+    expect(newAppViewSource).not.toContain("const [catalogQuery");
     expect(newAppViewSource).toContain("const allCatalogEntries = createMemo");
-    expect(newAppViewSource).toContain("const catalogEntries = createMemo");
-    expect(newAppViewSource).toContain("catalogEntryMatchesQuery");
+    expect(newAppViewSource).not.toContain("const catalogEntries = createMemo");
+    expect(newAppViewSource).not.toContain("catalogEntryMatchesQuery");
     expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
     expect(newAppViewSource).toContain("function catalogConfigPriority");
     expect(newAppViewSource).toContain("config.spaceId === undefined");
     expect(newAppViewSource).toContain('config.id.startsWith("cfg-official-")');
     expect(newAppViewSource).toContain("config.catalog?.source");
-    expect(newAppViewSource).toContain("const primaryCatalog = createMemo");
-    expect(newAppViewSource).toContain(
+    expect(newAppViewSource).not.toContain("const primaryCatalog = createMemo");
+    expect(newAppViewSource).not.toContain(
       "const buildingBlockCatalog = createMemo",
     );
-    expect(newAppViewSource).toContain("const exampleCatalog = createMemo");
-    expect(newAppViewSource).toContain('entry.surface === "service"');
-    expect(newAppViewSource).toContain('entry.surface === "building_block"');
-    expect(newAppViewSource).toContain('entry.surface === "example"');
-    expect(newAppViewSource).toContain('t("new.store.title")');
-    expect(newAppViewSource).toContain('t("new.store.featuredTitle")');
-    expect(newAppViewSource).toContain('t("new.store.searchPlaceholder")');
-    expect(newAppViewSource).toContain('t("new.store.blocksTitle")');
-    expect(newAppViewSource).toContain('t("new.store.examplesTitle")');
-    expect(newAppViewSource).toContain('class="av-store-section"');
+    expect(newAppViewSource).not.toContain("const exampleCatalog = createMemo");
+    expect(newAppViewSource).not.toContain('entry.surface === "service"');
+    expect(newAppViewSource).not.toContain(
+      'entry.surface === "building_block"',
+    );
+    expect(newAppViewSource).not.toContain('entry.surface === "example"');
+    expect(newAppViewSource).not.toContain('t("new.store.title")');
+    expect(newAppViewSource).not.toContain('t("new.store.featuredTitle")');
+    expect(newAppViewSource).not.toContain(
+      't("new.store.searchPlaceholder")',
+    );
+    expect(newAppViewSource).not.toContain('t("new.store.blocksTitle")');
+    expect(newAppViewSource).not.toContain('t("new.store.examplesTitle")');
+    expect(newAppViewSource).not.toContain('class="av-store-section"');
     expect(newAppViewSource).not.toContain(
       'class="wb-disclosure av-catalog-more"',
     );
-    expect(newAppViewSource).toContain('class="av-store-link-tile"');
-    expect(newAppViewSource).toContain('class="av-store-link-icon"');
-    expect(newAppViewSource).toContain('t("new.manualCard.title")');
-    expect(newAppViewSource).toContain('t("new.manualCard.body")');
-    const storeHeadStart = newAppViewSource.indexOf(
-      '<div class="av-store-head">',
-    );
-    const catalogGridStart = newAppViewSource.indexOf(
-      '<ul class="av-catalog-grid">',
-    );
-    const manualImportCallStart = newAppViewSource.indexOf("<ManualImportCard");
-    const catalogGridEnd = newAppViewSource.indexOf("</ul>", catalogGridStart);
-    const manualImportUseSource = newAppViewSource.slice(
-      manualImportCallStart,
-      catalogGridStart,
-    );
-    expect(manualImportUseSource).toContain('setActiveTab("git")');
-    expect(manualImportCallStart).toBeGreaterThan(storeHeadStart);
-    expect(manualImportCallStart).toBeLessThan(catalogGridStart);
-    expect(
-      newAppViewSource.slice(catalogGridStart, catalogGridEnd),
-    ).not.toContain("<ManualImportCard");
+    expect(newAppViewSource).not.toContain('class="av-store-link-tile"');
+    expect(newAppViewSource).not.toContain('class="av-store-link-icon"');
+    expect(newAppViewSource).not.toContain('t("new.manualCard.title")');
+    expect(newAppViewSource).not.toContain('t("new.manualCard.body")');
     expect(newAppViewSource).not.toContain('class="av-manual-import"');
     expect(newAppViewSource).not.toContain("av-catalog-card-manual");
     expect(newAppViewSource).not.toContain(
       '<details class="wb-disclosure av-manual-import">',
-    );
-    expect(storeHeadStart).toBeGreaterThan(-1);
-    expect(catalogGridStart).toBeGreaterThan(storeHeadStart);
-    expect(newAppViewSource.slice(storeHeadStart, catalogGridStart)).toContain(
-      'setActiveTab("git")',
     );
     expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).not.toContain("sourceSummaryMeta");
@@ -134,41 +115,35 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.tab.git");
     expect(en).not.toHaveProperty("new.catalog.select");
     expect(en).not.toHaveProperty("new.store.subtitle");
-    expect(en["new.store.title"]).toBe("What do you want to add?");
-    expect(en["new.store.featuredTitle"]).toBe("Ready to add");
-    expect(en["new.store.searchPlaceholder"]).toContain("Search");
-    expect(en["new.manualCard.title"]).toBe("Add from link");
-    expect(en["new.manualCard.action"]).toBe("Open");
-    expect(en["new.catalog.add"]).toBe("Add");
-    expect(en["new.catalog.kind.worker"]).toBe("Web app");
-    expect(en["new.catalog.kind.site"]).toBe("Website");
+    expect(en).not.toHaveProperty("new.store.title");
+    expect(en).not.toHaveProperty("new.store.featuredTitle");
+    expect(en).not.toHaveProperty("new.store.searchPlaceholder");
+    expect(en).not.toHaveProperty("new.manualCard.title");
+    expect(en).not.toHaveProperty("new.manualCard.action");
+    expect(en).not.toHaveProperty("new.catalog.add");
+    expect(en).not.toHaveProperty("new.catalog.kind.worker");
+    expect(en).not.toHaveProperty("new.catalog.kind.site");
     expect(en["new.summary.provider"]).toBe("Runs on");
-    expect(en["new.store.blocksTitle"]).toBe("Building blocks");
-    expect(en["new.store.examplesTitle"]).toBe("Examples");
-    expect(en["new.advancedImport.open"].toLowerCase()).toBe(
-      "add another link",
-    );
-    expect(en["new.advancedImport.open"].toLowerCase()).not.toContain(
-      "manually",
-    );
+    expect(en).not.toHaveProperty("new.store.blocksTitle");
+    expect(en).not.toHaveProperty("new.store.examplesTitle");
+    expect(en).not.toHaveProperty("new.advancedImport.open");
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja).not.toHaveProperty("new.catalog.select");
     expect(ja).not.toHaveProperty("new.store.subtitle");
-    expect(ja["new.store.title"]).toBe("何を追加しますか？");
-    expect(ja["new.store.featuredTitle"]).toBe("すぐ追加できるもの");
-    expect(ja["new.store.searchPlaceholder"]).toContain("探す");
-    expect(ja["new.manualCard.title"]).toBe("リンクから追加");
-    expect(ja["new.manualCard.action"]).toBe("開く");
-    expect(ja["new.catalog.add"]).toBe("追加");
-    expect(ja["new.catalog.kind.worker"]).toBe("Webアプリ");
-    expect(ja["new.catalog.kind.site"]).toBe("Webサイト");
-    expect(ja["new.catalog.kind.storage"]).toBe("ストレージ");
+    expect(ja).not.toHaveProperty("new.store.title");
+    expect(ja).not.toHaveProperty("new.store.featuredTitle");
+    expect(ja).not.toHaveProperty("new.store.searchPlaceholder");
+    expect(ja).not.toHaveProperty("new.manualCard.title");
+    expect(ja).not.toHaveProperty("new.manualCard.action");
+    expect(ja).not.toHaveProperty("new.catalog.add");
+    expect(ja).not.toHaveProperty("new.catalog.kind.worker");
+    expect(ja).not.toHaveProperty("new.catalog.kind.site");
+    expect(ja).not.toHaveProperty("new.catalog.kind.storage");
     expect(ja["new.summary.provider"]).toBe("ホスト先");
-    expect(ja["new.store.blocksTitle"]).toBe("部品・保存先");
-    expect(ja["new.store.examplesTitle"]).toBe("サンプル");
-    expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");
-    expect(ja["new.advancedImport.open"]).not.toContain("手動");
+    expect(ja).not.toHaveProperty("new.store.blocksTitle");
+    expect(ja).not.toHaveProperty("new.store.examplesTitle");
+    expect(ja).not.toHaveProperty("new.advancedImport.open");
     expect(en).not.toHaveProperty("new.flow.sourceMeta");
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");
     expect(en).not.toHaveProperty("new.selection.sourceDetails");
@@ -177,16 +152,18 @@ describe("/new flow guidance", () => {
     expect(ja["new.providers.alias"]).toBe("対象: {alias}");
   });
 
-  test("opens normal /new on the catalog while explicit links use the Git flow", () => {
+  test("opens /new on the install-link form while store handoffs preselect a service", () => {
     expect(newAppViewSource).toContain("function initialAddTab");
-    expect(newAppViewSource).toContain('if (hasPrefill) return "git"');
-    expect(newAppViewSource).toContain('params.get("mode") === "link"');
-    expect(newAppViewSource).toContain(': "catalog"');
     expect(newAppViewSource).toContain(
-      "initialAddTab(initialSearch, Boolean(prefill))",
+      'return parseInitialInstallConfigId(search) ? "catalog" : "git"',
     );
-    expect(newAppViewSource).not.toContain(
-      'createSignal<"catalog" | "git">("git")',
+    expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
+    expect(newAppViewSource).not.toContain('params.get("mode") === "link"');
+    expect(newAppViewSource).toContain(
+      "initialAddTab(initialSearch)",
+    );
+    expect(newAppViewSource).toContain(
+      'createSignal<"catalog" | "git">(',
     );
   });
 
