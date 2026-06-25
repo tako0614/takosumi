@@ -122,6 +122,24 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.diagnostics.failed"]).toContain("詳細");
   });
 
+  test("redacts secret-shaped values before rendering run diagnostics", () => {
+    expect(runViewSource).toContain("function diagnosticDisplayText");
+    expect(runViewSource).toContain("Bearer [REDACTED]");
+    expect(runViewSource).toContain("[REDACTED]");
+    expect(runViewSource).toContain(
+      "diagnosticDisplayText(props.diagnostic.message)",
+    );
+    expect(runViewSource).toContain(
+      "diagnosticDisplayText(props.diagnostic.detail)",
+    );
+    expect(runViewSource).not.toContain(
+      '<span class="wa-diag-msg">{props.diagnostic.message}</span>',
+    );
+    expect(runViewSource).not.toContain(
+      '<pre class="wa-pre">{props.diagnostic.detail}</pre>',
+    );
+  });
+
   test("keeps the copy explicit that private values are not displayed", () => {
     expect(en["run.connections.reviewBody"].toLowerCase()).toContain(
       "private values are not shown",

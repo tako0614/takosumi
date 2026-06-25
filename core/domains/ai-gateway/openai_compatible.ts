@@ -113,6 +113,11 @@ export function createTakosumiAiGatewayConfigFromEnv(
     );
   }
   const profiles = profilesFromJsonEnv(env);
+  if (profiles.length === 0) {
+    throw new TypeError(
+      "TAKOSUMI_AI_GATEWAY_PROFILES must define at least one upstream profile",
+    );
+  }
   const config = {
     basePath: TAKOSUMI_AI_GATEWAY_BASE_PATH,
     defaultModel:

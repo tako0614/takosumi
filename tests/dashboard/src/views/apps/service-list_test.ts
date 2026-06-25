@@ -33,6 +33,9 @@ describe("ServiceListView (/services)", () => {
     );
     expect(routerSource).toContain('path="/" component={AppListView}');
     expect(routerSource).toContain(
+      'path="/apps" component={() => <Navigate href="/" />}',
+    );
+    expect(routerSource).toContain(
       'path="/services/:id" component={AppDetailView}',
     );
   });

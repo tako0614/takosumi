@@ -174,7 +174,7 @@ function App() {
         component={RedirectLegacyInstallationDetail}
       />
       <Route path="/home" component={() => <Navigate href="/" />} />
-      <Route path="/apps" component={() => <Navigate href="/services" />} />
+      <Route path="/apps" component={() => <Navigate href="/" />} />
       <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
       <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
       <Route

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   initTcsState,
   loadMoreTcs,
+  mergeTcsListingBatches,
   sortTcsItems,
   type AggregatedTcsListing,
 } from "../../../../dashboard/src/lib/tcs-aggregate.ts";
@@ -80,6 +81,42 @@ describe("tcs aggregate", () => {
       "https://b.test",
     ]);
     expect(s.done).toBe(true);
+  });
+
+  test("keeps the installConfigId-backed official listing as primary", () => {
+    const sharedSource = {
+      git: "https://github.com/o/shared.git",
+      ref: "main",
+      path: "deploy/opentofu",
+    };
+    const merged = mergeTcsListingBatches(
+      [],
+      [
+        {
+          base: "https://app.takosumi.test",
+          isDefault: true,
+          items: [
+            {
+              ...L("official", sharedSource, "2026-01-01T00:00:00.000Z"),
+              installConfigId: "cfg-official-worker",
+            },
+          ],
+        },
+        {
+          base: "https://store.takos.jp",
+          isDefault: false,
+          items: [L("external", sharedSource, "2026-02-01T00:00:00.000Z")],
+        },
+      ],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.installConfigId).toBe("cfg-official-worker");
+    expect(merged[0]?.primaryServer).toBe("https://app.takosumi.test");
+    expect(merged[0]?.seenOn.sort()).toEqual([
+      "https://app.takosumi.test",
+      "https://store.takos.jp",
+    ]);
   });
 
   test("a failing server is isolated; others render", async () => {

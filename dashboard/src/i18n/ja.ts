@@ -560,16 +560,15 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "使う Provider 接続",
+  "new.providers.title": "使う接続済みアカウント",
   "new.providers.alias": "対象: {alias}",
-  "new.providers.selectConnection": "Provider 接続を選択",
+  "new.providers.selectConnection": "接続済みアカウントを選択",
   "new.providers.errorConnection":
-    "{provider} の利用可能な Provider 接続を選択してください。",
-  "new.providers.missingTitle": "Provider 接続の設定が必要です",
-  "new.providers.missingBody": "Provider 接続を設定すると続けられます。",
-  "new.providers.setupMissing": "必要な Provider 接続を設定",
-  "new.providers.returnNote":
-    "Provider 接続を保存すると、この追加の続きに戻ります。",
+    "{provider} の利用可能な接続済みアカウントを選択してください。",
+  "new.providers.missingTitle": "接続済みアカウントの設定が必要です",
+  "new.providers.missingBody": "接続済みアカウントを設定すると続けられます。",
+  "new.providers.setupMissing": "必要な接続済みアカウントを設定",
+  "new.providers.returnNote": "接続を保存すると、この追加の続きに戻ります。",
   "new.step.technical": "詳しい進行状況",
   "new.step.register": "サービスを準備",
   "new.step.sync": "内容を取得",
@@ -584,7 +583,9 @@ export const ja = {
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceFetchFailed":
-    "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
+    "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。",
+  "new.error.generic":
+    "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.alreadyExists":
     "「{name}」はこのワークスペースに既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":

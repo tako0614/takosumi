@@ -176,15 +176,33 @@ function isDestructiveConfirmationRequired(error: ControlApiError): boolean {
   );
 }
 
+function diagnosticDisplayText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const redacted = value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gu, "Bearer [REDACTED]")
+    .replace(
+      /\b(?:sk|pk|rk|ghp|github_pat|glpat|xox[baprs])_[A-Za-z0-9._-]+/gu,
+      "[REDACTED]",
+    )
+    .replace(
+      /\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*=([^\s"']+)/giu,
+      (match) => match.replace(/=.+$/u, "=[REDACTED]"),
+    );
+  return redacted.length > 4_000 ? `${redacted.slice(0, 4_000)}...` : redacted;
+}
+
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
+  const message = () =>
+    diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic";
+  const detail = () => diagnosticDisplayText(props.diagnostic.detail);
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
         {diagnosticSeverityLabel(props.diagnostic.severity)}
       </span>
-      <span class="wa-diag-msg">{props.diagnostic.message}</span>
-      <Show when={props.diagnostic.detail}>
-        <pre class="wa-pre">{props.diagnostic.detail}</pre>
+      <span class="wa-diag-msg">{message()}</span>
+      <Show when={detail()}>
+        {(text) => <pre class="wa-pre">{text()}</pre>}
       </Show>
     </li>
   );

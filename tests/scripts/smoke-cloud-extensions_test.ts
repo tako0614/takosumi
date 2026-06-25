@@ -106,12 +106,11 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
 });
 
-test("cloud extension smoke can require external AI upstream profiles", async () => {
+test("cloud extension smoke fails readiness when AI Gateway only has Workers AI fallback", async () => {
   const result = await runCloudExtensionSmoke(
     {
       ...BASE_OPTIONS,
       requireCompatMaterialization: true,
-      requireAiUpstreamProfile: true,
     },
     async (url, init) => {
       const parsed = new URL(url);
@@ -610,9 +609,7 @@ function responseForImplementedCompat(
     if (!pathname.endsWith("/r2/buckets")) {
       return cloudflare(true, { name: searchParams.get("name") ?? "r2-test" });
     }
-    return cloudflare(true, [
-      { name: searchParams.get("name") ?? "r2-test" },
-    ]);
+    return cloudflare(true, [{ name: searchParams.get("name") ?? "r2-test" }]);
   }
   if (pathname.includes("/workers/routes")) {
     if (method === "POST" && bodyText.includes("{}")) {
