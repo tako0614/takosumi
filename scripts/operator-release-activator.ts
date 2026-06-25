@@ -66,6 +66,7 @@ interface RunReleaseOptions {
   ) => Promise<void>;
   readonly operatorEnv?: Readonly<Record<string, string | undefined>>;
   readonly commandEnv?: Readonly<Record<string, string | undefined>>;
+  readonly commandEnvAllowlist?: readonly string[];
 }
 
 interface ServeOptions extends RunReleaseOptions {
@@ -149,7 +150,13 @@ export async function runReleaseActivation(
     await extractSourceArchive(archivePath, sourceRoot);
     const commandIds: string[] = [];
     for (const command of payload.commands) {
-      runReleaseCommand(payload, command, sourceRoot, options.commandEnv);
+      runReleaseCommand(
+        payload,
+        command,
+        sourceRoot,
+        options.commandEnv,
+        options.commandEnvAllowlist,
+      );
       commandIds.push(command.id);
     }
     return {
@@ -280,7 +287,9 @@ function parseCommandEnv(
       throw new Error("release command env must not include activator token");
     }
     if (SECRET_ENV_NAME_RE.test(name)) {
-      throw new Error(`release command env must not include secret-like ${name}`);
+      throw new Error(
+        `release command env must not include secret-like ${name}`,
+      );
     }
     if (isReservedProviderEnvName(name)) {
       throw new Error(`release command env must not override reserved ${name}`);
@@ -374,6 +383,7 @@ function runReleaseCommand(
   command: ReleaseActivationCommand,
   sourceRoot: string,
   parentEnv: Readonly<Record<string, string | undefined>> | undefined,
+  commandEnvAllowlist: readonly string[] | undefined,
 ): void {
   const cwd = command.workingDirectory
     ? resolve(sourceRoot, command.workingDirectory)
@@ -381,8 +391,13 @@ function runReleaseCommand(
   assertInside(cwd, sourceRoot, `release command ${command.id} cwd`);
   const releaseRunId = `operator_${payload.applyRunId}_${randomUUID()}`;
   const outputs = payload.nonSensitiveOutputs ?? {};
+  const explicitOperatorEnv = materializerAllowedCommandEnv(
+    parentEnv,
+    commandEnvAllowlist,
+  );
   const env = {
     ...materializerBaseEnv(parentEnv),
+    ...explicitOperatorEnv,
     TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
     ...(payload.installation?.id
@@ -404,7 +419,10 @@ function runReleaseCommand(
     }),
     ...(command.env ?? {}),
   };
-  assertNoCredentialEnv(env);
+  assertNoUnexpectedCredentialEnv(
+    env,
+    new Set(Object.keys(explicitOperatorEnv)),
+  );
   const [cmd, ...args] = command.command;
   const result = spawnSync(cmd!, args, {
     cwd,
@@ -432,6 +450,39 @@ function materializerBaseEnv(
   return next;
 }
 
+function materializerAllowedCommandEnv(
+  env: Readonly<Record<string, string | undefined>> | undefined = process.env,
+  allowlist: readonly string[] | undefined,
+): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const name of normalizeCommandEnvAllowlist(allowlist)) {
+    if (isReservedProviderEnvName(name)) {
+      throw new Error(
+        `release command env allowlist must not include reserved ${name}`,
+      );
+    }
+    const value = env[name];
+    if (typeof value === "string") next[name] = value;
+  }
+  return next;
+}
+
+function normalizeCommandEnvAllowlist(
+  allowlist: readonly string[] | undefined,
+): readonly string[] {
+  if (!allowlist) return [];
+  const names = new Set<string>();
+  for (const raw of allowlist) {
+    const name = raw.trim();
+    if (!name) continue;
+    if (!/^[A-Z_][A-Z0-9_]*$/u.test(name)) {
+      throw new Error(`release command env allowlist entry is invalid: ${raw}`);
+    }
+    names.add(name);
+  }
+  return [...names].sort();
+}
+
 function materializerToolEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Record<string, string> {
@@ -443,9 +494,12 @@ function materializerToolEnv(
   return next;
 }
 
-function assertNoCredentialEnv(env: Readonly<Record<string, string>>): void {
+function assertNoUnexpectedCredentialEnv(
+  env: Readonly<Record<string, string>>,
+  explicitNames: ReadonlySet<string>,
+): void {
   for (const name of Object.keys(env)) {
-    if (PROVIDER_CREDENTIAL_ENV_NAMES.has(name)) {
+    if (PROVIDER_CREDENTIAL_ENV_NAMES.has(name) && !explicitNames.has(name)) {
       throw new Error(`release command env unexpectedly carries ${name}`);
     }
   }
@@ -558,7 +612,21 @@ function optionsFromCli(values: Map<string, string>, flags: Set<string>) {
       process.env.TAKOSUMI_RELEASE_R2_JURISDICTION,
     workRoot: values.get("work-root") ?? process.env.TAKOSUMI_RELEASE_WORK_ROOT,
     keepWorkdir: flags.has("keep-workdir"),
+    commandEnvAllowlist: parseCommandEnvAllowlist(
+      values.get("command-env-allowlist") ??
+        process.env.TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST,
+    ),
   };
+}
+
+function parseCommandEnvAllowlist(
+  value: string | undefined,
+): readonly string[] {
+  if (!value?.trim()) return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {

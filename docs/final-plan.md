@@ -1228,6 +1228,12 @@ run an opaque command that talks to an already-authorized app resource CLI, or
 use an operator/Cloud activator whose secret material is supplied by the
 operator environment outside the OpenTofu output.
 
+The bundled operator activator forwards credential env to opaque operator
+commands only through an explicit operator-side allowlist such as
+`TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST`. This is an operator trust decision for
+the command being executed, not a new Takosumi DB migration API and not a
+secret channel through OpenTofu outputs.
+
 ### MVP 5: Cloudflare Compatibility Gateway
 
 Cloud-only:

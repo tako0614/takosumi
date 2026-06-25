@@ -99,7 +99,8 @@ The bundled Cloudflare-hosted operator helper is intentionally small:
 cd takosumi
 bun run operator:release-activator -- serve \
   --source-bucket "$TAKOSUMI_RELEASE_SOURCE_BUCKET" \
-  --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG"
+  --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG" \
+  --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID
 ```
 
 It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
@@ -109,6 +110,11 @@ publication code. Database migrations, Worker uploads, route promotion, search
 index bootstrap, and similar steps are commands owned by the Capsule/operator.
 Credentials required by this helper itself, such as R2 archive fetch auth, remain
 materializer tooling env and are not forwarded to the restored source commands.
+Credentials required by the opaque operator command are forwarded only when the
+operator explicitly names them in `--command-env-allowlist` (or
+`TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST`). The OpenTofu
+`takosumi_release.post_apply.env` descriptor remains non-secret and cannot carry
+provider tokens, database URLs, DSNs, or other credential material.
 
 ## Promotion Record
 

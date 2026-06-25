@@ -335,6 +335,12 @@ remain ordinary argv commands, but their authority comes from an app resource
 CLI or from an explicit operator/Cloud secret boundary, not from secrets stored
 inside OpenTofu state.
 
+Operator release activators may opt in to forwarding selected operator-owned
+environment variables to `executor = "operator"` commands with an explicit
+operator-side allowlist. That allowlist is not part of the Capsule output
+contract and does not make Takosumi understand databases, Workers, queues, or
+other app resources; the command remains an opaque argv.
+
 When no activator is configured, the OpenTofu apply can still succeed, but
 Takosumi records `release_activation.pending` instead of silently implying that
 migrations, artifact upload, or app initialization ran.

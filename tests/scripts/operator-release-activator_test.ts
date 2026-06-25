@@ -168,6 +168,119 @@ test("operator release activator restores source archive and runs opaque argv on
   }
 });
 
+test("operator release activator forwards only explicitly allowlisted operator env", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-env-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    const resultPath = join(tempDir, "activation-env.txt");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+
+    const result = await runReleaseActivation(
+      {
+        ...validPayload({
+          command: [
+            process.execPath,
+            "-e",
+            [
+              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.CLOUDFLARE_API_TOKEN ?? "missing", Bun.env.CLOUDFLARE_ACCOUNT_ID ?? "missing", Bun.env.NOT_ALLOWLISTED ?? "missing", Bun.env.TAKOSUMI_APPLY_RUN_ID].join(":"))`,
+            ].join(";"),
+          ],
+          env: { ACTIVATION_RESULT_FILE: resultPath },
+        }),
+        sourceSnapshot: {
+          archiveObjectKey:
+            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveDigest: digest,
+        },
+      },
+      {
+        commandEnv: {
+          PATH: process.env.PATH,
+          CLOUDFLARE_API_TOKEN: "operator-token",
+          CLOUDFLARE_ACCOUNT_ID: "operator-account",
+          NOT_ALLOWLISTED: "must-not-forward",
+        },
+        commandEnvAllowlist: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
+        downloadArchive: async (_payload, targetPath) => {
+          await writeFile(targetPath, await readFile(archivePath));
+        },
+        workRoot: join(tempDir, "work"),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      kind: "takosumi.operator.release-commands@v1",
+      metadata: {
+        applyRunId: "run_apply_1",
+        commandCount: 1,
+        commandIds: ["publish"],
+      },
+    });
+    await expect(readFile(resultPath, "utf8")).resolves.toBe(
+      "operator-token:operator-account:missing:run_apply_1",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("operator release activator rejects reserved operator env allowlist entries", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-env-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+    const payload = {
+      ...validPayload(),
+      sourceSnapshot: {
+        archiveObjectKey:
+          "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+        archiveDigest: digest,
+      },
+    };
+
+    await expect(
+      runReleaseActivation(payload, {
+        commandEnv: { TAKOSUMI_OUTPUTS_JSON: "{}" },
+        commandEnvAllowlist: ["TAKOSUMI_OUTPUTS_JSON"],
+        downloadArchive: async (_payload, targetPath) => {
+          await writeFile(targetPath, await readFile(archivePath));
+        },
+        workRoot: join(tempDir, "work-reserved"),
+      }),
+    ).rejects.toThrow(
+      "release command env allowlist must not include reserved TAKOSUMI_OUTPUTS_JSON",
+    );
+
+    await expect(
+      runReleaseActivation(payload, {
+        commandEnv: { "bad-name": "value" },
+        commandEnvAllowlist: ["bad-name"],
+        downloadArchive: async (_payload, targetPath) => {
+          await writeFile(targetPath, await readFile(archivePath));
+        },
+        workRoot: join(tempDir, "work-invalid"),
+      }),
+    ).rejects.toThrow(
+      "release command env allowlist entry is invalid: bad-name",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 function validPayload(
   command: {
     readonly command?: readonly string[];
