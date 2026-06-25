@@ -1212,7 +1212,8 @@ opaque argv commands through `takosumi_release.post_apply`, and Cloud/Operator
 activators run them in the appropriate execution boundary. Takosumi core must
 not grow DB-specific migration executors, Worker-specific deploy executors, or
 resource-aware activation plugins. Anything after apply is just an app/operator
-command with logs and activation status.
+command with logs and activation status; Takosumi records that it ran, not what
+the command semantically does.
 The built-in runner activator can run `executor = "runner"` commands inside the
 restored source snapshot sandbox and inject non-sensitive metadata and outputs
 (`TAKOSUMI_OUTPUTS_JSON`, run/deployment ids) into the command environment, but
