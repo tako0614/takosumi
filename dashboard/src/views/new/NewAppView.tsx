@@ -25,22 +25,17 @@ import {
   createResource,
   createSignal,
   For,
-  Match,
   onCleanup,
   Show,
-  Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import {
-  ArrowRight,
   Cloud,
   Download,
   Globe2,
   HardDrive,
   KeyRound,
-  Link2,
   Plus,
-  Search,
   Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
@@ -92,11 +87,9 @@ import { locale, t } from "../../i18n/index.ts";
 import {
   Badge,
   Button,
-  EmptyState,
   FormField,
   Input,
   Select,
-  Skeleton,
   Toast,
   type Tone,
 } from "../../components/ui/index.ts";
@@ -133,17 +126,6 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
   }
 }
 
-function catalogKindLabel(kind: CatalogEntry["kind"]): string {
-  switch (kind) {
-    case "worker":
-      return t("new.catalog.kind.worker");
-    case "site":
-      return t("new.catalog.kind.site");
-    case "storage":
-      return t("new.catalog.kind.storage");
-  }
-}
-
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
 
@@ -159,54 +141,6 @@ type CatalogInstallConfig = InstallConfig & {
     >;
   };
 };
-
-function CatalogCard(props: {
-  readonly entry: CatalogEntry;
-  readonly onSelect: (entry: CatalogEntry) => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        class="av-catalog-card"
-        onClick={() => props.onSelect(props.entry)}
-      >
-        <span class="av-catalog-icon" aria-hidden="true">
-          <CatalogIcon entry={props.entry} />
-        </span>
-        <span class="av-catalog-text">
-          <span class="av-catalog-meta">
-            <span>{catalogKindLabel(props.entry.kind)}</span>
-            <span>{providerDisplayName(props.entry.provider)}</span>
-          </span>
-          <span class="av-catalog-name">{props.entry.name[locale()]}</span>
-          <span class="av-catalog-desc">
-            {props.entry.description[locale()]}
-          </span>
-        </span>
-        <span class="av-catalog-action" aria-hidden="true">
-          <Plus size={16} />
-          <span>{t("new.catalog.add")}</span>
-        </span>
-      </button>
-    </li>
-  );
-}
-
-function ManualImportCard(props: { readonly onSelect: () => void }) {
-  return (
-    <button type="button" class="av-store-link-tile" onClick={props.onSelect}>
-      <span class="av-store-link-icon" aria-hidden="true">
-        <Link2 size={18} />
-      </span>
-      <span class="av-store-link-copy">
-        <span>{t("new.manualCard.title")}</span>
-        <small>{t("new.manualCard.body")}</small>
-      </span>
-      <ArrowRight size={16} aria-hidden="true" />
-    </button>
-  );
-}
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -542,11 +476,10 @@ function parseInitialInstallConfigId(search: string): string | null {
   return raw;
 }
 
-function initialAddTab(search: string, hasPrefill: boolean): "catalog" | "git" {
-  if (parseInitialInstallConfigId(search)) return "catalog";
-  if (hasPrefill) return "git";
-  const params = new URLSearchParams(search);
-  return params.get("mode") === "link" ? "git" : "catalog";
+function initialAddTab(search: string): "catalog" | "git" {
+  // The add tab is the install-link form. "catalog" only pre-selects a service
+  // handed off from the store via installConfigId; browsing lives in the store.
+  return parseInitialInstallConfigId(search) ? "catalog" : "git";
 }
 
 function Inner() {
@@ -568,12 +501,11 @@ function Inner() {
     hasInstallPrefillParams(initialSearch);
   const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
 
-  // Normal `/new` opens the catalog. Explicit link mode and external
-  // `/install?git=…` redirects open the Git-backed flow with the source visible.
+  // `/new` opens the install-link form. External `/install?git=…` redirects and
+  // store hand-offs (`?installConfigId=…`) seed the same Git-backed flow.
   const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
-    initialAddTab(initialSearch, Boolean(prefill)),
+    initialAddTab(initialSearch),
   );
-  const [catalogQuery, setCatalogQuery] = createSignal("");
   const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
     null,
   );
@@ -661,38 +593,6 @@ function Inner() {
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
   );
-  const normalizedCatalogQuery = () => catalogQuery().trim().toLowerCase();
-  const catalogEntryMatchesQuery = (entry: CatalogEntry) => {
-    const query = normalizedCatalogQuery();
-    if (!query) return true;
-    const searchText = [
-      entry.name[locale()],
-      entry.description[locale()],
-      entry.provider,
-      entry.kind,
-      entry.suggestedName,
-      entry.source?.git ?? "",
-    ]
-      .join(" ")
-      .toLowerCase();
-    return searchText.includes(query);
-  };
-  const catalogEntries = createMemo<readonly CatalogEntry[]>(() =>
-    allCatalogEntries().filter(catalogEntryMatchesQuery),
-  );
-  const primaryCatalog = createMemo(() =>
-    catalogEntries().filter((entry) => entry.surface === "service"),
-  );
-  const featuredCatalog = createMemo(() =>
-    primaryCatalog().length > 0 ? primaryCatalog() : catalogEntries(),
-  );
-  const showSecondaryCatalog = () => primaryCatalog().length > 0;
-  const buildingBlockCatalog = createMemo(() =>
-    catalogEntries().filter((entry) => entry.surface === "building_block"),
-  );
-  const exampleCatalog = createMemo(() =>
-    catalogEntries().filter((entry) => entry.surface === "example"),
-  );
   const defaultGitInstallConfig = () =>
     configList().find(
       (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -718,7 +618,7 @@ function Inner() {
   const selectedCatalogEntry = () => {
     const id = selectedCatalogId();
     return id
-      ? (catalogEntries().find((entry) => entry.id === id) ?? null)
+      ? (allCatalogEntries().find((entry) => entry.id === id) ?? null)
       : null;
   };
   const catalogInputValue = (entry: CatalogEntry, field: CatalogInputField) => {
@@ -1971,140 +1871,13 @@ function Inner() {
           </div>
         </Show>
 
-        <Show when={activeTab() !== "git" && !gitUrl().trim()}>
-          <section class="av-store" aria-label={t("new.store.aria")}>
-            <div class="av-store-hero">
-              <div class="av-store-head">
-                <div>
-                  <span class="av-store-kicker">{t("new.store.kicker")}</span>
-                  <h2>{t("new.store.title")}</h2>
-                  <p>{t("new.subtitle")}</p>
-                </div>
-              </div>
-              <div class="av-store-tools">
-                <label class="av-store-search">
-                  <Search size={18} aria-hidden="true" />
-                  <span class="sr-only">{t("new.store.searchLabel")}</span>
-                  <input
-                    id="new-catalog-search"
-                    name="catalogSearch"
-                    type="search"
-                    value={catalogQuery()}
-                    onInput={(event) =>
-                      setCatalogQuery(event.currentTarget.value)
-                    }
-                    placeholder={t("new.store.searchPlaceholder")}
-                    autocomplete="off"
-                    spellcheck={false}
-                  />
-                </label>
-                <ManualImportCard onSelect={() => setActiveTab("git")} />
-              </div>
-            </div>
-            <div class="av-store-shelf">
-              <div class="av-store-section-head">
-                <h3>{t("new.store.featuredTitle")}</h3>
-                <span>
-                  {t("new.store.count", { count: featuredCatalog().length })}
-                </span>
-              </div>
-              <Switch>
-                <Match when={configs.loading}>
-                  <div class="av-catalog-grid" aria-busy="true">
-                    <Skeleton variant="row" count={3} />
-                  </div>
-                </Match>
-                <Match when={configs.error}>
-                  <Toast tone="error">
-                    {t("common.fetchFailed", {
-                      message: (configs.error as ControlApiError).message,
-                    })}
-                  </Toast>
-                </Match>
-                <Match
-                  when={!configs.loading && allCatalogEntries().length === 0}
-                >
-                  <EmptyState
-                    icon={<Download size={28} />}
-                    title={t("new.store.empty.title")}
-                    message={t("new.store.empty.message")}
-                    action={
-                      <Button variant="primary" href="/new?mode=link">
-                        {t("new.advancedImport.open")}
-                      </Button>
-                    }
-                  />
-                </Match>
-                <Match
-                  when={
-                    !configs.loading &&
-                    allCatalogEntries().length > 0 &&
-                    catalogEntries().length === 0
-                  }
-                >
-                  <EmptyState
-                    icon={<Search size={28} />}
-                    title={t("new.store.searchEmpty.title")}
-                    message={t("new.store.searchEmpty.message")}
-                    action={
-                      <Button
-                        variant="secondary"
-                        type="button"
-                        onClick={() => setCatalogQuery("")}
-                      >
-                        {t("new.store.searchEmpty.clear")}
-                      </Button>
-                    }
-                  />
-                </Match>
-                <Match when={catalogEntries().length > 0}>
-                  <ul class="av-catalog-grid">
-                    <For each={featuredCatalog()}>
-                      {(entry) => (
-                        <CatalogCard
-                          entry={entry}
-                          onSelect={pickCatalogEntry}
-                        />
-                      )}
-                    </For>
-                  </ul>
-                </Match>
-              </Switch>
-            </div>
-            <Show
-              when={showSecondaryCatalog() && buildingBlockCatalog().length > 0}
-            >
-              <section class="av-store-section">
-                <div class="av-store-section-head">
-                  <h3>{t("new.store.blocksTitle")}</h3>
-                </div>
-                <ul class="av-catalog-grid av-catalog-grid-secondary">
-                  <For each={buildingBlockCatalog()}>
-                    {(entry) => (
-                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
-                    )}
-                  </For>
-                </ul>
-              </section>
-            </Show>
-            <Show when={showSecondaryCatalog() && exampleCatalog().length > 0}>
-              <section class="av-store-section">
-                <div class="av-store-section-head">
-                  <h3>{t("new.store.examplesTitle")}</h3>
-                </div>
-                <ul class="av-catalog-grid av-catalog-grid-secondary">
-                  <For each={exampleCatalog()}>
-                    {(entry) => (
-                      <CatalogCard entry={entry} onSelect={pickCatalogEntry} />
-                    )}
-                  </For>
-                </ul>
-              </section>
-            </Show>
-          </section>
-        </Show>
-
-        <Show when={activeTab() === "git" || Boolean(gitUrl().trim())}>
+        <Show
+          when={
+            activeTab() === "git" ||
+            Boolean(gitUrl().trim()) ||
+            Boolean(initialInstallConfigId)
+          }
+        >
           <section class="av-add-flow" aria-label={t("new.title")}>
             <div class="av-add-flow-header">
               <div class="av-add-flow-selected">
@@ -2150,16 +1923,6 @@ function Inner() {
                   {t("new.flow.stepReview")}
                 </li>
               </ol>
-              <Show when={activeTab() === "git" && !gitUrl().trim()}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  onClick={() => setActiveTab("catalog")}
-                >
-                  {t("new.advancedImport.close")}
-                </Button>
-              </Show>
             </div>
             <div class="av-add-flow-body">
               <form
