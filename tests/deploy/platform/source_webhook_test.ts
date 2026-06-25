@@ -730,6 +730,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
     cookie: string | null;
     session: string | null;
     authenticated: string | null;
+    authKind: string | null;
+    scopes: string | null;
     subject: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
@@ -738,6 +740,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
         authorization: "Bearer sess_secret",
         cookie: "takosumi_session=sess_cookie",
         "x-takosumi-account-session": "sess_header",
+        "x-takosumi-cloud-authenticated": "1",
+        "x-takosumi-cloud-auth-kind": "spoofed",
+        "x-takosumi-cloud-scopes": "admin",
+        "x-takosumi-cloud-subject": "spoofed",
       },
     }),
     {
@@ -750,6 +756,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
             authenticated: request.headers.get(
               "x-takosumi-cloud-authenticated",
             ),
+            authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
+            scopes: request.headers.get("x-takosumi-cloud-scopes"),
             subject: request.headers.get("x-takosumi-cloud-subject"),
           });
           return Response.json({ object: "list", data: [] });
@@ -767,6 +775,7 @@ test("Cloud-only extension routes receive platform auth context without raw sess
     },
     async () => ({
       authenticated: true,
+      authKind: "session",
       subject: "tsub_cloud_extension_smoke",
     }),
   );
@@ -777,6 +786,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       cookie: null,
       session: null,
       authenticated: "1",
+      authKind: "session",
+      scopes: null,
       subject: "tsub_cloud_extension_smoke",
     },
   ]);
@@ -788,6 +799,9 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
     cookie: string | null;
     session: string | null;
     authenticated: string | null;
+    authKind: string | null;
+    scopes: string | null;
+    subject: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
@@ -795,6 +809,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
         authorization: "Bearer taksrv_bad_scope",
         cookie: "takosumi_session=sess_cookie",
         "x-takosumi-account-session": "sess_header",
+        "x-takosumi-cloud-authenticated": "1",
+        "x-takosumi-cloud-auth-kind": "spoofed",
+        "x-takosumi-cloud-scopes": "admin",
+        "x-takosumi-cloud-subject": "spoofed",
       },
     }),
     {
@@ -807,6 +825,9 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
             authenticated: request.headers.get(
               "x-takosumi-cloud-authenticated",
             ),
+            authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
+            scopes: request.headers.get("x-takosumi-cloud-scopes"),
+            subject: request.headers.get("x-takosumi-cloud-subject"),
           });
           return Response.json(
             {
@@ -838,6 +859,9 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
       cookie: null,
       session: null,
       authenticated: null,
+      authKind: null,
+      scopes: null,
+      subject: null,
     },
   ]);
 });
@@ -848,6 +872,10 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
     body: string;
     contentType: string | null;
   }[] = [];
+  const providerRoute = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!providerRoute) throw new Error("Cloudflare extension route is missing");
   const context = await verifyPlatformCloudExtensionPersonalAccessToken(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts",
@@ -860,6 +888,7 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
     } as never,
     "takpat_cloud_provider",
+    providerRoute,
     async (request: Request) => {
       introspectionRequests.push({
         url: request.url,
@@ -876,7 +905,9 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
 
   expect(context).toEqual({
     authenticated: true,
+    authKind: "personal-access-token",
     subject: "tsub_provider_user",
+    scopes: ["read", "write"],
   });
   expect(introspectionRequests).toHaveLength(1);
   expect(introspectionRequests[0]?.url).toBe(
@@ -891,6 +922,83 @@ test("Cloud-only extension routes authenticate personal access tokens through ac
   expect(introspectionRequests[0]?.body).toContain(
     "token=takpat_cloud_provider",
   );
+});
+
+test("Cloud-only extension personal access token scopes are route and method aware", async () => {
+  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  const providerRoute = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!aiRoute || !providerRoute) {
+    throw new Error("Cloud extension routes are missing");
+  }
+  const env = {
+    TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+    TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+  } as never;
+  const introspect = (scope: string) => async () =>
+    Response.json({
+      active: true,
+      scope,
+      sub: "tsub_provider_user",
+    });
+
+  const readModels = await verifyPlatformCloudExtensionPersonalAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    env,
+    "takpat_read",
+    aiRoute,
+    introspect("read"),
+  );
+  expect(readModels.authenticated).toBe(true);
+
+  const readChat = await verifyPlatformCloudExtensionPersonalAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    env,
+    "takpat_read",
+    aiRoute,
+    introspect("read"),
+  );
+  expect(readChat).toEqual({ authenticated: false });
+
+  const writeChat = await verifyPlatformCloudExtensionPersonalAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    env,
+    "takpat_write",
+    aiRoute,
+    introspect("write"),
+  );
+  expect(writeChat.authenticated).toBe(true);
+
+  const readCloudflareMutation =
+    await verifyPlatformCloudExtensionPersonalAccessToken(
+      new Request(
+        "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+        { method: "PUT" },
+      ),
+      env,
+      "takpat_read",
+      providerRoute,
+      introspect("read"),
+    );
+  expect(readCloudflareMutation).toEqual({ authenticated: false });
+
+  const writeCloudflareMutation =
+    await verifyPlatformCloudExtensionPersonalAccessToken(
+      new Request(
+        "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+        { method: "PUT" },
+      ),
+      env,
+      "takpat_write",
+      providerRoute,
+      introspect("write"),
+    );
+  expect(writeCloudflareMutation.authenticated).toBe(true);
 });
 
 test("Cloud-only extension personal access token auth fails closed", async () => {
@@ -946,7 +1054,9 @@ test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async 
 
   expect(context).toEqual({
     authenticated: true,
+    authKind: "service-token",
     subject: "service-graph-service:inst_ai",
+    scopes: ["ai.model", "ai.models.read"],
   });
   expect(introspectionRequests[0]?.body).toContain("token=taksrv_runtime");
 
@@ -1174,11 +1284,7 @@ test("Cloud-only extension registry is limited to AI Gateway and Cloudflare comp
     ]),
   ).toEqual([
     ["GET", "/gateway/ai/v1/models", ["ai.model", "ai.models.read"]],
-    [
-      "GET",
-      "/gateway/ai/v1/__takosumi/status",
-      ["ai.model", "ai.models.read"],
-    ],
+    ["GET", "/gateway/ai/v1/__takosumi/status", ["ai.model", "ai.models.read"]],
     ["POST", "/gateway/ai/v1/chat/completions", ["ai.model", "ai.chat"]],
     ["POST", "/gateway/ai/v1/embeddings", ["ai.model", "ai.embeddings"]],
   ]);

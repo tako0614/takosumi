@@ -948,7 +948,9 @@ export async function handlePlatformCloudExtensionRouteRequest(
 
 export interface PlatformCloudExtensionSessionContext {
   readonly authenticated: boolean;
+  readonly authKind?: "service-token" | "personal-access-token" | "session";
   readonly subject?: string;
+  readonly scopes?: readonly string[];
 }
 
 export type PlatformCloudExtensionSessionVerifier = (
@@ -960,10 +962,18 @@ export type PlatformCloudExtensionSessionVerifier = (
 const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
   "x-takosumi-cloud-authenticated";
 const PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER = "x-takosumi-cloud-subject";
+const PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER = "x-takosumi-cloud-auth-kind";
+const PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER = "x-takosumi-cloud-scopes";
 const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "authorization",
   "cookie",
   "x-takosumi-account-session",
+] as const;
+const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
+  PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER,
+  PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
+  PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
+  PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
 ] as const;
 
 export async function requestWithPlatformCloudExtensionAuthContext(
@@ -977,10 +987,25 @@ export async function requestWithPlatformCloudExtensionAuthContext(
   for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
   }
+  for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
+    headers.delete(header);
+  }
   if (!session.authenticated) {
     return clonePlatformCloudExtensionRequest(request, headers);
   }
   headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
+  if (session.authKind) {
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
+      safeCloudExtensionHeaderValue(session.authKind),
+    );
+  }
+  if (session.scopes && session.scopes.length > 0) {
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
+      session.scopes.map(safeCloudExtensionHeaderValue).join(" "),
+    );
+  }
   if (session.subject) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
@@ -1027,6 +1052,7 @@ export async function verifyPlatformCloudExtensionSession(
       request,
       env,
       patToken,
+      route,
     );
     if (patSession.authenticated) return patSession;
   }
@@ -1048,7 +1074,7 @@ export async function verifyPlatformCloudExtensionSession(
     }
     const subject = (body as Record<string, unknown>).subject;
     return typeof subject === "string" && subject.length > 0
-      ? { authenticated: true, subject }
+      ? { authenticated: true, authKind: "session", subject }
       : { authenticated: false };
   } catch {
     return { authenticated: false };
@@ -1106,9 +1132,15 @@ export async function verifyPlatformCloudExtensionServiceAccessToken(
       return { authenticated: false };
     }
     const subject = record.sub;
+    const scopes = platformCloudExtensionScopes(scope);
     return typeof subject === "string" && subject.length > 0
-      ? { authenticated: true, subject }
-      : { authenticated: true };
+      ? {
+          authenticated: true,
+          authKind: "service-token",
+          subject,
+          scopes,
+        }
+      : { authenticated: true, authKind: "service-token", scopes };
   } catch {
     return { authenticated: false };
   }
@@ -1123,8 +1155,19 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
   request: Request,
   env: CloudflareWorkerEnv,
   token: string,
-  introspectFetch: PlatformCloudExtensionIntrospectFetch = defaultPlatformCloudExtensionIntrospectFetch,
+  routeOrIntrospectFetch?:
+    | PlatformCloudExtensionRoute
+    | PlatformCloudExtensionIntrospectFetch,
+  maybeIntrospectFetch?: PlatformCloudExtensionIntrospectFetch,
 ): Promise<PlatformCloudExtensionSessionContext> {
+  const route =
+    typeof routeOrIntrospectFetch === "function"
+      ? undefined
+      : routeOrIntrospectFetch;
+  const introspectFetch =
+    typeof routeOrIntrospectFetch === "function"
+      ? routeOrIntrospectFetch
+      : (maybeIntrospectFetch ?? defaultPlatformCloudExtensionIntrospectFetch);
   const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
   const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;
   if (!clientId || !clientSecret) return { authenticated: false };
@@ -1152,13 +1195,19 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
     const record = body as Record<string, unknown>;
     if (record.active !== true) return { authenticated: false };
     const scope = typeof record.scope === "string" ? record.scope : "";
-    if (!platformCloudExtensionScopesAllowAccess(scope)) {
+    if (!platformCloudExtensionScopesAllowAccess(scope, request, route)) {
       return { authenticated: false };
     }
     const subject = record.sub;
+    const scopes = platformCloudExtensionScopes(scope);
     return typeof subject === "string" && subject.length > 0
-      ? { authenticated: true, subject }
-      : { authenticated: true };
+      ? {
+          authenticated: true,
+          authKind: "personal-access-token",
+          subject,
+          scopes,
+        }
+      : { authenticated: true, authKind: "personal-access-token", scopes };
   } catch {
     return { authenticated: false };
   }
@@ -1190,8 +1239,16 @@ function bearerValue(authorization: string | null): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
-function platformCloudExtensionScopesAllowAccess(scope: string): boolean {
-  return ["read", "write", "admin"].some((required) =>
+function platformCloudExtensionScopesAllowAccess(
+  scope: string,
+  request: Request,
+  route?: PlatformCloudExtensionRoute,
+): boolean {
+  const requiredScopes = platformCloudExtensionPersonalAccessRequiredScopes(
+    request,
+    route,
+  );
+  return requiredScopes.some((required) =>
     platformCloudExtensionScopeIncludes(scope, required),
   );
 }
@@ -1200,7 +1257,31 @@ function platformCloudExtensionScopeIncludes(
   scope: string,
   required: string,
 ): boolean {
-  return scope.split(/\s+/u).filter(Boolean).includes(required);
+  if (
+    required !== "admin" &&
+    platformCloudExtensionScopes(scope).includes("admin")
+  ) {
+    return true;
+  }
+  return platformCloudExtensionScopes(scope).includes(required);
+}
+
+function platformCloudExtensionScopes(scope: string): string[] {
+  return scope.split(/\s+/u).filter(Boolean);
+}
+
+function platformCloudExtensionPersonalAccessRequiredScopes(
+  request: Request,
+  route?: PlatformCloudExtensionRoute,
+): readonly string[] {
+  const resolvedRoute =
+    route ?? matchPlatformCloudExtensionRoute(new URL(request.url).pathname);
+  if (!resolvedRoute) return ["read", "write", "admin"];
+  const method = request.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    return ["read", "admin"];
+  }
+  return ["write", "admin"];
 }
 
 function sessionMirrorHeaders(request: Request): Headers | undefined {
@@ -1270,7 +1351,6 @@ function platformCloudExtensionBinding(
   }
   return binding as PlatformCloudExtensionBinding;
 }
-
 
 const HARDENING_GATE_REF_PREFIX = "git+";
 const HARDENING_GATE_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}#/i;
