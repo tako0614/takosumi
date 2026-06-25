@@ -1212,7 +1212,12 @@ opaque argv commands such as `takosumi_release.post_apply` or
 `takos_app.release.post_apply`, and Cloud/Operator activators run them in the
 source snapshot sandbox. Takosumi core must not grow DB-specific migration
 executors; database migrations, Worker uploads, index setup, and bootstrap tasks
-are just app/operator commands with logs and activation status.
+are just app/operator commands with logs and activation status. The built-in
+runner activator can inject non-sensitive metadata and outputs
+(`TAKOSUMI_OUTPUTS_JSON`, run/deployment ids) into the command environment, but
+it does not hand provider credentials to arbitrary source commands. Credentialed
+provider-side artifact publication stays behind an explicit operator/Cloud
+activator boundary.
 
 ### MVP 5: Cloudflare Compatibility Gateway
 

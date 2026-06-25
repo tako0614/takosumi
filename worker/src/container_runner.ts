@@ -193,6 +193,7 @@ export class CloudflareContainerOpenTofuRunner
         objectKey: job.sourceSnapshot.archiveObjectKey,
         digest: job.sourceSnapshot.archiveDigest,
       },
+      outputs: job.nonSensitiveOutputs,
       activation: {
         applyRunId: job.applyRunId,
         installationId: job.installationId,

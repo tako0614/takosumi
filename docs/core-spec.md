@@ -313,10 +313,18 @@ output "takosumi_release" {
 ```
 
 When a host wires a ReleaseActivator, Takosumi passes the commands with the
-apply/deployment/output references and non-sensitive outputs. When no activator
-is configured, the OpenTofu apply can still succeed, but Takosumi records
-`release_activation.pending` instead of silently implying that migrations,
-artifact upload, or app initialization ran.
+apply/deployment/output references and non-sensitive outputs. The built-in
+runner activator runs those argv commands in the restored source snapshot and
+injects only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`,
+`TAKOSUMI_RELEASE_RUN_ID`, `TAKOSUMI_APPLY_RUN_ID`,
+`TAKOSUMI_INSTALLATION_ID`, and `TAKOSUMI_DEPLOYMENT_ID`. Provider credentials
+are not injected into arbitrary post-apply source commands; provider-owned
+artifact publishing should be handled by an operator/Cloud activator or another
+explicit credential boundary.
+
+When no activator is configured, the OpenTofu apply can still succeed, but
+Takosumi records `release_activation.pending` instead of silently implying that
+migrations, artifact upload, or app initialization ran.
 
 ## Security
 

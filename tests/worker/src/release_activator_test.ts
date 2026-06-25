@@ -128,6 +128,10 @@ test("runner release activator runs opaque post-apply commands", async () => {
       archiveObjectKey:
         "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
     },
+    nonSensitiveOutputs: {
+      public_url: "https://app.example.test",
+      worker_script_name: "site-worker",
+    },
     commands: [
       {
         id: "migrate",
