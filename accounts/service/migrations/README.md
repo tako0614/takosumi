@@ -64,7 +64,8 @@ position in the sorted list. The runner validates this and rejects gaps.
 For restore / disaster-recovery procedures, see
 [`takosumi/docs/operations/`](../../../docs/operations/).
 
-## Contract reference
+## Boundary
 
-See [`docs/quality/migration-runner-contract.md`](../../../../docs/quality/migration-runner-contract.md)
-for the canonical migration ledger contract across the Takos ecosystem.
+This is Takosumi Accounts internal storage maintenance. It is not a Capsule/app
+migration contract and does not require Takosumi to expose DB-specific
+migration APIs for installed apps.

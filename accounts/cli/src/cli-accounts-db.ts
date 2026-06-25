@@ -262,7 +262,8 @@ function parseOptionalIsoDateOption(
  * runners, blue/green promotion, manual operator) cannot race the ledger.
  *
  * Acquired before reading the ledger and released after the last migration
- * commits. See `docs/quality/migration-runner-contract.md` for the contract.
+ * commits. This is Takosumi Accounts internal storage maintenance, not a
+ * Capsule/app migration contract.
  */
 const ADVISORY_LOCK_LABEL = "takosumi_accounts_migrations";
 
@@ -307,8 +308,7 @@ const ADVISORY_LOCK_LABEL = "takosumi_accounts_migrations";
  *     (b) the ledger INSERT hits a `PRIMARY KEY (version)` constraint, so a
  *     racing second runner fails loud on the duplicate insert rather than
  *     double-applying. Operators MUST NOT run `migrate-d1` concurrently
- *     against the same database; run it from a single deploy job. See
- *     `docs/quality/migration-runner-contract.md` (SQLite/D1-family entry).
+ *     against the same database; run it from a single deploy job.
  *   - Each migration SQL must itself be safe under partial replay because the
  *     CLI cannot roll back a half-applied D1 batch — if the SQL fails
  *     mid-flight the ledger row is NOT inserted, so the operator can re-run
