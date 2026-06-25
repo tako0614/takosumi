@@ -141,6 +141,28 @@ bun run check:takosumi-billing-readiness -- \
   --out-file evidence/billing-readiness-production.json
 ```
 
+For pre-GA closed access, the production origin may be verified with Stripe
+test-mode secrets as a sandbox proof:
+
+```bash
+bun run check:takosumi-billing-readiness -- \
+  --private-root takosumi-private \
+  --environment production \
+  --allow-production-test-stripe \
+  --checkout-smoke \
+  --out-file evidence/billing-readiness-production-sandbox.json
+
+bun run status:takosumi-completion -- \
+  --probe-live \
+  --billing-checkout-smoke \
+  --allow-production-test-stripe
+```
+
+This proves the production-equivalent billing path can create Stripe Checkout
+Sessions without opening paid enforcement. Paid enforcement still requires
+live-mode Stripe secrets and `status:takosumi-completion
+--require-billing-readiness`.
+
 `bootstrap:takosumi-stripe-billing` creates or reuses Stripe prices by stable
 lookup key and writes only the non-secret Takosumi billing plan catalog. It reads
 the Stripe secret key from an operator-private secret file or an explicit
