@@ -40,6 +40,11 @@ export const ja = {
   "nav.apps": "アプリ",
   "nav.services": "サービス",
   "nav.add": "追加",
+  "nav.store": "ストア",
+  "store.title": "ストア",
+  "store.subtitle":
+    "追加できるサービスを探します。公式スターターと外部ストアをまとめて表示します。",
+  "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.runs": "更新履歴",
   "nav.connections": "接続",
   "nav.billing": "お支払い",
