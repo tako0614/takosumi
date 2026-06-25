@@ -132,7 +132,7 @@ export interface GenerateGenericCapsuleRootInput {
 const ARTIFACT_PATH_INPUT = "artifact_path";
 /** Path the runner copies the credential-free build artifact to (invariant 3). */
 const ARTIFACT_PATH_VALUE = "/work/artifact";
-const GENERIC_CONTROL_OUTPUTS = ["takosumi_release", "takos_app"] as const;
+const GENERIC_CONTROL_OUTPUTS = ["takosumi_release"] as const;
 
 export function generateRootModule(
   template: TemplateDefinition,
