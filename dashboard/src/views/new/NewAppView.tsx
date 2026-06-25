@@ -493,13 +493,13 @@ function Inner() {
   // PRE-FILLS — the visitor still confirms in this client (compatibility
   // check, then the explicit add button).
   const initialSearch = typeof location === "undefined" ? "" : location.search;
-  const prefill =
+  const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
       : parseInstallPrefill(initialSearch);
   const installPrefillRejected =
     typeof location !== "undefined" &&
-    !prefill &&
+    !initialInstallPrefill &&
     hasInstallPrefillParams(initialSearch);
   const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
 
@@ -517,13 +517,15 @@ function Inner() {
   const [catalogInputTouched, setCatalogInputTouched] = createSignal<
     Readonly<Record<string, boolean>>
   >({});
-  const initialRef = prefill?.ref || "main";
-  const [gitUrl, setGitUrl] = createSignal(prefill?.git ?? "");
+  const [activeInstallPrefill, setActiveInstallPrefill] =
+    createSignal<InstallPrefill | null>(initialInstallPrefill ?? null);
+  const initialRef = initialInstallPrefill?.ref || "main";
+  const [gitUrl, setGitUrl] = createSignal(initialInstallPrefill?.git ?? "");
   const [ref, setRef] = createSignal(displayRef(initialRef));
   const [pinnedFullRef, setPinnedFullRef] = createSignal<string | null>(
     isFullCommitSha(initialRef) ? initialRef : null,
   );
-  const [path, setPath] = createSignal(prefill?.path || ".");
+  const [path, setPath] = createSignal(initialInstallPrefill?.path || ".");
   const [sourceAccessMode, setSourceAccessMode] =
     createSignal<SourceAccessMode>("public");
   const [sourceAuthConnectionId, setSourceAuthConnectionId] = createSignal("");
@@ -533,19 +535,20 @@ function Inner() {
   const [sourceTokenError, setSourceTokenError] = createSignal<string | null>(
     null,
   );
-  const initialName = prefill
-    ? (prefill.name ?? capsuleNameFromUrl(prefill.git))
+  const initialName = initialInstallPrefill
+    ? (initialInstallPrefill.name ??
+      capsuleNameFromUrl(initialInstallPrefill.git))
     : "";
   const [name, setName] = createSignal(initialName);
   const [resourcePrefix, setResourcePrefix] = createSignal(
-    prefill?.vars?.project_name ?? "",
+    initialInstallPrefill?.vars?.project_name ?? "",
   );
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
-    prefill?.vars?.project_name !== undefined,
+    initialInstallPrefill?.vars?.project_name !== undefined,
   );
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
-  >(inputVariableRowsFromPrefill(prefill?.vars));
+  >(inputVariableRowsFromPrefill(initialInstallPrefill?.vars));
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
@@ -784,7 +787,7 @@ function Inner() {
   };
   const supportsProjectNameInput = () =>
     isTakosOpenTofuCapsule(gitUrl(), path()) ||
-    prefill?.vars?.project_name !== undefined;
+    activeInstallPrefill()?.vars?.project_name !== undefined;
   const supportsCloudflareScopeInput = () =>
     isTakosOpenTofuCapsule(gitUrl(), path());
   const defaultProjectName = () => {
@@ -1223,6 +1226,8 @@ function Inner() {
   };
   const applyInstallPrefillInput = (next: InstallPrefill) => {
     const nextRef = next.ref || "main";
+    setActiveTab("git");
+    setActiveInstallPrefill(next);
     setGitUrl(next.git);
     setRef(displayRef(nextRef));
     setPinnedFullRef(isFullCommitSha(nextRef) ? nextRef : null);
@@ -1230,12 +1235,20 @@ function Inner() {
     if (next.name || !name().trim()) {
       setName(next.name ?? capsuleNameFromUrl(next.git));
     }
-    if (next.vars?.project_name) setResourcePrefix(next.vars.project_name);
+    setInputVariables(inputVariableRowsFromPrefill(next.vars));
+    if (next.vars?.project_name) {
+      setResourcePrefix(next.vars.project_name);
+      setResourcePrefixTouched(true);
+    } else {
+      setResourcePrefix("");
+      setResourcePrefixTouched(false);
+    }
     resetCompatibility();
   };
 
   const pickCatalogEntry = (entry: CatalogEntry) => {
     if (!entry.source) return;
+    setActiveInstallPrefill(null);
     setGitUrl(entry.source.git);
     setRef(displayRef(entry.source.ref));
     setPinnedFullRef(
@@ -1660,6 +1673,7 @@ function Inner() {
               applyInstallPrefillInput(parsed);
               return;
             }
+            setActiveInstallPrefill(null);
             setGitUrl(e.currentTarget.value);
             resetCompatibility();
           }}
@@ -1820,7 +1834,9 @@ function Inner() {
   );
 
   const prefilledLinkReview = () => {
-    const capsule = capsuleNameFromUrl(gitUrl() || prefill?.git || "");
+    const capsule = capsuleNameFromUrl(
+      gitUrl() || activeInstallPrefill()?.git || "",
+    );
     return (
       <>
         <section class="av-link-review" aria-label={t("new.deeplink.aria")}>
@@ -1952,7 +1968,7 @@ function Inner() {
                 }}
               >
                 <Show when={!usingSelectedService()}>
-                  {prefill ? prefilledLinkReview() : gitFields()}
+                  {activeInstallPrefill() ? prefilledLinkReview() : gitFields()}
                 </Show>
 
                 <Show when={selectedCatalogEntry()}>
