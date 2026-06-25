@@ -1092,6 +1092,27 @@ test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async 
   });
   expect(introspectionRequests[0]?.body).toContain("token=taksrv_runtime");
 
+  const headContext = await verifyPlatformCloudExtensionServiceAccessToken(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      method: "HEAD",
+      headers: { authorization: "Bearer taksrv_runtime" },
+    }),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
+      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
+    } as never,
+    "taksrv_runtime",
+    aiRoute,
+    async () =>
+      Response.json({
+        active: true,
+        client_id: "service-graph-service:takosumi.ai.gateway",
+        scope: "ai.model ai.models.read",
+        sub: "service-graph-service:inst_ai",
+      }),
+  );
+  expect(headContext.authenticated).toBe(true);
+
   const missingChatScope = await verifyPlatformCloudExtensionServiceAccessToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",

@@ -143,10 +143,15 @@ export function platformCloudExtensionServiceTokenRequiredScopes(
   route: PlatformCloudExtensionRoute,
 ): readonly string[] | undefined {
   const url = new URL(request.url);
-  const method = request.method.toUpperCase();
+  const method = platformCloudExtensionServiceAccessRuleMethod(request.method);
   return route.serviceAccess?.rules.find(
     (rule) => rule.method === method && rule.path === url.pathname,
   )?.scopes;
+}
+
+function platformCloudExtensionServiceAccessRuleMethod(method: string): string {
+  const normalized = method.toUpperCase();
+  return normalized === "HEAD" ? "GET" : normalized;
 }
 
 export function pathIsUnderBase(pathname: string, basePath: string): boolean {
