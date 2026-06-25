@@ -77,7 +77,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
     },
     commands: [
       {
-        id: "migrate",
+        id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
       },
@@ -134,7 +134,7 @@ test("runner release activator runs opaque post-apply commands", async () => {
     },
     commands: [
       {
-        id: "migrate",
+        id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
       },
@@ -342,7 +342,7 @@ function fakeActivationInput(): ReleaseActivationInput {
     },
     commands: [
       {
-        id: "migrate",
+        id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
       },
