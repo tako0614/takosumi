@@ -1206,6 +1206,14 @@ cloud config
 
 Cloudflare compatibility is not required for the first hosted launch.
 
+OpenTofu apply success is only the infrastructure/state ledger. App readiness
+comes from a generic post-apply release activation step: Capsules can output
+opaque argv commands such as `takosumi_release.post_apply` or
+`takos_app.release.post_apply`, and Cloud/Operator activators run them in the
+source snapshot sandbox. Takosumi core must not grow DB-specific migration
+executors; database migrations, Worker uploads, index setup, and bootstrap tasks
+are just app/operator commands with logs and activation status.
+
 ### MVP 5: Cloudflare Compatibility Gateway
 
 Cloud-only:

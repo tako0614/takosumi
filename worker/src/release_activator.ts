@@ -113,6 +113,7 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
       outputDigest: input.outputSnapshot.outputDigest,
     },
     nonSensitiveOutputs: input.nonSensitiveOutputs,
+    commands: input.commands,
   };
 }
 

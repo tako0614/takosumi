@@ -65,6 +65,13 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
+    commands: [
+      {
+        id: "migrate",
+        phase: "post_apply",
+        command: ["bun", "run", "takos:migrate"],
+      },
+    ],
   });
   expect(payload).not.toHaveProperty("planRun");
   expect(payload).not.toHaveProperty("applyRun");
@@ -196,5 +203,12 @@ function fakeActivationInput(): ReleaseActivationInput {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
+    commands: [
+      {
+        id: "migrate",
+        phase: "post_apply",
+        command: ["bun", "run", "takos:migrate"],
+      },
+    ],
   } as unknown as ReleaseActivationInput;
 }

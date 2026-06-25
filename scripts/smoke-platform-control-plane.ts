@@ -135,6 +135,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
+  readonly opentofuApplyVerified: boolean;
   readonly deploymentVerified: boolean;
   readonly publicUrlVerified: boolean;
   readonly deploymentLedgerVerified: boolean;
@@ -586,7 +587,8 @@ export function dryRunResult(
       options.verificationMode === "cloudflare-worker"
         ? publicWorkerUrl(options)
         : "",
-    deploymentVerified: true,
+    opentofuApplyVerified: options.verificationMode === "opentofu",
+    deploymentVerified: options.verificationMode === "cloudflare-worker",
     publicUrlVerified: options.verificationMode === "cloudflare-worker",
     deploymentLedgerVerified: true,
     destroyVerified: true,
@@ -810,7 +812,8 @@ export async function runPlatformControlPlaneSmoke(
         options.verificationMode === "cloudflare-worker"
           ? publicWorkerUrl(options)
           : "",
-      deploymentVerified: true,
+      opentofuApplyVerified: options.verificationMode === "opentofu",
+      deploymentVerified: options.verificationMode === "cloudflare-worker",
       publicUrlVerified: options.verificationMode === "cloudflare-worker",
       deploymentLedgerVerified: true,
       destroyVerified: true,
@@ -952,9 +955,10 @@ function failedResult(
       options.verificationMode === "cloudflare-worker"
         ? publicWorkerUrl(options)
         : "",
-    deploymentVerified:
-      input.completedSteps.includes("deploymentVerified") ||
-      input.completedSteps.includes("opentofuApplyVerified"),
+    opentofuApplyVerified: input.completedSteps.includes(
+      "opentofuApplyVerified",
+    ),
+    deploymentVerified: input.completedSteps.includes("deploymentVerified"),
     publicUrlVerified: input.completedSteps.includes("publicUrlVerified"),
     deploymentLedgerVerified: input.completedSteps.includes(
       "deploymentLedgerVerified",

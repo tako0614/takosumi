@@ -445,6 +445,14 @@ export type ReleaseActivationStatus =
   | "succeeded"
   | "failed";
 
+export interface ReleaseActivationCommand {
+  readonly id: string;
+  readonly phase: "post_apply";
+  readonly command: readonly string[];
+  readonly workingDirectory?: string;
+  readonly env?: Readonly<Record<string, string>>;
+}
+
 export interface ReleaseActivationInput {
   readonly planRun: PlanRun;
   readonly applyRun: ApplyRun;
@@ -459,6 +467,13 @@ export interface ReleaseActivationInput {
    * secret-shaped names/values are filtered before this seam.
    */
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+  /**
+   * App-declared release commands extracted from projected outputs such as
+   * `takosumi_release.post_apply` or `takos_app.release.post_apply`.
+   * Takosumi core treats them as opaque argv arrays; DB migrations, worker
+   * uploads, index creation, or app bootstrap all stay app/operator code.
+   */
+  readonly commands: readonly ReleaseActivationCommand[];
 }
 
 export interface ReleaseActivationResult {
@@ -6032,8 +6047,22 @@ export class OpenTofuDeploymentController {
     readonly outputSnapshot: OutputSnapshot;
     readonly result: OpenTofuApplyResult;
   }): Promise<void> {
-    if (!this.#releaseActivator) return;
     const nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
+    const commands = releaseActivationCommands(input.result.outputs);
+    if (!this.#releaseActivator) {
+      if (commands.length > 0) {
+        await this.#recordReleaseActivationActivity({
+          ...input,
+          status: "pending",
+          kind: "takosumi.release-commands@v1",
+          message:
+            "post-apply release commands declared but no release activator is configured",
+          commandCount: commands.length,
+          outputCount: Object.keys(nonSensitiveOutputs).length,
+        });
+      }
+      return;
+    }
     let result: ReleaseActivationResult;
     try {
       result = await this.#releaseActivator.activate({
@@ -6043,12 +6072,14 @@ export class OpenTofuDeploymentController {
         deployment: input.deployment,
         outputSnapshot: input.outputSnapshot,
         nonSensitiveOutputs,
+        commands,
       });
     } catch (error) {
       await this.#recordReleaseActivationActivity({
         ...input,
         status: "failed",
         message: errorMessage(error),
+        commandCount: commands.length,
         outputCount: Object.keys(nonSensitiveOutputs).length,
       });
       return;
@@ -6062,6 +6093,7 @@ export class OpenTofuDeploymentController {
       hasLaunchUrl: Boolean(result.launchUrl),
       hasHealthUrl: Boolean(result.healthUrl),
       metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+      commandCount: commands.length,
       outputCount: Object.keys(nonSensitiveOutputs).length,
     });
   }
@@ -6076,6 +6108,7 @@ export class OpenTofuDeploymentController {
     readonly hasLaunchUrl?: boolean;
     readonly hasHealthUrl?: boolean;
     readonly metadataKeys?: readonly string[];
+    readonly commandCount?: number;
     readonly outputCount: number;
   }): Promise<void> {
     await this.#recordActivity({
@@ -6100,6 +6133,9 @@ export class OpenTofuDeploymentController {
         ...(input.metadataKeys && input.metadataKeys.length > 0
           ? { metadataKeys: [...input.metadataKeys] }
           : {}),
+        ...(input.commandCount === undefined
+          ? {}
+          : { commandCount: input.commandCount }),
       },
     });
   }
@@ -7049,6 +7085,108 @@ function releaseActivationOutputs(
   return safeOutputs;
 }
 
+function releaseActivationCommands(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): readonly ReleaseActivationCommand[] {
+  if (!outputs) return [];
+  const commands: ReleaseActivationCommand[] = [];
+  const visit = (name: string, value: JsonValue, sensitive?: boolean): void => {
+    if (sensitive === true) return;
+    const descriptors =
+      name === "takosumi_release"
+        ? [value]
+        : name === "takos_app"
+          ? takosAppReleaseDescriptors(value)
+          : [];
+    for (const descriptor of descriptors) {
+      commands.push(...parseReleaseCommandDescriptor(descriptor));
+    }
+  };
+  if (Array.isArray(outputs)) {
+    for (const output of outputs) {
+      visit(output.name, output.value, output.sensitive);
+    }
+  } else {
+    for (const [name, output] of Object.entries(outputs)) {
+      visit(name, output.value, output.sensitive);
+    }
+  }
+  return commands.slice(0, 20);
+}
+
+function takosAppReleaseDescriptors(value: JsonValue): readonly JsonValue[] {
+  if (!isRecord(value)) return [];
+  const release = value.release;
+  const lifecycle = value.lifecycle;
+  return [release, lifecycle].filter((entry): entry is JsonValue =>
+    isJsonValue(entry),
+  );
+}
+
+function parseReleaseCommandDescriptor(
+  descriptor: JsonValue,
+): readonly ReleaseActivationCommand[] {
+  if (!isRecord(descriptor)) return [];
+  const postApply = descriptor.post_apply ?? descriptor.postApply;
+  const rows = Array.isArray(postApply)
+    ? postApply
+    : isRecord(postApply) && Array.isArray(postApply.commands)
+      ? postApply.commands
+      : [];
+  const commands: ReleaseActivationCommand[] = [];
+  for (const [index, row] of rows.entries()) {
+    const command = parseReleaseCommand(row, index);
+    if (command) commands.push(command);
+  }
+  return commands;
+}
+
+function parseReleaseCommand(
+  value: unknown,
+  index: number,
+): ReleaseActivationCommand | undefined {
+  if (!isRecord(value)) return undefined;
+  const argv = Array.isArray(value.command)
+    ? value.command.filter(
+        (part): part is string => nonEmptyString(part) !== undefined,
+      )
+    : undefined;
+  if (!argv || argv.length === 0 || argv.length > 40) return undefined;
+  const id = nonEmptyString(value.id) ?? `post_apply_${index + 1}`;
+  const workingDirectory =
+    nonEmptyString(value.workingDirectory) ??
+    nonEmptyString(value.working_directory);
+  const env = releaseCommandEnv(value.env);
+  return {
+    id,
+    phase: "post_apply",
+    command: argv,
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(env ? { env } : {}),
+  };
+}
+
+function releaseCommandEnv(
+  value: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const env: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (RELEASE_ACTIVATION_SECRET_NAME_RE.test(key)) continue;
+    const stringValue =
+      typeof raw === "string" ||
+      typeof raw === "number" ||
+      typeof raw === "boolean"
+        ? String(raw)
+        : undefined;
+    if (!stringValue || RELEASE_ACTIVATION_SECRET_VALUE_RE.test(stringValue)) {
+      continue;
+    }
+    env[key] = stringValue;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
 function isReleaseActivationOutputSafe(
   name: string,
   value: JsonValue,
@@ -7084,6 +7222,12 @@ function releaseActivationValueLooksSecret(value: JsonValue): boolean {
     }
   }
   return false;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 function changedOutputNamesBetween(
