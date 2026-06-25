@@ -1,0 +1,280 @@
+/* StoreBrowser — neutral theming via --tg-* tokens with fallbacks so it adapts
+   to either host (takos / takosumi) yet renders standalone. */
+.tcs-root {
+  --c-panel: var(--tg-surface, #14161c);
+  --c-panel2: var(--tg-surface-2, #1b1e26);
+  --c-border: var(--tg-border, #242833);
+  --c-fg: var(--tg-text, #e7e9ee);
+  --c-muted: var(--tg-text-muted, #9aa0ad);
+  --c-accent: var(--tg-accent, #5b8cff);
+  --c-accent2: var(--tg-accent-2, #7ce0c3);
+  --c-official: #f4c152;
+  --c-err: var(--tg-danger, #ff6b6b);
+  color: var(--c-fg);
+}
+
+.tcs-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.tcs-search {
+  flex: 1;
+  min-width: 180px;
+}
+.tcs-search input,
+.tcs-add input {
+  width: 100%;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 9px;
+  color: var(--c-fg);
+  padding: 9px 12px;
+  font: inherit;
+}
+.tcs-sort {
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 9px;
+  color: var(--c-fg);
+  padding: 0 10px;
+  font: inherit;
+}
+.tcs-btn {
+  background: var(--c-panel2);
+  border: 1px solid var(--c-border);
+  color: var(--c-fg);
+  border-radius: 9px;
+  padding: 8px 13px;
+  font: inherit;
+  cursor: pointer;
+}
+.tcs-btn.tcs-sm {
+  padding: 4px 9px;
+  font-size: 0.82rem;
+}
+.tcs-btn.tcs-primary {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: #0b0c10;
+  font-weight: 600;
+}
+.tcs-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.tcs-servers {
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 11px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.tcs-servers ul {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tcs-servers li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.tcs-servers li .tcs-mono {
+  flex: 1;
+}
+.tcs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.tcs-dot.ok {
+  background: var(--c-accent2);
+}
+.tcs-dot.bad {
+  background: var(--c-err);
+}
+.tcs-add {
+  display: flex;
+  gap: 8px;
+}
+.tcs-add input {
+  flex: 1;
+}
+
+.tcs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+.tcs-chip {
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  color: var(--c-muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.83rem;
+  cursor: pointer;
+}
+.tcs-chip.active {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: #0b0c10;
+}
+.tcs-chip.tcs-kind.active {
+  background: var(--c-accent2);
+}
+
+.tcs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.tcs-card {
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 13px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tcs-card-head {
+  display: flex;
+  gap: 6px;
+}
+.tcs-card-open {
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.tcs-card-open h4 {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+}
+.tcs-card-open p {
+  margin: 0;
+  color: var(--c-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tcs-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+.tcs-card-actions,
+.tcs-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tcs-badge {
+  background: var(--c-panel2);
+  color: var(--c-accent2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.73rem;
+}
+.tcs-badge.tcs-official {
+  background: rgba(244, 193, 82, 0.16);
+  color: var(--c-official);
+}
+.tcs-tag {
+  background: var(--c-panel2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.73rem;
+  color: var(--c-muted);
+}
+.tcs-muted {
+  color: var(--c-muted);
+}
+.tcs-mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.84rem;
+}
+.tcs-break {
+  word-break: break-all;
+}
+.tcs-err {
+  color: var(--c-err);
+  font-size: 0.8rem;
+}
+.tcs-empty {
+  color: var(--c-muted);
+  text-align: center;
+  padding: 40px 0;
+}
+.tcs-loadmore {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+.tcs-link {
+  color: var(--c-accent);
+  text-decoration: none;
+  font-size: 0.86rem;
+}
+.tcs-link:hover {
+  text-decoration: underline;
+}
+
+.tcs-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 50;
+}
+.tcs-detail {
+  width: min(460px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--tg-bg, #0e0f13);
+  border-left: 1px solid var(--c-border);
+  padding: 20px 20px 60px;
+}
+.tcs-detail header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.tcs-detail header h3 {
+  margin: 0;
+}
+.tcs-detail section {
+  margin-top: 18px;
+  border-top: 1px solid var(--c-border);
+  padding-top: 14px;
+}
+.tcs-detail h5 {
+  margin: 0 0 8px;
+  color: var(--c-muted);
+  font-size: 0.86rem;
+}
+.tcs-bare {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

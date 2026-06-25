@@ -13,6 +13,7 @@ import {
   Plus,
   Server,
   Settings,
+  Store,
 } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
@@ -37,6 +38,7 @@ const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.apps", icon: LayoutGrid, end: true },
   { href: "/services", labelKey: "nav.services", icon: Server },
   { href: "/new", labelKey: "nav.add", icon: Plus },
+  { href: "/store", labelKey: "nav.store", icon: Store },
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   {
     href: "/advanced/workspace",
