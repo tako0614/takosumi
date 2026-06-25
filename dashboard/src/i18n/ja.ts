@@ -46,9 +46,10 @@ export const ja = {
     "追加できるサービスを探します。公式スターターと外部ストアをまとめて表示します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.runs": "更新履歴",
-  "nav.connections": "接続",
+  "nav.connections": "ホスト接続",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
+  "nav.primary": "主な操作",
   "nav.manage": "管理",
   "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
@@ -378,10 +379,10 @@ export const ja = {
   "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
-  "run.connections.title": "Provider 接続",
-  "run.connections.reviewTitle": "Provider 接続の確認が必要です",
+  "run.connections.title": "ホスト接続",
+  "run.connections.reviewTitle": "ホスト接続の確認が必要です",
   "run.connections.reviewBody":
-    "続行する前に確認が必要な Provider 接続があります。非公開の値は表示しません。",
+    "続行する前に確認が必要なホスト接続があります。非公開の値は表示しません。",
   "run.connections.provider": "Provider",
   "run.connections.connection": "アクセス",
   "run.connections.status": "状態",
@@ -659,8 +660,8 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "このチームがサービスのホスト時に使う provider 認証情報を保存します。",
-  "conn.providerConnections.title": "Provider 接続",
+    "このチームがサービスのホスト時に使うクラウドアカウントやアクセスキーを接続します。",
+  "conn.providerConnections.title": "ホスト接続",
   "conn.providerConnections.provider": "Provider",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
@@ -669,15 +670,15 @@ export const ja = {
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
   "conn.return.subtitle":
-    "Provider 接続を保存してから、サービス追加の続きに戻ります。",
+    "ホスト接続を保存してから、サービス追加の続きに戻ります。",
   "conn.return.cta": "サービス追加に戻る",
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest":
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
-  "conn.add.title": "Provider 接続を追加",
-  "conn.add.open": "Provider 接続を追加",
+  "conn.add.title": "ホスト接続を追加",
+  "conn.add.open": "ホスト接続を追加",
   "conn.add.close": "閉じる",
   "conn.add.provider": "Provider",
   "conn.add.genericEnvOption": "任意の OpenTofu provider",
@@ -767,14 +768,14 @@ export const ja = {
   "conn.error.invalidProvider": "Provider が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "Provider 接続はまだありません",
+  "conn.empty.title": "ホスト接続はまだありません",
   "conn.empty.message":
-    "サービスが provider 認証情報を必要とするときに追加します。",
+    "サービスがクラウドアカウントやキーを必要とするときに追加します。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
     "このアカウントはまだ利用できません（状態: {status}）。",
-  "conn.remove.confirmTitle": "Provider 接続を削除",
+  "conn.remove.confirmTitle": "ホスト接続を削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
 

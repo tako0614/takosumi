@@ -37,19 +37,22 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("sidebar leads with everyday surfaces: apps / services / add / accounts / settings (+ Cloud billing)", () => {
-    // Apps (/) and the full Services list (/services) are split into two nav
-    // items; `/` is the app launcher, `/services` the technical list.
+  test("sidebar leads with app-first surfaces and keeps hosting management lower", () => {
     expect(sidebarSource).toContain('labelKey: "nav.apps"');
+    expect(sidebarSource).toContain('href: "/new"');
+    expect(sidebarSource).toContain('labelKey: "nav.add"');
+    expect(sidebarSource).toContain('href: "/store"');
+    expect(sidebarSource).toContain('labelKey: "nav.store"');
+    expect(sidebarSource).toContain("const MANAGE");
+    expect(sidebarSource).toContain("sidebar-nav-manage");
+    // Apps (/) and the full Services list (/services) are split into two nav
+    // groups; `/` is the app launcher, `/services` the technical list.
     expect(sidebarSource).toContain('href: "/services"');
     expect(sidebarSource).toContain('labelKey: "nav.services"');
     expect(sidebarSource).toContain('href: "/connections"');
     expect(sidebarSource).toContain('labelKey: "nav.connections"');
     expect(sidebarSource).toContain('href: "/advanced/workspace"');
     expect(sidebarSource).toContain('labelKey: "nav.spaceSettings"');
-    // "Add a service" is a first-class sidebar item (mirrors the launcher).
-    expect(sidebarSource).toContain('href: "/new"');
-    expect(sidebarSource).toContain('labelKey: "nav.add"');
     // Billing is a sidebar item, Cloud-only.
     expect(sidebarSource).toContain("isTakosumiCloudRuntime");
     expect(sidebarSource).toContain('href="/billing"');
@@ -61,15 +64,15 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('href: "/notifications"');
   });
 
-  test("mobile keeps persistent navigation and exposes services plus the Store", () => {
+  test("mobile keeps persistent app-first navigation without hosting internals as tabs", () => {
     expect(mobileTabsSource).toContain('href: "/"');
-    expect(mobileTabsSource).toContain('href: "/services"');
-    expect(mobileTabsSource).toContain('href: "/store"');
     expect(mobileTabsSource).toContain('href: "/new"');
-    expect(mobileTabsSource).toContain('href: "/connections"');
-    expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
-    expect(mobileTabsSource).not.toContain('href: "/account"');
-    expect(shellCssSource).toContain("grid-template-columns: repeat(6, 1fr);");
+    expect(mobileTabsSource).toContain('href: "/store"');
+    expect(mobileTabsSource).toContain('href: "/account"');
+    expect(mobileTabsSource).not.toContain('href: "/services"');
+    expect(mobileTabsSource).not.toContain('href: "/connections"');
+    expect(mobileTabsSource).not.toContain('href: "/advanced/workspace"');
+    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
     expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
     expect(shellCssSource).toContain("display: inline-flex;");
   });
@@ -98,6 +101,8 @@ describe("dashboard shell navigation layout", () => {
     // access — toHaveProperty would treat "a.b" as a nested path.
     expect(en["nav.connections"]).toBeTruthy();
     expect(ja["nav.connections"]).toBeTruthy();
+    expect(en["nav.primary"]).toBeTruthy();
+    expect(ja["nav.primary"]).toBeTruthy();
     expect(en["nav.spaceSettings"]).toBeTruthy();
     expect(ja["nav.spaceSettings"]).toBeTruthy();
     expect(en["spaceSettings.title"]).toBe("Team settings");
