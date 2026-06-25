@@ -101,9 +101,7 @@ describe("/new flow guidance", () => {
     const catalogGridStart = newAppViewSource.indexOf(
       '<ul class="av-catalog-grid">',
     );
-    const manualImportCallStart = newAppViewSource.indexOf(
-      "<ManualImportCard",
-    );
+    const manualImportCallStart = newAppViewSource.indexOf("<ManualImportCard");
     const catalogGridEnd = newAppViewSource.indexOf("</ul>", catalogGridStart);
     const manualImportUseSource = newAppViewSource.slice(
       manualImportCallStart,
@@ -127,6 +125,7 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).not.toContain("sourceSummaryMeta");
+    expect(newAppViewSource).toContain("<Show when={!usingSelectedService()}>");
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
     expect(newAppViewSource).not.toContain('t("new.catalog.provider"');
@@ -141,6 +140,9 @@ describe("/new flow guidance", () => {
     expect(en["new.manualCard.title"]).toBe("Add from link");
     expect(en["new.manualCard.action"]).toBe("Open");
     expect(en["new.catalog.add"]).toBe("Add");
+    expect(en["new.catalog.kind.worker"]).toBe("Web app");
+    expect(en["new.catalog.kind.site"]).toBe("Website");
+    expect(en["new.summary.provider"]).toBe("Runs on");
     expect(en["new.store.blocksTitle"]).toBe("Building blocks");
     expect(en["new.store.examplesTitle"]).toBe("Examples");
     expect(en["new.advancedImport.open"].toLowerCase()).toBe(
@@ -159,6 +161,10 @@ describe("/new flow guidance", () => {
     expect(ja["new.manualCard.title"]).toBe("リンクから追加");
     expect(ja["new.manualCard.action"]).toBe("開く");
     expect(ja["new.catalog.add"]).toBe("追加");
+    expect(ja["new.catalog.kind.worker"]).toBe("Webアプリ");
+    expect(ja["new.catalog.kind.site"]).toBe("Webサイト");
+    expect(ja["new.catalog.kind.storage"]).toBe("ストレージ");
+    expect(ja["new.summary.provider"]).toBe("ホスト先");
     expect(ja["new.store.blocksTitle"]).toBe("部品・保存先");
     expect(ja["new.store.examplesTitle"]).toBe("サンプル");
     expect(ja["new.advancedImport.open"]).toBe("その他のリンクから追加");

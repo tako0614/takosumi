@@ -271,6 +271,37 @@
   color: var(--c-muted);
   font-size: 0.86rem;
 }
+.tcs-compact {
+  margin: 0;
+}
+.tcs-advanced {
+  margin-top: 18px;
+  border-top: 1px solid var(--c-border);
+  padding-top: 14px;
+}
+.tcs-advanced summary {
+  color: var(--c-muted);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.tcs-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.tcs-detail-list div {
+  display: grid;
+  gap: 2px;
+}
+.tcs-detail-list dt {
+  color: var(--c-muted);
+  font-size: 0.78rem;
+}
+.tcs-detail-list dd {
+  margin: 0;
+}
 .tcs-bare {
   list-style: none;
   margin: 0;
