@@ -53,7 +53,8 @@ const STR = {
   sortName: { ja: "名前順", en: "Name" },
   loadMore: { ja: "もっと読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
-  servers: { ja: "ストアサーバー", en: "Store servers" },
+  servers: { ja: "カタログ取得元", en: "Catalog sources" },
+  serversAdvanced: { ja: "詳細", en: "Advanced" },
   addServer: { ja: "追加", en: "Add" },
   serverPlaceholder: {
     ja: "https://store.example.com",
@@ -68,10 +69,24 @@ const STR = {
   installed: { ja: "追加開始", en: "Started" },
   configure: { ja: "追加する", en: "Add" },
   close: { ja: "閉じる", en: "Close" },
-  source: { ja: "提供元", en: "Source" },
+  summary: { ja: "概要", en: "Overview" },
+  settings: { ja: "追加時の設定", en: "Setup" },
+  source: { ja: "取得元の詳細", en: "Source details" },
+  technicalDetails: {
+    ja: "詳細な取得元と設定名",
+    en: "Advanced source and input IDs",
+  },
+  sourceLocation: { ja: "取得元", en: "Source" },
+  version: { ja: "バージョン", en: "Version" },
+  folder: { ja: "フォルダ", en: "Folder" },
   inputs: { ja: "設定項目", en: "Settings" },
+  noInputs: {
+    ja: "追加時に入力する項目はありません",
+    en: "No setup fields are needed",
+  },
   required: { ja: "必須", en: "required" },
   openRepo: { ja: "リポジトリ", en: "Repository" },
+  inputId: { ja: "内部名", en: "Input ID" },
 } as const;
 
 function s(key: keyof typeof STR, locale: TcsLocale): string {
@@ -86,6 +101,9 @@ function repoUrl(git: string, ref: string, path: string): string {
     return `${base}/tree/${ref}${path ? `/${path}` : ""}`;
   }
   return base;
+}
+function sourceVersion(listing: TcsListing): string {
+  return listing.source.resolvedCommit ?? listing.source.ref;
 }
 function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
   return [
@@ -316,7 +334,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           class="tcs-btn"
           onClick={() => setShowServers((v) => !v)}
         >
-          {s("servers", props.locale)} ({agg().status.length})
+          {s("serversAdvanced", props.locale)}: {s("servers", props.locale)} (
+          {agg().status.length})
         </button>
       </div>
 
@@ -483,48 +502,110 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               </p>
               <div class="tcs-detail-actions">{installButton(listing())}</div>
               <section>
-                <h5>{s("source", props.locale)}</h5>
-                <div class="tcs-mono tcs-break">{listing().source.git}</div>
-                <div class="tcs-mono tcs-muted">
-                  {listing().source.resolvedCommit ?? listing().source.ref}
-                  {listing().source.path ? ` · ${listing().source.path}` : ""}
+                <h5>{s("summary", props.locale)}</h5>
+                <div class="tcs-card-meta">
+                  <span class="tcs-tag">
+                    {tcsProviderLabel(listing().provider)}
+                  </span>
+                  <span class="tcs-tag">
+                    {tcsCategoryLabel(listing().category, props.locale)}
+                  </span>
+                  <span class="tcs-tag">
+                    {tcsKindLabel(listing().kind, props.locale)}
+                  </span>
                 </div>
-                <a
-                  class="tcs-link"
-                  href={repoUrl(
-                    listing().source.git,
-                    listing().source.resolvedCommit ?? listing().source.ref,
-                    listing().source.path,
-                  )}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  {s("openRepo", props.locale)} ↗
-                </a>
               </section>
-              <Show when={listing().inputs.length > 0}>
-                <section>
-                  <h5>{s("inputs", props.locale)}</h5>
+              <section>
+                <h5>{s("settings", props.locale)}</h5>
+                <Show
+                  when={listing().inputs.length > 0}
+                  fallback={
+                    <p class="tcs-muted tcs-compact">
+                      {s("noInputs", props.locale)}
+                    </p>
+                  }
+                >
                   <ul class="tcs-bare">
                     <For each={listing().inputs}>
                       {(input) => (
                         <li>
-                          <span class="tcs-mono">{input.name}</span>
+                          <span>{pick(input.label, props.locale)}</span>
                           <Show when={input.required}>
                             <span class="tcs-tag tcs-muted">
                               {s("required", props.locale)}
                             </span>
                           </Show>
-                          <span class="tcs-muted">
-                            {" "}
-                            {pick(input.label, props.locale)}
-                          </span>
+                          <Show when={input.helper}>
+                            {(helper) => (
+                              <span class="tcs-muted">
+                                {" "}
+                                {pick(helper(), props.locale)}
+                              </span>
+                            )}
+                          </Show>
                         </li>
                       )}
                     </For>
                   </ul>
+                </Show>
+              </section>
+              <details class="tcs-advanced">
+                <summary>{s("technicalDetails", props.locale)}</summary>
+                <section>
+                  <h5>{s("source", props.locale)}</h5>
+                  <dl class="tcs-detail-list">
+                    <div>
+                      <dt>{s("sourceLocation", props.locale)}</dt>
+                      <dd class="tcs-mono tcs-break">{listing().source.git}</dd>
+                    </div>
+                    <div>
+                      <dt>{s("version", props.locale)}</dt>
+                      <dd class="tcs-mono tcs-break">
+                        {sourceVersion(listing())}
+                      </dd>
+                    </div>
+                    <Show when={listing().source.path}>
+                      {(path) => (
+                        <div>
+                          <dt>{s("folder", props.locale)}</dt>
+                          <dd class="tcs-mono tcs-break">{path()}</dd>
+                        </div>
+                      )}
+                    </Show>
+                  </dl>
+                  <a
+                    class="tcs-link"
+                    href={repoUrl(
+                      listing().source.git,
+                      sourceVersion(listing()),
+                      listing().source.path,
+                    )}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {s("openRepo", props.locale)} ↗
+                  </a>
                 </section>
-              </Show>
+                <Show when={listing().inputs.length > 0}>
+                  <section>
+                    <h5>{s("inputs", props.locale)}</h5>
+                    <ul class="tcs-bare">
+                      <For each={listing().inputs}>
+                        {(input) => (
+                          <li>
+                            <span class="tcs-mono">{input.name}</span>
+                            <span class="tcs-muted">
+                              {" "}
+                              {s("inputId", props.locale)} ·{" "}
+                              {pick(input.label, props.locale)}
+                            </span>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </section>
+                </Show>
+              </details>
             </aside>
           </div>
         )}

@@ -425,8 +425,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.store.searchEmpty.message":
     "Try another search or add from an install link.",
   "new.store.searchEmpty.clear": "Clear search",
-  "new.catalog.kind.worker": "Worker",
-  "new.catalog.kind.site": "Web",
+  "new.catalog.kind.worker": "Web app",
+  "new.catalog.kind.site": "Website",
   "new.catalog.kind.storage": "Storage",
   "new.catalog.add": "Add",
   "new.manualCard.title": "Add from link",
@@ -444,7 +444,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.flow.stepConfigure": "Set up",
   "new.flow.stepReview": "Review",
   "new.summary.aria": "Add summary",
-  "new.summary.provider": "Provider",
+  "new.summary.provider": "Runs on",
   "new.catalogInput.title": "Service setup",
   "new.catalogInput.subtitle":
     "Name the service and fill the minimum fields needed to publish it.",

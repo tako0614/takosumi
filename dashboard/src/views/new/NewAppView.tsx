@@ -2665,14 +2665,16 @@ function Inner() {
                       <dt>{t("new.summary.provider")}</dt>
                       <dd>{addSummaryProvider()}</dd>
                     </div>
-                    <div>
-                      <dt>{t("new.deeplink.version")}</dt>
-                      <dd>{displayRef(ref())}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("new.deeplink.folder")}</dt>
-                      <dd>{displayModulePath(path())}</dd>
-                    </div>
+                    <Show when={!usingSelectedService()}>
+                      <div>
+                        <dt>{t("new.deeplink.version")}</dt>
+                        <dd>{displayRef(ref())}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("new.deeplink.folder")}</dt>
+                        <dd>{displayModulePath(path())}</dd>
+                      </div>
+                    </Show>
                   </dl>
                 </div>
 
