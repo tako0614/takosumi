@@ -3118,6 +3118,9 @@ function releaseCommandEnv(
   if (!isRecord(envRecord)) return undefined;
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(envRecord)) {
+    if (isReservedProviderEnvName(key)) {
+      throw new Error(`release command env must not override reserved ${key}`);
+    }
     if (typeof value === "string") env[key] = value;
   }
   return Object.keys(env).length > 0 ? env : undefined;
@@ -3135,6 +3138,7 @@ function releaseBaseEnv(
   runId: string,
   release: ReleaseSpec,
 ): Record<string, string> {
+  const outputs = release.outputs ?? {};
   return {
     TAKOSUMI_RELEASE_RUN_ID: runId,
     ...(release.activation?.applyRunId
@@ -3146,9 +3150,21 @@ function releaseBaseEnv(
     ...(release.activation?.deploymentId
       ? { TAKOSUMI_DEPLOYMENT_ID: release.activation.deploymentId }
       : {}),
-    ...(release.outputs
-      ? { TAKOSUMI_OUTPUTS_JSON: JSON.stringify(release.outputs) }
-      : {}),
+    TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
+    TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
+      kind: "takosumi.release-context@v1",
+      releaseRunId: runId,
+      ...(release.activation?.applyRunId
+        ? { applyRunId: release.activation.applyRunId }
+        : {}),
+      ...(release.activation?.installationId
+        ? { installationId: release.activation.installationId }
+        : {}),
+      ...(release.activation?.deploymentId
+        ? { deploymentId: release.activation.deploymentId }
+        : {}),
+      outputs,
+    }),
   };
 }
 

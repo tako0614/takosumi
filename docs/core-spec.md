@@ -316,8 +316,12 @@ When a host wires a ReleaseActivator, Takosumi passes the commands with the
 apply/deployment/output references and non-sensitive outputs. The built-in
 runner activator runs `executor = "runner"` argv commands in the restored source
 snapshot and injects only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`,
-`TAKOSUMI_RELEASE_RUN_ID`, `TAKOSUMI_APPLY_RUN_ID`,
-`TAKOSUMI_INSTALLATION_ID`, and `TAKOSUMI_DEPLOYMENT_ID`. Provider credentials
+`TAKOSUMI_RELEASE_CONTEXT_JSON`, `TAKOSUMI_RELEASE_RUN_ID`,
+`TAKOSUMI_APPLY_RUN_ID`, `TAKOSUMI_INSTALLATION_ID`, and
+`TAKOSUMI_DEPLOYMENT_ID`. `TAKOSUMI_RELEASE_CONTEXT_JSON` is a generic
+`takosumi.release-context@v1` object with release/apply/deployment ids and the
+same non-sensitive outputs; it is not a provider-specific or DB-specific
+contract. Provider credentials
 are not injected into arbitrary post-apply source commands; provider-owned
 artifact publishing should declare `executor = "operator"` and be handled by an
 operator/Cloud activator or another explicit credential boundary. If no operator
