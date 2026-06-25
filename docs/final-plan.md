@@ -1210,9 +1210,9 @@ OpenTofu apply success is only the infrastructure/state ledger. App readiness
 comes from a generic post-apply release activation step: Capsules can output
 opaque argv commands through `takosumi_release.post_apply`, and Cloud/Operator
 activators run them in the appropriate execution boundary. Takosumi core must
-not grow DB-specific migration executors; database migrations, Worker uploads,
-index setup, and bootstrap tasks are just app/operator commands with logs and
-activation status.
+not grow DB-specific migration executors, Worker-specific deploy executors, or
+resource-aware activation plugins. Anything after apply is just an app/operator
+command with logs and activation status.
 The built-in runner activator can run `executor = "runner"` commands inside the
 restored source snapshot sandbox and inject non-sensitive metadata and outputs
 (`TAKOSUMI_OUTPUTS_JSON`, run/deployment ids) into the command environment, but
@@ -1223,10 +1223,9 @@ an explicit operator/Cloud activator boundary.
 `takosumi_release.post_apply.env` is for non-sensitive command knobs only. It
 must not carry database URLs, DSNs, connection strings, API tokens, provider
 credentials, session tokens, or passwords, because the descriptor comes from
-OpenTofu output/state. Apps that need schema migrations or bootstrap work should
-run an opaque command that talks to an already-authorized app resource CLI, or
-use an operator/Cloud activator whose secret material is supplied by the
-operator environment outside the OpenTofu output.
+OpenTofu output/state. Apps that need bootstrap or publication work should run
+an opaque command in the selected execution boundary, with any required secret
+material supplied by the operator environment outside the OpenTofu output.
 
 The bundled operator activator forwards credential env to opaque operator
 commands only through an explicit operator-side allowlist such as

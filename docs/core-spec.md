@@ -296,7 +296,7 @@ Sensitive outputs remain encrypted and are not projected into public views.
 OpenTofu apply is not the same thing as an application being ready. A Capsule may
 declare generic post-apply release commands in the neutral `takosumi_release`
 output; Takosumi core treats those commands as opaque argv arrays and never adds
-DB-specific, Worker-specific, or provider-specific migration code.
+DB-specific, Worker-specific, or provider-specific activation code.
 
 ```hcl
 output "takosumi_release" {
@@ -330,10 +330,10 @@ instead of being attempted inside the credential-free runner sandbox.
 
 `post_apply.env` is limited to non-sensitive knobs. DB URLs, DSNs, connection
 strings, API tokens, provider credentials, session tokens, and passwords must
-not be declared through the OpenTofu output. App migrations and bootstrap work
-remain ordinary argv commands, but their authority comes from an app resource
-CLI or from an explicit operator/Cloud secret boundary, not from secrets stored
-inside OpenTofu state.
+not be declared through the OpenTofu output. App bootstrap and publication work
+remain ordinary argv commands, but their authority comes from the command's own
+runtime context or from an explicit operator/Cloud secret boundary, not from
+secrets stored inside OpenTofu state.
 
 Operator release activators may opt in to forwarding selected operator-owned
 environment variables to `executor = "operator"` commands with an explicit
@@ -343,7 +343,7 @@ other app resources; the command remains an opaque argv.
 
 When no activator is configured, the OpenTofu apply can still succeed, but
 Takosumi records `release_activation.pending` instead of silently implying that
-migrations, artifact upload, or app initialization ran.
+post-apply commands, artifact upload, or app initialization ran.
 
 ## Security
 
