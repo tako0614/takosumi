@@ -39,8 +39,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.add": "Add",
   "nav.store": "Store",
   "store.title": "Store",
-  "store.subtitle":
-    "Find services you can add. Start with official starters.",
+  "store.subtitle": "Find apps and services to add from the store.",
   "store.noWorkspace": "Select a Workspace first.",
   "nav.runs": "Updates",
   "nav.connections": "Hosting access",

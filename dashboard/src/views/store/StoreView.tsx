@@ -1,9 +1,10 @@
 /**
- * Control-plane Store tab. Wraps the shared StoreBrowser with Takosumi's
- * official starter catalog and hands every add action to the full /new flow
- * where compatibility, provider connections, and variables are reviewed.
+ * Control-plane Store tab. Wraps the shared StoreBrowser with the decentralized
+ * Takosumi store(s); every add action is handed to the full /new flow where
+ * compatibility, provider connections, and variables are reviewed. There is no
+ * built-in starter catalog here — discovery lives in the store.
  */
-import { createMemo, createResource, onMount } from "solid-js";
+import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -13,68 +14,13 @@ import {
   selectAvailableSpaceId,
   setCurrentSpaceId,
 } from "../../lib/space-state.ts";
-import {
-  listSpaces,
-  listStarterCatalogInstallConfigs,
-  type InstallConfig,
-} from "../../lib/control-api.ts";
+import { listSpaces } from "../../lib/control-api.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 
-type CatalogInstallConfig = InstallConfig & {
-  readonly catalog: NonNullable<InstallConfig["catalog"]> & {
-    readonly source: NonNullable<
-      NonNullable<InstallConfig["catalog"]>["source"]
-    >;
-  };
-};
-
-function isCatalogInstallConfig(
-  config: InstallConfig,
-): config is CatalogInstallConfig {
-  return Boolean(config.catalog?.source);
-}
-
-function asTcsListing(config: CatalogInstallConfig): TcsListing {
-  const catalog = config.catalog;
-  return {
-    id: catalog.templateId ?? config.id,
-    installConfigId: config.id,
-    source: {
-      git: catalog.source.git,
-      ref: catalog.source.ref,
-      path: catalog.source.path,
-      ...(catalog.source.ref.match(/^[0-9a-f]{40}$/iu)
-        ? { resolvedCommit: catalog.source.ref }
-        : {}),
-    },
-    kind: catalog.kind,
-    surface: catalog.surface,
-    provider: catalog.provider,
-    category: catalog.surface,
-    suggestedName: catalog.suggestedName,
-    name: catalog.name,
-    description: catalog.description,
-    badge: catalog.badge,
-    inputs: catalog.inputs,
-    outputAllowlist: [],
-    publisher: { handle: "takosumi", displayName: "Takosumi" },
-    createdAt: config.createdAt,
-    updatedAt: config.updatedAt,
-  };
-}
-
 function Inner() {
   const navigate = useNavigate();
-  const workspaceId = () => currentSpaceId() || undefined;
-  const [officialCatalog] = createResource(
-    workspaceId,
-    listStarterCatalogInstallConfigs,
-  );
-  const localListings = createMemo(() =>
-    (officialCatalog() ?? []).filter(isCatalogInstallConfig).map(asTcsListing),
-  );
 
   onMount(async () => {
     if (currentSpaceId()) return;
@@ -108,7 +54,6 @@ function Inner() {
         </header>
         <StoreBrowser
           locale={locale()}
-          localListings={localListings()}
           onInstall={onConfigure}
           onConfigure={onConfigure}
         />
