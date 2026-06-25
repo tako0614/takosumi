@@ -328,6 +328,13 @@ operator/Cloud activator or another explicit credential boundary. If no operator
 activator is configured, such commands remain `release_activation.pending`
 instead of being attempted inside the credential-free runner sandbox.
 
+`post_apply.env` is limited to non-sensitive knobs. DB URLs, DSNs, connection
+strings, API tokens, provider credentials, session tokens, and passwords must
+not be declared through the OpenTofu output. App migrations and bootstrap work
+remain ordinary argv commands, but their authority comes from an app resource
+CLI or from an explicit operator/Cloud secret boundary, not from secrets stored
+inside OpenTofu state.
+
 When no activator is configured, the OpenTofu apply can still succeed, but
 Takosumi records `release_activation.pending` instead of silently implying that
 migrations, artifact upload, or app initialization ran.

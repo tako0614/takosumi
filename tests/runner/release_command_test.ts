@@ -80,14 +80,14 @@ test("release action treats database migrations as opaque app commands", async (
                 process.execPath,
                 "-e",
                 [
-                  `if (!Bun.env.DATABASE_URL?.startsWith("postgres://")) process.exit(9)`,
+                  `if (Bun.env.MIGRATION_DIR !== "migrations") process.exit(9)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
                   `await Bun.write("migration-ran.txt", ["opaque", context.kind, Bun.env.MIGRATION_DIR].join(":"))`,
                 ].join(";"),
               ],
               env: {
-                DATABASE_URL: "postgres://localhost/example",
                 MIGRATION_DIR: "migrations",
+                SQL_RESOURCE: "database",
               },
             },
           ],
@@ -175,6 +175,33 @@ test("release action rejects provider credential and reserved env", async () => 
     );
   } finally {
     await rm(reservedRoot, { recursive: true, force: true });
+  }
+
+  const secretLikeRunId = `release_secret_like_${crypto.randomUUID().replace(/-/g, "")}`;
+  const secretLikeRoot = join(RUN_ROOT, safeRunId(secretLikeRunId));
+  try {
+    await mkdir(join(secretLikeRoot, "source"), { recursive: true });
+    const response = await handleRunnerRequest(
+      runnerRequest(secretLikeRunId, {
+        release: {
+          commands: [
+            {
+              id: "should-not-run",
+              command: [process.execPath, "-e", `console.log("ran")`],
+              env: { DATABASE_URL: "postgres://localhost/example" },
+            },
+          ],
+        },
+      }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.stderr).toContain(
+      "release command env must not include secret-like DATABASE_URL",
+    );
+    expect(JSON.stringify(body)).not.toContain("postgres://localhost/example");
+  } finally {
+    await rm(secretLikeRoot, { recursive: true, force: true });
   }
 });
 

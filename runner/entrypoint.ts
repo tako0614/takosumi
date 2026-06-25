@@ -193,6 +193,14 @@ const RUNNER_SECRET_ASSIGNMENT_PATTERN = new RegExp(
 );
 const RUNNER_TF_VAR_ASSIGNMENT_PATTERN =
   /\b(TF_VAR_[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,&;]+)/g;
+const RUNNER_SECRET_ENV_NAME_PATTERN = new RegExp(
+  `(^|[_-])${RUNNER_SECRET_WORD}($|[_-])`,
+  "i",
+);
+const RUNNER_SECRET_VALUE_PATTERN = new RegExp(
+  `${RUNNER_SECRET_WORD}|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\\/\\/|:\\/\\/[^/\\s:@]+:[^@\\s]+@`,
+  "i",
+);
 export async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
@@ -3118,10 +3126,25 @@ function releaseCommandEnv(
   if (!isRecord(envRecord)) return undefined;
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(envRecord)) {
+    if (allKnownCredentialEnvNames().has(key)) {
+      throw new Error(
+        `command env unexpectedly carries provider credential env name ${key}`,
+      );
+    }
     if (isReservedProviderEnvName(key)) {
       throw new Error(`release command env must not override reserved ${key}`);
     }
-    if (typeof value === "string") env[key] = value;
+    if (RUNNER_SECRET_ENV_NAME_PATTERN.test(key)) {
+      throw new Error(`release command env must not include secret-like ${key}`);
+    }
+    if (typeof value === "string") {
+      if (RUNNER_SECRET_VALUE_PATTERN.test(value)) {
+        throw new Error(
+          `release command env value for ${key} looks secret-like`,
+        );
+      }
+      env[key] = value;
+    }
   }
   return Object.keys(env).length > 0 ? env : undefined;
 }

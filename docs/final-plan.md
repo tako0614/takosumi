@@ -1220,6 +1220,14 @@ it does not hand provider credentials to arbitrary source commands. Credentialed
 provider-side artifact publication uses `executor = "operator"` and stays behind
 an explicit operator/Cloud activator boundary.
 
+`takosumi_release.post_apply.env` is for non-sensitive command knobs only. It
+must not carry database URLs, DSNs, connection strings, API tokens, provider
+credentials, session tokens, or passwords, because the descriptor comes from
+OpenTofu output/state. Apps that need schema migrations or bootstrap work should
+run an opaque command that talks to an already-authorized app resource CLI, or
+use an operator/Cloud activator whose secret material is supplied by the
+operator environment outside the OpenTofu output.
+
 ### MVP 5: Cloudflare Compatibility Gateway
 
 Cloud-only:

@@ -64,6 +64,22 @@ test("operator release activator rejects credential and reserved command env", (
       }),
     ),
   ).toThrow("release command env must not include activator token");
+
+  expect(() =>
+    parsePayload(
+      validPayload({
+        env: { DATABASE_URL: "postgres://localhost/example" },
+      }),
+    ),
+  ).toThrow("release command env must not include secret-like DATABASE_URL");
+
+  expect(() =>
+    parsePayload(
+      validPayload({
+        env: { RELEASE_TARGET: "postgres://user:pass@db.example/app" },
+      }),
+    ),
+  ).toThrow("release command env value for RELEASE_TARGET looks secret-like");
 });
 
 test("operator release activator rejects non-operator commands", () => {
