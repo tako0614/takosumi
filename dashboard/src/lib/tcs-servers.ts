@@ -1,17 +1,16 @@
 /**
- * Known TCS store servers the dashboard queries. Unlike the store SPA there is
- * no "home origin": the list is the configurable default store plus any servers
- * the user adds (persisted in localStorage). Each is queried independently and
- * merged client-side (tcs-aggregate.ts) — the decentralization surface.
- *
- * DEFAULT_STORE_URL is a placeholder until an official store is deployed; the
- * add-server UI makes the browser usable immediately against any store (incl.
- * a local dev node).
+ * Optional TCS store servers the dashboard queries in addition to the official
+ * starter catalog. Do not hard-code a placeholder public store: a missing DNS
+ * record makes production look broken. Operators can enable a canonical store
+ * with VITE_TAKOSUMI_TCS_STORE_URL; local dev can still add stores through
+ * localStorage.
  */
 const LS_KEY = "tcs.stores";
 
-/** Configurable default/official store. Override via localStorage or the UI. */
-export const DEFAULT_STORE_URL = "https://store.takos.jp";
+/** Optional canonical Takosumi store. Empty means official catalog only. */
+export const DEFAULT_STORE_URL = (
+  import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL ?? ""
+).trim();
 
 export interface TcsServer {
   readonly base: string;
@@ -51,9 +50,10 @@ export function getTcsServers(): TcsServer[] {
   const def = normalizeBase(DEFAULT_STORE_URL);
   const users = readUserServers()
     .map(normalizeBase)
-    .filter((b) => b && b !== def);
+    .filter((b) => b && (!def || b !== def));
   const seen = new Set<string>();
   const out: TcsServer[] = def ? [{ base: def, isDefault: true }] : [];
+  if (def) seen.add(def);
   for (const b of users) {
     if (seen.has(b)) continue;
     seen.add(b);
@@ -72,7 +72,8 @@ export function addTcsServer(raw: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  if (base === normalizeBase(DEFAULT_STORE_URL)) return base;
+  const def = normalizeBase(DEFAULT_STORE_URL);
+  if (def && base === def) return base;
   const users = readUserServers().map(normalizeBase);
   if (!users.includes(base)) writeUserServers([...users, base]);
   return base;
