@@ -772,6 +772,8 @@ export function installationsImportPlanHelpText(): string {
     "  --created-by-subject <tsub_...>",
     "  --target-installation-id <installation-id>",
     "  --mode <shared-cell|dedicated|self-hosted>",
+    "  --variables-json <json-object>",
+    "  --variables-file <path>",
     "  --out-file <path>",
     "  --json",
   ].join("\n");
@@ -798,6 +800,9 @@ export function installationsImportApplyHelpText(): string {
     "  --mode <shared-cell|dedicated|self-hosted>",
     "  --install-config-id <id>   default: cfg-default-opentofu-capsule",
     "  --environment <name>       default: production",
+    "  --provider <provider=connection-id[,provider=connection-id]>",
+    "  --variables-json <json-object>",
+    "  --variables-file <path>",
     "  --wait-timeout-seconds <n> default: 120",
     "  --wait-interval-ms <n>     default: 1000",
     "  --idempotency-key <key>",

@@ -106,9 +106,11 @@ export function accountsApiErrorMessage(
   fallback: string,
 ): string {
   if (!isRecord(value)) return fallback;
+  const nestedError = isRecord(value.error) ? value.error : undefined;
   return (
     stringValue(value.error_description) ??
     stringValue(value.message) ??
+    stringValue(nestedError?.message) ??
     stringValue(value.error) ??
     fallback
   );

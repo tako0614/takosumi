@@ -317,13 +317,15 @@ async function createPlanRunForFacadeRequest(input: {
   operation: "create" | "update" | "destroy";
   installationId?: string;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
+  const installationId =
+    input.installationId ?? stringValue(input.body.installationId);
   let installation: Installation | undefined;
-  if (input.installationId) {
+  if (installationId) {
     const installationResult =
       await requestDeployControlJson<GetInstallationResponse>({
         deployControl: input.deployControl,
         method: "GET",
-        path: INSTALLATION_PATH(input.installationId),
+        path: INSTALLATION_PATH(installationId),
       });
     if (installationResult.status < 200 || installationResult.status >= 300) {
       return installationResult;
@@ -369,7 +371,7 @@ async function createPlanRunForFacadeRequest(input: {
     spaceId,
     source,
     operation: input.operation,
-    ...(input.installationId ? { installationId: input.installationId } : {}),
+    ...(installationId ? { installationId } : {}),
     ...(stringValue(input.body.runnerProfileId)
       ? { runnerProfileId: stringValue(input.body.runnerProfileId) }
       : {}),

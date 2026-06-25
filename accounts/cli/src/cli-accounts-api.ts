@@ -33,12 +33,28 @@ export async function requestAccountsApi(input: {
   const text = await response.text();
   const body = text.trim().length > 0 ? parseJson(text) : undefined;
   if (!response.ok) {
-    throw new Error(accountsApiErrorMessage(body, `HTTP ${response.status}`));
+    throw new AccountsApiError({
+      status: response.status,
+      body,
+      message: accountsApiErrorMessage(body, `HTTP ${response.status}`),
+    });
   }
   if (body === undefined) {
     throw new Error("Takosumi Accounts returned an empty response");
   }
   return body;
+}
+
+export class AccountsApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(input: { status: number; body: unknown; message: string }) {
+    super(input.message);
+    this.name = "AccountsApiError";
+    this.status = input.status;
+    this.body = input.body;
+  }
 }
 
 export function accountsApiBase(
