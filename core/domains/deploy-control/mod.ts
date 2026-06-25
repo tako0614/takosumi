@@ -192,6 +192,7 @@ import {
   resolvedProviderEnvBindingsDigest,
   type ResolvedInstallationProviderEnvBinding,
 } from "../connections/mod.ts";
+import { providerEnvRule } from "takosumi-contract/provider-env-rules";
 import { SourceManagement } from "./source_management.ts";
 import { SourceLifecycleService } from "./source_lifecycle.ts";
 import { ConnectionManagement } from "./connection_management.ts";
@@ -623,6 +624,14 @@ const RUN_RENEWAL_INTERVAL_MS = Math.floor(
  */
 const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["queued", "running"];
 const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
+
+function providersRequiringProviderEnvBindings(
+  providers: readonly string[],
+): readonly string[] {
+  return normalizeProviders(
+    providers.filter((provider) => providerEnvRule(provider) !== undefined),
+  );
+}
 
 function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
   return [
@@ -2340,11 +2349,13 @@ export class OpenTofuDeploymentController {
       const requiredProviders = template.policy.allowedProviders.map(
         canonicalProviderAddress,
       );
+      const credentialRequiredProviders =
+        providersRequiringProviderEnvBindings(requiredProviders);
       const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
         input.installation,
         input.installConfig,
         installType,
-        requiredProviders,
+        credentialRequiredProviders,
       );
       return {
         request: {
@@ -2397,7 +2408,7 @@ export class OpenTofuDeploymentController {
       input.installation,
       input.installConfig,
       input.installConfig.installType,
-      requiredProviders,
+      providersRequiringProviderEnvBindings(requiredProviders),
     );
     const bindingProviders = installTypePlan.requiredProvidersFromBindings;
     if (requiredProviders.length === 0 && bindingProviders.length > 0) {
@@ -2406,7 +2417,7 @@ export class OpenTofuDeploymentController {
         input.installation,
         input.installConfig,
         input.installConfig.installType,
-        requiredProviders,
+        providersRequiringProviderEnvBindings(requiredProviders),
       );
     }
     const variables = normalizeVariables(
@@ -2493,7 +2504,7 @@ export class OpenTofuDeploymentController {
     );
     const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
       installation,
-      requiredProviders,
+      providersRequiringProviderEnvBindings(requiredProviders),
     );
     return await this.#genericRootDispatchForRequest(
       request,
@@ -3758,7 +3769,7 @@ export class OpenTofuDeploymentController {
     // generated provider blocks.
     return await this.#connectionsService.resolveProviderEnvBindingsForRun(
       installation,
-      planRun.requiredProviders,
+      providersRequiringProviderEnvBindings(planRun.requiredProviders),
     );
   }
 

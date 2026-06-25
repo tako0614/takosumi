@@ -9,7 +9,10 @@
  */
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
-import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
+import {
+  providerEnvRule,
+  sameProviderFamily,
+} from "takosumi-contract/provider-env-rules";
 import type {
   ProviderRequirement,
   ProviderRequirementPhase,
@@ -157,13 +160,15 @@ export class RunEnvResolver {
       });
     }
 
-    return planRun.requiredProviders.map((provider) => {
+    const resolutions: ProviderResolution[] = [];
+    for (const provider of planRun.requiredProviders) {
       const match = resolved.find((entry) =>
         sameProviderFamily(provider, entry.provider),
       );
       const requirement = providerRequirement(planRun, provider);
       if (!match) {
-        return {
+        if (!providerEnvRule(provider)) continue;
+        resolutions.push({
           requirement,
           status: "blocked_missing_env",
           blockedReason: `provider connection is required for provider ${provider}`,
@@ -172,10 +177,14 @@ export class RunEnvResolver {
             provider,
             reason: `provider connection is required for provider ${provider}`,
           },
-        };
+        });
+        continue;
       }
-      return providerResolutionFromResolved(input, requirement, match);
-    });
+      resolutions.push(
+        providerResolutionFromResolved(input, requirement, match),
+      );
+    }
+    return resolutions;
   }
 }
 

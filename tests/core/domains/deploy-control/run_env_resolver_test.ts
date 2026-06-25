@@ -14,6 +14,7 @@ import {
 } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+const NULL_PROVIDER = "registry.opentofu.org/hashicorp/null";
 
 function planRun(over: Partial<PlanRun> = {}): PlanRun {
   return {
@@ -206,6 +207,29 @@ test("RunEnvResolver fails closed with blocked provider resolution evidence", as
     blockedReason: `provider connection is required for provider ${CLOUDFLARE_PROVIDER}`,
   });
   expect(error.runEnvironment.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
+});
+
+test("RunEnvResolver does not require Provider Envs for credential-free providers", async () => {
+  const calls: Array<{ phase: string; auditRunId: string }> = [];
+  const subject = resolver({
+    calls,
+    resolved: [],
+    credentials: () => undefined,
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      runnerProfileId: "generic-opentofu-provider",
+      requiredProviders: [NULL_PROVIDER],
+    }),
+    phase: "plan",
+    auditRunId: "plan_1",
+  });
+
+  expect(calls).toEqual([{ phase: "plan", auditRunId: "plan_1" }]);
+  expect(result.credentials).toBeUndefined();
+  expect(result.providerResolutions).toEqual([]);
+  expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
 test("RunEnvResolver fails closed for raw no-installation runs with providers", async () => {

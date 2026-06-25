@@ -108,8 +108,10 @@ export interface PlanResolutionServiceDependencies {
   readonly templateRegistry: TemplateRegistry;
   readonly now: () => number;
   /**
-   * Run-scoped provider env binding resolution. Every required provider must have
-   * an explicit Installation provider env binding.
+   * Run-scoped provider env binding resolution. The controller passes the subset
+   * of required providers that need Takosumi-managed credential material; other
+   * providers may run without env/file injection or with explicit generic-env
+   * bindings.
    * Delegates to the controller's shared {@link ConnectionsService}.
    */
   readonly resolveInstallationProviderEnvBindingsForRun: (
@@ -147,15 +149,16 @@ export class PlanResolutionService {
     installation: Installation,
     installConfig: InstallConfig,
     installType: InstallType,
-    requiredProviders: readonly string[],
+    credentialRequiredProviders: readonly string[],
   ): Promise<InstallTypePlanContext> {
     // Run-scoped resolution so generated-root provider blocks come from the
-    // reviewed Installation provider env bindings only. `requiredProviders` MUST
-    // equal the value stored on the plan run so the mint path
-    // (#resolveRunInstallationProviderEnvBindings) resolves the identical set.
+    // reviewed Installation provider env bindings only. The caller filters the
+    // full required provider set down to providers that require credential
+    // material; no-credential providers remain on PlanRun.requiredProviders but
+    // do not force a ProviderConnection.
     const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
       installation,
-      requiredProviders,
+      credentialRequiredProviders,
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
