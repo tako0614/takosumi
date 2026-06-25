@@ -63,6 +63,56 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
   }
 });
 
+test("release action treats database migrations as opaque app commands", async () => {
+  const runId = `release_db_cmd_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  try {
+    await mkdir(join(sourceRoot, "migrations"), { recursive: true });
+
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "migrate",
+              command: [
+                process.execPath,
+                "-e",
+                [
+                  `if (!Bun.env.DATABASE_URL?.startsWith("postgres://")) process.exit(9)`,
+                  `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
+                  `await Bun.write("migration-ran.txt", ["opaque", context.kind, Bun.env.MIGRATION_DIR].join(":"))`,
+                ].join(";"),
+              ],
+              env: {
+                DATABASE_URL: "postgres://localhost/example",
+                MIGRATION_DIR: "migrations",
+              },
+            },
+          ],
+        },
+        outputs: { database_name: "example" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "release",
+      status: "succeeded",
+      exitCode: 0,
+      commandCount: 1,
+    });
+    await expect(
+      readFile(join(sourceRoot, "migration-ran.txt"), "utf8"),
+    ).resolves.toBe("opaque:takosumi.release-context@v1:migrations");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("release action rejects provider credential and reserved env", async () => {
   const runId = `release_secret_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));
@@ -94,7 +144,7 @@ test("release action rejects provider credential and reserved env", async () => 
       exitCode: 1,
     });
     expect(body.stderr).toContain(
-      "build phase env unexpectedly carries credential env name CLOUDFLARE_API_TOKEN",
+      "command env unexpectedly carries provider credential env name CLOUDFLARE_API_TOKEN",
     );
     expect(JSON.stringify(body)).not.toContain(secret);
   } finally {

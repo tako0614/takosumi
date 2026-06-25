@@ -46,6 +46,7 @@
     "ga:browser-functional-e2e:self-test": "bun ../scripts/run-takosumi-browser-functional-e2e.mjs --self-test",
     "ga:browser-functional-e2e:check": "bun ../scripts/check-takosumi-browser-functional-e2e.mjs",
     "ga:browser-functional-e2e:check:self-test": "bun ../scripts/check-takosumi-browser-functional-e2e.mjs --self-test",
+    "ga:export-request-probe": "bun ../scripts/probe-takosumi-export-request.mjs",
     "ga:synthetic-flow": "bun ../scripts/probe-takosumi-synthetic-flow.mjs",
     "ga:sync-readiness": "bun ../scripts/sync-takosumi-readiness-evidence.mjs",
     "ga:complete-live-evidence": "bun ../scripts/complete-takosumi-live-evidence.mjs",
