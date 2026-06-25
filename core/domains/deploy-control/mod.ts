@@ -1201,6 +1201,7 @@ export class OpenTofuDeploymentController {
   readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
+  readonly #usesExternalRunQueue: boolean;
   #connectionsService?: ConnectionsService;
 
   constructor(dependencies: OpenTofuDeploymentControllerDependencies = {}) {
@@ -1307,6 +1308,7 @@ export class OpenTofuDeploymentController {
     });
     // Default to an inline dispatcher: run the consumer immediately so local /
     // node substrates and tests keep the historical synchronous semantics.
+    this.#usesExternalRunQueue = dependencies.enqueueRun !== undefined;
     this.#enqueueRun =
       dependencies.enqueueRun ??
       ((dispatch) => this.dispatchQueuedRun(dispatch));
@@ -1330,6 +1332,10 @@ export class OpenTofuDeploymentController {
     this.#seededProviderCatalogEntries = this.#seedProviderCatalogEntries(
       initialProviderCatalogEntries(),
     );
+  }
+
+  usesExternalRunQueue(): boolean {
+    return this.#usesExternalRunQueue;
   }
 
   async listRunnerProfiles(): Promise<ListRunnerProfilesResponse> {

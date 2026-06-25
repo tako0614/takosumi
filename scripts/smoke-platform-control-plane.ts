@@ -13,6 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
 import process from "node:process";
 import {
   access,
@@ -34,8 +35,74 @@ const DEFAULT_CAPSULE_DIR = resolve(
   TAKOSUMI_ROOT,
   "providers/cloudflare/modules/cloudflare-hello-worker/module",
 );
+const DEFAULT_PROVIDERLESS_CAPSULE_DIR = resolve(
+  TAKOSUMI_ROOT,
+  "examples/opentofu-basic",
+);
+const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "generic-opentofu-provider";
 const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
 const API_PREFIX = "/api/v1";
+const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`
+const chunks = [];
+function finish(payload) {
+  process.stdout.write(JSON.stringify(payload), () => process.exit(0));
+}
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", async () => {
+  try {
+    const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const headers = { ...(input.headers ?? {}) };
+    const token = process.env.TAKOSUMI_SMOKE_HTTP_TOKEN;
+    if (token) headers.authorization = "Bearer " + token;
+    const controller =
+      typeof input.timeoutMs === "number" && input.timeoutMs > 0
+        ? new AbortController()
+        : undefined;
+    const timeout =
+      controller !== undefined
+        ? setTimeout(() => controller.abort(), input.timeoutMs)
+        : undefined;
+    const init = {
+      method: input.method,
+      headers,
+      ...(controller ? { signal: controller.signal } : {}),
+    };
+    if (typeof input.binaryBase64 === "string") {
+      init.body = Buffer.from(input.binaryBase64, "base64");
+    } else if (typeof input.bodyText === "string") {
+      init.body = input.bodyText;
+    }
+    try {
+      const response = await fetch(input.url, init);
+      const bodyText = await response.text();
+      finish({
+        ok: true,
+        status: response.status,
+        bodyText,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({
+        ok: false,
+        name: error instanceof Error ? error.name : "Error",
+        message,
+        timeout:
+          controller?.signal.aborted === true ||
+          /(?:timed?\s*out|timeout|aborted)/iu.test(message),
+      });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  } catch (error) {
+    finish({
+      ok: false,
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error),
+      timeout: false,
+    });
+  }
+});
+`;
 const TERMINAL_RUN_STATUSES = new Set([
   "succeeded",
   "failed",
@@ -219,6 +286,25 @@ interface RequestOptions {
   readonly binary?: Uint8Array;
   readonly allowEmpty?: boolean;
   readonly timeoutMs?: number;
+  readonly transport?: "native" | "node";
+}
+
+interface NodeHttpTransportInput {
+  readonly url: string;
+  readonly method: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly bodyText?: string;
+  readonly binaryBase64?: string;
+  readonly timeoutMs?: number;
+}
+
+interface NodeHttpTransportResult {
+  readonly ok: boolean;
+  readonly status?: number;
+  readonly bodyText?: string;
+  readonly name?: string;
+  readonly message?: string;
+  readonly timeout?: boolean;
 }
 
 class RequestTimeoutError extends Error {
@@ -394,6 +480,8 @@ export async function resolveOptions(
   const cloudflareInputsRequired =
     cloudflareConnectionMode !== "none" ||
     verificationMode === "cloudflare-worker";
+  const providerlessOpenTofuSmoke =
+    cloudflareConnectionMode === "none" && verificationMode === "opentofu";
   const cloudflareAccountId = cloudflareInputsRequired
     ? await readNonSecretInput({
         file: args.cloudflareAccountIdFile ?? env.CLOUDFLARE_ACCOUNT_ID_FILE,
@@ -461,7 +549,12 @@ export async function resolveOptions(
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
   const sourceMode = sourceGitUrl ? "git" : "upload";
-  const capsuleDir = resolve(args.capsuleDir ?? DEFAULT_CAPSULE_DIR);
+  const capsuleDir = resolve(
+    args.capsuleDir ??
+      (providerlessOpenTofuSmoke
+        ? DEFAULT_PROVIDERLESS_CAPSULE_DIR
+        : DEFAULT_CAPSULE_DIR),
+  );
   if (args.dryRun !== true && sourceMode === "upload") {
     await access(capsuleDir);
   }
@@ -474,6 +567,7 @@ export async function resolveOptions(
       accountId: cloudflareAccountId.value,
       appName: resolvedAppName,
       workersSubdomain: cloudflareWorkersSubdomain.value,
+      providerless: providerlessOpenTofuSmoke,
     }),
   });
   const outputAllowlist = parseOutputAllowlist(
@@ -488,7 +582,17 @@ export async function resolveOptions(
     }),
   );
   const appName =
-    args.appName ?? stringRecordValue(vars, "appName") ?? resolvedAppName;
+    args.appName ??
+    stringRecordValue(vars, "appName") ??
+    stringRecordValue(vars, "name") ??
+    resolvedAppName;
+  const explicitRunnerProfileId =
+    args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID;
+  const runnerProfileId =
+    explicitRunnerProfileId ??
+    (providerlessOpenTofuSmoke
+      ? DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID
+      : undefined);
   return {
     url: normalizeBaseUrl(url),
     accountSessionToken: accountSessionToken.value,
@@ -501,12 +605,7 @@ export async function resolveOptions(
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
-    ...((args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID)
-      ? {
-          runnerProfileId:
-            args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID,
-        }
-      : {}),
+    ...(runnerProfileId ? { runnerProfileId } : {}),
     space,
     appName,
     environment: args.environment ?? defaultSmokeEnvironment(url),
@@ -2162,6 +2261,9 @@ async function revokeConnection(
 }
 
 async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
+  if (shouldUseNodeHttpTransport(options)) {
+    return await requestJsonWithNodeTransport<T>(options);
+  }
   const headers: Record<string, string> = {
     accept: "application/json",
     authorization: `Bearer ${options.token}`,
@@ -2187,7 +2289,10 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
   try {
     response = await fetch(`${options.baseUrl}${options.path}`, init);
   } catch (error) {
-    if (controller?.signal.aborted) {
+    if (
+      controller?.signal.aborted ||
+      (options.timeoutMs !== undefined && isFetchTimeoutError(error))
+    ) {
       throw new RequestTimeoutError(
         options.method ?? "GET",
         options.path,
@@ -2218,6 +2323,160 @@ async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
     );
   }
   return body as T;
+}
+
+function shouldUseNodeHttpTransport(options: RequestOptions): boolean {
+  if (options.transport === "native") return false;
+  if (options.transport === "node") return true;
+  return process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT === "node";
+}
+
+async function requestJsonWithNodeTransport<T = unknown>(
+  options: RequestOptions,
+): Promise<T> {
+  const method = options.method ?? "GET";
+  const headers: Record<string, string> = { accept: "application/json" };
+  const input: NodeHttpTransportInput = {
+    url: `${options.baseUrl}${options.path}`,
+    method,
+    headers,
+    ...(options.timeoutMs !== undefined
+      ? { timeoutMs: options.timeoutMs }
+      : {}),
+  };
+  let transportInput: NodeHttpTransportInput;
+  if (options.binary !== undefined) {
+    transportInput = {
+      ...input,
+      headers: { ...headers, "content-type": "application/zstd" },
+      binaryBase64: Buffer.from(options.binary).toString("base64"),
+    };
+  } else if (options.body !== undefined) {
+    transportInput = {
+      ...input,
+      headers: { ...headers, "content-type": "application/json" },
+      bodyText: JSON.stringify(options.body),
+    };
+  } else {
+    transportInput = input;
+  }
+  const result = await runNodeHttpTransport(
+    transportInput,
+    options.token,
+    method,
+    options.path,
+  );
+  if (!result.ok) {
+    if (result.timeout) {
+      throw new RequestTimeoutError(
+        method,
+        options.path,
+        options.timeoutMs ?? 0,
+      );
+    }
+    throw new Error(
+      `${method} ${options.path} failed in node HTTP transport: ${publicErrorMessage(
+        result.message ?? result.name ?? "unknown error",
+      )}`,
+    );
+  }
+  const text = result.bodyText ?? "";
+  const body = parseResponseBody(text, `${method} ${options.path}`);
+  const status = result.status ?? 0;
+  if (status < 200 || status >= 300) {
+    throw new Error(
+      `${method} ${options.path} failed (${status}): ${apiErrorMessage(
+        body,
+        `HTTP ${status}`,
+      )}`,
+    );
+  }
+  if (body === undefined) {
+    if (options.allowEmpty) return {} as T;
+    throw new Error(`${method} ${options.path} returned empty response`);
+  }
+  return body as T;
+}
+
+async function runNodeHttpTransport(
+  input: NodeHttpTransportInput,
+  token: string,
+  method: string,
+  path: string,
+): Promise<NodeHttpTransportResult> {
+  const nodeBinary = process.env.TAKOSUMI_NODE_BINARY ?? "node";
+  const child = spawn(nodeBinary, ["-e", NODE_HTTP_TRANSPORT_SCRIPT], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: nodeHttpTransportEnv(token),
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  const timeoutMs =
+    input.timeoutMs !== undefined && input.timeoutMs > 0
+      ? input.timeoutMs + 5_000
+      : undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const exitCode = await new Promise<number>((resolvePromise, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => resolvePromise(code ?? 1));
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new RequestTimeoutError(method, path, input.timeoutMs ?? 0));
+      }, timeoutMs);
+    }
+    child.stdin.end(`${JSON.stringify(input)}\n`);
+  }).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+  const stderrText = Buffer.concat(stderr).toString("utf8").trim();
+  if (exitCode !== 0) {
+    throw new Error(
+      `${method} ${path} node HTTP transport exited ${exitCode}: ${redactResponseSnippet(
+        stderrText,
+      )}`,
+    );
+  }
+  const raw = Buffer.concat(stdout).toString("utf8");
+  try {
+    return parseJsonRecord(
+      raw,
+      "node HTTP transport result",
+    ) as unknown as NodeHttpTransportResult;
+  } catch (error) {
+    throw new Error(
+      `${method} ${path} node HTTP transport returned invalid result: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function nodeHttpTransportEnv(token: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { TAKOSUMI_SMOKE_HTTP_TOKEN: token };
+  for (const name of [
+    "PATH",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+  ] as const) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
+function isFetchTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /(?:timed?\s*out|timeout|aborted)/iu.test(error.message);
 }
 
 function parseResponseBody(text: string, label: string): unknown {
@@ -2469,7 +2728,14 @@ function defaultSmokeVars(input: {
   readonly accountId: string;
   readonly appName: string;
   readonly workersSubdomain: string;
+  readonly providerless?: boolean;
 }): Readonly<Record<string, JsonSmokeValue>> {
+  if (input.providerless) {
+    return {
+      name: input.appName,
+      base_url: `https://example.invalid/${input.appName}`,
+    };
+  }
   return {
     accountId: input.accountId,
     appName: input.appName,
@@ -2600,6 +2866,9 @@ function defaultAppName(): string {
 function capsuleLabel(options: PlatformControlPlaneSmokeOptions): string {
   if (options.capsuleDir === DEFAULT_CAPSULE_DIR) {
     return "cloudflare-hello-worker";
+  }
+  if (options.capsuleDir === DEFAULT_PROVIDERLESS_CAPSULE_DIR) {
+    return "opentofu-basic";
   }
   if (options.sourceMode === "git") return "git-opentofu-capsule";
   return "uploaded-opentofu-capsule";
@@ -2947,6 +3216,46 @@ async function runSelfTest(): Promise<void> {
   if (serializedProviderless.includes("keyless-selftest")) {
     throw new Error("providerless self-test leaked vars content");
   }
+  const defaultProviderlessOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      appName: "takosumi-keyless-default-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+    },
+    {},
+  );
+  const defaultProviderlessResult = dryRunResult(defaultProviderlessOptions);
+  if (defaultProviderlessResult.capsuleModule !== "opentofu-basic") {
+    throw new Error("providerless self-test did not default to opentofu-basic");
+  }
+  if (
+    defaultProviderlessResult.inputs.runnerProfileId !==
+      DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID ||
+    defaultProviderlessOptions.runnerProfileId !==
+      DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID
+  ) {
+    throw new Error("providerless self-test did not default to generic runner");
+  }
+  if (
+    defaultProviderlessResult.inputs.cloudflareApiTokenSource !== "not_required"
+  ) {
+    throw new Error(
+      "providerless self-test should not require a Cloudflare token",
+    );
+  }
+  if (
+    defaultProviderlessOptions.vars.name !==
+      "takosumi-keyless-default-selftest" ||
+    defaultProviderlessOptions.vars.base_url !==
+      "https://example.invalid/takosumi-keyless-default-selftest"
+  ) {
+    throw new Error("providerless self-test did not default keyless vars");
+  }
   const gitOptions = await resolveOptions(
     {
       dryRun: true,
@@ -3094,6 +3403,30 @@ async function runSelfTest(): Promise<void> {
   } finally {
     globalThis.fetch = originalFetch;
   }
+  globalThis.fetch = (async () => {
+    throw new Error("The operation timed out.");
+  }) as typeof fetch;
+  try {
+    await requestJson({
+      baseUrl: "https://app-staging.takosumi.com",
+      token: "redacted",
+      method: "POST",
+      path: `${API_PREFIX}/deploy`,
+      timeoutMs: 1,
+      body: {},
+      transport: "native",
+    });
+    throw new Error("self-test requestJson runtime timeout did not fire");
+  } catch (error) {
+    if (
+      !(error instanceof RequestTimeoutError) ||
+      error.path !== `${API_PREFIX}/deploy`
+    ) {
+      throw error;
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
   console.log("platform control-plane smoke self-test passed");
 }
 
@@ -3122,7 +3455,7 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
-  --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID
+  --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)

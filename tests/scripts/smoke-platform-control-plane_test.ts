@@ -193,6 +193,45 @@ test("platform control-plane smoke resolves secret sources from environment", as
   expect(options.cloudflareWorkersSubdomain).toBe("<redacted>");
 });
 
+test("platform control-plane smoke defaults providerless OpenTofu mode to a keyless capsule", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      appName: "takosumi-keyless-test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.capsuleModule).toBe("opentofu-basic");
+  expect(result.providerConnectionMode).toBe("none");
+  expect(result.credentialPath).toBe("none");
+  expect(result.inputs.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(options.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(result.inputs.cloudflareApiTokenSource).toBe("not_required");
+  expect(result.inputs.cloudflareAccountIdSource).toBe("not_required");
+  expect(options.vars).toEqual({
+    name: "takosumi-keyless-test",
+    base_url: "https://example.invalid/takosumi-keyless-test",
+  });
+  expect(result.steps).toEqual([
+    "providerConnectionNotRequired",
+    "scratchInstall",
+    "plan",
+    "apply",
+    "opentofuApplyVerified",
+    "deploymentLedgerVerified",
+    "destroy",
+  ]);
+});
+
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
   expect(
     shouldMarkPendingSmokeInstallationError(

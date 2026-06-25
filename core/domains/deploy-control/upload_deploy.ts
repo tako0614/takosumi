@@ -131,7 +131,8 @@ export async function deployUpload(
     //    plan path is upload-aware (synthesizes an in-memory Source from the
     //    snapshot) and gates the Capsule before the run.
     const shouldDeferCompatibilityReport =
-      effectiveRunnerProfileId === undefined;
+      effectiveRunnerProfileId === undefined ||
+      deps.controller.usesExternalRunQueue();
     const planResponse = await deps.controller.createInstallationPlan(
       installation.id,
       context,
