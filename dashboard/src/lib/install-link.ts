@@ -51,6 +51,27 @@ export function parseInstallPrefill(
   };
 }
 
+/**
+ * Accepts a full external install URL pasted into the add form and returns the
+ * same prefill shape as the router path. Plain Git URLs intentionally return
+ * undefined so the normal Git-source input path remains unchanged.
+ */
+export function parseInstallPrefillFromInput(
+  value: string,
+): InstallPrefill | undefined {
+  const raw = value.trim();
+  if (!raw || /[\r\n\0]/u.test(raw)) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:") return undefined;
+  if (!hasInstallPrefillParams(url.search)) return undefined;
+  return parseInstallPrefill(url.search);
+}
+
 function parseOptionalName(value: string | null): string | undefined {
   const name = value?.trim();
   if (!name) return undefined;

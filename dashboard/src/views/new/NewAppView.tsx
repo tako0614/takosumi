@@ -45,9 +45,11 @@ import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
+  type InstallPrefill,
   isSafeInstallVariableName,
   isSafeInstallVariableValue,
   parseInstallPrefill,
+  parseInstallPrefillFromInput,
 } from "../../lib/install-link.ts";
 import {
   installReturnPathFromPrefill,
@@ -1219,6 +1221,18 @@ function Inner() {
     setExistingInstallation(null);
     setError(null);
   };
+  const applyInstallPrefillInput = (next: InstallPrefill) => {
+    const nextRef = next.ref || "main";
+    setGitUrl(next.git);
+    setRef(displayRef(nextRef));
+    setPinnedFullRef(isFullCommitSha(nextRef) ? nextRef : null);
+    setPath(next.path || ".");
+    if (next.name || !name().trim()) {
+      setName(next.name ?? capsuleNameFromUrl(next.git));
+    }
+    if (next.vars?.project_name) setResourcePrefix(next.vars.project_name);
+    resetCompatibility();
+  };
 
   const pickCatalogEntry = (entry: CatalogEntry) => {
     if (!entry.source) return;
@@ -1641,6 +1655,11 @@ function Inner() {
           value={gitUrl()}
           onInput={(e) => {
             clearSelectedCatalog();
+            const parsed = parseInstallPrefillFromInput(e.currentTarget.value);
+            if (parsed) {
+              applyInstallPrefillInput(parsed);
+              return;
+            }
             setGitUrl(e.currentTarget.value);
             resetCompatibility();
           }}
