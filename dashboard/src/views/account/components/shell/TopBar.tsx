@@ -27,6 +27,7 @@ const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.apps"],
   [/^\/services(\/|$)/, "nav.services"],
   [/^\/new(\/|$)/, "nav.add"],
+  [/^\/store(\/|$)/, "nav.store"],
   [/^\/connections(\/|$)/, "nav.connections"],
   [/^\/advanced\/workspace(\/|$)/, "nav.spaceSettings"],
   [/^\/billing(\/|$)/, "nav.billing"],

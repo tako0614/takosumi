@@ -61,14 +61,15 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('href: "/notifications"');
   });
 
-  test("mobile keeps persistent navigation while the add action stays in the top bar", () => {
+  test("mobile keeps persistent navigation and exposes the Store", () => {
     expect(mobileTabsSource).toContain('href: "/"');
-    expect(mobileTabsSource).toContain('href: "/services"');
+    expect(mobileTabsSource).toContain('href: "/store"');
+    expect(mobileTabsSource).toContain('href: "/new"');
     expect(mobileTabsSource).toContain('href: "/connections"');
     expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
-    expect(mobileTabsSource).not.toContain('href: "/new"');
+    expect(mobileTabsSource).not.toContain('href: "/services"');
     expect(mobileTabsSource).not.toContain('href: "/account"');
-    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
+    expect(shellCssSource).toContain("grid-template-columns: repeat(5, 1fr);");
     expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
     expect(shellCssSource).toContain("display: inline-flex;");
   });

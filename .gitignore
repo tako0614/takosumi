@@ -13,3 +13,4 @@ node_modules/
 .fix_result.txt
 .gitignore_addition.txt
 .env.smoke
+tmp/

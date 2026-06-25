@@ -377,7 +377,7 @@
     min-height: calc(var(--tg-mobile-tab-h) + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
     z-index: 40;

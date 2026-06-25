@@ -1,15 +1,16 @@
 /* StoreBrowser — neutral theming via --tg-* tokens with fallbacks so it adapts
    to either host (takos / takosumi) yet renders standalone. */
 .tcs-root {
-  --c-panel: var(--tg-surface, #14161c);
-  --c-panel2: var(--tg-surface-2, #1b1e26);
-  --c-border: var(--tg-border, #242833);
-  --c-fg: var(--tg-text, #e7e9ee);
-  --c-muted: var(--tg-text-muted, #9aa0ad);
+  --c-panel: var(--tg-bg-elev, #ffffff);
+  --c-panel2: var(--tg-bg-subtle, #eef1f5);
+  --c-border: var(--tg-line, #d9dee7);
+  --c-fg: var(--tg-fg, #111827);
+  --c-muted: var(--tg-fg-muted, #667085);
   --c-accent: var(--tg-accent, #5b8cff);
-  --c-accent2: var(--tg-accent-2, #7ce0c3);
+  --c-accent2: var(--tg-info, #2563eb);
+  --c-accent-fg: var(--tg-accent-fg, #ffffff);
   --c-official: #f4c152;
-  --c-err: var(--tg-danger, #ff6b6b);
+  --c-err: var(--tg-danger, #c82323);
   color: var(--c-fg);
 }
 
@@ -57,7 +58,7 @@
 .tcs-btn.tcs-primary {
   background: var(--c-accent);
   border-color: var(--c-accent);
-  color: #0b0c10;
+  color: var(--c-accent-fg);
   font-weight: 600;
 }
 .tcs-btn:disabled {
@@ -125,7 +126,7 @@
 .tcs-chip.active {
   background: var(--c-accent);
   border-color: var(--c-accent);
-  color: #0b0c10;
+  color: var(--c-accent-fg);
 }
 .tcs-chip.tcs-kind.active {
   background: var(--c-accent2);
@@ -247,7 +248,7 @@
   width: min(460px, 100%);
   height: 100%;
   overflow-y: auto;
-  background: var(--tg-bg, #0e0f13);
+  background: var(--tg-bg, #f6f7f9);
   border-left: 1px solid var(--c-border);
   padding: 20px 20px 60px;
 }
