@@ -28,14 +28,15 @@ describe("RunsListView", () => {
     );
   });
 
-  test("builds the list from the real activity ledger and installation API", () => {
-    expect(source).toContain("listActivity");
+  test("builds the list from the real Run ledger and installation API", () => {
+    expect(source).toContain("listRuns");
     expect(source).toContain("listInstallations");
-    expect(source).toContain("rowsFromActivity");
-    expect(source).toContain("RUN_ACTIONS");
+    expect(source).toContain("rowsFromRuns");
+    expect(source).toContain("RUN_LIST_LIMIT");
     expect(source).toContain(
       "href={`/runs/${encodeURIComponent(props.row.runId)}`}",
     );
+    expect(source).not.toContain("listActivity");
     expect(source).not.toContain("const SAMPLE");
     expect(source).not.toContain("Math.random");
   });

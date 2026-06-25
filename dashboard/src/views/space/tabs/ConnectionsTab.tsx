@@ -23,6 +23,10 @@ import {
   Switch,
 } from "solid-js";
 import { ArrowLeft, Link, Plug, Plus, Trash } from "lucide-solid";
+import {
+  isProviderEnvName,
+  isReservedProviderEnvName,
+} from "takosumi-contract";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
@@ -300,6 +304,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     const name = genericEnvProvider().trim();
     if (!name) throw new Error(t("conn.genericEnv.providerRequired"));
     const submitValues: Record<string, string> = {};
+    const seenEnvNames = new Set<string>();
     for (const pair of envPairs()) {
       const envName = pair.name.trim();
       const value = pair.value;
@@ -307,6 +312,16 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       if (envName.length === 0) {
         throw new Error(t("conn.genericEnv.nameRequired"));
       }
+      if (!isProviderEnvName(envName)) {
+        throw new Error(t("conn.genericEnv.invalidName", { name: envName }));
+      }
+      if (isReservedProviderEnvName(envName)) {
+        throw new Error(t("conn.genericEnv.reservedName", { name: envName }));
+      }
+      if (seenEnvNames.has(envName)) {
+        throw new Error(t("conn.genericEnv.duplicateName", { name: envName }));
+      }
+      seenEnvNames.add(envName);
       submitValues[envName] = value;
     }
     if (Object.keys(submitValues).length === 0) {

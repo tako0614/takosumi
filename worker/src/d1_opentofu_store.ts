@@ -104,6 +104,7 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
   TransitionRunInput,
@@ -111,6 +112,8 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
+  clampRunListLimit,
+  compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
 } from "../../core/domains/deploy-control/store.ts";
@@ -429,6 +432,21 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async getBackupRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
+  }
+
+  async listRunsBySpace(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly StoredRunRecord[]> {
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: eq(schema.runs.spaceId, spaceId),
+      },
+    );
+    const limit = clampRunListLimit(options.limit);
+    return [...rows].sort(compareStoredRunRecordsDesc).slice(0, limit);
   }
 
   async listSourceSyncRuns(

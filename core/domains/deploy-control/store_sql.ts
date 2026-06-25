@@ -93,6 +93,7 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
   TransitionRunInput,
@@ -100,6 +101,8 @@ import type {
 } from "./store.ts";
 import {
   clampActivityLimit,
+  clampRunListLimit,
+  compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
 } from "./store.ts";
@@ -417,6 +420,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async getBackupRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_BACKUP, RUN_KIND_RESTORE]);
+  }
+
+  async listRunsBySpace(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly StoredRunRecord[]> {
+    const rows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(eq(pgSchema.runs.spaceId, spaceId));
+    const limit = clampRunListLimit(options.limit);
+    return rows
+      .map((row) => parseRow(row) as StoredRunRecord)
+      .filter((row): row is StoredRunRecord => Boolean(row))
+      .sort(compareStoredRunRecordsDesc)
+      .slice(0, limit);
   }
 
   async listSourceSyncRuns(

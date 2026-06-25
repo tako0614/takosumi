@@ -679,8 +679,34 @@ function fakeOperations(
       return {
         id,
         spaceId: "space_a",
+        type: "plan",
         status: "succeeded",
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
       } as unknown as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>;
+    },
+    listRuns: async (spaceId, options) => {
+      record("listRuns", spaceId, options);
+      return [
+        {
+          id: "apply_1",
+          spaceId,
+          installationId: "inst_1",
+          type: "apply",
+          status: "succeeded",
+          createdBy: "test",
+          createdAt: "2026-01-01T00:01:00Z",
+        },
+        {
+          id: "plan_1",
+          spaceId,
+          installationId: "inst_1",
+          type: "plan",
+          status: "waiting_approval",
+          createdBy: "test",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ] as unknown as Awaited<ReturnType<ControlPlaneOperations["listRuns"]>>;
     },
     approveRun: async (id, input) => {
       record("approveRun", id, input);
@@ -1119,6 +1145,30 @@ test("GET /api/v1/workspaces/:id/capsules aliases the final Capsule list route",
   expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_a");
 });
 
+test("GET /api/v1/workspaces/:id/runs lists the Workspace Run ledger", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/runs?limit=2",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    runs: readonly { id: string; providerResolutions?: unknown[] }[];
+  };
+  expect(body.runs.map((run) => run.id)).toEqual(["apply_1", "plan_1"]);
+  expect(body.runs[0]?.providerResolutions).toBeUndefined();
+  expect(operations.calls.listRuns).toEqual(["space_a", { limit: 2 }]);
+});
+
 test("anonymous /api/v1 requests are 401", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
@@ -1165,6 +1215,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/api/v1/spaces/space_a/installations"],
     ["GET", "/api/v1/spaces/space_a/graph"],
     ["GET", "/api/v1/spaces/space_a/activity"],
+    ["GET", "/api/v1/workspaces/space_a/runs"],
     ["GET", "/api/v1/spaces/space_a/backups"],
     ["POST", "/api/v1/spaces/space_a/backups"],
     ["POST", "/api/v1/spaces/space_a/backups/bkp_1/restores"],

@@ -125,6 +125,7 @@ import type {
 } from "takosumi-contract/billing";
 import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
 import type {
+  ListRunsResponse,
   Run,
   RunCostInfo,
   RunEventsResponse,
@@ -769,6 +770,10 @@ export interface ControlPlaneOperations {
     };
   };
   // --- Runs (§6.8 / §19 / §23) ---
+  listRuns(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly Run[]>;
   createInstallationPlan(
     installationId: string,
     options?: { readonly compatibilityReportId?: string },
@@ -1165,6 +1170,10 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (leaf === "graph" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return await spaceGraph(operations, spaceId);
+    }
+    if (leaf === "runs" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return await spaceRuns(operations, spaceId, url);
     }
     if (leaf === "activity" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -2923,6 +2932,25 @@ async function deleteDependency(
 }
 
 // --- Activity --------------------------------------------------------------
+
+async function spaceRuns(
+  operations: ControlPlaneOperations,
+  spaceId: string,
+  url: URL,
+): Promise<Response> {
+  const limit = parseLimit(url.searchParams.get("limit"));
+  if (limit === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "limit must be a positive integer",
+      400,
+    );
+  }
+  const runs = await operations.listRuns(spaceId, limit ? { limit } : {});
+  return json({
+    runs: await Promise.all(runs.map((run) => publicRun(operations, run))),
+  } satisfies ListRunsResponse);
+}
 
 async function spaceActivity(
   operations: ControlPlaneOperations,

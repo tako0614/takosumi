@@ -43,6 +43,11 @@ export type RunStatus =
   | "cancelled"
   | "expired";
 
+/** Default page size for a Workspace Run listing when no limit is given. */
+export const RUN_LIST_DEFAULT_LIMIT = 100;
+/** Maximum page size accepted on the Workspace Run listing route. */
+export const RUN_LIST_MAX_LIMIT = 500;
+
 export type RunPolicyStatus = "pass" | "warn" | "deny";
 
 export interface RunChangeSummary {
@@ -148,6 +153,11 @@ export interface Run {
 export type PublicRun = Omit<Run, "providerResolutions"> & {
   readonly providerResolutions?: readonly PublicProviderResolution[];
 };
+
+/** Body of `GET /api/v1/workspaces/:workspaceId/runs`. */
+export interface ListRunsResponse {
+  readonly runs: readonly PublicRun[];
+}
 
 export interface RunDiagnostic {
   readonly severity: "info" | "warning" | "error";

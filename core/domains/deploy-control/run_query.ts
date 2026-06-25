@@ -92,6 +92,21 @@ export class RunQueryService {
   }
 
   /**
+   * Lists a Workspace's unified Run projections newest first. The store returns
+   * raw internal run rows, then each row is re-read through `getRun` so the
+   * public projection stays identical to `GET /runs/:id` and never exposes
+   * internal PlanRun / ApplyRun fields or credential material.
+   */
+  async listRuns(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly Run[]> {
+    requireNonEmptyString(spaceId, "spaceId");
+    const rows = await this.#store.listRunsBySpace(spaceId, options);
+    return await Promise.all(rows.map((row) => this.getRun(row.id)));
+  }
+
+  /**
    * Reads the run-level diagnostics + audit trail for a Run (spec §30 `GET
    * /internal/v1/runs/:runId/logs`). Diagnostics + audit events are recorded on the
    * underlying PlanRun / ApplyRun ledger record; a `source_sync` run carries no

@@ -171,6 +171,8 @@ export const en: Record<keyof typeof ja, string> = {
   "op.drift_check": "Drift check",
   "op.source_sync": "Fetch contents",
   "op.compatibility_check": "Pre-add check",
+  "op.backup": "Backup",
+  "op.restore": "Restore",
   "op.generic": "Operation",
 
   // --- Service list (home) --------------------------------------------------
@@ -750,6 +752,11 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.addRow": "Add value",
   "conn.genericEnv.providerRequired": "Enter an OpenTofu provider.",
   "conn.genericEnv.nameRequired": "Rows with a value need a value name.",
+  "conn.genericEnv.invalidName":
+    "Use an uppercase env name like SNOWFLAKE_PASSWORD.",
+  "conn.genericEnv.reservedName":
+    "“{name}” is reserved for the runner. Use a provider-specific env name.",
+  "conn.genericEnv.duplicateName": "“{name}” is already added.",
   "conn.genericEnv.oneRequired": "Enter at least one value.",
   "conn.error.invalidProvider": "Invalid provider.",
   "conn.error.tokenRequired": "Paste a token.",

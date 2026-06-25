@@ -3972,6 +3972,13 @@ export class OpenTofuDeploymentController {
     return await this.#runQuery.getRun(id);
   }
 
+  async listRuns(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly Run[]> {
+    return await this.#runQuery.listRuns(spaceId, options);
+  }
+
   async getRunLogs(id: string): Promise<RunLogsResponse> {
     return await this.#runQuery.getRunLogs(id);
   }

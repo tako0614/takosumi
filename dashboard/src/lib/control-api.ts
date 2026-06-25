@@ -1442,6 +1442,16 @@ export async function listActivity(
   return body.events ?? [];
 }
 
+export async function listRuns(
+  spaceId: string,
+  limit?: number,
+): Promise<readonly Run[]> {
+  const body = await controlFetch<{ runs?: readonly Run[] }>(
+    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/runs${query({ limit })}`,
+  );
+  return body.runs ?? [];
+}
+
 // --- Sources ---------------------------------------------------------------
 
 export async function listSources(spaceId: string): Promise<readonly Source[]> {
