@@ -54,6 +54,9 @@ export interface ServiceGraphOperations {
   listGrantsByBinding(bindingId: string): Promise<readonly ServiceGrant[]>;
   resolveBinding(bindingId: string): Promise<ServiceBinding>;
   issueGrant(input: IssueServiceGrantInput): Promise<ServiceGrant>;
+  projectFromOutputSnapshot(
+    input: ProjectExportsFromOutputSnapshotInput,
+  ): Promise<ProjectServiceGraphFromOutputSnapshotResult>;
   projectExportsFromOutputSnapshot(
     input: ProjectExportsFromOutputSnapshotInput,
   ): Promise<readonly ServiceExport[]>;
@@ -107,10 +110,23 @@ export interface ProjectExportsFromOutputSnapshotInput {
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
+export interface ProjectServiceGraphFromOutputSnapshotResult {
+  readonly serviceExports: readonly ServiceExport[];
+  readonly serviceBindings: readonly ServiceBinding[];
+}
+
 type NormalizedProjectedExportInput = Omit<
   RecordServiceExportInput,
   "id" | "workspaceId" | "producerCapsuleId"
 >;
+
+type NormalizedProjectedBindingInput = Omit<
+  RequestServiceBindingInput,
+  "id" | "workspaceId" | "consumerCapsuleId"
+> & {
+  readonly stableName: string;
+  readonly selectorProducerIsSelf?: boolean;
+};
 
 export class ServiceGraphService implements ServiceGraphOperations {
   readonly #stores: ServiceGraphServiceStores;
@@ -266,9 +282,7 @@ export class ServiceGraphService implements ServiceGraphOperations {
       serviceExportId: serviceExport.id,
       consumerCapsuleId: binding.consumerCapsuleId,
       scopes: binding.grantRequest.scopes,
-      audience: binding.grantRequest.audience ?? [
-        binding.consumerCapsuleId,
-      ],
+      audience: binding.grantRequest.audience ?? [binding.consumerCapsuleId],
       material,
       secretRef: input.secretRef,
       status: "active",
@@ -288,9 +302,9 @@ export class ServiceGraphService implements ServiceGraphOperations {
       this.#allowExtensionCapabilities,
     );
 
-    const records: ServiceExport[] = [];
+    const serviceExports: ServiceExport[] = [];
     for (const normalized of projectedExports) {
-      records.push(
+      serviceExports.push(
         await this.recordExport({
           id: stableProjectedExportId({
             producerCapsuleId: input.producerCapsuleId,
@@ -307,7 +321,44 @@ export class ServiceGraphService implements ServiceGraphOperations {
         }),
       );
     }
-    return records;
+    return serviceExports;
+  }
+
+  async projectFromOutputSnapshot(
+    input: ProjectExportsFromOutputSnapshotInput,
+  ): Promise<ProjectServiceGraphFromOutputSnapshotResult> {
+    const serviceExports = await this.projectExportsFromOutputSnapshot(input);
+    const projectedBindings = normalizeProjectedBindings(
+      input.outputs,
+      this.#allowExtensionCapabilities,
+    );
+
+    const serviceBindings: ServiceBinding[] = [];
+    for (const normalized of projectedBindings) {
+      const { selectorProducerIsSelf, stableName, ...bindingInput } =
+        normalized;
+      const selector = normalized.selectorProducerIsSelf
+        ? {
+            ...normalized.selector,
+            producerCapsuleId: input.producerCapsuleId,
+          }
+        : normalized.selector;
+      serviceBindings.push(
+        await this.requestBinding({
+          id: stableProjectedBindingId({
+            consumerCapsuleId: input.producerCapsuleId,
+            outputId: input.outputId,
+            name: stableName,
+          }),
+          workspaceId: input.workspaceId,
+          consumerCapsuleId: input.producerCapsuleId,
+          ...bindingInput,
+          selector,
+        }),
+      );
+    }
+
+    return { serviceExports, serviceBindings };
   }
 
   async #candidateExports(
@@ -338,6 +389,10 @@ export function validateProjectedServiceExportsFromOutputSnapshot(
   options: { readonly allowExtensionCapabilities?: boolean } = {},
 ): void {
   normalizeProjectedExports(
+    outputs,
+    options.allowExtensionCapabilities === true,
+  );
+  normalizeProjectedBindings(
     outputs,
     options.allowExtensionCapabilities === true,
   );
@@ -377,6 +432,8 @@ export function createStorageBackedServiceGraphService(
     resolveBinding: (bindingId) =>
       withService((service) => service.resolveBinding(bindingId)),
     issueGrant: (input) => withService((service) => service.issueGrant(input)),
+    projectFromOutputSnapshot: (input) =>
+      withService((service) => service.projectFromOutputSnapshot(input)),
     projectExportsFromOutputSnapshot: (input) =>
       withService((service) => service.projectExportsFromOutputSnapshot(input)),
   };
@@ -386,20 +443,49 @@ function normalizeProjectedExports(
   outputs: Readonly<Record<string, JsonValue>>,
   allowExtensionCapabilities: boolean,
 ): readonly NormalizedProjectedExportInput[] {
+  const projected: NormalizedProjectedExportInput[] = [];
   const rawExports = outputs.service_exports;
-  if (rawExports === undefined) return [];
-  if (!Array.isArray(rawExports)) {
-    throw new TypeError("service_exports output must be an array");
+  if (rawExports !== undefined) {
+    if (!Array.isArray(rawExports)) {
+      throw new TypeError("service_exports output must be an array");
+    }
+    for (const [index, value] of rawExports.entries()) {
+      const normalized = normalizeProjectedExport(value, index);
+      assertCapabilitiesAllowed(
+        normalized.capabilities,
+        allowExtensionCapabilities,
+        `service_exports[${index}].capabilities`,
+      );
+      projected.push(normalized);
+    }
   }
-  return rawExports.map((value, index) => {
-    const normalized = normalizeProjectedExport(value, index);
+
+  const takosAppExports = normalizeTakosAppPublishExports(outputs.takos_app);
+  for (const [index, normalized] of takosAppExports.entries()) {
     assertCapabilitiesAllowed(
       normalized.capabilities,
       allowExtensionCapabilities,
-      `service_exports[${index}].capabilities`,
+      `takos_app.publish[${index}].capabilities`,
     );
-    return normalized;
-  });
+    projected.push(normalized);
+  }
+
+  return projected;
+}
+
+function normalizeProjectedBindings(
+  outputs: Readonly<Record<string, JsonValue>>,
+  allowExtensionCapabilities: boolean,
+): readonly NormalizedProjectedBindingInput[] {
+  const projected = normalizeTakosAppConsumeBindings(outputs.takos_app);
+  for (const [index, normalized] of projected.entries()) {
+    assertCapabilitiesAllowed(
+      normalized.selector.capabilities,
+      allowExtensionCapabilities,
+      `takos_app.compute.consume[${index}].selector.capabilities`,
+    );
+  }
+  return projected;
 }
 
 function assertCapabilitiesAllowed(
@@ -518,9 +604,7 @@ function isVisibleToConsumer(
   binding: ServiceBinding,
 ): boolean {
   if (serviceExport.visibility === "private") {
-    return (
-      serviceExport.producerCapsuleId === binding.consumerCapsuleId
-    );
+    return serviceExport.producerCapsuleId === binding.consumerCapsuleId;
   }
   return ["space", "shared", "public"].includes(serviceExport.visibility);
 }
@@ -574,6 +658,313 @@ function stableProjectedExportId(input: {
     sanitizeIdPart(input.outputId),
     sanitizeIdPart(input.name),
   ].join("_");
+}
+
+function stableProjectedBindingId(input: {
+  readonly consumerCapsuleId: string;
+  readonly outputId: string;
+  readonly name: string;
+}): string {
+  return [
+    "sbind",
+    sanitizeIdPart(input.consumerCapsuleId),
+    sanitizeIdPart(input.outputId),
+    sanitizeIdPart(input.name),
+  ].join("_");
+}
+
+function normalizeTakosAppPublishExports(
+  value: JsonValue | undefined,
+): readonly NormalizedProjectedExportInput[] {
+  if (value === undefined) return [];
+  if (!isJsonObject(value)) {
+    throw new TypeError("takos_app output must be an object when present");
+  }
+  const publish = value.publish;
+  if (publish === undefined) return [];
+  if (!Array.isArray(publish)) {
+    throw new TypeError("takos_app.publish must be an array when present");
+  }
+  const appName = optionalString(value.name, "takos_app.name");
+  const appVersion = optionalString(value.version, "takos_app.version");
+  return publish.map((entry, index) => {
+    if (!isJsonObject(entry)) {
+      throw new TypeError(`takos_app.publish[${index}] must be an object`);
+    }
+    const name = requiredString(entry.name, `takos_app.publish[${index}].name`);
+    const type = requiredString(entry.type, `takos_app.publish[${index}].type`);
+    const capability = capabilityFromTakosAppPublicationType(
+      type,
+      `takos_app.publish[${index}].type`,
+    );
+    const visibilityRaw = optionalString(
+      entry.visibility,
+      `takos_app.publish[${index}].visibility`,
+    );
+    const visibility = visibilityRaw ?? "space";
+    if (!isServiceExportVisibility(visibility)) {
+      throw new TypeError(
+        `takos_app.publish[${index}].visibility must be private, space, public, or shared`,
+      );
+    }
+    const publisher = optionalString(
+      entry.publisher,
+      `takos_app.publish[${index}].publisher`,
+    );
+    return {
+      name,
+      capabilities: [capability],
+      visibility,
+      endpoints: endpointsFromTakosAppPublishOutputs(entry.outputs),
+      labels: compactStringRecord({
+        app: appName,
+        version: appVersion,
+        publisher,
+      }),
+      metadata: compactJsonObject({
+        source: "takos_app.publish",
+        appName,
+        appVersion,
+        publisher,
+        type,
+        outputs: optionalJsonObject(entry.outputs),
+        display: optionalJsonObject(entry.display),
+        spec: optionalJsonObject(entry.spec),
+      }),
+    };
+  });
+}
+
+function normalizeTakosAppConsumeBindings(
+  value: JsonValue | undefined,
+): readonly NormalizedProjectedBindingInput[] {
+  if (value === undefined) return [];
+  if (!isJsonObject(value)) {
+    throw new TypeError("takos_app output must be an object when present");
+  }
+  const compute = value.compute;
+  if (compute === undefined) return [];
+  if (!isJsonObject(compute)) {
+    throw new TypeError("takos_app.compute must be an object when present");
+  }
+  const appName = optionalString(value.name, "takos_app.name");
+  const bindings: NormalizedProjectedBindingInput[] = [];
+  for (const [componentName, componentValue] of Object.entries(compute)) {
+    if (!isJsonObject(componentValue)) {
+      throw new TypeError(
+        `takos_app.compute.${componentName} must be an object`,
+      );
+    }
+    const consume = componentValue.consume;
+    if (consume === undefined) continue;
+    if (!Array.isArray(consume)) {
+      throw new TypeError(
+        `takos_app.compute.${componentName}.consume must be an array when present`,
+      );
+    }
+    for (const [index, entry] of consume.entries()) {
+      if (!isJsonObject(entry)) {
+        throw new TypeError(
+          `takos_app.compute.${componentName}.consume[${index}] must be an object`,
+        );
+      }
+      const publication = requiredString(
+        entry.publication,
+        `takos_app.compute.${componentName}.consume[${index}].publication`,
+      );
+      const capability = capabilityFromTakosAppConsume(
+        entry,
+        publication,
+        `takos_app.compute.${componentName}.consume[${index}]`,
+      );
+      const env = envNamesFromTakosAppInject(entry.inject);
+      bindings.push({
+        stableName: `${componentName}_${publication}`,
+        target: {
+          kind: "workload",
+          name: componentName,
+          metadata: compactJsonObject({
+            source: "takos_app.compute",
+            appName,
+            componentName,
+            componentKind: optionalString(
+              componentValue.kind,
+              `takos_app.compute.${componentName}.kind`,
+            ),
+          }),
+        },
+        selector: {
+          capabilities: [capability],
+          name: publication,
+        },
+        selectorProducerIsSelf: publication === "launcher",
+        dependencyMode: "variable_injection",
+        grantRequest: {
+          scopes: scopesFromTakosAppConsume(entry, capability),
+          audience: [componentName],
+          ...(env.length > 0 ? { env } : {}),
+          metadata: compactJsonObject({
+            source: "takos_app.compute.consume",
+            appName,
+            componentName,
+            publication,
+            sourceRef:
+              capability === "identity.oidc"
+                ? "takosumi.identity.oidc"
+                : undefined,
+            inject: optionalJsonObject(entry.inject),
+          }),
+        },
+      });
+    }
+  }
+  return bindings;
+}
+
+function capabilityFromTakosAppPublicationType(
+  value: string,
+  field: string,
+): ServiceGraphCapability {
+  switch (value) {
+    case "UiSurface":
+    case "ui.surface":
+    case "launcher":
+      return "interface.ui.surface";
+    case "McpServer":
+    case "mcp.server":
+      return "protocol.mcp.server";
+    default:
+      if (isServiceGraphCapability(value)) return value;
+      throw new TypeError(
+        `${field} must be a known takos_app publication type or dotted Service Graph capability`,
+      );
+  }
+}
+
+function capabilityFromTakosAppConsume(
+  entry: JsonObject,
+  publication: string,
+  field: string,
+): ServiceGraphCapability {
+  const explicit = optionalString(entry.capability, `${field}.capability`);
+  if (explicit !== undefined) {
+    if (!isServiceGraphCapability(explicit)) {
+      throw new TypeError(`${field}.capability must be a dotted capability`);
+    }
+    return explicit;
+  }
+  switch (publication) {
+    case "identity.oidc":
+      return "identity.oidc";
+    case "launcher":
+      return "interface.ui.surface";
+    case "mcp":
+    case "mcp.server":
+      return "protocol.mcp.server";
+    default:
+      return isServiceGraphCapability(publication)
+        ? publication
+        : "deployment.outputs";
+  }
+}
+
+function scopesFromTakosAppConsume(
+  entry: JsonObject,
+  capability: ServiceGraphCapability,
+): readonly string[] {
+  const raw = entry.scopes;
+  if (raw !== undefined) {
+    if (
+      !Array.isArray(raw) ||
+      raw.some((scope) => typeof scope !== "string" || scope.length === 0)
+    ) {
+      throw new TypeError("takos_app consume scopes must be string[]");
+    }
+    return [...new Set(raw as string[])];
+  }
+  if (capability === "identity.oidc") return ["openid", "profile", "email"];
+  return [];
+}
+
+function envNamesFromTakosAppInject(
+  value: JsonValue | undefined,
+): readonly string[] {
+  if (value === undefined) return [];
+  if (!isJsonObject(value)) {
+    throw new TypeError("takos_app consume inject must be an object");
+  }
+  const rawEnv = value.env;
+  if (rawEnv === undefined) return [];
+  if (!isJsonObject(rawEnv)) {
+    throw new TypeError("takos_app consume inject.env must be an object");
+  }
+  const names: string[] = [];
+  for (const envName of Object.values(rawEnv)) {
+    if (typeof envName !== "string" || envName.length === 0) {
+      throw new TypeError(
+        "takos_app consume inject.env values must be env var names",
+      );
+    }
+    names.push(envName);
+  }
+  return [...new Set(names)];
+}
+
+function endpointsFromTakosAppPublishOutputs(
+  value: JsonValue | undefined,
+): readonly ServiceGraphEndpoint[] | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const endpoints: ServiceGraphEndpoint[] = [];
+  for (const [name, output] of Object.entries(value)) {
+    if (!isJsonObject(output)) continue;
+    const kind = output.kind;
+    const url = output.url ?? output.value;
+    if (kind === "url" && typeof url === "string" && url.length > 0) {
+      endpoints.push({ name, url });
+    }
+  }
+  return endpoints.length > 0 ? endpoints : undefined;
+}
+
+function compactStringRecord(
+  value: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> | undefined {
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] => entry[1] !== undefined,
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function compactJsonObject(
+  value: Readonly<Record<string, JsonValue | undefined>>,
+): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry) => entry[1] !== undefined),
+  ) as JsonObject;
+}
+
+function optionalJsonObject(
+  value: JsonValue | undefined,
+): JsonObject | undefined {
+  return isJsonObject(value) ? value : undefined;
+}
+
+function requiredString(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(
+  value: JsonValue | undefined,
+  field: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${field} must be a non-empty string when present`);
+  }
+  return value;
 }
 
 function sanitizeIdPart(value: string): string {

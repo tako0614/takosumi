@@ -63,6 +63,52 @@ test("Accounts service graph material resolver materializes OIDC public clients 
   expect(client?.clientSecretHash).toEqual(undefined);
 });
 
+test("Accounts service graph material resolver materializes yurucommu-style OIDC client context", async () => {
+  const store = new InMemoryAccountsStore();
+  const resolver = createTakosumiServiceGraphMaterialResolver({
+    store,
+    issuer: "https://app.takosumi.test",
+    allowDeployControlInstallations: true,
+    now: () => 1_700_000_000_000,
+  });
+
+  const material = singleMaterial(
+    await resolver.resolve({
+      capsuleId: "cap_yurucommu",
+      workspaceId: "ws_social",
+      appId: "yurucommu",
+      componentName: "web",
+      bindingName: "identity.oidc",
+      sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+      component: {
+        kind: "worker",
+        spec: {
+          redirectPaths: ["/api/auth/callback/takos"],
+          scopes: ["openid", "profile", "email"],
+        },
+      },
+    }),
+  );
+
+  expect(material.capability).toEqual(
+    TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
+  );
+  expect(material.issuerUrl).toEqual("https://app.takosumi.test");
+  expect(material.redirectUris).toEqual([
+    "https://app.takosumi.test/api/auth/callback/takos",
+  ]);
+  expect(material.allowedScopes).toEqual(["openid", "profile", "email"]);
+  expect(material.tokenEndpointAuthMethod).toEqual("none");
+
+  const client = store.findOidcClientForInstallation("cap_yurucommu");
+  expect(client?.namespacePath).toEqual(
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+  );
+  expect(store.findAppInstallation("cap_yurucommu")?.appId).toEqual(
+    "yurucommu",
+  );
+});
+
 test("Accounts service graph material resolver rejects network-path redirectPaths", async () => {
   const store = new InMemoryAccountsStore();
   const resolver = createTakosumiServiceGraphMaterialResolver({
