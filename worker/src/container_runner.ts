@@ -18,6 +18,8 @@ import type {
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
+  ReleaseCommandRunJob,
+  ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
@@ -34,14 +36,12 @@ import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
  */
 const DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MS = 45_000;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
+type ContainerRunnerAction = OpenTofuRunQueueMessage["action"] | "release";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
 {
-  readonly #activeRunsByAction = new Map<
-    OpenTofuRunQueueMessage["action"],
-    number
-  >();
+  readonly #activeRunsByAction = new Map<ContainerRunnerAction, number>();
 
   constructor(
     private readonly env: CloudflareWorkerEnv,
@@ -177,6 +177,47 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
+  async release(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult> {
+    const result = await this.#runContainer("release", job.runId, {
+      release: {
+        commands: job.commands.map((command) => ({
+          id: command.id,
+          command: [...command.command],
+          ...(command.workingDirectory
+            ? { workingDirectory: command.workingDirectory }
+            : {}),
+          ...(command.env ? { env: command.env } : {}),
+        })),
+      },
+      sourceArchive: {
+        objectKey: job.sourceSnapshot.archiveObjectKey,
+        digest: job.sourceSnapshot.archiveDigest,
+      },
+      activation: {
+        applyRunId: job.applyRunId,
+        installationId: job.installationId,
+        deploymentId: job.deploymentId,
+      },
+    });
+    const status = stringFromRecord(result, "status");
+    if (status !== "succeeded") {
+      throw new Error(
+        `release command runner returned ${status ?? "unknown"} status`,
+      );
+    }
+    return {
+      status: "succeeded",
+      runId: job.runId,
+      commandCount:
+        typeof result.commandCount === "number"
+          ? result.commandCount
+          : job.commands.length,
+      ...(stringFromRecord(result, "stdout")
+        ? { stdout: stringFromRecord(result, "stdout") }
+        : {}),
+    };
+  }
+
   async sourceSync(
     job: OpenTofuSourceSyncJob,
   ): Promise<OpenTofuSourceSyncResult> {
@@ -304,7 +345,7 @@ export class CloudflareContainerOpenTofuRunner
   }
 
   async #runContainer(
-    action: OpenTofuRunQueueMessage["action"],
+    action: ContainerRunnerAction,
     runId: string,
     request: unknown,
     options: { readonly timeoutMs?: number } = {},
@@ -373,7 +414,7 @@ export class CloudflareContainerOpenTofuRunner
   }
 
   async #recordActiveRuns(
-    action: OpenTofuRunQueueMessage["action"],
+    action: ContainerRunnerAction,
     delta: 1 | -1,
   ): Promise<void> {
     const next = Math.max(

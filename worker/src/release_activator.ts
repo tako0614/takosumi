@@ -3,6 +3,7 @@ import type {
   ReleaseActivationResult,
   ReleaseActivator,
   ReleaseActivationStatus,
+  OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { JsonValue } from "takosumi-contract/reference/compat";
 import type { CloudflareWorkerEnv } from "./bindings.ts";
@@ -55,6 +56,42 @@ export function createWebhookReleaseActivator(
         return { status: "succeeded" };
       }
       return parseReleaseActivatorResponse(await response.json());
+    },
+  };
+}
+
+export function createRunnerReleaseActivator(
+  runner: Pick<OpenTofuRunner, "release">,
+): ReleaseActivator | undefined {
+  if (typeof runner.release !== "function") return undefined;
+  return {
+    async activate(input) {
+      if (input.commands.length === 0) return { status: "skipped" };
+      if (!input.sourceSnapshot) {
+        return {
+          status: "pending",
+          kind: "takosumi.release-commands@v1",
+          message:
+            "post-apply release commands require a source snapshot archive",
+        };
+      }
+      const result = await runner.release!({
+        runId: releaseCommandRunId(input.applyRun.id),
+        commands: input.commands,
+        sourceSnapshot: input.sourceSnapshot,
+        applyRunId: input.applyRun.id,
+        installationId: input.installation.id,
+        deploymentId: input.deployment.id,
+      });
+      return {
+        status: "succeeded",
+        kind: "takosumi.release-commands@v1",
+        message: `ran ${result.commandCount} post-apply release command(s)`,
+        metadata: {
+          releaseRunId: result.runId,
+          commandCount: result.commandCount,
+        },
+      };
     },
   };
 }
@@ -112,9 +149,25 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
       stateGeneration: input.outputSnapshot.stateGeneration,
       outputDigest: input.outputSnapshot.outputDigest,
     },
+    ...(input.sourceSnapshot
+      ? {
+          sourceSnapshot: {
+            id: input.sourceSnapshot.id,
+            origin: input.sourceSnapshot.origin,
+            archiveObjectKey: input.sourceSnapshot.archiveObjectKey,
+            archiveDigest: input.sourceSnapshot.archiveDigest,
+            resolvedCommit: input.sourceSnapshot.resolvedCommit,
+            path: input.sourceSnapshot.path,
+          },
+        }
+      : {}),
     nonSensitiveOutputs: input.nonSensitiveOutputs,
     commands: input.commands,
   };
+}
+
+function releaseCommandRunId(applyRunId: string): string {
+  return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
 }
 
 function parseReleaseActivatorResponse(
