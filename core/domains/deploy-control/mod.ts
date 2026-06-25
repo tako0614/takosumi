@@ -7090,6 +7090,9 @@ const RELEASE_ACTIVATION_SECRET_NAME_RE =
   /(?:^|[_-])(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])|(?:^|[_-])(?:database|db|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite)[_-]?(?:url|uri|dsn)(?:$|[_-])|(?:^|[_-])(?:dsn|connection[_-]?string)(?:$|[_-])/i;
 const RELEASE_ACTIVATION_SECRET_VALUE_RE =
   /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key|database[_-]?url|connection[_-]?string|\bdsn\b|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@)/i;
+const RELEASE_ACTIVATION_ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/u;
+const RELEASE_ACTIVATION_RESERVED_ENV_RE = /^(?:TAKOSUMI_|OPENTOFU_|TF_)/u;
+const RELEASE_ACTIVATION_RESERVED_ENV_NAMES = new Set(["PATH", "HOME", "PWD"]);
 
 function releaseActivationOutputs(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
@@ -7159,16 +7162,18 @@ function parseReleaseCommand(
   index: number,
 ): ReleaseActivationCommand | undefined {
   if (!isRecord(value)) return undefined;
-  const argv = Array.isArray(value.command)
-    ? value.command.filter(
-        (part): part is string => nonEmptyString(part) !== undefined,
-      )
-    : undefined;
+  const argv = releaseCommandArgv(value.command);
   if (!argv || argv.length === 0 || argv.length > 40) return undefined;
-  const id = nonEmptyString(value.id) ?? `post_apply_${index + 1}`;
-  const workingDirectory =
+  const id = releaseCommandId(value.id) ?? `post_apply_${index + 1}`;
+  const rawWorkingDirectory =
     nonEmptyString(value.workingDirectory) ??
     nonEmptyString(value.working_directory);
+  const workingDirectory =
+    rawWorkingDirectory &&
+    isSafeReleaseCommandWorkingDirectory(rawWorkingDirectory)
+      ? rawWorkingDirectory
+      : undefined;
+  if (rawWorkingDirectory && !workingDirectory) return undefined;
   const env = releaseCommandEnv(value.env);
   const executor = releaseCommandExecutor(value.executor);
   return {
@@ -7187,12 +7192,51 @@ function releaseCommandExecutor(
   return value === "runner" || value === "operator" ? value : undefined;
 }
 
+function releaseCommandArgv(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 40) {
+    return undefined;
+  }
+  const argv: string[] = [];
+  for (const part of value) {
+    const stringPart = nonEmptyString(part);
+    if (!stringPart || /[\0\r\n]/u.test(stringPart)) return undefined;
+    argv.push(stringPart);
+  }
+  return argv;
+}
+
+function releaseCommandId(value: unknown): string | undefined {
+  const id = nonEmptyString(value);
+  if (!id || /[\0\r\n]/u.test(id)) return undefined;
+  return id;
+}
+
+function isSafeReleaseCommandWorkingDirectory(value: string): boolean {
+  if (
+    value.length === 0 ||
+    /[\0\r\n]/u.test(value) ||
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:[\\/]/u.test(value)
+  ) {
+    return false;
+  }
+  return !value.split(/[\\/]+/u).some((segment) => segment === "..");
+}
+
 function releaseCommandEnv(
   value: unknown,
 ): Readonly<Record<string, string>> | undefined {
   if (!isRecord(value)) return undefined;
   const env: Record<string, string> = {};
   for (const [key, raw] of Object.entries(value)) {
+    if (!RELEASE_ACTIVATION_ENV_NAME_RE.test(key)) continue;
+    if (
+      RELEASE_ACTIVATION_RESERVED_ENV_RE.test(key) ||
+      RELEASE_ACTIVATION_RESERVED_ENV_NAMES.has(key)
+    ) {
+      continue;
+    }
     if (RELEASE_ACTIVATION_SECRET_NAME_RE.test(key)) continue;
     const stringValue =
       typeof raw === "string" ||
@@ -7200,7 +7244,11 @@ function releaseCommandEnv(
       typeof raw === "boolean"
         ? String(raw)
         : undefined;
-    if (!stringValue || RELEASE_ACTIVATION_SECRET_VALUE_RE.test(stringValue)) {
+    if (
+      !stringValue ||
+      /[\0\r\n]/u.test(stringValue) ||
+      RELEASE_ACTIVATION_SECRET_VALUE_RE.test(stringValue)
+    ) {
       continue;
     }
     env[key] = stringValue;

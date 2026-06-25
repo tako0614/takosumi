@@ -2219,6 +2219,89 @@ test("release activator receives neutral post-apply commands as opaque argv", as
   });
 });
 
+test("release command descriptor validates only generic command shape", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: [
+            {
+              id: "db-activation-is-opaque",
+              executor: "operator",
+              command: ["bun", "run", "db:migrate"],
+              working_directory: "backend",
+              env: {
+                APP_RELEASE_TARGET: "production",
+                BAD_NAME: "ok",
+                "bad-name": "ignored",
+                TAKOSUMI_OUTPUTS_JSON: "ignored",
+                PATH: "/tmp/bin",
+                DATABASE_URL: "postgres://user:pass@db.example/app",
+                MULTILINE: "one\ntwo",
+              },
+            },
+            {
+              id: "path-escape",
+              executor: "operator",
+              command: ["bun", "run", "activate"],
+              working_directory: "../outside",
+            },
+            {
+              id: "absolute-path",
+              executor: "operator",
+              command: ["bun", "run", "activate"],
+              working_directory: "/tmp",
+            },
+            {
+              id: "control-char-argv",
+              executor: "operator",
+              command: ["bun", "run\nactivate"],
+            },
+          ],
+        },
+      },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "db-activation-is-opaque",
+      phase: "post_apply",
+      command: ["bun", "run", "db:migrate"],
+      workingDirectory: "backend",
+      env: {
+        APP_RELEASE_TARGET: "production",
+        BAD_NAME: "ok",
+      },
+      executor: "operator",
+    },
+  ]);
+  expect(JSON.stringify(activations[0])).not.toContain("postgres://");
+  expect(JSON.stringify(activations[0])).not.toContain("TAKOSUMI_OUTPUTS_JSON");
+  expect(JSON.stringify(activations[0])).not.toContain("../outside");
+});
+
 test("app-declared release commands stay pending when no release activator is configured", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(
