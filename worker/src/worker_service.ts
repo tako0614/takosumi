@@ -38,6 +38,7 @@ import { sensitiveOutputResolverFromEnv } from "./sensitive_output_resolver.ts";
 import { dependencyValueSealerFromEnv } from "./dependency_value_sealer.ts";
 import { CloudflareContainerOpenTofuRunner } from "./container_runner.ts";
 import {
+  createCompositeReleaseActivator,
   createRunnerReleaseActivator,
   releaseActivatorFromEnv,
 } from "./release_activator.ts";
@@ -94,10 +95,14 @@ export async function createWorkerServiceApp(
   const dependencyValueSealer = sensitiveOutputResolver
     ? dependencyValueSealerFromEnv(runtimeEnv)
     : undefined;
+  const envReleaseActivator = releaseActivatorFromEnv(env, runtimeEnv);
+  const runnerReleaseActivator = createRunnerReleaseActivator(opentofuRunner);
   const releaseActivator =
     options.releaseActivator ??
-    releaseActivatorFromEnv(env, runtimeEnv) ??
-    createRunnerReleaseActivator(opentofuRunner);
+    createCompositeReleaseActivator({
+      operator: envReleaseActivator,
+      runner: runnerReleaseActivator,
+    });
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
   return await createTakosumiService({
     role,

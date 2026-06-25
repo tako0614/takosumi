@@ -225,12 +225,17 @@ function parseCommands(raw: unknown): readonly ReleaseActivationCommand[] {
     if (workingDirectory) assertSafeRelativePath(workingDirectory);
     const env = parseCommandEnv(value.env);
     const executor = parseExecutor(value.executor, `commands[${index}]`);
+    if (executor !== "operator") {
+      throw new Error(
+        `commands[${index}].executor must be operator for operator release activation`,
+      );
+    }
     return {
       id,
       command,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(env ? { env } : {}),
-      ...(executor ? { executor } : {}),
+      executor,
     };
   });
 }

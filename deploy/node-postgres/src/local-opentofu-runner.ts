@@ -13,6 +13,8 @@ import type {
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
   ProviderInstallationEvidence,
+  ReleaseCommandRunJob,
+  ReleaseCommandRunResult,
 } from "../../../core/domains/deploy-control/mod.ts";
 import type {
   OpenTofuPlanArtifact,
@@ -200,6 +202,30 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
   }
 
+  async release(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult> {
+    await this.restoreSourceArchive(job.runId, {
+      objectKey: job.sourceSnapshot.archiveObjectKey,
+      digest: job.sourceSnapshot.archiveDigest,
+    });
+    const result = await runRunner(this.transport, "release", job.runId, {
+      release: { commands: job.commands },
+      outputs: job.nonSensitiveOutputs,
+      activation: {
+        applyRunId: job.applyRunId,
+        installationId: job.installationId,
+        deploymentId: job.deploymentId,
+      },
+    });
+    return {
+      status: "succeeded",
+      runId: stringValue(result, "runId") ?? job.runId,
+      commandCount: numberValue(result, "commandCount") ?? job.commands.length,
+      ...(stringValue(result, "stdout")
+        ? { stdout: stringValue(result, "stdout") }
+        : {}),
+    };
+  }
+
   async sourceSync(
     job: OpenTofuSourceSyncJob,
   ): Promise<OpenTofuSourceSyncResult> {
@@ -348,7 +374,13 @@ function runnerLocalPlanRunId(
 
 async function runRunner(
   transport: RunnerTransport,
-  action: "plan" | "apply" | "destroy" | "compatibility_check" | "source_sync",
+  action:
+    | "plan"
+    | "apply"
+    | "destroy"
+    | "compatibility_check"
+    | "source_sync"
+    | "release",
   runId: string,
   request: unknown,
 ): Promise<Record<string, unknown>> {

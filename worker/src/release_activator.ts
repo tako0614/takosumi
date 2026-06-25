@@ -41,13 +41,34 @@ export function createWebhookReleaseActivator(
   const fetcher = options.fetcher ?? fetch;
   return {
     async activate(input) {
+      const operatorCommands = input.commands.filter(
+        (command) => command.executor === "operator",
+      );
+      if (operatorCommands.length === 0) {
+        const metadata: Readonly<Record<string, JsonValue>> = {
+          commandCount: input.commands.length,
+          runnerCommandCount: input.commands.length,
+        };
+        return {
+          status: input.commands.length === 0 ? "skipped" : "pending",
+          kind: "takosumi.operator.release-activation@v1",
+          message:
+            "operator release activator only accepts executor=operator commands",
+          metadata,
+        };
+      }
       const response = await fetcher(endpoint, {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(releaseActivationWebhookPayload(input)),
+        body: JSON.stringify(
+          releaseActivationWebhookPayload({
+            ...input,
+            commands: operatorCommands,
+          }),
+        ),
       });
       if (!response.ok) {
         throw new Error(`release activator request failed: ${response.status}`);
@@ -56,6 +77,45 @@ export function createWebhookReleaseActivator(
         return { status: "succeeded" };
       }
       return parseReleaseActivatorResponse(await response.json());
+    },
+  };
+}
+
+export function createCompositeReleaseActivator(options: {
+  readonly runner?: ReleaseActivator;
+  readonly operator?: ReleaseActivator;
+}): ReleaseActivator | undefined {
+  if (!options.runner) return options.operator;
+  if (!options.operator) return options.runner;
+  return {
+    async activate(input) {
+      if (input.commands.length === 0) return { status: "skipped" };
+      const runnerCommands = input.commands.filter(
+        (command) => command.executor !== "operator",
+      );
+      const operatorCommands = input.commands.filter(
+        (command) => command.executor === "operator",
+      );
+      const runnerResult =
+        runnerCommands.length > 0
+          ? await options.runner!.activate({
+              ...input,
+              commands: runnerCommands,
+            })
+          : undefined;
+      const operatorResult =
+        operatorCommands.length > 0
+          ? await options.operator!.activate({
+              ...input,
+              commands: operatorCommands,
+            })
+          : undefined;
+      return combineActivationResults({
+        runnerCommands,
+        operatorCommands,
+        runnerResult,
+        operatorResult,
+      });
     },
   };
 }
@@ -131,6 +191,46 @@ export function releaseActivatorFromEnv(
     token,
     allowInsecure: releaseActivatorInsecureAllowed(env, runtimeEnv),
   });
+}
+
+function combineActivationResults(input: {
+  readonly runnerCommands: readonly unknown[];
+  readonly operatorCommands: readonly unknown[];
+  readonly runnerResult?: ReleaseActivationResult;
+  readonly operatorResult?: ReleaseActivationResult;
+}): ReleaseActivationResult {
+  const results = [input.runnerResult, input.operatorResult].filter(
+    (result): result is ReleaseActivationResult => result !== undefined,
+  );
+  if (results.length === 0) return { status: "skipped" };
+  if (results.length === 1) return results[0]!;
+  const status = combinedStatus(results);
+  const metadata: Record<string, JsonValue> = {
+    runnerCommandCount: input.runnerCommands.length,
+    operatorCommandCount: input.operatorCommands.length,
+    runnerStatus: input.runnerResult?.status ?? "skipped",
+    operatorStatus: input.operatorResult?.status ?? "skipped",
+  };
+  const messages = results
+    .map((result) => result.message)
+    .filter((message): message is string => Boolean(message));
+  return {
+    status,
+    kind: "takosumi.release-activation.composite@v1",
+    ...(messages.length > 0 ? { message: messages.join("; ") } : {}),
+    metadata,
+  };
+}
+
+function combinedStatus(
+  results: readonly ReleaseActivationResult[],
+): ReleaseActivationStatus {
+  if (results.some((result) => result.status === "failed")) return "failed";
+  if (results.some((result) => result.status === "pending")) return "pending";
+  if (results.some((result) => result.status === "succeeded")) {
+    return "succeeded";
+  }
+  return "skipped";
 }
 
 function releaseActivatorInsecureAllowed(

@@ -66,6 +66,25 @@ test("operator release activator rejects credential and reserved command env", (
   ).toThrow("release command env must not include activator token");
 });
 
+test("operator release activator rejects non-operator commands", () => {
+  expect(() =>
+    parsePayload(
+      validPayload({
+        executor: "runner",
+      }),
+    ),
+  ).toThrow(
+    "commands[0].executor must be operator for operator release activation",
+  );
+
+  const payload = validPayload();
+  const command = (payload.commands as Record<string, unknown>[])[0]!;
+  delete command.executor;
+  expect(() => parsePayload(payload)).toThrow(
+    "commands[0].executor must be operator for operator release activation",
+  );
+});
+
 test("operator release activator restores source archive and runs opaque argv only", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-operator-release-"));
   try {
@@ -136,6 +155,7 @@ function validPayload(
   command: {
     readonly command?: readonly string[];
     readonly env?: Readonly<Record<string, string>>;
+    readonly executor?: "operator" | "runner";
   } = {},
 ): Record<string, unknown> {
   return {
@@ -155,7 +175,7 @@ function validPayload(
     commands: [
       {
         id: "publish",
-        executor: "operator",
+        executor: command.executor ?? "operator",
         command: command.command ?? [process.execPath, "-e", "console.log(1)"],
         ...(command.env ? { env: command.env } : {}),
       },
