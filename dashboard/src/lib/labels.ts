@@ -23,6 +23,7 @@ function label(
 /** Capsule lifecycle status: pending/active/stale/error/disabled/destroyed. */
 const INSTALLATION: Record<string, MessageKey> = {
   pending: "status.installation.pending",
+  needs_attention: "status.installation.needsAttention",
   active: "status.installation.active",
   stale: "status.installation.stale",
   error: "status.installation.error",
@@ -117,6 +118,7 @@ export function installationTone(status: string | undefined): Tone {
     case "pending":
     case "stale":
       return "warn";
+    case "needs_attention":
     case "error":
       return "danger";
     case "disabled":

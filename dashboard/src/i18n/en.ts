@@ -126,6 +126,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- status labels ----------------------------------------------------
   "status.installation.pending": "Setting up",
+  "status.installation.needsAttention": "Needs attention",
   // `active` = the last apply succeeded and the state generation advanced; it
   // is NOT a verified-reachable signal, so say "Deployed", not "Running".
   "status.installation.active": "Deployed",
