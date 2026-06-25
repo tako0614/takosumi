@@ -40,6 +40,7 @@ function asTcsListing(config: CatalogInstallConfig): TcsListing {
   const catalog = config.catalog;
   return {
     id: catalog.templateId ?? config.id,
+    installConfigId: config.id,
     source: {
       git: catalog.source.git,
       ref: catalog.source.ref,

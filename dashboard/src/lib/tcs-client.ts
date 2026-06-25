@@ -43,6 +43,8 @@ export type TcsListingSurface = "service" | "building_block" | "example";
 
 export interface TcsListing {
   readonly id: string;
+  /** Dashboard-local hint for official starter entries; external TCS nodes omit it. */
+  readonly installConfigId?: string;
   readonly source: TcsListingSource;
   readonly kind: TcsListingKind;
   readonly surface: TcsListingSurface;

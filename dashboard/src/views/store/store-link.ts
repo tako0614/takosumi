@@ -12,6 +12,10 @@ import type { TcsListing } from "../../lib/tcs-client.ts";
  */
 export function buildNewQuery(listing: TcsListing): string {
   const params = new URLSearchParams();
+  if (listing.installConfigId) {
+    params.set("installConfigId", listing.installConfigId);
+    return params.toString();
+  }
   params.set("git", listing.source.git);
   params.set("ref", listing.source.resolvedCommit ?? listing.source.ref);
   if (listing.source.path) params.set("path", listing.source.path);

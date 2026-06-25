@@ -536,7 +536,14 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
+function parseInitialInstallConfigId(search: string): string | null {
+  const raw = new URLSearchParams(search).get("installConfigId")?.trim();
+  if (!raw || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(raw)) return null;
+  return raw;
+}
+
 function initialAddTab(search: string, hasPrefill: boolean): "catalog" | "git" {
+  if (parseInitialInstallConfigId(search)) return "catalog";
   if (hasPrefill) return "git";
   const params = new URLSearchParams(search);
   return params.get("mode") === "link" ? "git" : "catalog";
@@ -559,6 +566,7 @@ function Inner() {
     typeof location !== "undefined" &&
     !prefill &&
     hasInstallPrefillParams(initialSearch);
+  const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
 
   // Normal `/new` opens the catalog. Explicit link mode and external
   // `/install?git=…` redirects open the Git-backed flow with the source visible.
@@ -1336,6 +1344,19 @@ function Inner() {
     resetCompatibility();
     setActiveTab("catalog");
   };
+
+  let initialCatalogApplied = false;
+  createEffect(() => {
+    if (initialCatalogApplied || !initialInstallConfigId) return;
+    const entry = allCatalogEntries().find(
+      (candidate) =>
+        candidate.installConfigId === initialInstallConfigId ||
+        candidate.id === initialInstallConfigId,
+    );
+    if (!entry) return;
+    initialCatalogApplied = true;
+    pickCatalogEntry(entry);
+  });
 
   createEffect(() => {
     const entry = selectedCatalogEntry();

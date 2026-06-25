@@ -29,6 +29,12 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
+import {
+  tcsBadgeLabel,
+  tcsCategoryLabel,
+  tcsKindLabel,
+  tcsProviderLabel,
+} from "./store-labels.ts";
 import "./StoreBrowser.css";
 
 type Status = {
@@ -81,6 +87,22 @@ function repoUrl(git: string, ref: string, path: string): string {
   }
   return base;
 }
+function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
+  return [
+    pick(listing.name, locale),
+    pick(listing.description, locale),
+    listing.suggestedName,
+    listing.provider,
+    tcsProviderLabel(listing.provider),
+    listing.kind,
+    tcsKindLabel(listing.kind, locale),
+    listing.category,
+    tcsCategoryLabel(listing.category, locale),
+    listing.source.git,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
 
 const EMPTY: TcsAggregateState = {
   servers: [],
@@ -118,6 +140,11 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     {},
   );
 
+  const setSearchValue = (value: string) => {
+    setSearchInput(value);
+    setActiveQuery(value.trim());
+  };
+
   let reqToken = 0;
   async function rebuild() {
     const token = ++reqToken;
@@ -145,8 +172,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const onSearch = (e: Event) => {
     e.preventDefault();
     setActiveQuery(searchInput().trim());
-    setFCategory("");
-    setFKind("");
     void rebuild();
   };
   const onSort = (v: TcsSort) => {
@@ -221,6 +246,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const displayed = createMemo(() =>
     allItems().filter(
       (l) =>
+        (!activeQuery() ||
+          listingSearchText(l, props.locale).includes(
+            activeQuery().toLowerCase(),
+          )) &&
         (!fCategory() || l.category === fCategory()) &&
         (!fKind() || l.kind === fKind()),
     ),
@@ -269,7 +298,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             name="storeSearch"
             type="search"
             value={searchInput()}
-            onInput={(e) => setSearchInput(e.currentTarget.value)}
+            onInput={(e) => setSearchValue(e.currentTarget.value)}
             placeholder={s("search", props.locale)}
           />
         </form>
@@ -354,7 +383,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               classList={{ active: fCategory() === c }}
               onClick={() => setFCategory(fCategory() === c ? "" : c)}
             >
-              {c}
+              {tcsCategoryLabel(c, props.locale)}
             </button>
           )}
         </For>
@@ -366,7 +395,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               classList={{ active: fKind() === k }}
               onClick={() => setFKind(fKind() === k ? "" : k)}
             >
-              {k}
+              {tcsKindLabel(k, props.locale)}
             </button>
           )}
         </For>
@@ -389,7 +418,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     {pick(listing.badge, props.locale)}
                   </span>
                   <Show when={listing.badges?.includes("official")}>
-                    <span class="tcs-badge tcs-official">official</span>
+                    <span class="tcs-badge tcs-official">
+                      {tcsBadgeLabel("official", props.locale)}
+                    </span>
                   </Show>
                 </div>
                 <button
@@ -401,8 +432,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   <p>{pick(listing.description, props.locale)}</p>
                 </button>
                 <div class="tcs-card-meta">
-                  <span class="tcs-tag">{listing.provider}</span>
-                  <span class="tcs-tag">{listing.kind}</span>
+                  <span class="tcs-tag">
+                    {tcsProviderLabel(listing.provider)}
+                  </span>
+                  <span class="tcs-tag">
+                    {tcsKindLabel(listing.kind, props.locale)}
+                  </span>
                   <Show when={listing.seenOn.length > 1}>
                     <span class="tcs-tag tcs-muted">
                       +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
