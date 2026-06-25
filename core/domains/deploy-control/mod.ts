@@ -1668,8 +1668,14 @@ export class OpenTofuDeploymentController {
   async createInstallationDestroyPlan(
     installationId: string,
     context: DeployControlActorContext = {},
+    internal: Pick<CreateInstallationPlanInternal, "runnerProfileId"> = {},
   ): Promise<PlanRunResponse> {
-    return await this.#createInstallationPlanRun(installationId, true, context);
+    return await this.#createInstallationPlanRun(
+      installationId,
+      true,
+      context,
+      internal,
+    );
   }
 
   /**
@@ -1724,6 +1730,8 @@ export class OpenTofuDeploymentController {
           `installation ${installationId}`,
       );
     }
+    const runnerProfileId =
+      internal.runnerProfileId ?? installConfig.runnerProfileId;
     // Two snapshot-resolution paths share the rest of the pipeline:
     //   - git installations resolve their registered Source's snapshot;
     //   - upload installations (no Source) pin the upload snapshot the deploy
@@ -1824,9 +1832,7 @@ export class OpenTofuDeploymentController {
       source,
       snapshot,
       operation,
-      ...(internal.runnerProfileId
-        ? { runnerProfileId: internal.runnerProfileId }
-        : {}),
+      ...(runnerProfileId ? { runnerProfileId } : {}),
       ...(compatibilityReport ? { compatibilityReport } : {}),
     });
     const installationContext: PlanRunInstallationContext = {
@@ -1842,8 +1848,8 @@ export class OpenTofuDeploymentController {
     // BEFORE the run is created. The DependencySnapshot is pinned
     // AFTER the run row exists (runId known), then the planRun is re-put with its
     // id (order: resolve -> inject -> create plan -> snapshot -> re-put).
-    const selectedPlanRequest = internal.runnerProfileId
-      ? { ...planRequest, runnerProfileId: internal.runnerProfileId }
+    const selectedPlanRequest = runnerProfileId
+      ? { ...planRequest, runnerProfileId }
       : planRequest;
     const resolvedDeps = destroy
       ? undefined

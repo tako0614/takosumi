@@ -75,6 +75,7 @@ export async function deployUpload(
   );
   let created = false;
   let installConfigId: string;
+  let effectiveRunnerProfileId: string | undefined = request.runnerProfileId;
   if (installation) {
     if (installation.sourceId) {
       throw new OpenTofuControllerError(
@@ -85,13 +86,15 @@ export async function deployUpload(
     }
     installConfigId = installation.installConfigId;
     // Re-deploy: refresh the variable mapping from the new request vars.
-    await refreshInstallConfigVars(
+    const refreshed = await refreshInstallConfigVars(
       deps,
       installConfigId,
       request.vars,
       request.outputAllowlist,
+      request.runnerProfileId,
       now,
     );
+    effectiveRunnerProfileId = refreshed.runnerProfileId;
   } else {
     const config = buildDefaultInstallConfig({
       id: newId("icfg"),
@@ -99,6 +102,7 @@ export async function deployUpload(
       name: request.name,
       vars: request.vars,
       outputAllowlist: request.outputAllowlist,
+      runnerProfileId: request.runnerProfileId,
       now,
     });
     await deps.installations.putInstallConfig(config);
@@ -110,6 +114,7 @@ export async function deployUpload(
     });
     installConfigId = config.id;
     created = true;
+    effectiveRunnerProfileId = config.runnerProfileId;
   }
   try {
     if (providerEnvBindings !== undefined) {
@@ -126,7 +131,7 @@ export async function deployUpload(
     //    plan path is upload-aware (synthesizes an in-memory Source from the
     //    snapshot) and gates the Capsule before the run.
     const shouldDeferCompatibilityReport =
-      request.runnerProfileId === undefined;
+      effectiveRunnerProfileId === undefined;
     const planResponse = await deps.controller.createInstallationPlan(
       installation.id,
       context,
@@ -135,8 +140,8 @@ export async function deployUpload(
         ...(shouldDeferCompatibilityReport
           ? { deferCompatibilityReport: true as const }
           : {}),
-        ...(request.runnerProfileId
-          ? { runnerProfileId: request.runnerProfileId }
+        ...(effectiveRunnerProfileId
+          ? { runnerProfileId: effectiveRunnerProfileId }
           : {}),
       },
     );
@@ -224,13 +229,15 @@ async function refreshInstallConfigVars(
   installConfigId: string,
   vars: Readonly<Record<string, JsonValue>> | undefined,
   outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
+  runnerProfileId: string | undefined,
   now: () => Date,
-): Promise<void> {
+): Promise<InstallConfig> {
   const existing = await deps.installations.getInstallConfig(installConfigId);
-  await deps.installations.putInstallConfig({
+  return await deps.installations.putInstallConfig({
     ...existing,
     variableMapping: { ...(vars ?? {}) },
     outputAllowlist: refreshedOutputAllowlist(existing, outputAllowlist),
+    ...(runnerProfileId !== undefined ? { runnerProfileId } : {}),
     updatedAt: now().toISOString(),
   });
 }
@@ -257,6 +264,7 @@ function buildDefaultInstallConfig(input: {
   readonly outputAllowlist:
     | InternalDeployRequest["outputAllowlist"]
     | undefined;
+  readonly runnerProfileId: string | undefined;
   readonly now: () => Date;
 }): InstallConfig {
   const nowIso = input.now().toISOString();
@@ -273,6 +281,9 @@ function buildDefaultInstallConfig(input: {
       allowProviderLift: true,
       allowAliasInjection: true,
     },
+    ...(input.runnerProfileId !== undefined
+      ? { runnerProfileId: input.runnerProfileId }
+      : {}),
     variableMapping: { ...(input.vars ?? {}) },
     outputAllowlist: input.outputAllowlist ?? defaultCapsuleOutputAllowlist(),
     policy: {},

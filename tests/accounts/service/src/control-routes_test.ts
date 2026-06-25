@@ -687,8 +687,8 @@ function fakeOperations(
         ReturnType<ControlPlaneOperations["createInstallationPlan"]>
       >;
     },
-    createInstallationDestroyPlan: async (installationId) => {
-      record("createInstallationDestroyPlan", installationId);
+    createInstallationDestroyPlan: async (installationId, options) => {
+      record("createInstallationDestroyPlan", { installationId, options });
       return { planRun: { id: "plan_destroy" } } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["createInstallationDestroyPlan"]>
       >;
@@ -3222,9 +3222,37 @@ test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as { run: { id: string } };
   expect(body.run.id).toEqual("plan_destroy");
-  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual("inst_1");
+  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
+    installationId: "inst_1",
+    options: undefined,
+  });
   expect(operations.calls.getRun).toContain("plan_destroy");
   expect(operations.calls.getRunCost).toContain("plan_destroy");
+});
+
+test("POST /api/v1/installations/:id/destroy-plan forwards runnerProfileId", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/installations/inst_1/destroy-plan",
+    {
+      cookie,
+      body: { runnerProfileId: "generic-opentofu-provider" },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
+    installationId: "inst_1",
+    options: { runnerProfileId: "generic-opentofu-provider" },
+  });
 });
 
 test("Installation session routes patch status, delete via destroy-plan, drift-check, and list dependencies", async () => {
@@ -3255,7 +3283,10 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
     operations,
   });
   expect(deleteResp?.status).toEqual(202);
-  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual("inst_1");
+  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
+    installationId: "inst_1",
+    options: undefined,
+  });
 
   const drift = request("POST", "/api/v1/installations/inst_1/drift-check", {
     cookie,

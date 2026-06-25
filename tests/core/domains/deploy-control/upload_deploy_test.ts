@@ -409,11 +409,26 @@ test("deployUpload preflights explicit generic runner uploads before dispatch", 
   expect(planRun?.policy.status).toBe("passed");
   const installation = await store.getInstallation(result.installation.id);
   expect(installation?.compatibilityReportId).toBeDefined();
+  const installConfig = await store.getInstallConfig(result.installConfigId);
+  expect(installConfig?.runnerProfileId).toBe(genericProfile.id);
   expect(runner.planJobs[0]?.runnerProfile.id).toBe(genericProfile.id);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
     NULL_PROVIDER,
   ]);
   expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
+
+  await applyUploadedDeploy(store, controller, result);
+  const destroy = await controller.createInstallationDestroyPlan(
+    result.installation.id,
+  );
+
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  expect(destroy.planRun.runnerProfileId).toBe(genericProfile.id);
+  expect(destroy.planRun.requiredProviders).toEqual([NULL_PROVIDER]);
+  expect(runner.planJobs[1]?.runnerProfile.id).toBe(genericProfile.id);
+  expect(runner.planJobs[1]?.planRun.requiredProviders).toEqual([
+    NULL_PROVIDER,
+  ]);
 });
 
 test("deployUpload returns a queued plan before upload compatibility inspection when a run queue is configured", async () => {

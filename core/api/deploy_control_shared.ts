@@ -235,6 +235,8 @@ export const ALLOWED_KEYS: Record<
     "vars",
   ]),
   installationPatch: new Set(["status"]),
+  installationPlan: new Set(["runnerProfileId"]),
+  installationDestroyPlan: new Set(["runnerProfileId"]),
   runApprove: new Set(["reason"]),
   dependencyCreate: new Set([
     "producerInstallationId",
@@ -301,6 +303,8 @@ export type DeployControlRouteName =
   | "spacePatch"
   | "installationCreate"
   | "installationPatch"
+  | "installationPlan"
+  | "installationDestroyPlan"
   | "providerEnvPut"
   | "runApprove"
   | "dependencyCreate"
