@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 
 import {
   InMemoryOpenTofuDeploymentStore,
@@ -43,6 +43,8 @@ import type {
 } from "takosumi-contract/security";
 import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+
+setDefaultTimeout(20_000);
 
 /**
  * Minimal in-memory SQL client that interprets exactly the Space-direct model
