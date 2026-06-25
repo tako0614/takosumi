@@ -63,36 +63,36 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
   }
 });
 
-test("release action treats database migrations as opaque app commands", async () => {
-  const runId = `release_db_cmd_${crypto.randomUUID().replace(/-/g, "")}`;
+test("release action treats post-apply work as opaque app commands", async () => {
+  const runId = `release_task_cmd_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));
   const sourceRoot = join(root, "source");
   try {
-    await mkdir(join(sourceRoot, "migrations"), { recursive: true });
+    await mkdir(join(sourceRoot, "artifacts"), { recursive: true });
 
     const response = await handleRunnerRequest(
       runnerRequest(runId, {
         release: {
           commands: [
             {
-              id: "migrate",
+              id: "publish",
               command: [
                 process.execPath,
                 "-e",
                 [
-                  `if (Bun.env.MIGRATION_DIR !== "migrations") process.exit(9)`,
+                  `if (Bun.env.ARTIFACT_DIR !== "artifacts") process.exit(9)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
-                  `await Bun.write("migration-ran.txt", ["opaque", context.kind, Bun.env.MIGRATION_DIR].join(":"))`,
+                  `await Bun.write("post-apply-ran.txt", ["opaque", context.kind, Bun.env.ARTIFACT_DIR].join(":"))`,
                 ].join(";"),
               ],
               env: {
-                MIGRATION_DIR: "migrations",
-                SQL_RESOURCE: "database",
+                ARTIFACT_DIR: "artifacts",
+                RELEASE_TARGET: "preview",
               },
             },
           ],
         },
-        outputs: { database_name: "example" },
+        outputs: { artifact_name: "example" },
       }),
     );
 
@@ -106,8 +106,8 @@ test("release action treats database migrations as opaque app commands", async (
       commandCount: 1,
     });
     await expect(
-      readFile(join(sourceRoot, "migration-ran.txt"), "utf8"),
-    ).resolves.toBe("opaque:takosumi.release-context@v1:migrations");
+      readFile(join(sourceRoot, "post-apply-ran.txt"), "utf8"),
+    ).resolves.toBe("opaque:takosumi.release-context@v1:artifacts");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
