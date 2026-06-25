@@ -125,12 +125,16 @@ export async function deployUpload(
     // 3. Plan Run pinned to the upload snapshot. The controller's installation
     //    plan path is upload-aware (synthesizes an in-memory Source from the
     //    snapshot) and gates the Capsule before the run.
+    const shouldDeferCompatibilityReport =
+      request.runnerProfileId === undefined;
     const planResponse = await deps.controller.createInstallationPlan(
       installation.id,
       context,
       {
         sourceSnapshotId: snapshot.id,
-        deferCompatibilityReport: true,
+        ...(shouldDeferCompatibilityReport
+          ? { deferCompatibilityReport: true as const }
+          : {}),
         ...(request.runnerProfileId
           ? { runnerProfileId: request.runnerProfileId }
           : {}),

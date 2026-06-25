@@ -44,6 +44,7 @@ const STATE_DIGEST =
 const UPLOAD_DIGEST =
   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const CLOUDFLARE_PROVIDER = "registry.opentofu.org/cloudflare/cloudflare";
+const NULL_PROVIDER = "registry.opentofu.org/hashicorp/null";
 const UPLOAD_PROVIDER_CONNECTIONS: InstallationProviderEnvBindings = [
   {
     provider: "cloudflare",
@@ -78,6 +79,22 @@ resource "aws_s3_bucket" "attachments" {
 
 output "attachments_bucket" {
   value = aws_s3_bucket.attachments.bucket
+}
+`;
+
+const NULL_CAPSULE = `
+terraform {
+  required_providers {
+    null = {
+      source = "hashicorp/null"
+    }
+  }
+}
+
+resource "null_resource" "example" {}
+
+output "worker_name" {
+  value = "null-example"
 }
 `;
 
@@ -194,10 +211,12 @@ async function setup(
     readonly enqueueRun?: EnqueueRun;
     readonly runnerProfiles?: readonly RunnerProfile[];
     readonly defaultRunnerProfileId?: string;
+    readonly capsuleSourceText?: string;
+    readonly planResult?: Partial<OpenTofuPlanResult>;
   } = {},
 ) {
   const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner(options.planResult);
   // seedInstallationModel creates the Space (space_test) we deploy into; its git
   // Installation is unrelated to the upload Installation under test.
   await seedInstallationModel(store, { environment: "preview" });
@@ -206,7 +225,9 @@ async function setup(
     now: () => new Date("2026-06-09T00:00:00.000Z"),
     newId: (prefix) => `${prefix}_upload`,
     readCapsuleSourceFiles: () =>
-      Promise.resolve([{ path: "main.tf", text: READY_CAPSULE }]),
+      Promise.resolve([
+        { path: "main.tf", text: options.capsuleSourceText ?? READY_CAPSULE },
+      ]),
   });
   const installations = new InstallationsService({ store });
   const controller = new OpenTofuDeploymentController({
@@ -338,7 +359,7 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   });
 });
 
-test("deployUpload threads an explicit runnerProfileId into the plan run", async () => {
+test("deployUpload preflights explicit generic runner uploads before dispatch", async () => {
   const genericProfile: RunnerProfile = {
     id: "generic-opentofu-provider",
     name: "Generic OpenTofu provider",
@@ -352,6 +373,12 @@ test("deployUpload threads an explicit runnerProfileId into the plan run", async
   const { store, runner, sources, installations, controller } = await setup({
     runnerProfiles: [genericProfile],
     defaultRunnerProfileId: genericProfile.id,
+    capsuleSourceText: NULL_CAPSULE,
+    planResult: {
+      requiredProviders: [NULL_PROVIDER],
+      providerInstallation: [],
+      planResourceChanges: [],
+    },
   });
   const snapshot = await sources.recordUploadSnapshot({
     spaceId: "space_test",
@@ -372,13 +399,20 @@ test("deployUpload threads an explicit runnerProfileId into the plan run", async
       environment: "preview",
       snapshotId: snapshot.id,
       runnerProfileId: genericProfile.id,
-      providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
     },
   );
 
   const planRun = await store.getPlanRun((result.planRun ?? result.run).id);
   expect(planRun?.runnerProfileId).toBe(genericProfile.id);
+  expect(planRun?.requiredProviders).toEqual([NULL_PROVIDER]);
+  expect(planRun?.status).toBe("succeeded");
+  expect(planRun?.policy.status).toBe("passed");
+  const installation = await store.getInstallation(result.installation.id);
+  expect(installation?.compatibilityReportId).toBeDefined();
   expect(runner.planJobs[0]?.runnerProfile.id).toBe(genericProfile.id);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
+    NULL_PROVIDER,
+  ]);
   expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
 });
 
