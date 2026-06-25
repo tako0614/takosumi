@@ -488,8 +488,7 @@ export interface ReleaseActivationInput {
   /**
    * App-declared release commands extracted from the neutral
    * `takosumi_release.post_apply` output. Takosumi core treats them as opaque
-   * argv arrays; DB migrations, worker uploads, index creation, or app
-   * bootstrap all stay app/operator code.
+   * argv arrays; every activation detail stays app/operator code.
    */
   readonly commands: readonly ReleaseActivationCommand[];
   readonly sourceSnapshot?: SourceSnapshot;

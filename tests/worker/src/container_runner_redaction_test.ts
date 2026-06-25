@@ -409,7 +409,7 @@ test("container runner dispatches post-apply release commands to the release act
     },
     commands: [
       {
-        id: "migrate",
+        id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
@@ -429,7 +429,7 @@ test("container runner dispatches post-apply release commands to the release act
   expect((captured?.request as Record<string, unknown>).release).toEqual({
     commands: [
       {
-        id: "migrate",
+        id: "activate",
         command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
         env: { APP_RELEASE_TARGET: "runtime" },
