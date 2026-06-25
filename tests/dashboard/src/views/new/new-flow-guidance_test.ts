@@ -86,9 +86,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('entry.surface === "example"');
     expect(newAppViewSource).not.toContain('t("new.store.title")');
     expect(newAppViewSource).not.toContain('t("new.store.featuredTitle")');
-    expect(newAppViewSource).not.toContain(
-      't("new.store.searchPlaceholder")',
-    );
+    expect(newAppViewSource).not.toContain('t("new.store.searchPlaceholder")');
     expect(newAppViewSource).not.toContain('t("new.store.blocksTitle")');
     expect(newAppViewSource).not.toContain('t("new.store.examplesTitle")');
     expect(newAppViewSource).not.toContain('class="av-store-section"');
@@ -159,11 +157,22 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).not.toContain('params.get("mode") === "link"');
+    expect(newAppViewSource).toContain("initialAddTab(initialSearch)");
+    expect(newAppViewSource).toContain('createSignal<"catalog" | "git">(');
+  });
+
+  test("treats pasted install links as active prefill state, not raw git input", () => {
+    expect(newAppViewSource).toContain("activeInstallPrefill");
+    expect(newAppViewSource).toContain("setActiveInstallPrefill(next)");
     expect(newAppViewSource).toContain(
-      "initialAddTab(initialSearch)",
+      "setInputVariables(inputVariableRowsFromPrefill(next.vars))",
     );
-    expect(newAppViewSource).toContain(
-      'createSignal<"catalog" | "git">(',
+    expect(newAppViewSource).toContain("activeInstallPrefill()");
+    expect(newAppViewSource).toContain("? prefilledLinkReview()");
+    expect(newAppViewSource).toContain(": gitFields()");
+    expect(newAppViewSource).toContain("setActiveInstallPrefill(null)");
+    expect(newAppViewSource).not.toContain(
+      "prefill ? prefilledLinkReview() : gitFields()",
     );
   });
 
