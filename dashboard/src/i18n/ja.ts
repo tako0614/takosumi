@@ -42,8 +42,7 @@ export const ja = {
   "nav.add": "追加",
   "nav.store": "ストア",
   "store.title": "ストア",
-  "store.subtitle":
-    "追加できるサービスを探します。まずは公式スターターから選べます。",
+  "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.runs": "更新履歴",
   "nav.connections": "ホスト接続",

@@ -44,8 +44,10 @@ describe("TCS store server defaults", () => {
     }
   });
 
-  test("does not query a placeholder external store by default", () => {
-    expect(getTcsServers()).toEqual([]);
+  test("uses the official Takosumi store by default", () => {
+    expect(getTcsServers()).toEqual([
+      { base: "https://store.takosumi.com", isDefault: true },
+    ]);
   });
 
   test("still supports opt-in user-added stores", () => {
@@ -53,10 +55,13 @@ describe("TCS store server defaults", () => {
       "https://store.example.com",
     );
     expect(getTcsServers()).toEqual([
+      { base: "https://store.takosumi.com", isDefault: true },
       { base: "https://store.example.com", isDefault: false },
     ]);
 
     removeTcsServer("https://store.example.com");
-    expect(getTcsServers()).toEqual([]);
+    expect(getTcsServers()).toEqual([
+      { base: "https://store.takosumi.com", isDefault: true },
+    ]);
   });
 });

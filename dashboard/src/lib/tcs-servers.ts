@@ -1,15 +1,18 @@
 /**
- * Optional TCS store servers the dashboard queries in addition to the official
- * starter catalog. Do not hard-code a placeholder public store: a missing DNS
- * record makes production look broken. Operators can enable a canonical store
- * with VITE_TAKOSUMI_TCS_STORE_URL; local dev can still add stores through
- * localStorage.
+ * TCS store servers the dashboard queries. The official Takosumi store
+ * (store.takosumi.com) is the default discovery surface; operators can point at
+ * a different canonical store with VITE_TAKOSUMI_TCS_STORE_URL, or set it to an
+ * empty string to start with no default store. Local dev can add more stores
+ * through localStorage.
  */
 const LS_KEY = "tcs.stores";
 
-/** Optional canonical Takosumi store. Empty means official catalog only. */
+/**
+ * Canonical Takosumi store. Defaults to the official live store; an explicit
+ * empty `VITE_TAKOSUMI_TCS_STORE_URL=""` opts out (no default store).
+ */
 export const DEFAULT_STORE_URL = (
-  import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL ?? ""
+  import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL ?? "https://store.takosumi.com"
 ).trim();
 
 export interface TcsServer {

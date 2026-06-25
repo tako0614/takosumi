@@ -103,7 +103,7 @@ describe("tcs aggregate", () => {
           ],
         },
         {
-          base: "https://store.takos.jp",
+          base: "https://store.takosumi.com",
           isDefault: false,
           items: [L("external", sharedSource, "2026-02-01T00:00:00.000Z")],
         },
@@ -115,7 +115,7 @@ describe("tcs aggregate", () => {
     expect(merged[0]?.primaryServer).toBe("https://app.takosumi.test");
     expect(merged[0]?.seenOn.sort()).toEqual([
       "https://app.takosumi.test",
-      "https://store.takos.jp",
+      "https://store.takosumi.com",
     ]);
   });
 
