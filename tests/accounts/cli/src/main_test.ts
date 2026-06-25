@@ -9233,6 +9233,9 @@ test("platform-secrets status compares local vault with remote names", async () 
     );
     expect(output).toContain("TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN");
     expect(output).toContain("Missing required manual: none");
+    expect(output).toContain("AI Gateway profiles: none");
+    expect(output).toContain("AI Gateway external upstreams: 0");
+    expect(output).toContain("AI Gateway missing API key secrets: none");
     expect(output).toContain("Remote only: REMOTE_ONLY_SECRET");
     expect(output).not.toContain("secret-one");
     expect(output).not.toContain("secret-two");
@@ -9329,6 +9332,14 @@ test("platform-secrets status requires AI Gateway profile apiKeyEnv secrets", as
       "Required manual present: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
     );
     expect(output).toContain("Missing required manual: none");
+    expect(output).toContain("AI Gateway profiles: 1");
+    expect(output).toContain("AI Gateway providers: deepseek");
+    expect(output).toContain("AI Gateway external upstreams: 1");
+    expect(output).toContain(
+      "AI Gateway required API key secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
+    );
+    expect(output).toContain("AI Gateway missing API key secrets: none");
+    expect(output).not.toContain("deepseek-token");
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);
@@ -9439,8 +9450,13 @@ test("platform-secrets status reads multiline AI Gateway profiles from wrangler 
 
     expect(code).toEqual(1);
     expect(stderr).toEqual([]);
-    expect(stdout.join("\n")).toContain(
+    const output = stdout.join("\n");
+    expect(output).toContain(
       "Missing required manual: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
+    );
+    expect(output).toContain("AI Gateway profiles: 1");
+    expect(output).toContain(
+      "AI Gateway missing API key secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
     );
   } finally {
     await removePath(dir, { recursive: true });
@@ -9479,6 +9495,11 @@ test("platform-secrets status accepts Workers AI binding profiles without manual
     expect(stderr).toEqual([]);
     const output = stdout.join("\n");
     expect(output).toContain("Missing required manual: none");
+    expect(output).toContain("AI Gateway profiles: 1");
+    expect(output).toContain("AI Gateway providers: workers_ai");
+    expect(output).toContain("AI Gateway external upstreams: 0");
+    expect(output).toContain("AI Gateway Workers AI profiles: 1");
+    expect(output).toContain("AI Gateway required API key secrets: none");
     expect(output).not.toContain("TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY");
   } finally {
     await removePath(dir, { recursive: true });

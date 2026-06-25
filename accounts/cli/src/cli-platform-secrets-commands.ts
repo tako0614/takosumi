@@ -81,6 +81,20 @@ type SecretManifestEntry = {
   readonly generator?: () => string | Promise<string>;
 };
 
+type AiGatewayProfileSecretStatus = {
+  readonly configured: boolean;
+  readonly profileCount: number;
+  readonly openAiCompatibleProfileCount: number;
+  readonly workersAiBindingProfileCount: number;
+  readonly providers: readonly string[];
+  readonly publicModelCount: number;
+  readonly externalUpstreamConfigured: boolean;
+  readonly workersAiOnly: boolean;
+  readonly requiredApiKeySecrets: readonly string[];
+  readonly presentApiKeySecrets: readonly string[];
+  readonly missingApiKeySecrets: readonly string[];
+};
+
 const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
   {
     name: "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK",
@@ -229,6 +243,7 @@ export async function platformSecretsStatus(
   requiredManualPresent: readonly string[];
   manualPresent: readonly string[];
   unknownLocal: readonly string[];
+  aiGateway: AiGatewayProfileSecretStatus;
 }> {
   const [localNames, remoteNames] = await Promise.all([
     listLocalSecretNames(options),
@@ -261,6 +276,7 @@ export async function platformSecretsStatus(
     requiredManualPresent: requiredManual.filter((name) => local.has(name)),
     manualPresent: manual.filter((name) => local.has(name)),
     unknownLocal: localNames.filter((name) => !expected.has(name)),
+    aiGateway: await aiGatewayProfileSecretStatus(options, local),
   };
 }
 
@@ -398,11 +414,48 @@ function configuredStringValue(
 async function aiGatewayProfileApiKeyEnvNames(
   options: Record<string, string | boolean>,
 ): Promise<readonly string[]> {
+  return (await readAiGatewayProfileSummary(options)).requiredApiKeySecrets;
+}
+
+async function aiGatewayProfileSecretStatus(
+  options: Record<string, string | boolean>,
+  local: ReadonlySet<string>,
+): Promise<AiGatewayProfileSecretStatus> {
+  const summary = await readAiGatewayProfileSummary(options);
+  return {
+    ...summary,
+    presentApiKeySecrets: summary.requiredApiKeySecrets.filter((name) =>
+      local.has(name),
+    ),
+    missingApiKeySecrets: summary.requiredApiKeySecrets.filter(
+      (name) => !local.has(name),
+    ),
+  };
+}
+
+async function readAiGatewayProfileSummary(
+  options: Record<string, string | boolean>,
+): Promise<Omit<
+  AiGatewayProfileSecretStatus,
+  "presentApiKeySecrets" | "missingApiKeySecrets"
+>> {
   const raw =
     optionalStringOption(options, "aiGatewayProfiles") ??
     process.env.TAKOSUMI_AI_GATEWAY_PROFILES ??
     (await aiGatewayProfilesFromWranglerConfig(options));
-  if (!raw) return [];
+  if (!raw) {
+    return {
+      configured: false,
+      profileCount: 0,
+      openAiCompatibleProfileCount: 0,
+      workersAiBindingProfileCount: 0,
+      providers: [],
+      publicModelCount: 0,
+      externalUpstreamConfigured: false,
+      workersAiOnly: false,
+      requiredApiKeySecrets: [],
+    };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -413,11 +466,18 @@ async function aiGatewayProfileApiKeyEnvNames(
     throw new TypeError("TAKOSUMI_AI_GATEWAY_PROFILES must be a JSON array");
   }
   const names = new Set<string>();
+  const providers = new Set<string>();
+  let openAiCompatibleProfileCount = 0;
+  let workersAiBindingProfileCount = 0;
+  let publicModelCount = 0;
   parsed.forEach((entry, index) => {
     if (!isRecord(entry)) {
       throw new TypeError(`AI Gateway profile ${index} must be an object`);
     }
     const id = stringValue(entry.id) ?? String(index);
+    const provider = stringValue(entry.provider);
+    if (provider) providers.add(provider);
+    if (Array.isArray(entry.models)) publicModelCount += entry.models.length;
     if ("apiKey" in entry) {
       throw new TypeError(
         `AI Gateway profile ${id}.apiKey must not be embedded; use apiKeyEnv`,
@@ -425,6 +485,7 @@ async function aiGatewayProfileApiKeyEnvNames(
     }
     const profileType = stringValue(entry.type) ?? "openai_compatible";
     if (profileType === "workers_ai_binding") {
+      workersAiBindingProfileCount += 1;
       if ("apiKeyEnv" in entry || "apiKeyHeader" in entry) {
         throw new TypeError(
           `AI Gateway profile ${id} uses Workers AI binding and must not define apiKeyEnv or apiKeyHeader`,
@@ -446,6 +507,7 @@ async function aiGatewayProfileApiKeyEnvNames(
     if (profileType !== "openai_compatible") {
       throw new TypeError(`AI Gateway profile ${id}.type is unsupported`);
     }
+    openAiCompatibleProfileCount += 1;
     const apiKeyEnv = stringValue(entry.apiKeyEnv);
     if (!apiKeyEnv) {
       throw new TypeError(`AI Gateway profile ${id}.apiKeyEnv is required`);
@@ -459,7 +521,21 @@ async function aiGatewayProfileApiKeyEnvNames(
     assertNoSecretBearingAiGatewayModelMetadata(entry, id);
     names.add(apiKeyEnv);
   });
-  return [...names].sort();
+  const profileCount = parsed.length;
+  return {
+    configured: true,
+    profileCount,
+    openAiCompatibleProfileCount,
+    workersAiBindingProfileCount,
+    providers: [...providers].sort(),
+    publicModelCount,
+    externalUpstreamConfigured: openAiCompatibleProfileCount > 0,
+    workersAiOnly:
+      profileCount > 0 &&
+      workersAiBindingProfileCount === profileCount &&
+      openAiCompatibleProfileCount === 0,
+    requiredApiKeySecrets: [...names].sort(),
+  };
 }
 
 function assertNoSecretBearingAiGatewayHeaders(
@@ -1002,6 +1078,7 @@ function formatSecretStatus(
     requiredManualPresent: readonly string[];
     manualPresent: readonly string[];
     unknownLocal: readonly string[];
+    aiGateway: AiGatewayProfileSecretStatus;
   },
   asJson: boolean,
 ): string {
@@ -1016,6 +1093,12 @@ function formatSecretStatus(
     `Missing generated: ${input.missingGenerated.length ? input.missingGenerated.join(", ") : "none"}`,
     `Missing protected: ${input.missingProtected.length ? input.missingProtected.join(", ") : "none"}`,
     `Missing required manual: ${input.missingRequiredManual.length ? input.missingRequiredManual.join(", ") : "none"}`,
+    `AI Gateway profiles: ${input.aiGateway.configured ? input.aiGateway.profileCount : "none"}`,
+    `AI Gateway providers: ${input.aiGateway.providers.length ? input.aiGateway.providers.join(", ") : "none"}`,
+    `AI Gateway external upstreams: ${input.aiGateway.openAiCompatibleProfileCount}`,
+    `AI Gateway Workers AI profiles: ${input.aiGateway.workersAiBindingProfileCount}`,
+    `AI Gateway required API key secrets: ${input.aiGateway.requiredApiKeySecrets.length ? input.aiGateway.requiredApiKeySecrets.join(", ") : "none"}`,
+    `AI Gateway missing API key secrets: ${input.aiGateway.missingApiKeySecrets.length ? input.aiGateway.missingApiKeySecrets.join(", ") : "none"}`,
     `Unknown local: ${input.unknownLocal.length ? input.unknownLocal.join(", ") : "none"}`,
     `Remote only: ${input.remoteOnly.length ? input.remoteOnly.join(", ") : "none"}`,
   ].join("\n");
