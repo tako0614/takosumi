@@ -19,6 +19,7 @@ import type {
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import {
   applyExpectedGuardFromPlanRun,
+  createDefaultRunnerProfiles,
   OpenTofuDeploymentController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -488,6 +489,138 @@ test("deployUpload returns a queued plan before upload compatibility inspection 
   expect(persistedPlan?.compatibilityReportId).toBe(
     installation?.compatibilityReportId,
   );
+});
+
+test("deployUpload queues providerless upload Capsules without Provider Connections", async () => {
+  const enqueued: Parameters<EnqueueRun>[0][] = [];
+  const { store, runner, sources, installations, controller } = await setup({
+    enqueueRun: async (dispatch) => {
+      enqueued.push(dispatch);
+    },
+    planResult: {
+      requiredProviders: [],
+      providerInstallation: [],
+    },
+  });
+  const snapshot = await sources.recordUploadSnapshot({
+    spaceId: "space_test",
+    snapshotId: "snap_providerless_upload",
+    archiveObjectKey: uploadArchiveObjectKey(
+      "space_test",
+      "snap_providerless_upload",
+    ),
+    archiveDigest: UPLOAD_DIGEST,
+    archiveSizeBytes: 512,
+  });
+
+  const result = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "providerless-uploaded-app",
+      environment: "preview",
+      snapshotId: snapshot.id,
+      vars: {
+        name: "providerless-uploaded-app",
+        base_url: "https://example.invalid/providerless-uploaded-app",
+      },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string", required: true },
+      },
+    },
+  );
+
+  const planRun = await store.getPlanRun(result.run.id);
+  expect(result.created).toBe(true);
+  expect(result.run.type).toBe("plan");
+  expect(result.run.status).toBe("queued");
+  expect(enqueued).toEqual([
+    {
+      action: "plan",
+      runId: result.run.id,
+      spaceId: "space_test",
+    },
+  ]);
+  expect(runner.planJobs).toHaveLength(0);
+  expect(planRun?.requiredProviders).toEqual([]);
+  expect(planRun?.runnerProfileId).toBe("cloudflare-default");
+  const installation = await store.getInstallation(result.installation.id);
+  expect(installation?.compatibilityReportId).toBeUndefined();
+  expect(planRun?.compatibilityReportId).toBeUndefined();
+});
+
+test("deployUpload can use an enabled generic profile for providerless upload Capsules", async () => {
+  const enqueued: Parameters<EnqueueRun>[0][] = [];
+  const genericProfile = createDefaultRunnerProfiles()
+    .map((profile) =>
+      profile.id === "generic-opentofu-provider"
+        ? {
+            ...profile,
+            labels: {
+              ...(profile.labels ?? {}),
+              "takosumi.com/profile-enabled": "true",
+            },
+          }
+        : profile,
+    )
+    .find((profile) => profile.id === "generic-opentofu-provider");
+  if (!genericProfile) throw new Error("generic profile fixture missing");
+  const { store, runner, sources, installations, controller } = await setup({
+    enqueueRun: async (dispatch) => {
+      enqueued.push(dispatch);
+    },
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: "generic-opentofu-provider",
+    planResult: {
+      requiredProviders: [],
+      providerInstallation: [],
+    },
+  });
+  const snapshot = await sources.recordUploadSnapshot({
+    spaceId: "space_test",
+    snapshotId: "snap_providerless_generic_upload",
+    archiveObjectKey: uploadArchiveObjectKey(
+      "space_test",
+      "snap_providerless_generic_upload",
+    ),
+    archiveDigest: UPLOAD_DIGEST,
+    archiveSizeBytes: 512,
+  });
+
+  const result = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "providerless-generic-uploaded-app",
+      environment: "preview",
+      snapshotId: snapshot.id,
+      vars: {
+        name: "providerless-generic-uploaded-app",
+        base_url: "https://example.invalid/providerless-generic-uploaded-app",
+      },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string", required: true },
+      },
+    },
+  );
+
+  const planRun = await store.getPlanRun(result.run.id);
+  expect(result.run.status).toBe("queued");
+  expect(enqueued).toEqual([
+    {
+      action: "plan",
+      runId: result.run.id,
+      spaceId: "space_test",
+    },
+  ]);
+  expect(runner.planJobs).toHaveLength(0);
+  expect(planRun?.requiredProviders).toEqual([]);
+  expect(planRun?.runnerProfileId).toBe("generic-opentofu-provider");
+  const installation = await store.getInstallation(result.installation.id);
+  expect(installation?.compatibilityReportId).toBeUndefined();
+  expect(planRun?.compatibilityReportId).toBeUndefined();
 });
 
 test("deployUpload marks a new upload Installation error when orchestration throws", async () => {
