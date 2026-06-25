@@ -45,6 +45,7 @@ import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import type {
   Connection,
+  OpenTofuOutputEnvelope,
   PlanRun,
   PlanResourceChange,
   RunnerProfile,
@@ -93,6 +94,7 @@ interface RecordingRunner extends OpenTofuRunner {
 
 function recordingRunner(
   planResult: Partial<OpenTofuPlanResult> = {},
+  applyOutputs?: OpenTofuOutputEnvelope,
 ): RecordingRunner {
   const planJobs: OpenTofuPlanJob[] = [];
   const applyJobs: OpenTofuApplyJob[] = [];
@@ -125,13 +127,13 @@ function recordingRunner(
         // output that only flows to spaceOutputs when allowlisted. `admin_token` is
         // sensitive-flagged: it must appear in NEITHER projection (invariants
         // 11/12).
-        outputs: {
+        outputs: applyOutputs ?? {
           launch_url: { sensitive: false, value: "https://x.example" },
           public_url: { sensitive: false, value: "https://public.example" },
           public_status: { sensitive: false, value: "sk-output-raw-token" },
           bucket_name: { sensitive: false, value: "my-bucket" },
           admin_token: { sensitive: true, value: "super-secret-token" },
-        } as never,
+        },
         stateDigest: STATE_DIGEST,
         rawOutputsKey:
           "spaces/space_test/installations/inst_fixture/runs/apply_0007/outputs.raw.json.enc",
@@ -2150,6 +2152,125 @@ test("release activator runs after apply with only non-sensitive outputs", async
   });
   expect(JSON.stringify(activity)).not.toContain("https://x.example");
   expect(JSON.stringify(activity)).not.toContain("super-secret-token");
+});
+
+test("release activator receives app-declared post-apply commands as opaque argv", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takos_app: {
+        sensitive: false,
+        value: {
+          release: {
+            post_apply: [
+              {
+                id: "migrate",
+                command: [
+                  "bun",
+                  "run",
+                  "takos:migrate",
+                  "--resource",
+                  "database",
+                ],
+                working_directory: ".",
+                env: {
+                  TAKOS_RESOURCE: "database",
+                  API_TOKEN: "sk-should-not-leak",
+                },
+              },
+            ],
+          },
+          resources: {
+            encryption_key: { type: "secret" },
+          },
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "migrate",
+      phase: "post_apply",
+      command: ["bun", "run", "takos:migrate", "--resource", "database"],
+      workingDirectory: ".",
+      env: { TAKOS_RESOURCE: "database" },
+    },
+  ]);
+  expect(JSON.stringify(activations[0])).not.toContain("sk-should-not-leak");
+
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.succeeded",
+  );
+  expect(activity?.metadata).toMatchObject({
+    commandCount: 1,
+  });
+});
+
+test("app-declared release commands stay pending when no release activator is configured", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: {
+            commands: [
+              {
+                id: "publish",
+                command: ["bun", "run", "release"],
+              },
+            ],
+          },
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.pending",
+  );
+  expect(activity).toBeDefined();
+  expect(activity?.metadata).toMatchObject({
+    activationKind: "takosumi.release-commands@v1",
+    commandCount: 1,
+    message:
+      "post-apply release commands declared but no release activator is configured",
+  });
 });
 
 test("release activator failure records activity without failing apply", async () => {

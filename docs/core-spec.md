@@ -291,6 +291,33 @@ inputs:
 
 Sensitive outputs remain encrypted and are not projected into public views.
 
+## Post-Apply Release Commands
+
+OpenTofu apply is not the same thing as an application being ready. A Capsule may
+declare generic post-apply release commands in an output such as
+`takosumi_release` or `takos_app.release`; Takosumi core treats those commands as
+opaque argv arrays and never adds DB-specific, Worker-specific, or provider-
+specific migration code.
+
+```hcl
+output "takosumi_release" {
+  value = {
+    post_apply = [
+      {
+        id      = "migrate"
+        command = ["bun", "run", "takos:migrate"]
+      }
+    ]
+  }
+}
+```
+
+When a host wires a ReleaseActivator, Takosumi passes the commands with the
+apply/deployment/output references and non-sensitive outputs. When no activator
+is configured, the OpenTofu apply can still succeed, but Takosumi records
+`release_activation.pending` instead of silently implying that migrations,
+artifact upload, or app initialization ran.
+
 ## Security
 
 OSS and Cloud share these invariants:
