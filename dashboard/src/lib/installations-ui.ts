@@ -4,27 +4,68 @@
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { ActivityEvent } from "./control-api.ts";
 
+export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
+
 /**
  * Presentation status for an Installation, folding the read-time `freshness`
  * field into the status vocabulary: an `active` app whose freshness is `stale`
  * presents as `stale` (再デプロイが必要). Compatible with both the
  * stored-`stale` backend and the derived-freshness backend.
  */
-export function effectiveInstallationStatus(inst: {
-  readonly status: string;
-  readonly freshness?: "fresh" | "stale";
-}): string {
+export function effectiveInstallationStatus(
+  inst: {
+    readonly status: string;
+    readonly freshness?: "fresh" | "stale";
+    readonly updatedAt?: string;
+  },
+  options: {
+    readonly now?: number;
+    readonly pendingNeedsAttentionAfterMs?: number;
+  } = {},
+): string {
+  if (pendingNeedsAttention(inst, options)) return "needs_attention";
   if (inst.freshness === "stale" && inst.status === "active") return "stale";
   return inst.status;
 }
 
-/** True when the app needs attention (error or stale under either model). */
-export function needsAttention(inst: {
-  readonly status: string;
-  readonly freshness?: "fresh" | "stale";
-}): boolean {
-  const status = effectiveInstallationStatus(inst);
-  return status === "error" || status === "stale";
+/** True when the app needs attention: failed, stale, or stuck in setup. */
+export function needsAttention(
+  inst: {
+    readonly status: string;
+    readonly freshness?: "fresh" | "stale";
+    readonly updatedAt?: string;
+  },
+  options: {
+    readonly now?: number;
+    readonly pendingNeedsAttentionAfterMs?: number;
+  } = {},
+): boolean {
+  const status = effectiveInstallationStatus(inst, options);
+  return (
+    status === "error" || status === "stale" || status === "needs_attention"
+  );
+}
+
+/** True when a setup-like Installation has stayed pending long enough that it
+ * should stop looking like normal progress in user-facing screens. */
+export function pendingNeedsAttention(
+  inst: {
+    readonly status: string;
+    readonly updatedAt?: string;
+  },
+  options: {
+    readonly now?: number;
+    readonly pendingNeedsAttentionAfterMs?: number;
+  } = {},
+): boolean {
+  if (inst.status !== "pending") return false;
+  if (!inst.updatedAt) return false;
+  const updatedAt = Date.parse(inst.updatedAt);
+  if (!Number.isFinite(updatedAt)) return false;
+  const now = options.now ?? Date.now();
+  const threshold =
+    options.pendingNeedsAttentionAfterMs ?? PENDING_NEEDS_ATTENTION_AFTER_MS;
+  return Math.max(0, now - updatedAt) >= threshold;
 }
 
 /** True when the Installation belongs in the primary service launcher. */

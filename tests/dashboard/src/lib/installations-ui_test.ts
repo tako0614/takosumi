@@ -1,5 +1,44 @@
 import { describe, expect, test } from "bun:test";
-import { appSurfacesFromOutputs } from "../../../../dashboard/src/lib/installations-ui.ts";
+import {
+  appSurfacesFromOutputs,
+  effectiveInstallationStatus,
+  needsAttention,
+  pendingNeedsAttention,
+} from "../../../../dashboard/src/lib/installations-ui.ts";
+
+describe("installation presentation status", () => {
+  const now = Date.parse("2026-06-25T12:00:00.000Z");
+
+  test("keeps recent pending services as normal setup", () => {
+    const inst = {
+      status: "pending",
+      updatedAt: "2026-06-25T11:45:01.000Z",
+    };
+    expect(pendingNeedsAttention(inst, { now })).toBe(false);
+    expect(effectiveInstallationStatus(inst, { now })).toBe("pending");
+    expect(needsAttention(inst, { now })).toBe(false);
+  });
+
+  test("turns old pending services into needs-attention presentation", () => {
+    const inst = {
+      status: "pending",
+      updatedAt: "2026-06-25T11:29:59.000Z",
+    };
+    expect(pendingNeedsAttention(inst, { now })).toBe(true);
+    expect(effectiveInstallationStatus(inst, { now })).toBe("needs_attention");
+    expect(needsAttention(inst, { now })).toBe(true);
+  });
+
+  test("preserves derived stale status ahead of stored active", () => {
+    expect(
+      effectiveInstallationStatus({
+        status: "active",
+        freshness: "stale",
+        updatedAt: "2026-06-25T01:00:00.000Z",
+      }),
+    ).toBe("stale");
+  });
+});
 
 describe("appSurfacesFromOutputs", () => {
   test("returns [] without app metadata — a bare launch URL is not an app", () => {

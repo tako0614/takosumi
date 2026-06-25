@@ -130,6 +130,7 @@ export const ja = {
 
   // --- status labels ----------------------------------------------------
   "status.installation.pending": "準備中",
+  "status.installation.needsAttention": "確認が必要",
   // `active` = 直近の apply が成功し state generation が前進した状態。readiness
   // 検証ではない（health probe は別）ので「稼働中」とは言わず実態どおりにする。
   "status.installation.active": "デプロイ済み",
