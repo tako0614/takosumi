@@ -993,7 +993,14 @@ export async function runPlatformControlPlaneSmoke(
     if (options.verificationMode === "cloudflare-worker") {
       await assertCloudflareWorkerExists(options);
       completeStep("deploymentVerified");
-      await assertPublicWorkerUrl(options);
+      if (options.publicUrlChecks.length > 0) {
+        publicUrlChecks = await assertConfiguredPublicUrls(
+          options,
+          deploymentLedger.outputsPublic,
+        );
+      } else {
+        await assertPublicWorkerUrl(options);
+      }
       completeStep("publicUrlVerified");
     }
     if (
