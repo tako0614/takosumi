@@ -1430,6 +1430,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       name: "hello",
       environment: "preview",
       snapshotId: "snap_upload",
+      modulePath: "takos/deploy/opentofu",
       vars: { greeting: "hi" },
       outputAllowlist: {
         url: { from: "url", type: "url", required: true },
@@ -1460,6 +1461,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       name: "hello",
       environment: "preview",
       snapshotId: "snap_upload",
+      modulePath: "takos/deploy/opentofu",
       vars: { greeting: "hi" },
       outputAllowlist: {
         url: { from: "url", type: "url", required: true },

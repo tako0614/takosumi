@@ -3236,6 +3236,15 @@ async function deployUploadedSnapshot(
     );
   }
   const environment = stringValue(body.environment);
+  const modulePath = modulePathValue(body.modulePath);
+  if (body.modulePath !== undefined && modulePath === undefined) {
+    return errorJson(
+      "invalid_argument",
+      "modulePath must be a safe relative OpenTofu module path.",
+      400,
+      request,
+    );
+  }
   const runnerProfileId =
     stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   let providerEnvBindings: InstallationProviderEnvBindings | undefined;
@@ -3301,6 +3310,7 @@ async function deployUploadedSnapshot(
     name,
     ...(environment ? { environment } : {}),
     snapshotId,
+    ...(modulePath ? { modulePath } : {}),
     ...(runnerProfileId ? { runnerProfileId } : {}),
     ...(vars ? { vars } : {}),
     ...(outputAllowlist ? { outputAllowlist } : {}),
