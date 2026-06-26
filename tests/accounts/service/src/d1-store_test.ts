@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { assertEquals, assertRejects } from "../../../helpers/assert.ts";
 import {
   D1AccountsStore,
@@ -9,7 +9,19 @@ import {
   type D1Value,
   LedgerAccountOwnershipConflictError,
 } from "../../../../accounts/service/src/d1-store.ts";
-import { registerSessionHashSaltConfig } from "../../../../accounts/service/src/session-hash-salt.ts";
+import {
+  __resetSessionHashSaltConfigForTesting,
+  registerSessionHashSaltConfig,
+} from "../../../../accounts/service/src/session-hash-salt.ts";
+
+// `registerSessionHashSaltConfig` mutates a process-global singleton shared by
+// every test file in the same Bun process. Reset it after each test so a
+// registration here never leaks into a later file (cross-file test-isolation
+// leak: e.g. worker_test's "requires a session hash salt" guard and the
+// account-plane handler tests that expect a clean, unregistered salt config).
+afterEach(() => {
+  __resetSessionHashSaltConfigForTesting();
+});
 
 test("D1AccountsStore initializes lazily and persists indexed records", async () => {
   const db = new MemoryD1Database();
