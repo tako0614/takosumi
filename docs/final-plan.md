@@ -828,11 +828,14 @@ POST /gateway/ai/v1/chat/completions
 POST /gateway/ai/v1/embeddings
 ```
 
-Takosumi Cloud may back those routes with Workers AI or OpenAI-compatible
-upstreams such as OpenAI, DeepSeek, Z.AI/GLM, Gemini-compatible endpoints, or
-other configured providers. Upstream provider keys stay in Takosumi Cloud
-operator secrets. Capsule runtimes receive only the gateway base URL and a
-rotated service token.
+Takosumi Cloud may back those routes with Cloudflare AI Gateway REST API plus
+Unified Billing, Workers AI, or direct/BYOK OpenAI-compatible upstreams such as
+OpenAI, DeepSeek, Z.AI/GLM, Gemini-compatible endpoints, or other configured
+providers. The preferred Takosumi Cloud sandbox path is Cloudflare Unified
+Billing: Takosumi stores a Cloudflare API token, Cloudflare bills provider
+credits, and Takosumi does not need provider-specific API keys. Direct/BYOK
+provider keys, when used, stay in Takosumi Cloud operator secrets. Capsule
+runtimes receive only the gateway base URL and a rotated service token.
 
 For GA scope, compatibility APIs are limited to Cloudflare Compatibility
 Gateway and Takosumi AI Gateway. Other providers should be supported through
@@ -1268,7 +1271,9 @@ Cloud-only:
 /gateway/ai/v1/embeddings
 OpenAI-compatible request/response shape
 operator-configured upstream profiles
-Workers AI fallback
+Cloudflare Unified Billing profile
+Workers AI binding profile
+direct/BYOK OpenAI-compatible profiles
 short-lived runtime service tokens
 ```
 

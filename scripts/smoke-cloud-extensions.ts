@@ -54,6 +54,7 @@ export interface CloudExtensionSmokeOptions {
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
   readonly requireAiUpstreamProfile: boolean;
+  readonly requireAiCloudflareUnifiedBillingProfile: boolean;
   readonly requireAiServiceGraphToken: boolean;
   readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
@@ -82,6 +83,7 @@ export interface CloudExtensionSmokeResult {
   readonly requireCompatMaterialization: boolean;
   readonly requireProviderE2E: boolean;
   readonly requireAiUpstreamProfile: boolean;
+  readonly requireAiCloudflareUnifiedBillingProfile: boolean;
   readonly requireAiServiceGraphToken: boolean;
   readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
@@ -104,6 +106,7 @@ interface CliArgs {
   readonly requireCompatMaterialization?: boolean;
   readonly requireProviderE2e?: boolean;
   readonly requireAiUpstreamProfile?: boolean;
+  readonly requireAiCloudflareUnifiedBillingProfile?: boolean;
   readonly requireAiServiceGraphToken?: boolean;
   readonly aiServiceInstallationId?: string;
   readonly platformVersion?: string;
@@ -167,6 +170,8 @@ export async function resolveOptions(
       requireProviderE2E:
         args.requireProviderE2E === true || args.requireProviderE2e === true,
       requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
+      requireAiCloudflareUnifiedBillingProfile:
+        args.requireAiCloudflareUnifiedBillingProfile === true,
       requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
       aiServiceInstallationId: optionalString(
         args.aiServiceInstallationId ??
@@ -197,6 +202,8 @@ export async function resolveOptions(
     requireProviderE2E:
       args.requireProviderE2E === true || args.requireProviderE2e === true,
     requireAiUpstreamProfile: args.requireAiUpstreamProfile === true,
+    requireAiCloudflareUnifiedBillingProfile:
+      args.requireAiCloudflareUnifiedBillingProfile === true,
     requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
     aiServiceInstallationId: optionalString(
       args.aiServiceInstallationId ??
@@ -476,6 +483,8 @@ export async function runCloudExtensionSmoke(
   }
   const gaps = cloudExtensionGaps(checks, {
     requireAiUpstreamProfile: options.requireAiUpstreamProfile,
+    requireAiCloudflareUnifiedBillingProfile:
+      options.requireAiCloudflareUnifiedBillingProfile,
   });
   const gaReady = checks.every((check) => check.ok) && gaps.length === 0;
   const status =
@@ -494,6 +503,8 @@ export async function runCloudExtensionSmoke(
     requireCompatMaterialization: options.requireCompatMaterialization,
     requireProviderE2E: options.requireProviderE2E,
     requireAiUpstreamProfile: options.requireAiUpstreamProfile,
+    requireAiCloudflareUnifiedBillingProfile:
+      options.requireAiCloudflareUnifiedBillingProfile,
     requireAiServiceGraphToken: options.requireAiServiceGraphToken,
     aiServiceInstallationId: options.aiServiceInstallationId,
     platformVersion: options.platformVersion,
@@ -846,7 +857,10 @@ function syntheticCheck(input: {
 
 function cloudExtensionGaps(
   checks: readonly CloudExtensionSmokeCheck[],
-  options: { readonly requireAiUpstreamProfile?: boolean } = {},
+  options: {
+    readonly requireAiUpstreamProfile?: boolean;
+    readonly requireAiCloudflareUnifiedBillingProfile?: boolean;
+  } = {},
 ): string[] {
   const gaps: string[] = [];
   const catalog = checks.find(
@@ -870,6 +884,14 @@ function cloudExtensionGaps(
     !summaryProviders(aiStatus).some((provider) => provider !== "workers_ai")
   ) {
     gaps.push("ai_gateway_external_upstream_not_configured");
+  }
+  if (
+    aiStatus &&
+    aiStatus.ok &&
+    options.requireAiCloudflareUnifiedBillingProfile === true &&
+    !summaryProviders(aiStatus).includes("cloudflare_unified_billing")
+  ) {
+    gaps.push("ai_gateway_cloudflare_unified_billing_profile_not_configured");
   }
   if (aiStatus && !aiStatus.ok) {
     gaps.push("ai_gateway_status_not_ready");
@@ -2447,6 +2469,7 @@ async function runSelfTest(): Promise<void> {
     requireCompatMaterialization: false,
     requireProviderE2E: false,
     requireAiUpstreamProfile: false,
+    requireAiCloudflareUnifiedBillingProfile: false,
     requireAiServiceGraphToken: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
@@ -2637,7 +2660,7 @@ function cloudExtensionCatalogResponse(configured: boolean): Response {
 function aiGatewayStatusResponse(
   mode: "configured_upstreams" | "workers_ai_fallback",
 ): Response {
-  const embeddingModel = "workers-ai/bge-base-en-v1.5";
+  const embeddingModel = "openai/text-embedding-3-small";
   return jsonResponse({
     kind: "takosumi.ai-gateway-status@v1",
     mode,
@@ -2646,15 +2669,17 @@ function aiGatewayStatusResponse(
       profileCount: mode === "configured_upstreams" ? 1 : 0,
       publicModelCount: mode === "configured_upstreams" ? 1 : 3,
       providers:
-        mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+        mode === "configured_upstreams"
+          ? ["cloudflare_unified_billing"]
+          : ["workers_ai"],
     },
     upstreamProfiles:
       mode === "configured_upstreams"
         ? [
             {
-              id: "deepseek-main",
-              provider: "deepseek",
-              endpointOrigin: "https://api.deepseek.example",
+              id: "cloudflare-unified",
+              provider: "cloudflare_unified_billing",
+              endpointOrigin: "https://api.cloudflare.com",
               modelCount: 2,
               publicModels: [
                 {
@@ -2693,7 +2718,9 @@ Options:
   --out-file <path>                    write redacted JSON evidence to a private file
   --require-compat-materialization     fail if Cloudflare Workers script materialization still returns 501
   --require-provider-e2e               run tofu init/plan/apply/destroy through the Cloudflare compat endpoint
-  --require-ai-upstream-profile        fail unless a non-Workers-AI external upstream profile is configured
+  --require-ai-upstream-profile        fail unless a non-Workers-AI upstream profile is configured
+  --require-ai-cloudflare-unified-billing-profile
+                                      fail unless a Cloudflare Unified Billing AI Gateway profile is configured
   --require-ai-service-graph-token     rotate an AI Gateway Service Graph runtime token and use it against /gateway/ai/v1
   --ai-service-installation-id <id>    installation projection id used for Service Graph runtime-token rotation
   --platform-version <id>              include deployed platform version id in evidence

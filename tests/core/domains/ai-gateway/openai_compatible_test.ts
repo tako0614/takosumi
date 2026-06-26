@@ -244,6 +244,83 @@ test("AI Gateway forwards chat completions with default alias and safe headers",
   expect(await response.text()).not.toContain("deepseek-secret");
 });
 
+test("AI Gateway forwards Cloudflare Unified Billing chat completions through the REST API", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv({
+    TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+      {
+        type: "openai_compatible",
+        id: "cloudflare-unified",
+        provider: "cloudflare_unified_billing",
+        baseUrl:
+          "https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1",
+        apiKeyEnv: "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
+        headers: {
+          "cf-aig-gateway-id": "takosumi-cloud",
+        },
+        models: [
+          {
+            publicModel: "takosumi/default",
+            upstreamModel: "openai/gpt-4.1-mini",
+            endpoints: ["chat.completions"],
+            default: true,
+            billingClass: "operator-paid-preview",
+          },
+        ],
+      },
+    ]),
+    TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN: "cf-token",
+  });
+  let upstreamRequest: Request | undefined;
+  const fetcher: typeof fetch = async (input, init) => {
+    upstreamRequest = new Request(input, init);
+    const body = await upstreamRequest.json();
+    expect(body.model).toBe("openai/gpt-4.1-mini");
+    expect(upstreamRequest.headers.get("authorization")).toBe(
+      "Bearer cf-token",
+    );
+    expect(upstreamRequest.headers.get("cf-aig-gateway-id")).toBe(
+      "takosumi-cloud",
+    );
+    return Response.json({
+      id: "chatcmpl_cf_1",
+      object: "chat.completion",
+      model: body.model,
+    });
+  };
+  const url = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "takosumi/default",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    url,
+    {
+      config,
+      fetcher,
+      authorize: async (_request, auth) => {
+        expect(auth.requiredScopes).toEqual(["ai.chat"]);
+        return { ok: true };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(upstreamRequest?.url).toBe(
+    "https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1/chat/completions",
+  );
+  expect(response.headers.get("x-takosumi-ai-gateway-provider")).toBe(
+    "cloudflare_unified_billing",
+  );
+  expect(response.headers.get("x-takosumi-ai-gateway-model")).toBe(
+    "takosumi/default",
+  );
+  expect(await response.text()).not.toContain("cf-token");
+});
+
 test("AI Gateway normalizes upstream errors without passing provider diagnostics through", async () => {
   const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
   const url = gatewayUrl("/gateway/ai/v1/chat/completions");

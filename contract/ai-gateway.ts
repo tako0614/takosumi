@@ -73,8 +73,10 @@ export interface TakosumiOpenAiCompatibleProfile extends TakosumiAiGatewayBasePr
   readonly type?: "openai_compatible";
   readonly baseUrl: string;
   /**
-   * Name of the operator secret/env var that holds the upstream API key.
-   * The key value itself must not be embedded in public config.
+   * Name of the operator secret/env var that holds the upstream credential.
+   * For Cloudflare Unified Billing this is a Cloudflare API token; for
+   * direct/BYOK providers this is the provider API key. The value itself must
+   * not be embedded in public config.
    */
   readonly apiKeyEnv: string;
   /**

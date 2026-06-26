@@ -9234,8 +9234,8 @@ test("platform-secrets status compares local vault with remote names", async () 
     expect(output).toContain("TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN");
     expect(output).toContain("Missing required manual: none");
     expect(output).toContain("AI Gateway profiles: none");
-    expect(output).toContain("AI Gateway external upstreams: 0");
-    expect(output).toContain("AI Gateway missing API key secrets: none");
+    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 0");
+    expect(output).toContain("AI Gateway missing credential secrets: none");
     expect(output).toContain("Remote only: REMOTE_ONLY_SECRET");
     expect(output).not.toContain("secret-one");
     expect(output).not.toContain("secret-two");
@@ -9334,12 +9334,66 @@ test("platform-secrets status requires AI Gateway profile apiKeyEnv secrets", as
     expect(output).toContain("Missing required manual: none");
     expect(output).toContain("AI Gateway profiles: 1");
     expect(output).toContain("AI Gateway providers: deepseek");
-    expect(output).toContain("AI Gateway external upstreams: 1");
+    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 1");
     expect(output).toContain(
-      "AI Gateway required API key secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
+      "AI Gateway required credential secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
     );
-    expect(output).toContain("AI Gateway missing API key secrets: none");
+    expect(output).toContain("AI Gateway missing credential secrets: none");
     expect(output).not.toContain("deepseek-token");
+  } finally {
+    await removePath(dir, { recursive: true });
+    await removePath(config);
+  }
+});
+
+test("platform-secrets status accepts Cloudflare Unified Billing API token profiles", async () => {
+  const dir = await makeTempDir();
+  const config = await makeTempFile({ suffix: ".toml" });
+  await writeTextFile(
+    config,
+    [
+      "[vars]",
+      "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
+      "[",
+      '  {"id":"cloudflare-unified","provider":"cloudflare_unified_billing","baseUrl":"https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN","headers":{"cf-aig-gateway-id":"takosumi-cloud"},"models":[{"publicModel":"takosumi/default","upstreamModel":"openai/gpt-4.1-mini","endpoints":["chat.completions"],"default":true,"billingClass":"operator-paid-preview"}]}',
+      "]",
+      "'''",
+    ].join("\n"),
+  );
+  await writeTextFile(
+    pathJoin(dir, "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN"),
+    "cf-token",
+  );
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    const code = await runPlatformSecrets(
+      ["status", "--config", config, "--secrets-dir", dir],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+      async () => ({ code: 0, stdout: "[]", stderr: "" }),
+    );
+
+    expect(code).toEqual(1);
+    expect(stderr).toEqual([]);
+    const output = stdout.join("\n");
+    expect(output).toContain(
+      "Required manual present: TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
+    );
+    expect(output).toContain("Missing required manual: none");
+    expect(output).toContain("AI Gateway profiles: 1");
+    expect(output).toContain(
+      "AI Gateway providers: cloudflare_unified_billing",
+    );
+    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 1");
+    expect(output).toContain(
+      "AI Gateway required credential secrets: TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
+    );
+    expect(output).toContain("AI Gateway missing credential secrets: none");
+    expect(output).not.toContain("cf-token");
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);
@@ -9456,7 +9510,7 @@ test("platform-secrets status reads multiline AI Gateway profiles from wrangler 
     );
     expect(output).toContain("AI Gateway profiles: 1");
     expect(output).toContain(
-      "AI Gateway missing API key secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
+      "AI Gateway missing credential secrets: TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
     );
   } finally {
     await removePath(dir, { recursive: true });
@@ -9497,9 +9551,9 @@ test("platform-secrets status accepts Workers AI binding profiles without manual
     expect(output).toContain("Missing required manual: none");
     expect(output).toContain("AI Gateway profiles: 1");
     expect(output).toContain("AI Gateway providers: workers_ai");
-    expect(output).toContain("AI Gateway external upstreams: 0");
+    expect(output).toContain("AI Gateway OpenAI-compatible profiles: 0");
     expect(output).toContain("AI Gateway Workers AI profiles: 1");
-    expect(output).toContain("AI Gateway required API key secrets: none");
+    expect(output).toContain("AI Gateway required credential secrets: none");
     expect(output).not.toContain("TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY");
   } finally {
     await removePath(dir, { recursive: true });
