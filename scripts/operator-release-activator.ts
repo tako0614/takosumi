@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   isReservedProviderEnvName,
   PROVIDER_CREDENTIAL_ENV_RULES,
@@ -73,13 +74,33 @@ interface ServeOptions extends RunReleaseOptions {
   readonly token: string;
   readonly host: string;
   readonly port: number;
+  readonly runActivation?: (
+    payload: ReleaseActivationPayload,
+    options: RunReleaseOptions,
+    jobId: string,
+  ) => Promise<ReleaseActivationResponse>;
 }
 
 interface ReleaseActivationResponse {
-  readonly status: "succeeded" | "failed";
+  readonly status: "pending" | "succeeded" | "failed";
   readonly kind: string;
   readonly message: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+type ReleaseActivationJobStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+interface ReleaseActivationJob {
+  readonly id: string;
+  readonly payload: ReleaseActivationPayload;
+  readonly createdAt: string;
+  status: ReleaseActivationJobStatus;
+  updatedAt: string;
+  result?: ReleaseActivationResponse;
 }
 
 const PROVIDER_CREDENTIAL_ENV_NAMES = new Set(
@@ -675,38 +696,234 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 }
 
 export function serveReleaseActivator(options: ServeOptions): void {
+  const fetch = createReleaseActivatorFetchHandler(options);
   const server = Bun.serve({
     hostname: options.host,
     port: options.port,
-    async fetch(request) {
-      if (request.method !== "POST") {
-        return Response.json({ error: "not found" }, { status: 404 });
-      }
-      const expected = `Bearer ${options.token}`;
-      if (request.headers.get("authorization") !== expected) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-      try {
-        const result = await runReleaseActivation(
-          await request.json(),
-          options,
-        );
-        return Response.json(result);
-      } catch (error) {
-        return Response.json(
-          {
-            status: "failed",
-            kind: "takosumi.operator.release-commands@v1",
-            message: error instanceof Error ? error.message : String(error),
-          },
-          { status: 500 },
-        );
-      }
-    },
+    fetch,
   });
   console.log(
     `Takosumi operator release activator listening on http://${server.hostname}:${server.port}`,
   );
+}
+
+export function createReleaseActivatorFetchHandler(options: ServeOptions) {
+  const jobs = new Map<string, ReleaseActivationJob>();
+  return async function fetch(request: Request): Promise<Response> {
+    const expected = `Bearer ${options.token}`;
+    if (request.headers.get("authorization") !== expected) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const url = new URL(request.url);
+    if (request.method === "GET") {
+      const jobId = url.searchParams.get("jobId");
+      if (!jobId) return Response.json({ error: "not found" }, { status: 404 });
+      const job = jobs.get(jobId);
+      if (!job) {
+        return Response.json({ error: "job not found" }, { status: 404 });
+      }
+      return Response.json(jobResponse(job, request.url));
+    }
+    if (request.method !== "POST") {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
+    let payload: ReleaseActivationPayload;
+    try {
+      payload = parsePayload(await request.json());
+    } catch (error) {
+      return Response.json(
+        {
+          status: "failed",
+          kind: "takosumi.operator.release-commands@v1",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        { status: 400 },
+      );
+    }
+    const jobId = releaseActivationJobId(payload);
+    let job = jobs.get(jobId);
+    if (!job) {
+      job = {
+        id: jobId,
+        payload,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      jobs.set(jobId, job);
+      startReleaseActivationJob(job, options);
+    }
+    const status =
+      job.status === "pending" || job.status === "running" ? 202 : 200;
+    return Response.json(jobResponse(job, statusUrl(request.url, job.id)), {
+      status,
+    });
+  };
+}
+
+function startReleaseActivationJob(
+  job: ReleaseActivationJob,
+  options: ServeOptions,
+): void {
+  setTimeout(() => {
+    job.status = "running";
+    job.updatedAt = new Date().toISOString();
+    const run =
+      options.runActivation ??
+      ((payload: ReleaseActivationPayload, runOptions: RunReleaseOptions) =>
+        runReleaseActivationChild(payload, runOptions, job.id));
+    void run(job.payload, options, job.id)
+      .then((result) => {
+        job.status = result.status;
+        job.result = result;
+        job.updatedAt = new Date().toISOString();
+      })
+      .catch((error) => {
+        job.status = "failed";
+        job.result = {
+          status: "failed",
+          kind: "takosumi.operator.release-commands@v1",
+          message: error instanceof Error ? error.message : String(error),
+        };
+        job.updatedAt = new Date().toISOString();
+      });
+  }, 0);
+}
+
+async function runReleaseActivationChild(
+  payload: ReleaseActivationPayload,
+  options: RunReleaseOptions,
+  jobId: string,
+): Promise<ReleaseActivationResponse> {
+  const workRoot = options.workRoot ?? DEFAULT_WORK_ROOT;
+  const jobDir = join(workRoot, "jobs", jobId);
+  await mkdir(jobDir, { recursive: true });
+  const payloadPath = join(jobDir, "payload.json");
+  await writeFile(payloadPath, JSON.stringify(payload), "utf8");
+  const args = [
+    fileURLToPath(import.meta.url),
+    "run",
+    "--payload",
+    payloadPath,
+    ...runModeArgs(options),
+  ];
+  const child = spawn(process.execPath, args, {
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout = tailText(stdout + String(chunk), 256 * 1024);
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr = tailText(stderr + String(chunk), 256 * 1024);
+  });
+  return await new Promise((resolve) => {
+    child.on("error", (error) => {
+      resolve({
+        status: "failed",
+        kind: "takosumi.operator.release-commands@v1",
+        message: `release activation child failed: ${error.message}`,
+      });
+    });
+    child.on("close", (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(stdout) as ReleaseActivationResponse);
+          return;
+        } catch {
+          resolve({
+            status: "failed",
+            kind: "takosumi.operator.release-commands@v1",
+            message: `release activation child returned invalid JSON: ${tailText(
+              stdout,
+            )}`,
+          });
+          return;
+        }
+      }
+      resolve({
+        status: "failed",
+        kind: "takosumi.operator.release-commands@v1",
+        message: [
+          `release activation child exited ${code ?? "unknown"}`,
+          stdout ? `stdout tail:\n${tailText(stdout)}` : undefined,
+          stderr ? `stderr tail:\n${tailText(stderr)}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      });
+    });
+  });
+}
+
+function runModeArgs(options: RunReleaseOptions): string[] {
+  const args: string[] = [];
+  if (options.sourceBucket) args.push("--source-bucket", options.sourceBucket);
+  if (options.wranglerConfig) {
+    args.push("--wrangler-config", options.wranglerConfig);
+  }
+  if (options.wranglerEnv) args.push("--wrangler-env", options.wranglerEnv);
+  if (options.jurisdiction) args.push("--jurisdiction", options.jurisdiction);
+  if (options.workRoot) args.push("--work-root", options.workRoot);
+  if (options.keepWorkdir) args.push("--keep-workdir");
+  if (options.commandEnvAllowlist && options.commandEnvAllowlist.length > 0) {
+    args.push("--command-env-allowlist", options.commandEnvAllowlist.join(","));
+  }
+  return args;
+}
+
+function releaseActivationJobId(payload: ReleaseActivationPayload): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        applyRunId: payload.applyRunId,
+        deploymentId: payload.deployment?.id ?? "",
+        archiveDigest: payload.sourceSnapshot.archiveDigest,
+        commands: payload.commands,
+      }),
+    )
+    .digest("hex");
+  return `rel_${digest.slice(0, 32)}`;
+}
+
+function jobResponse(
+  job: ReleaseActivationJob,
+  statusUrlValue?: string,
+): ReleaseActivationResponse & {
+  readonly jobId: string;
+  readonly statusUrl?: string;
+} {
+  const base =
+    job.result ??
+    ({
+      status: "pending",
+      kind: "takosumi.operator.release-commands@v1",
+      message:
+        job.status === "running"
+          ? "release activation job is running"
+          : "release activation job is pending",
+    } satisfies ReleaseActivationResponse);
+  return {
+    ...base,
+    jobId: job.id,
+    ...(statusUrlValue ? { statusUrl: statusUrlValue } : {}),
+    metadata: {
+      ...(base.metadata ?? {}),
+      jobId: job.id,
+      jobStatus: job.status,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    },
+  };
+}
+
+function statusUrl(requestUrl: string, jobId: string): string {
+  const url = new URL(requestUrl);
+  url.search = "";
+  url.searchParams.set("jobId", jobId);
+  return url.toString();
 }
 
 if (import.meta.main) {

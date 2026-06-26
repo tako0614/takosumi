@@ -319,6 +319,64 @@ test("webhook release activator treats 204 as succeeded", async () => {
   });
 });
 
+test("webhook release activator polls accepted operator jobs", async () => {
+  const requests: Request[] = [];
+  const activator = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    pollIntervalMs: 1,
+    timeoutMs: 100,
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.method === "POST") {
+        return Response.json(
+          {
+            status: "pending",
+            kind: "takosumi.operator.release-commands@v1",
+            message: "accepted",
+            jobId: "rel_job_1",
+            statusUrl:
+              "https://materializer.example.test/activate?jobId=rel_job_1",
+          },
+          { status: 202 },
+        );
+      }
+      if (requests.filter((entry) => entry.method === "GET").length === 1) {
+        return Response.json({
+          status: "pending",
+          kind: "takosumi.operator.release-commands@v1",
+          message: "running",
+          metadata: { jobId: "rel_job_1" },
+        });
+      }
+      return Response.json({
+        status: "succeeded",
+        kind: "takosumi.operator.release-commands@v1",
+        message: "done",
+        metadata: { jobId: "rel_job_1", commandCount: 1 },
+      });
+    },
+  });
+
+  await expect(
+    activator.activate(fakeOperatorActivationInput()),
+  ).resolves.toEqual({
+    status: "succeeded",
+    kind: "takosumi.operator.release-commands@v1",
+    message: "done",
+    metadata: { jobId: "rel_job_1", commandCount: 1 },
+  });
+  expect(requests.map((request) => request.method)).toEqual([
+    "POST",
+    "GET",
+    "GET",
+  ]);
+  expect(requests[1]?.url).toBe(
+    "https://materializer.example.test/activate?jobId=rel_job_1",
+  );
+});
+
 test("webhook release activator fails closed on non-2xx responses", async () => {
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",

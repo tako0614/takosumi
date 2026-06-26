@@ -21,6 +21,8 @@ export interface WebhookReleaseActivatorOptions {
   readonly token: string;
   readonly fetcher?: typeof fetch;
   readonly allowInsecure?: boolean;
+  readonly pollIntervalMs?: number;
+  readonly timeoutMs?: number;
 }
 
 /**
@@ -39,6 +41,8 @@ export function createWebhookReleaseActivator(
   const token = options.token.trim();
   if (!token) throw new Error("release activator token is required");
   const fetcher = options.fetcher ?? fetch;
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 3000);
+  const timeoutMs = Math.max(pollIntervalMs, options.timeoutMs ?? 45 * 60_000);
   return {
     async activate(input) {
       const operatorCommands = input.commands.filter(
@@ -61,6 +65,7 @@ export function createWebhookReleaseActivator(
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
+          accept: "application/json",
           "content-type": "application/json",
         },
         body: JSON.stringify(
@@ -79,7 +84,20 @@ export function createWebhookReleaseActivator(
       if (response.status === 204) {
         return { status: "succeeded" };
       }
-      return parseReleaseActivatorResponse(await response.json());
+      const rawResponse = await response.json();
+      const result = parseReleaseActivatorResponse(rawResponse);
+      const job = releaseActivatorJobReference(rawResponse, endpoint);
+      if (result.status === "pending" && job) {
+        return await pollReleaseActivatorJob({
+          endpoint,
+          token,
+          fetcher,
+          job,
+          pollIntervalMs,
+          timeoutMs,
+        });
+      }
+      return result;
     },
   };
 }
@@ -335,6 +353,76 @@ function parseReleaseActivatorResponse(
       ? { metadata: value.metadata as Readonly<Record<string, JsonValue>> }
       : {}),
   };
+}
+
+async function pollReleaseActivatorJob(input: {
+  readonly endpoint: string;
+  readonly token: string;
+  readonly fetcher: typeof fetch;
+  readonly job: ReleaseActivatorJobReference;
+  readonly pollIntervalMs: number;
+  readonly timeoutMs: number;
+}): Promise<ReleaseActivationResult> {
+  const deadline = Date.now() + input.timeoutMs;
+  while (Date.now() <= deadline) {
+    await sleep(input.pollIntervalMs);
+    const response = await input.fetcher(
+      input.job.statusUrl ?? statusUrlForJob(input.endpoint, input.job.jobId),
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${input.token}`,
+        },
+      },
+    );
+    if (!response.ok) {
+      const detail = await releaseActivatorFailureDetail(response);
+      throw new Error(
+        `release activator job status failed: ${response.status}${detail ? `: ${detail}` : ""}`,
+      );
+    }
+    const result = parseReleaseActivatorResponse(await response.json());
+    if (result.status !== "pending") return result;
+  }
+  throw new Error(
+    `release activator job ${input.job.jobId} did not finish within ${input.timeoutMs}ms`,
+  );
+}
+
+interface ReleaseActivatorJobReference {
+  readonly jobId: string;
+  readonly statusUrl?: string;
+}
+
+function releaseActivatorJobReference(
+  value: unknown,
+  endpoint: string,
+): ReleaseActivatorJobReference | undefined {
+  if (!isRecord(value)) return undefined;
+  const jobId =
+    typeof value.jobId === "string"
+      ? value.jobId
+      : isRecord(value.metadata) && typeof value.metadata.jobId === "string"
+        ? value.metadata.jobId
+        : undefined;
+  if (!jobId) return undefined;
+  const statusUrl =
+    typeof value.statusUrl === "string"
+      ? parseReleaseActivatorUrl(value.statusUrl, endpoint.startsWith("http:"))
+      : undefined;
+  return { jobId, ...(statusUrl ? { statusUrl } : {}) };
+}
+
+function statusUrlForJob(endpoint: string, jobId: string): string {
+  const url = new URL(endpoint);
+  url.search = "";
+  url.searchParams.set("jobId", jobId);
+  return url.toString();
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isReleaseActivationStatus(
