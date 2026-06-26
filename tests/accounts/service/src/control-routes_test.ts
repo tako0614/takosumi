@@ -3980,7 +3980,10 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
     "/api/v1/sources/src_x/compatibility-check",
     {
       cookie,
-      body: { sourceSnapshotId: "snap_1" },
+      body: {
+        sourceSnapshotId: "snap_1",
+        modulePath: "deploy/opentofu",
+      },
     },
   );
   const compatibilityResp = await handleControlRoute({
@@ -3993,6 +3996,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(operations.calls.createSourceCompatibilityCheck?.[0]).toEqual("src_x");
   expect(operations.calls.createSourceCompatibilityCheck?.[1]).toEqual({
     sourceSnapshotId: "snap_1",
+    modulePath: "deploy/opentofu",
   });
 
   // Catalog deep-link path: a curated `installConfigId` in the body must be
@@ -4016,6 +4020,25 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
     sourceSnapshotId: "snap_1",
     installConfigId: "cfg-official-cloudflare-worker-service",
   });
+
+  const unsafeModulePath = request(
+    "POST",
+    "/api/v1/sources/src_x/compatibility-check",
+    {
+      cookie,
+      body: {
+        sourceSnapshotId: "snap_1",
+        modulePath: "../outside",
+      },
+    },
+  );
+  const unsafeModulePathResp = await handleControlRoute({
+    request: unsafeModulePath.request,
+    url: unsafeModulePath.url,
+    store,
+    operations,
+  });
+  expect(unsafeModulePathResp?.status).toEqual(400);
 
   const report = request("GET", "/api/v1/compatibility-reports/caprep_1", {
     cookie,

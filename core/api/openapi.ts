@@ -1372,6 +1372,11 @@ function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       properties: {
         sourceSnapshotId: { type: "string" },
+        modulePath: {
+          type: "string",
+          description:
+            "Safe relative OpenTofu/Terraform module path inside the SourceSnapshot archive.",
+        },
         installationId: { type: "string" },
       },
       additionalProperties: false,

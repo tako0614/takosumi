@@ -73,6 +73,7 @@ export type EnqueueSourceSync = (dispatch: {
 
 export type ReadCapsuleSourceFiles = (
   snapshot: SourceSnapshot,
+  options?: { readonly modulePath?: string },
 ) => Promise<readonly CapsuleSourceFile[]>;
 
 export interface SourcesServiceDependencies {
@@ -350,6 +351,7 @@ export class SourcesService {
       ...(request.installationId
         ? { installationId: request.installationId }
         : {}),
+      ...(request.modulePath ? { modulePath: request.modulePath } : {}),
       ...(policy ? { policy } : {}),
     });
   }
@@ -363,7 +365,10 @@ export class SourcesService {
    */
   async createCompatibilityCheckForSnapshot(
     snapshot: SourceSnapshot,
-    options: { readonly installationId?: string } = {},
+    options: {
+      readonly installationId?: string;
+      readonly modulePath?: string;
+    } = {},
   ): Promise<CapsuleCompatibilityReportResponse> {
     const policy = await this.#compatibilityPolicyForSnapshot(
       snapshot.spaceId,
@@ -375,6 +380,7 @@ export class SourcesService {
       ...(options.installationId
         ? { installationId: options.installationId }
         : {}),
+      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
       ...(policy ? { policy } : {}),
     });
   }
@@ -389,6 +395,7 @@ export class SourcesService {
     readonly spaceId: string;
     readonly sourceId?: string;
     readonly installationId?: string;
+    readonly modulePath?: string;
     readonly policy?: PolicyConfig;
   }): Promise<CapsuleCompatibilityReportResponse> {
     const { snapshot, spaceId } = input;
@@ -406,16 +413,18 @@ export class SourcesService {
       startedAt: nowIso,
     };
     await this.#store.putCompatibilityCheckRun(runningRun);
-    const analysisAttempt = await this.#compatibilityAnalysisOrUnsupportedReport(
-      snapshot,
-      async (files) =>
-        await this.#compatibilityAnalyzer.analyze({
-          ...(input.sourceId ? { sourceId: input.sourceId } : {}),
-          sourceSnapshot: snapshot,
-          files,
-          ...(input.policy ? { policy: input.policy } : {}),
-        }),
-    );
+    const analysisAttempt =
+      await this.#compatibilityAnalysisOrUnsupportedReport(
+        snapshot,
+        input.modulePath,
+        async (files) =>
+          await this.#compatibilityAnalyzer.analyze({
+            ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+            sourceSnapshot: snapshot,
+            files,
+            ...(input.policy ? { policy: input.policy } : {}),
+          }),
+      );
     const analysis = analysisAttempt.analysis;
     const normalizedArtifact = await this.#persistNormalizedArtifact(
       snapshot,
@@ -462,6 +471,7 @@ export class SourcesService {
 
   async #compatibilityAnalysisOrUnsupportedReport(
     snapshot: SourceSnapshot,
+    modulePath: string | undefined,
     analyze: (
       files: readonly CapsuleSourceFile[],
     ) => Promise<CapsuleCompatibilityAnalysis>,
@@ -470,7 +480,10 @@ export class SourcesService {
     readonly diagnosticMessage?: string;
   }> {
     try {
-      const files = await this.#readCapsuleSourceFiles(snapshot);
+      const files = await this.#readCapsuleSourceFiles(
+        snapshot,
+        modulePath ? { modulePath } : undefined,
+      );
       return { analysis: await analyze(files) };
     } catch (error) {
       return {
@@ -856,8 +869,7 @@ function compatibilityCheckFailureAnalysis(
       {
         severity: "error",
         code: "capsule_compatibility_check_failed",
-        message:
-          "Takosumi could not inspect this Capsule before installation.",
+        message: "Takosumi could not inspect this Capsule before installation.",
         path: snapshot.path,
         suggestion:
           "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",

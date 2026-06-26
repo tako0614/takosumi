@@ -152,9 +152,12 @@ test("source register -> sync -> snapshots flow", async () => {
   expect(synced.status).toBe(201);
   expect((await synced.json()).run.status).toBe("queued");
 
-  const snaps = await app.request(`/internal/v1/sources/${sourceId}/snapshots`, {
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const snaps = await app.request(
+    `/internal/v1/sources/${sourceId}/snapshots`,
+    {
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(snaps.status).toBe(200);
   expect((await snaps.json()).snapshots).toEqual([]);
 });
@@ -246,15 +249,21 @@ test("source compatibility-check creates and reads a Capsule report", async () =
     compatibilityReportId: checkedBody.report.id,
   });
 
-  const logs = await app.request(`/internal/v1/runs/${compatibilityRunId}/logs`, {
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const logs = await app.request(
+    `/internal/v1/runs/${compatibilityRunId}/logs`,
+    {
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(logs.status).toBe(200);
   expect(await logs.json()).toEqual({ diagnostics: [], auditEvents: [] });
 
-  const events = await app.request(`/internal/v1/runs/${compatibilityRunId}/events`, {
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const events = await app.request(
+    `/internal/v1/runs/${compatibilityRunId}/events`,
+    {
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(events.status).toBe(200);
   expect(await events.json()).toEqual({ auditEvents: [] });
 
@@ -268,10 +277,13 @@ test("source compatibility-check creates and reads a Capsule report", async () =
   expect(approve.status).toBe(409);
   expect((await approve.json()).error.code).toBe("failed_precondition");
 
-  const cancel = await app.request(`/internal/v1/runs/${compatibilityRunId}/cancel`, {
-    method: "POST",
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const cancel = await app.request(
+    `/internal/v1/runs/${compatibilityRunId}/cancel`,
+    {
+      method: "POST",
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(cancel.status).toBe(409);
   expect((await cancel.json()).error.code).toBe("failed_precondition");
 });
@@ -321,16 +333,21 @@ test("GET /internal/v1/compatibility-reports resolves owner from sourceSnapshot 
   };
   await store.putCapsuleCompatibilityReport(report);
 
-  const got = await app.request(`/internal/v1/compatibility-reports/${report.id}`, {
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const got = await app.request(
+    `/internal/v1/compatibility-reports/${report.id}`,
+    {
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(got.status).toBe(403);
 });
 
-test("source compatibility-check analyzes expanded OpenTofu files when available", async () => {
+test("source compatibility-check analyzes expanded OpenTofu files at modulePath when available", async () => {
+  const sourceFileReadOptions: unknown[] = [];
   const { app, store } = await makeAppWithStore({
-    readCapsuleSourceFiles: () =>
-      Promise.resolve([
+    readCapsuleSourceFiles: (_snapshot, options) => {
+      sourceFileReadOptions.push(options);
+      return Promise.resolve([
         {
           path: "main.tf",
           text: `
@@ -351,7 +368,8 @@ output "attachments_bucket" {
 }
 `,
         },
-      ]),
+      ]);
+    },
   });
   const created = await app.request("/internal/v1/sources", {
     method: "POST",
@@ -384,10 +402,14 @@ output "attachments_bucket" {
     {
       method: "POST",
       headers: HEADERS,
-      body: JSON.stringify({ sourceSnapshotId: snapshot.id }),
+      body: JSON.stringify({
+        sourceSnapshotId: snapshot.id,
+        modulePath: "deploy/opentofu",
+      }),
     },
   );
   expect(checked.status).toBe(201);
+  expect(sourceFileReadOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
   const checkedBody = await checked.json();
   expect(checkedBody.report).toMatchObject({
     level: "ready",
@@ -422,9 +444,12 @@ test("PATCH /internal/v1/sources updates fields", async () => {
 
 test("source id with an unsupported shape is rejected (400)", async () => {
   const app = await makeApp();
-  const response = await app.request("/internal/v1/sources/not-a-source/snapshots", {
-    headers: { authorization: "Bearer scoped-token" },
-  });
+  const response = await app.request(
+    "/internal/v1/sources/not-a-source/snapshots",
+    {
+      headers: { authorization: "Bearer scoped-token" },
+    },
+  );
   expect(response.status).toBe(400);
 });
 

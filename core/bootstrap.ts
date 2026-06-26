@@ -823,10 +823,13 @@ export async function createTakosumiService(
     enqueueSourceSync,
     ...(options.opentofuRunner?.readCapsuleSourceFiles
       ? {
-          readCapsuleSourceFiles: (snapshot) =>
+          readCapsuleSourceFiles: (snapshot, fileOptions) =>
             options.opentofuRunner!.readCapsuleSourceFiles!({
               runId: `compatibility_${snapshot.id}`,
               sourceSnapshot: snapshot,
+              ...(fileOptions?.modulePath
+                ? { modulePath: fileOptions.modulePath }
+                : {}),
             }),
         }
       : {}),

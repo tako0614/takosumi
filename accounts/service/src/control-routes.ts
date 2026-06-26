@@ -1527,6 +1527,14 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         return errorJson("invalid_json", "invalid json body", 400);
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
+      const modulePath = modulePathValue(body.modulePath);
+      if (body.modulePath !== undefined && modulePath === undefined) {
+        return errorJson(
+          "invalid_request",
+          "modulePath must be a safe relative OpenTofu module path.",
+          400,
+        );
+      }
       const installationId = stringValue(body.installationId);
       // Curated catalog deep-link path: when no Installation exists yet, gate
       // the pre-install check against the catalog's bounded InstallConfig so a
@@ -1536,6 +1544,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       const installConfigId = stringValue(body.installConfigId);
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
         ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
+        ...(modulePath ? { modulePath } : {}),
         ...(installationId ? { installationId } : {}),
         ...(installConfigId ? { installConfigId } : {}),
       };
