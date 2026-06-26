@@ -26,7 +26,7 @@ import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
   containsSecretLikeString,
   redactString,
-} from "../observability/redaction.ts";
+} from "takosumi-contract/redaction";
 
 export function deploymentOutputsFromOpenTofu(
   outputs: OpenTofuOutputEnvelope,

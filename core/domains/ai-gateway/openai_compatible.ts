@@ -25,7 +25,7 @@ import {
   containsSecretLikeString,
   isSecretKey,
   redactString,
-} from "../observability/redaction.ts";
+} from "takosumi-contract/redaction";
 
 export interface TakosumiAiGatewayConfig {
   readonly basePath: string;

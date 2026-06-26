@@ -18,7 +18,7 @@ import {
   containsSecretLikeString,
   isSecretKey,
   redactString,
-} from "../../../core/domains/observability/redaction.ts";
+} from "takosumi-contract/redaction";
 import {
   platformSecretsApplyHelpText,
   platformSecretsHelpText,

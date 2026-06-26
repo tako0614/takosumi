@@ -9,7 +9,7 @@ import {
   isSecretKey,
   redactString,
   REDACTED_VALUE,
-} from "../domains/observability/redaction.ts";
+} from "takosumi-contract/redaction";
 
 export { REDACTED_VALUE, redactString };
 

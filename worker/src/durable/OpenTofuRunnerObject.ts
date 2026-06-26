@@ -1,6 +1,6 @@
 import type { CloudflareWorkerEnv } from "../bindings.ts";
 import { StateArtifactCrypto } from "../state_crypto.ts";
-import { redactString } from "../../../core/domains/observability/redaction.ts";
+import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";

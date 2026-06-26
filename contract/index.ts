@@ -1,5 +1,6 @@
 export { API_V1_PREFIX, isApiV1Path } from "./api-surface.ts";
 export * from "./sources.ts";
+export * from "./redaction.ts";
 export * from "./spaces.ts";
 export type {
   BackupConfig,
