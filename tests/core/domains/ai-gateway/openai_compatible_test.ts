@@ -255,7 +255,7 @@ test("AI Gateway forwards Cloudflare Unified Billing chat completions through th
           "https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1",
         apiKeyEnv: "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
         headers: {
-          "cf-aig-gateway-id": "takosumi-cloud",
+          "cf-aig-gateway-id": "default",
         },
         models: [
           {
@@ -279,7 +279,7 @@ test("AI Gateway forwards Cloudflare Unified Billing chat completions through th
       "Bearer cf-token",
     );
     expect(upstreamRequest.headers.get("cf-aig-gateway-id")).toBe(
-      "takosumi-cloud",
+      "default",
     );
     return Response.json({
       id: "chatcmpl_cf_1",
@@ -477,6 +477,14 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
         type: "workers_ai_binding",
         id: "workers-ai",
         provider: "workers_ai",
+        gateway: {
+          id: "default",
+          skipCache: false,
+          collectLog: true,
+          metadata: {
+            surface: "takosumi-cloud",
+          },
+        },
         models: [
           {
             publicModel: "workers-ai/chat",
@@ -540,7 +548,7 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
   });
 
   const chatUrl = gatewayUrl("/gateway/ai/v1/chat/completions");
-  const calls: { model: string; input: unknown }[] = [];
+  const calls: { model: string; input: unknown; options: unknown }[] = [];
   const chat = await handleTakosumiAiGatewayRequest(
     new Request(chatUrl, {
       method: "POST",
@@ -553,8 +561,8 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
     {
       config,
       workersAi: {
-        run: async (model, input) => {
-          calls.push({ model, input });
+        run: async (model, input, options) => {
+          calls.push({ model, input, options });
           return { response: "hello from Workers AI" };
         },
       },
@@ -569,6 +577,16 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
     {
       model: "@cf/meta/llama-3.1-8b-instruct-fast",
       input: { messages: [{ role: "user", content: "hello" }] },
+      options: {
+        gateway: {
+          id: "default",
+          skipCache: false,
+          collectLog: true,
+          metadata: {
+            surface: "takosumi-cloud",
+          },
+        },
+      },
     },
   ]);
   expect(await chat.json()).toMatchObject({
@@ -598,8 +616,8 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
     {
       config,
       workersAi: {
-        run: async (model, input) => {
-          calls.push({ model, input });
+        run: async (model, input, options) => {
+          calls.push({ model, input, options });
           return {
             data: [
               [0.1, 0.2],
@@ -665,6 +683,29 @@ test("AI Gateway rejects secrets on Workers AI binding profiles", () => {
       TAKOSUMI_AI_GATEWAY_UNSAFE_KEY: "secret",
     }),
   ).toThrow("apiKeyEnv is not valid for workers_ai_binding");
+
+  expect(() =>
+    createTakosumiAiGatewayConfigFromEnv({
+      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+        {
+          type: "workers_ai_binding",
+          id: "workers-ai",
+          provider: "workers_ai",
+          gateway: {
+            id: "default",
+            metadata: { apiKey: "must-not-be-public" },
+          },
+          models: [
+            {
+              publicModel: "workers-ai/chat",
+              upstreamModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+              endpoints: ["chat.completions"],
+            },
+          ],
+        },
+      ]),
+    }),
+  ).toThrow("gateway.metadata.apiKey may carry secrets");
 });
 
 test("AI Gateway config rejects secret-bearing static upstream headers", () => {

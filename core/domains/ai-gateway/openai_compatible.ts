@@ -10,6 +10,7 @@ import {
   type TakosumiAiGatewayRoute,
   type TakosumiAiGatewayScope,
   type TakosumiAiGatewayStatusResponse,
+  type TakosumiWorkersAiGatewayOptions,
   type TakosumiWorkersAiBindingProfile,
 } from "takosumi-contract/ai-gateway";
 import type { JsonObject, JsonValue } from "takosumi-contract";
@@ -42,7 +43,16 @@ export type ResolvedAiGatewayUpstreamProfile =
   | ResolvedWorkersAiBindingProfile;
 
 export interface TakosumiWorkersAiBinding {
-  run(model: string, input: unknown): Promise<unknown>;
+  run(
+    model: string,
+    input: unknown,
+    options?: TakosumiWorkersAiRunOptions,
+  ): Promise<unknown>;
+  readonly aiGatewayLogId?: string;
+}
+
+export interface TakosumiWorkersAiRunOptions {
+  readonly gateway?: TakosumiWorkersAiGatewayOptions;
 }
 
 export interface TakosumiAiGatewayAuthContext {
@@ -437,6 +447,11 @@ async function forwardWorkersAiBindingRequest(input: {
     result = await input.workersAi.run(
       input.model.upstreamModel,
       workersAiInput,
+      input.profile.gateway
+        ? {
+            gateway: input.profile.gateway,
+          }
+        : undefined,
     );
   } catch {
     return aiGatewayError(
@@ -760,11 +775,13 @@ function parseProfile(
       }
     }
     const models = parseModels(entry.models, id);
+    const gateway = parseWorkersAiGateway(entry.gateway, id);
     return {
       type: "workers_ai_binding",
       id,
       provider,
       models,
+      gateway,
     };
   }
   if (profileType !== "openai_compatible") {
@@ -867,6 +884,78 @@ function parsePublicMetadata(
     throw new TypeError(`${issue} may carry secrets; use apiKeyEnv`);
   }
   return value;
+}
+
+function parseWorkersAiGateway(
+  value: unknown,
+  profileId: string,
+): TakosumiWorkersAiGatewayOptions | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) {
+    throw new TypeError(
+      `AI Gateway profile ${profileId}.gateway must be an object`,
+    );
+  }
+  const id = requiredString(
+    value.id,
+    `AI Gateway profile ${profileId}.gateway.id`,
+  );
+  if (containsSecretLikeString(id) || redactString(id) !== id) {
+    throw new TypeError(
+      `AI Gateway profile ${profileId}.gateway.id may carry secrets`,
+    );
+  }
+  const gateway: {
+    id: string;
+    skipCache?: boolean;
+    cacheTtl?: number;
+    cacheKey?: string;
+    collectLog?: boolean;
+    metadata?: JsonObject;
+  } = { id };
+  if (value.skipCache !== undefined) {
+    if (typeof value.skipCache !== "boolean") {
+      throw new TypeError(
+        `AI Gateway profile ${profileId}.gateway.skipCache must be a boolean`,
+      );
+    }
+    gateway.skipCache = value.skipCache;
+  }
+  if (value.cacheTtl !== undefined) {
+    gateway.cacheTtl = optionalPositiveInteger(value.cacheTtl);
+    if (gateway.cacheTtl === undefined) {
+      throw new TypeError(
+        `AI Gateway profile ${profileId}.gateway.cacheTtl must be a positive integer`,
+      );
+    }
+  }
+  if (value.cacheKey !== undefined) {
+    gateway.cacheKey = requiredString(
+      value.cacheKey,
+      `AI Gateway profile ${profileId}.gateway.cacheKey`,
+    );
+    if (
+      containsSecretLikeString(gateway.cacheKey) ||
+      redactString(gateway.cacheKey) !== gateway.cacheKey
+    ) {
+      throw new TypeError(
+        `AI Gateway profile ${profileId}.gateway.cacheKey may carry secrets`,
+      );
+    }
+  }
+  if (value.collectLog !== undefined) {
+    if (typeof value.collectLog !== "boolean") {
+      throw new TypeError(
+        `AI Gateway profile ${profileId}.gateway.collectLog must be a boolean`,
+      );
+    }
+    gateway.collectLog = value.collectLog;
+  }
+  gateway.metadata = parsePublicMetadata(
+    value.metadata,
+    `AI Gateway profile ${profileId}.gateway.metadata`,
+  );
+  return gateway;
 }
 
 function publicMetadataSecretIssue(

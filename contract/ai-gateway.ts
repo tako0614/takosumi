@@ -90,11 +90,26 @@ export interface TakosumiOpenAiCompatibleProfile extends TakosumiAiGatewayBasePr
 
 export interface TakosumiWorkersAiBindingProfile extends TakosumiAiGatewayBaseProfile {
   readonly type: "workers_ai_binding";
+  /**
+   * Optional Cloudflare AI Gateway routing for Workers AI binding calls.
+   * This is non-secret routing/cache metadata; provider credentials are not
+   * accepted here.
+   */
+  readonly gateway?: TakosumiWorkersAiGatewayOptions;
 }
 
 export type TakosumiAiGatewayUpstreamProfile =
   | TakosumiOpenAiCompatibleProfile
   | TakosumiWorkersAiBindingProfile;
+
+export interface TakosumiWorkersAiGatewayOptions {
+  readonly id: string;
+  readonly skipCache?: boolean;
+  readonly cacheTtl?: number;
+  readonly cacheKey?: string;
+  readonly collectLog?: boolean;
+  readonly metadata?: JsonObject;
+}
 
 export interface TakosumiAiGatewayModelListResponse {
   readonly object: "list";
