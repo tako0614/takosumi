@@ -190,15 +190,19 @@ repo.
    )" \
      bun run smoke:platform-control-plane -- \
        --url https://app-staging.takosumi.com \
-      --workspace <scratch-workspace-id-or-handle> \
+       --workspace <scratch-workspace-id-or-handle> \
        --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
+       --cloudflare-resource-preflight account-resources \
        --json
    ```
 
    The command uses the public session-authenticated platform API for Workspace,
    connection, upload, deploy, run, and destroy. It does not require opening
    any edge-public internal route. The smoke output redacts token values and
-   the Cloudflare account id; keep the raw transcript in
+   the Cloudflare account id. The `account-resources` preflight checks D1,
+   Workers KV, R2, and Queues read access before apply so an active but
+   under-scoped token fails before OpenTofu can partially create resources; keep
+   the raw transcript in
    `takosumi-private/evidence/platform-control-plane-smoke.md`.
 
 7. Produce staging launch-readiness and hardening evidence. Staging rows may be

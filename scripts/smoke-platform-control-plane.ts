@@ -114,7 +114,7 @@ type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
 type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
 type SmokeAuthTokenKind = "session" | "pat";
-type CloudflareResourcePreflightMode = "none" | "d1";
+type CloudflareResourcePreflightMode = "none" | "d1" | "account-resources";
 type ReleaseActivationRequirement = "any" | "pending" | "succeeded" | "failed";
 type SecretInputSource = "env" | "file" | "not_required";
 type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
@@ -418,6 +418,33 @@ interface CloudflareResourcePreflightResult {
   readonly status: "passed";
   readonly checks: readonly string[];
 }
+
+const CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS = [
+  {
+    id: "cloudflare.d1.database.list",
+    label: "D1 databases",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database?per_page=1`,
+  },
+  {
+    id: "cloudflare.kv.namespace.list",
+    label: "KV namespaces",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/storage/kv/namespaces?per_page=1`,
+  },
+  {
+    id: "cloudflare.r2.bucket.list",
+    label: "R2 buckets",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/r2/buckets?per_page=1`,
+  },
+  {
+    id: "cloudflare.queue.list",
+    label: "Queues",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/queues?per_page=1`,
+  },
+] as const;
 
 interface BackupRestoreRehearsalResult {
   readonly backupId: string;
@@ -743,10 +770,9 @@ export function dryRunResult(
           cloudflareResourcePreflight: {
             mode: options.cloudflareResourcePreflight,
             status: "passed",
-            checks:
-              options.cloudflareResourcePreflight === "d1"
-                ? ["cloudflare.d1.database.list"]
-                : [],
+            checks: cloudflareResourcePreflightChecks(
+              options.cloudflareResourcePreflight,
+            ),
           },
         }
       : {}),
@@ -1188,9 +1214,9 @@ function failedNextAction(input: {
 }): string {
   if (
     input.error instanceof Error &&
-    input.error.message.startsWith("cloudflare d1 preflight failed:")
+    input.error.message.startsWith("cloudflare resource preflight failed:")
   ) {
-    return "Update the operator Cloudflare API token so it can read and create D1 resources for the configured account, or use a non-resource-creating Capsule smoke before rerunning this apply.";
+    return "Update the operator Cloudflare API token so it can read and create the Cloudflare account resources required by the Capsule, or use a non-resource-creating Capsule smoke before rerunning this apply.";
   }
   if (
     input.error instanceof RequestTimeoutError &&
@@ -1341,11 +1367,11 @@ async function assertCloudflareResourcePreflight(
   if (options.cloudflareResourcePreflight === "none") {
     throw new Error("cloudflare resource preflight called with mode none");
   }
-  if (options.cloudflareResourcePreflight === "d1") {
-    const check = "cloudflare.d1.database.list";
-    const path = `/client/v4/accounts/${encodeURIComponent(
-      options.cloudflareAccountId,
-    )}/d1/database?per_page=1`;
+  const checks = cloudflareResourcePreflightDefinitions(
+    options.cloudflareResourcePreflight,
+  );
+  for (const check of checks) {
+    const path = check.path(options.cloudflareAccountId);
     const response = await fetch(`https://api.cloudflare.com${path}`, {
       method: "GET",
       headers: {
@@ -1354,25 +1380,46 @@ async function assertCloudflareResourcePreflight(
       },
     }).catch((error) => {
       throw new Error(
-        `cloudflare d1 preflight request failed: ${errorMessage(error)}`,
+        `cloudflare resource preflight request failed: ${check.label}: ${errorMessage(error)}`,
       );
     });
     const bodyText = await response.text();
-    const body = parseResponseBody(bodyText, "cloudflare d1 preflight");
+    const body = parseResponseBody(
+      bodyText,
+      `cloudflare resource preflight ${check.id}`,
+    );
     if (!response.ok || !cloudflareApiSuccess(body)) {
       throw new Error(
-        `cloudflare d1 preflight failed: GET /accounts/<redacted>/d1/database returned http ${
+        `cloudflare resource preflight failed: ${check.id} returned http ${
           response.status
-        }: ${cloudflareApiErrorCode(body)}. The Cloudflare token is active but cannot read D1 databases for the configured account; update CLOUDFLARE_API_TOKEN permissions or CLOUDFLARE_ACCOUNT_ID before applying resource-creating Capsules.`,
+        }: ${cloudflareApiErrorCode(body)}. The Cloudflare token is active but cannot read ${check.label} for the configured account; update CLOUDFLARE_API_TOKEN permissions or CLOUDFLARE_ACCOUNT_ID before applying resource-creating Capsules.`,
       );
     }
-    return {
-      mode: "d1",
-      status: "passed",
-      checks: [check],
-    };
   }
-  return assertNever(options.cloudflareResourcePreflight);
+  return {
+    mode: options.cloudflareResourcePreflight,
+    status: "passed",
+    checks: checks.map((check) => check.id),
+  };
+}
+
+function cloudflareResourcePreflightDefinitions(
+  mode: Exclude<CloudflareResourcePreflightMode, "none">,
+): readonly (typeof CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS)[number][] {
+  if (mode === "d1") {
+    return [CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS[0]!];
+  }
+  if (mode === "account-resources") {
+    return CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS;
+  }
+  return assertNever(mode);
+}
+
+function cloudflareResourcePreflightChecks(
+  mode: CloudflareResourcePreflightMode,
+): readonly string[] {
+  if (mode === "none") return [];
+  return cloudflareResourcePreflightDefinitions(mode).map((check) => check.id);
 }
 
 async function lookupPublicProviderConnectionId(
@@ -2995,7 +3042,10 @@ function parseCloudflareResourcePreflight(
     return "none";
   }
   if (value === "d1") return "d1";
-  throw new Error("--cloudflare-resource-preflight must be d1 or none");
+  if (value === "account-resources") return "account-resources";
+  throw new Error(
+    "--cloudflare-resource-preflight must be account-resources, d1, or none",
+  );
 }
 
 function parseReleaseActivationRequirement(
@@ -3788,7 +3838,8 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
-  --cloudflare-resource-preflight <d1|none>       verify the Cloudflare token can read D1 for the configured account before resource-creating applies
+  --cloudflare-resource-preflight <account-resources|d1|none>
+                                                   verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, and Queues
   --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
   --capsule-dir <path>                            default cloudflare-hello-worker module

@@ -157,6 +157,39 @@ test("platform control-plane smoke records Cloudflare D1 resource preflight", as
   });
 });
 
+test("platform control-plane smoke records Cloudflare account resource preflight", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      cloudflareResourcePreflight: "account-resources",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.inputs.cloudflareResourcePreflight).toBe("account-resources");
+  expect(result.steps).toContain("cloudflareResourcePreflight");
+  expect(result.completedSteps).toContain("cloudflareResourcePreflight");
+  expect(result.cloudflareResourcePreflight).toEqual({
+    mode: "account-resources",
+    status: "passed",
+    checks: [
+      "cloudflare.d1.database.list",
+      "cloudflare.kv.namespace.list",
+      "cloudflare.r2.bucket.list",
+      "cloudflare.queue.list",
+    ],
+  });
+});
+
 test("platform control-plane smoke labels Git sources as Git OpenTofu Capsules", async () => {
   const options = await resolveOptions(
     {
