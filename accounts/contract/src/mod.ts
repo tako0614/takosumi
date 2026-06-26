@@ -205,6 +205,7 @@ export interface TakosumiAccountsCreatePatResponse {
 
 export interface TakosumiAccountsListPatsResponse {
   tokens: readonly TakosumiAccountsPatMetadata[];
+  next_cursor: string | null;
 }
 
 export interface TakosumiAccountsRevokePatResponse {

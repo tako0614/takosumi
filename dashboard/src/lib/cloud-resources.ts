@@ -234,7 +234,9 @@ async function getCloudflareCompatInventory(
       workerScripts: { ok: false, error: accounts.error },
     };
   }
-  const selectedAccountId = firstString(accounts.data.map((account) => account.id));
+  const selectedAccountId = firstString(
+    accounts.data.map((account) => account.id),
+  );
   if (!selectedAccountId) {
     return {
       accounts,
@@ -285,8 +287,10 @@ function emptyCloudflareCompatInventory(
   };
 }
 
-export const CLOUD_API_KEY_SCOPES = ["read", "write"] as const satisfies
-  readonly TakosumiAccountsPatScope[];
+export const CLOUD_API_KEY_SCOPES = [
+  "read",
+  "write",
+] as const satisfies readonly TakosumiAccountsPatScope[];
 
 export async function createCloudApiKey(input: {
   readonly name: string;
@@ -315,10 +319,28 @@ export async function revokeCloudApiKey(
 async function getAccountTokens(): Promise<
   CloudResourceResult<readonly TakosumiAccountsPatMetadata[]>
 > {
-  const result = await resultFor<TakosumiAccountsListPatsResponse>(
-    TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  );
-  return result.ok ? { ok: true, data: result.data.tokens } : result;
+  try {
+    const tokens: TakosumiAccountsPatMetadata[] = [];
+    let cursor: string | null | undefined;
+    do {
+      const url = new URL(
+        TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
+        typeof location !== "undefined"
+          ? location.origin
+          : "https://app.takosumi.com",
+      );
+      url.searchParams.set("limit", "200");
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const page = await cloudFetch<TakosumiAccountsListPatsResponse>(
+        url.pathname + url.search,
+      );
+      tokens.push(...page.tokens);
+      cursor = page.next_cursor;
+    } while (cursor);
+    return { ok: true, data: tokens };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
 }
 
 async function getCloudUsage(

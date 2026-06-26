@@ -2824,6 +2824,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   expect(listResponse.status).toEqual(200);
   const listBody = await listResponse.json();
   expect(listBody.tokens.length).toEqual(1);
+  expect(listBody.next_cursor).toEqual(null);
   expect(listBody.tokens[0].token).toEqual(undefined);
   expect(listBody.tokens[0].name).toEqual("CLI");
 
@@ -2871,6 +2872,70 @@ test("accounts handler issues and revokes personal access tokens", async () => {
     }),
   );
   expect((await revokedIntrospectResponse.json()).active).toEqual(false);
+});
+
+test("accounts handler paginates personal access token metadata", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveAccount({
+    subject: "tsub_pat_page_owner",
+    email: "page-owner@example.test",
+    displayName: "Page Owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_pat_page_owner",
+    subject: "tsub_pat_page_owner",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const handler = createAccountsHandler({ store });
+  for (const name of ["Key 1", "Key 2", "Key 3"]) {
+    const createResponse = await handler(
+      new Request("https://accounts.example.test/v1/account/tokens", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer sess_pat_page_owner",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name, scopes: ["read"] }),
+      }),
+    );
+    expect(createResponse.status).toEqual(201);
+  }
+
+  const firstPage = await handler(
+    new Request("https://accounts.example.test/v1/account/tokens?limit=2", {
+      headers: {
+        authorization: "Bearer sess_pat_page_owner",
+      },
+    }),
+  );
+  expect(firstPage.status).toEqual(200);
+  const firstBody = await firstPage.json();
+  expect(firstBody.tokens.length).toEqual(2);
+  expect(typeof firstBody.next_cursor).toEqual("string");
+  expect(
+    firstBody.tokens.map((token: { token?: string }) => token.token),
+  ).toEqual([undefined, undefined]);
+
+  const secondPage = await handler(
+    new Request(
+      `https://accounts.example.test/v1/account/tokens?limit=2&cursor=${encodeURIComponent(
+        firstBody.next_cursor,
+      )}`,
+      {
+        headers: {
+          authorization: "Bearer sess_pat_page_owner",
+        },
+      },
+    ),
+  );
+  expect(secondPage.status).toEqual(200);
+  const secondBody = await secondPage.json();
+  expect(secondBody.tokens.length).toEqual(1);
+  expect(secondBody.next_cursor).toEqual(null);
 });
 
 test("accounts handler requires session auth and valid scopes for personal access tokens", async () => {
