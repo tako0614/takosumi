@@ -45,6 +45,8 @@ export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
  * maps it to operator runner policy internally and still validates provider
  * allowlists, source policy, and credential binding before any OpenTofu
  * execution starts.
+ * `modulePath` selects the OpenTofu/Terraform module path inside the uploaded
+ * SourceSnapshot archive. It must be a safe relative path.
  */
 export interface DeployRequest {
   readonly spaceId: string;
@@ -52,6 +54,7 @@ export interface DeployRequest {
   /** Defaults to `"production"` when omitted. */
   readonly environment?: string;
   readonly snapshotId: string;
+  readonly modulePath?: string;
   readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;

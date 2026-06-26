@@ -1995,6 +1995,7 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
+        modulePath: { type: "string" },
         runnerId: { type: "string" },
         vars: {
           type: "object",
@@ -2039,6 +2040,7 @@ function deploySchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         environment: { type: "string" },
         snapshotId: { type: "string" },
+        modulePath: { type: "string" },
         runnerId: { type: "string" },
         vars: {
           type: "object",
@@ -2841,6 +2843,7 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
         environment: { type: "string" },
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
+        modulePath: { type: "string" },
         runnerId: { type: "string" },
         outputAllowlist: {
           type: "object",

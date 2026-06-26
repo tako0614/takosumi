@@ -22,6 +22,7 @@
  */
 
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
+import { isAbsolute, normalize } from "node:path";
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
@@ -2638,6 +2639,14 @@ async function createInstallation(
   const runnerProfileId =
     stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
+  const modulePath = modulePathValue(body.modulePath);
+  if (body.modulePath !== undefined && modulePath === undefined) {
+    return errorJson(
+      "invalid_request",
+      "modulePath must be a safe relative OpenTofu module path.",
+      400,
+    );
+  }
   if (body.outputAllowlist !== undefined && outputAllowlist === undefined) {
     return errorJson(
       "invalid_request",
@@ -2679,7 +2688,8 @@ async function createInstallation(
   if (
     (vars !== undefined && Object.keys(vars).length > 0) ||
     runnerProfileId ||
-    outputAllowlist !== undefined
+    outputAllowlist !== undefined ||
+    modulePath
   ) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
@@ -2699,6 +2709,7 @@ async function createInstallation(
       internal: { reason: "per_install_overrides" },
       variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
+      ...(modulePath ? { modulePath } : {}),
       outputAllowlist:
         outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
@@ -4719,6 +4730,22 @@ function outputAllowlistValue(
     };
   }
   return out;
+}
+
+function modulePathValue(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const raw = stringValue(value)?.trim();
+  if (!raw) return undefined;
+  if (isAbsolute(raw) || raw.includes("\0") || /^[A-Za-z]:[\\/]/u.test(raw)) {
+    return undefined;
+  }
+  const normalized = normalize(raw)
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/u, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

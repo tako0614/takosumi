@@ -293,6 +293,40 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
   expect(listed.every((item) => item.runnerId === undefined)).toBe(true);
 });
 
+test("model e2e: create Installation with modulePath stores a scoped InstallConfig", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "module-path");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "staging",
+        sourceId,
+        installConfigId,
+        modulePath: "deploy/opentofu",
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const installation = (await createRes.json()).installation as {
+    installConfigId: string;
+  };
+  expect(installation.installConfigId).not.toBe(installConfigId);
+
+  const config = await operations.installations.getInstallConfig(
+    installation.installConfigId,
+  );
+  expect(config.spaceId).toBe(spaceId);
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.modulePath).toBe("deploy/opentofu");
+});
+
 test("model e2e: create Installation rejects non-object vars", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "bad-vars");

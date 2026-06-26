@@ -692,6 +692,31 @@ test("installation plan treats sourceArchive as the selected module subtree", as
   expect("modulePath" in runner.planJobs[0]!.planRun.source).toBe(false);
 });
 
+test("installation plan uses InstallConfig modulePath inside a repo-root SourceSnapshot", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      modulePath: "deploy/opentofu",
+    },
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.source.kind).toEqual("git");
+  expect(planRun.source).toHaveProperty("modulePath", "deploy/opentofu");
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]!.planRun.source).toHaveProperty(
+    "modulePath",
+    "deploy/opentofu",
+  );
+});
+
 test("installation queued plan fails before credential mint when generated-root sidecar is missing", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -2314,13 +2339,7 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
             {
               id: "delete-worker",
               executor: "operator",
-              command: [
-                "bun",
-                "run",
-                "takosumi:release",
-                "--",
-                "--destroy",
-              ],
+              command: ["bun", "run", "takosumi:release", "--", "--destroy"],
               working_directory: ".",
             },
           ],
