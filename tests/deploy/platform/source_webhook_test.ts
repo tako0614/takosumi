@@ -23,11 +23,16 @@ import {
   isPlatformMetricsPath,
   oidcMetricRoute,
   PLATFORM_CLOUD_EXTENSION_ROUTES,
+  PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
   pollAutoSyncSources,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
   type OperatorBillingOperations,
+  type PlatformCloudExtensionUsageOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
@@ -1253,6 +1258,136 @@ test("Cloudflare Compatibility Gateway route delegates only to the Cloud extensi
       authorization: null,
     },
   ]);
+});
+
+test("Cloud extension route records reported Workers and AI usage", async () => {
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!route) throw new Error("AI Gateway route missing");
+  const usageCalls: {
+    spaceId: string;
+    input: Parameters<
+      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+    >[1];
+  }[] = [];
+  const usageOps: PlatformCloudExtensionUsageOperations = {
+    recordGatewayResourceUsage: async (spaceId, input) => {
+      usageCalls.push({ spaceId, input });
+      return { usageEvents: [{ id: "usage_1" }] };
+    },
+  };
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl_1", choices: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "ai:takosumi-default:request",
+                    kind: "ai_request",
+                    quantity: 1,
+                    credits: 2,
+                  },
+                  {
+                    meterId: "workers:compat:cpu",
+                    installationId: "inst_worker",
+                    kind: "gateway_compute",
+                    quantity: 42,
+                    credits: 3,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    usageOps,
+  );
+  expect(response.status).toBe(200);
+  expect(
+    response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
+  ).toBe(null);
+  expect(usageCalls).toEqual([
+    {
+      spaceId: "space_usage",
+      input: {
+        periodStart: "2026-06-26T13:00:00.000Z",
+        periodEnd: "2026-06-26T13:01:00.000Z",
+        meters: [
+          {
+            meterId: "ai:takosumi-default:request",
+            kind: "ai_request",
+            quantity: 1,
+            credits: 2,
+          },
+          {
+            meterId: "workers:compat:cpu",
+            installationId: "inst_worker",
+            kind: "gateway_compute",
+            quantity: 42,
+            credits: 3,
+          },
+        ],
+      },
+    },
+  ]);
+});
+
+test("Cloud extension route fails closed when reported usage cannot be recorded", async () => {
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!route) throw new Error("AI Gateway route missing");
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
+    }),
+    {
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl_1", choices: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "ai:takosumi-default:request",
+                    kind: "ai_request",
+                    quantity: 1,
+                    credits: 2,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+  );
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({
+    error: "usage metering unavailable",
+    error_description:
+      "Cloud extension reported usage, but the platform usage ledger is not wired.",
+  });
 });
 
 test("Cloudflare Compatibility Gateway route delegates through the platform worker fetch registry", async () => {

@@ -38,7 +38,10 @@ import {
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
-import type { BillingSettings } from "takosumi-contract/billing";
+import type {
+  BillingSettings,
+  GatewayResourceUsageMeter,
+} from "takosumi-contract/billing";
 import {
   AI_GATEWAY_BASE_PATH,
   CLOUDFLARE_COMPAT_BASE_PATH,
@@ -142,11 +145,19 @@ export default {
     if (isPlatformCloudExtensionCatalogPath(url.pathname)) {
       return handlePlatformCloudExtensionCatalogRequest(request, url, env);
     }
-    const cloudExtensionResponse = await handlePlatformCloudExtensionRequest(
-      request,
-      env,
-    );
-    if (cloudExtensionResponse) return cloudExtensionResponse;
+    const cloudExtensionRoute = matchPlatformCloudExtensionRoute(url.pathname);
+    if (cloudExtensionRoute) {
+      return await handlePlatformCloudExtensionRouteRequest(
+        request,
+        env,
+        cloudExtensionRoute,
+        verifyPlatformCloudExtensionSession,
+        async () =>
+          (await deployControlSeam(
+            env,
+          ).operations()) as PlatformCloudExtensionUsageOperations,
+      );
+    }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
     // deploy-control service seam BEFORE delegating to the accounts handler.
@@ -927,10 +938,17 @@ export function handlePlatformCloudExtensionCatalogRequest(
 export async function handlePlatformCloudExtensionRequest(
   request: Request,
   env: CloudflareWorkerEnv,
+  usageOperations?: PlatformCloudExtensionUsageOperations,
 ): Promise<Response | undefined> {
   const route = matchPlatformCloudExtensionRoute(new URL(request.url).pathname);
   if (!route) return undefined;
-  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
+  return await handlePlatformCloudExtensionRouteRequest(
+    request,
+    env,
+    route,
+    verifyPlatformCloudExtensionSession,
+    usageOperations,
+  );
 }
 
 export async function handlePlatformCloudExtensionRouteRequest(
@@ -938,18 +956,25 @@ export async function handlePlatformCloudExtensionRouteRequest(
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
   sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
+  usageOperations?: PlatformCloudExtensionUsageOperationsInput,
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
-  const authenticatedRequest = await requestWithPlatformCloudExtensionAuthContext(
-    request,
-    env,
-    route,
-    sessionVerifier,
-  );
+  const authenticatedRequest =
+    await requestWithPlatformCloudExtensionAuthContext(
+      request,
+      env,
+      route,
+      sessionVerifier,
+    );
   const upstreamResponse = await binding.fetch(
     requestForPlatformCloudExtensionBinding(authenticatedRequest, route),
   );
+  const usageResult = await recordPlatformCloudExtensionUsage(
+    upstreamResponse,
+    usageOperations,
+  );
+  if (!usageResult.ok) return usageResult.response;
   return responseForPlatformCloudExtensionClient(
     request,
     route,
@@ -969,6 +994,37 @@ export type PlatformCloudExtensionSessionVerifier = (
   env: CloudflareWorkerEnv,
   route?: PlatformCloudExtensionRoute,
 ) => Promise<PlatformCloudExtensionSessionContext>;
+
+export interface PlatformCloudExtensionUsageOperations {
+  recordGatewayResourceUsage(
+    spaceId: string,
+    input: {
+      readonly periodStart: string;
+      readonly periodEnd: string;
+      readonly meters: readonly GatewayResourceUsageMeter[];
+    },
+  ): Promise<{ readonly usageEvents: readonly unknown[] }>;
+}
+
+type PlatformCloudExtensionUsageOperationsInput =
+  | PlatformCloudExtensionUsageOperations
+  | (() => Promise<PlatformCloudExtensionUsageOperations>);
+
+export const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
+  "x-takosumi-cloud-usage-space-id";
+export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
+  "x-takosumi-cloud-usage-period-start";
+export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
+  "x-takosumi-cloud-usage-period-end";
+export const PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER =
+  "x-takosumi-cloud-usage-meters";
+
+const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
+  PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+] as const;
 
 const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
   "x-takosumi-cloud-authenticated";
@@ -1045,6 +1101,179 @@ function clonePlatformCloudExtensionRequest(
   });
 }
 
+async function recordPlatformCloudExtensionUsage(
+  response: Response,
+  operationsInput?: PlatformCloudExtensionUsageOperationsInput,
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly response: Response }
+> {
+  let usage:
+    | {
+        readonly spaceId: string;
+        readonly periodStart: string;
+        readonly periodEnd: string;
+        readonly meters: readonly GatewayResourceUsageMeter[];
+      }
+    | undefined;
+  try {
+    usage = platformCloudExtensionUsageReportFromHeaders(response.headers);
+  } catch {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid usage metering report",
+          error_description:
+            "Cloud extension returned a malformed usage report.",
+        },
+        { status: 502 },
+      ),
+    };
+  }
+  if (!usage) return { ok: true };
+  if (!response.ok) return { ok: true };
+  if (!operationsInput) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "usage metering unavailable",
+          error_description:
+            "Cloud extension reported usage, but the platform usage ledger is not wired.",
+        },
+        { status: 502 },
+      ),
+    };
+  }
+  try {
+    const operations =
+      typeof operationsInput === "function"
+        ? await operationsInput()
+        : operationsInput;
+    await operations.recordGatewayResourceUsage(usage.spaceId, {
+      periodStart: usage.periodStart,
+      periodEnd: usage.periodEnd,
+      meters: usage.meters,
+    });
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "usage metering failed",
+          error_description:
+            "Cloud extension usage could not be recorded, so the request was not returned as a billable success.",
+        },
+        { status: 502 },
+      ),
+    };
+  }
+}
+
+function platformCloudExtensionUsageReportFromHeaders(headers: Headers):
+  | {
+      readonly spaceId: string;
+      readonly periodStart: string;
+      readonly periodEnd: string;
+      readonly meters: readonly GatewayResourceUsageMeter[];
+    }
+  | undefined {
+  const metersHeader = headers.get(
+    PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  );
+  if (!metersHeader) return undefined;
+  const spaceId = requiredUsageHeader(
+    headers,
+    PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  );
+  const periodStart = requiredUsageHeader(
+    headers,
+    PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  );
+  const periodEnd = requiredUsageHeader(
+    headers,
+    PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  );
+  const parsed = JSON.parse(metersHeader) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("Cloud extension usage meters must be a JSON array");
+  }
+  return {
+    spaceId,
+    periodStart,
+    periodEnd,
+    meters: parsed.map(platformCloudExtensionUsageMeterFromJson),
+  };
+}
+
+function requiredUsageHeader(headers: Headers, name: string): string {
+  const value = headers.get(name)?.trim();
+  if (!value) throw new TypeError(`${name} is required when usage is reported`);
+  return value;
+}
+
+function platformCloudExtensionUsageMeterFromJson(
+  value: unknown,
+): GatewayResourceUsageMeter {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Cloud extension usage meter must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  if (!isPlatformCloudExtensionUsageKind(kind)) {
+    throw new TypeError("Cloud extension usage kind is not supported");
+  }
+  const quantity = record.quantity;
+  if (
+    typeof quantity !== "number" ||
+    !Number.isFinite(quantity) ||
+    quantity < 0
+  ) {
+    throw new TypeError("Cloud extension usage quantity must be non-negative");
+  }
+  const credits = record.credits;
+  if (
+    typeof credits !== "number" ||
+    !Number.isInteger(credits) ||
+    credits < 0
+  ) {
+    throw new TypeError(
+      "Cloud extension usage credits must be a non-negative integer",
+    );
+  }
+  const meterId =
+    typeof record.meterId === "string" ? record.meterId.trim() : "";
+  if (!meterId)
+    throw new TypeError("Cloud extension usage meterId is required");
+  const installationId =
+    typeof record.installationId === "string" && record.installationId.trim()
+      ? record.installationId.trim()
+      : undefined;
+  return {
+    ...(installationId ? { installationId } : {}),
+    kind,
+    quantity,
+    credits,
+    meterId,
+  };
+}
+
+function isPlatformCloudExtensionUsageKind(
+  value: unknown,
+): value is GatewayResourceUsageMeter["kind"] {
+  return (
+    value === "gateway_compute" ||
+    value === "gateway_storage_gb_hour" ||
+    value === "ai_request" ||
+    value === "ai_input_token" ||
+    value === "ai_output_token" ||
+    value === "artifact_storage_gb_hour" ||
+    value === "backup_storage_gb_hour" ||
+    value === "egress_gb"
+  );
+}
+
 function requestForPlatformCloudExtensionBinding(
   request: Request,
   route: PlatformCloudExtensionRoute,
@@ -1064,10 +1293,17 @@ function responseForPlatformCloudExtensionClient(
   route: PlatformCloudExtensionRoute,
   response: Response,
 ): Response {
-  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
-    return response;
-  }
   const headers = new Headers(response.headers);
+  for (const header of PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS) {
+    headers.delete(header);
+  }
+  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
   headers.delete("content-length");
   return new Response(null, {
     status: response.status,

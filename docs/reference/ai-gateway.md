@@ -77,6 +77,35 @@ only for owner/operator smoke and diagnostics; deployed Capsule runtimes should
 not receive account sessions, PATs, Cloudflare API tokens, or direct upstream
 provider keys.
 
+## Billing and Metering
+
+For the preferred Cloudflare Unified Billing profile, upstream model cost is
+charged to the Takosumi Cloud operator's Cloudflare account. That is only the
+upstream cost path. It is not sufficient evidence that the Takosumi customer has
+been billed.
+
+The closed AI Gateway worker must report billable usage back to the platform
+worker with the Cloud extension usage report headers. The platform worker strips
+those headers before returning the response and records them in the Workspace
+usage ledger. Supported AI meter kinds are:
+
+- `ai_request`
+- `ai_input_token`
+- `ai_output_token`
+
+Example internal report:
+
+```http
+x-takosumi-cloud-usage-space-id: space_xxx
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":"ai_request","quantity":1,"credits":2}]
+```
+
+If these headers are present but the ledger write fails, the platform route
+fails closed with `502` rather than returning an unmetered success. Billing and
+Stripe reconciliation use the Workspace usage ledger as the source of truth.
+
 Tokens are rotated through the installation Service Graph service projection.
 That route is intentionally not documented as a stable Takosumi OSS customer
 API while the public model migrates to Workspace / Project / Capsule /
