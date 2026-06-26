@@ -5,6 +5,12 @@ import {
   handleTakosumiAiGatewayRequest,
   type TakosumiAiGatewayAuthRequest,
 } from "../../../../core/domains/ai-gateway/openai_compatible.ts";
+import {
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+} from "takosumi-contract/billing";
 
 function gatewayEnv() {
   return {
@@ -21,6 +27,7 @@ function gatewayEnv() {
             endpoints: ["chat.completions"],
             default: true,
             metadata: { tier: "fast" },
+            billingCreditsPerRequest: 2,
           },
         ],
       },
@@ -36,6 +43,7 @@ function gatewayEnv() {
             publicModel: "zai/glm-embedding",
             upstreamModel: "embedding-3",
             endpoints: ["embeddings"],
+            billingCreditsPerRequest: 1,
           },
         ],
       },
@@ -244,6 +252,96 @@ test("AI Gateway forwards chat completions with default alias and safe headers",
   expect(await response.text()).not.toContain("deepseek-secret");
 });
 
+test("AI Gateway emits billable usage headers for attributed successful requests", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const url = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "deepseek/chat",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    url,
+    {
+      config,
+      fetcher: async () =>
+        Response.json({
+          id: "chatcmpl_usage_1",
+          object: "chat.completion",
+          model: "deepseek-chat",
+        }),
+      authorize: async (_request, auth) => {
+        expect(auth.requiredScopes).toEqual(["ai.chat"]);
+        return {
+          ok: true,
+          context: {
+            subject: "service-graph-service:inst_ai",
+            installationId: "inst_ai",
+            spaceId: "space_ai",
+          },
+        };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(
+    response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER),
+  ).toBe("space_ai");
+  expect(
+    response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER),
+  ).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  expect(
+    response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER),
+  ).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  expect(
+    JSON.parse(
+      response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER) ?? "",
+    ),
+  ).toEqual([
+    {
+      installationId: "inst_ai",
+      meterId: "ai:deepseek-chat:chat.completions:request",
+      kind: "ai_request",
+      quantity: 1,
+      credits: 2,
+    },
+  ]);
+});
+
+test("AI Gateway does not emit usage headers without an attributed Space", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const url = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "deepseek/chat",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    url,
+    {
+      config,
+      fetcher: async () =>
+        Response.json({
+          id: "chatcmpl_unattributed",
+          object: "chat.completion",
+          model: "deepseek-chat",
+        }),
+      authorize: async () => ({ ok: true }),
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(
+    response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER),
+  ).toBe(null);
+});
+
 test("AI Gateway forwards Cloudflare Unified Billing chat completions through the REST API", async () => {
   const config = createTakosumiAiGatewayConfigFromEnv({
     TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
@@ -278,9 +376,7 @@ test("AI Gateway forwards Cloudflare Unified Billing chat completions through th
     expect(upstreamRequest.headers.get("authorization")).toBe(
       "Bearer cf-token",
     );
-    expect(upstreamRequest.headers.get("cf-aig-gateway-id")).toBe(
-      "default",
-    );
+    expect(upstreamRequest.headers.get("cf-aig-gateway-id")).toBe("default");
     return Response.json({
       id: "chatcmpl_cf_1",
       object: "chat.completion",
@@ -468,6 +564,30 @@ test("AI Gateway config rejects an empty upstream profile catalog", () => {
       TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([]),
     }),
   ).toThrow("must define at least one upstream profile");
+});
+
+test("AI Gateway config rejects invalid billing credits", () => {
+  expect(() =>
+    createTakosumiAiGatewayConfigFromEnv({
+      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+        {
+          id: "deepseek",
+          provider: "deepseek",
+          baseUrl: "https://api.deepseek.example/v1",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [
+            {
+              publicModel: "deepseek/chat",
+              upstreamModel: "deepseek-chat",
+              endpoints: ["chat.completions"],
+              billingCreditsPerRequest: -1,
+            },
+          ],
+        },
+      ]),
+      DEEPSEEK_API_KEY: "deepseek-secret",
+    }),
+  ).toThrow("billingCreditsPerRequest must be a non-negative integer");
 });
 
 test("AI Gateway supports Workers AI binding profiles without upstream keys", async () => {
@@ -660,6 +780,69 @@ test("AI Gateway supports Workers AI binding profiles without upstream keys", as
   expect((await unconfigured.json()).error.code).toBe(
     "workers_ai_unconfigured",
   );
+});
+
+test("AI Gateway emits usage headers for Workers AI binding requests", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv({
+    TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
+      {
+        type: "workers_ai_binding",
+        id: "workers-ai",
+        provider: "workers_ai",
+        models: [
+          {
+            publicModel: "workers-ai/chat",
+            upstreamModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+            endpoints: ["chat.completions"],
+            default: true,
+            billingCreditsPerRequest: 1,
+          },
+        ],
+      },
+    ]),
+  });
+  const url = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "workers-ai/chat",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    url,
+    {
+      config,
+      workersAi: {
+        run: async () => ({ response: "hello from Workers AI" }),
+      },
+      authorize: async () => ({
+        ok: true,
+        context: {
+          installationId: "inst_workers_ai",
+          spaceId: "space_workers_ai",
+        },
+      }),
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(
+    response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER),
+  ).toBe("space_workers_ai");
+  expect(
+    JSON.parse(
+      response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER) ?? "",
+    ),
+  ).toEqual([
+    {
+      installationId: "inst_workers_ai",
+      meterId: "ai:workers-ai-chat:chat.completions:request",
+      kind: "ai_request",
+      quantity: 1,
+      credits: 1,
+    },
+  ]);
 });
 
 test("AI Gateway rejects secrets on Workers AI binding profiles", () => {
