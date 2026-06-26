@@ -9,26 +9,25 @@ counts. The full endpoint contract, scope, and examples live in this document.
 
 ## App and docs split
 
-The dedicated Cloud screen has been retired; Cloud operational information now
-lives under Connections (`app.takosumi.com/connections`) and Billing
-(`app.takosumi.com/billing`).
-
-The Connections tab (Cloud runtime only) shows:
+`app.takosumi.com/cloud` is a screen focused on managing API keys and resources.
 
 - creating, listing, and revoking API keys
-- AI Gateway base URL, connection health, default model, and model count
+- Cloud resources (KV / Object Storage / Database / Workers): list, copy IDs,
+  and delete
+- AI Gateway base URL, connection health, and default model
 - Cloudflare Compatibility API base URL and current account
-- KV / Object Storage / Database / Worker counts in Takosumi Cloud
 
-The Billing tab shows:
+Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
+screen:
 
 - this month's usage, Gateway usage, and available credits
 - usage history (the usage event ledger)
 
-The app does not carry the full specification. Complete model aliases and
-resource names are secondary details that can be opened only when needed;
-provider compatibility scope, OpenTofu provider examples, usage event
-contracts, and secret-handling rules belong in docs.
+Deleting a resource calls the compat gateway's DELETE. It requires a
+`write`-scoped session and only takes effect when the Cloud backend has
+materialized it; otherwise the gateway answers 501 fail-closed. The app does not
+carry the full specification — provider compatibility scope, OpenTofu provider
+examples, usage event contracts, and secret-handling rules belong in docs.
 
 ## Boundary
 
