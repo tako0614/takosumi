@@ -176,6 +176,18 @@ describe("/new flow guidance", () => {
     );
   });
 
+  test("normalizes pasted install links before checking or creating the source", () => {
+    expect(newAppViewSource).toContain("const currentInstallPrefill = () =>");
+    expect(newAppViewSource).toContain("const sourceGitUrl = () =>");
+    expect(newAppViewSource).toContain("gitUrl: sourceGitUrl()");
+    expect(newAppViewSource).toContain("ref: sourceRef()");
+    expect(newAppViewSource).toContain("path: sourcePath()");
+    expect(newAppViewSource).toContain("<dd>{displayRef(sourceRef())}</dd>");
+    expect(newAppViewSource).toContain(
+      "<dd>{displayModulePath(sourcePath())}</dd>",
+    );
+  });
+
   test("catalog exposes multiple runnable service choices backed by official configs", () => {
     const officialSeedSource = readFileSync(
       resolve(

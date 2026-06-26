@@ -785,18 +785,31 @@ function Inner() {
     if (pinned && current === displayRef(pinned)) return pinned;
     return current || "main";
   };
+  const currentInstallPrefill = () =>
+    activeInstallPrefill() ?? parseInstallPrefillFromInput(gitUrl());
+  const sourceGitUrl = () => currentInstallPrefill()?.git ?? gitUrl().trim();
+  const sourceRef = () => {
+    const prefill = currentInstallPrefill();
+    return prefill ? prefill.ref || "main" : effectiveRef();
+  };
+  const sourcePath = () =>
+    currentInstallPrefill()?.path || path().trim() || ".";
+  const prefilledProjectName = () =>
+    currentInstallPrefill()?.vars?.project_name;
   const supportsProjectNameInput = () =>
-    isTakosOpenTofuCapsule(gitUrl(), path()) ||
-    activeInstallPrefill()?.vars?.project_name !== undefined;
+    isTakosOpenTofuCapsule(sourceGitUrl(), sourcePath()) ||
+    prefilledProjectName() !== undefined;
   const supportsCloudflareScopeInput = () =>
-    isTakosOpenTofuCapsule(gitUrl(), path());
+    isTakosOpenTofuCapsule(sourceGitUrl(), sourcePath());
   const defaultProjectName = () => {
-    const base = slugInputValue(name() || capsuleNameFromUrl(gitUrl()));
+    const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     const suffix = spaceSuffix(spaceId());
     return suffix && base === "takos" ? `${base}-${suffix}` : base;
   };
   const projectNameVariable = () =>
-    slugInputValue(resourcePrefix() || defaultProjectName());
+    slugInputValue(
+      resourcePrefix() || prefilledProjectName() || defaultProjectName(),
+    );
   const updateInputVariable = (
     index: number,
     patch: Partial<InputVariableRow>,
@@ -863,6 +876,7 @@ function Inner() {
     | Readonly<Record<string, JsonValue>>
     | undefined => {
     const variables: Record<string, JsonValue> = {
+      ...(currentInstallPrefill()?.vars ?? {}),
       ...selectedCatalogVariables(),
       ...normalizedInputVariables(),
     };
@@ -876,9 +890,9 @@ function Inner() {
   };
   const currentInstallReturnPath = () =>
     installReturnPathFromPrefill({
-      git: gitUrl(),
-      ref: effectiveRef(),
-      path: path().trim() || ".",
+      git: sourceGitUrl(),
+      ref: sourceRef(),
+      path: sourcePath(),
       name: name().trim(),
       vars: installReturnVariables(),
     });
@@ -1318,9 +1332,9 @@ function Inner() {
     compatibilityRunnable() &&
     providerConnectionError() === null;
   const usingSelectedService = () =>
-    activeTab() !== "git" && Boolean(gitUrl().trim());
+    activeTab() !== "git" && Boolean(sourceGitUrl());
   const sourceSummaryTitle = () =>
-    gitUrl().trim() ? name().trim() || capsuleNameFromUrl(gitUrl()) : "";
+    sourceGitUrl() ? name().trim() || capsuleNameFromUrl(sourceGitUrl()) : "";
   const retryAfterSyncWait = () => {
     if (compatibility()) void runFlow();
     else void runCompatibilityCheck();
@@ -1385,9 +1399,9 @@ function Inner() {
       const result = await checkCapsuleCompatibility({
         spaceId: spaceId()!,
         sourceId: createdSourceId() ?? undefined,
-        gitUrl: gitUrl().trim(),
-        ref: effectiveRef(),
-        path: path().trim() || ".",
+        gitUrl: sourceGitUrl(),
+        ref: sourceRef(),
+        path: sourcePath(),
         name: name().trim(),
         authConnectionId: sourceAuthConnectionIdForRun(),
         installConfigId: selectedInstallConfigId(),
@@ -1472,9 +1486,9 @@ function Inner() {
     const space = spaceId()!;
     const flowInput = {
       name: name().trim(),
-      gitUrl: gitUrl().trim(),
-      ref: effectiveRef(),
-      path: path().trim() || ".",
+      gitUrl: sourceGitUrl(),
+      ref: sourceRef(),
+      path: sourcePath(),
       authConnectionId: sourceAuthConnectionIdForRun(),
       installConfigId:
         compatibility()?.installConfigId ?? selectedInstallConfigId(),
@@ -1834,9 +1848,7 @@ function Inner() {
   );
 
   const prefilledLinkReview = () => {
-    const capsule = capsuleNameFromUrl(
-      gitUrl() || activeInstallPrefill()?.git || "",
-    );
+    const capsule = capsuleNameFromUrl(sourceGitUrl());
     return (
       <>
         <section class="av-link-review" aria-label={t("new.deeplink.aria")}>
@@ -1852,15 +1864,15 @@ function Inner() {
             <dl class="av-link-review-meta">
               <div>
                 <dt>{t("new.deeplink.source")}</dt>
-                <dd>{sourceHostLabel(gitUrl())}</dd>
+                <dd>{sourceHostLabel(sourceGitUrl())}</dd>
               </div>
               <div>
                 <dt>{t("new.deeplink.version")}</dt>
-                <dd>{displayRef(ref())}</dd>
+                <dd>{displayRef(sourceRef())}</dd>
               </div>
               <div>
                 <dt>{t("new.deeplink.folder")}</dt>
-                <dd>{displayModulePath(path())}</dd>
+                <dd>{displayModulePath(sourcePath())}</dd>
               </div>
             </dl>
           </div>
@@ -1875,7 +1887,7 @@ function Inner() {
   const addSummaryTitle = () =>
     selectedCatalogEntry()?.name[locale()] ||
     name().trim() ||
-    capsuleNameFromUrl(gitUrl()) ||
+    capsuleNameFromUrl(sourceGitUrl()) ||
     t("new.advancedImport.title");
   const addSummaryDescription = () =>
     selectedCatalogEntry()?.description[locale()] ||
@@ -1885,7 +1897,7 @@ function Inner() {
   const addSummaryProvider = () =>
     selectedCatalogEntry()
       ? providerDisplayName(selectedCatalogEntry()!.provider)
-      : sourceHostLabel(gitUrl());
+      : sourceHostLabel(sourceGitUrl());
 
   return (
     <AppShell>
@@ -2466,11 +2478,11 @@ function Inner() {
                     <Show when={!usingSelectedService()}>
                       <div>
                         <dt>{t("new.deeplink.version")}</dt>
-                        <dd>{displayRef(ref())}</dd>
+                        <dd>{displayRef(sourceRef())}</dd>
                       </div>
                       <div>
                         <dt>{t("new.deeplink.folder")}</dt>
-                        <dd>{displayModulePath(path())}</dd>
+                        <dd>{displayModulePath(sourcePath())}</dd>
                       </div>
                     </Show>
                   </dl>

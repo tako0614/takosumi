@@ -19,6 +19,7 @@ export default defineConfig({
         __dirname,
         "../accounts/contract/src/mod.ts",
       ),
+      "takosumi-contract": resolve(__dirname, "../contract/index.ts"),
     },
   },
   build: {
