@@ -674,6 +674,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       };
     } else if (isCloudflareProvider(connection.provider)) {
       const token = values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN;
+      const accountId =
+        values.CLOUDFLARE_ACCOUNT_ID?.trim() ||
+        values.CF_ACCOUNT_ID?.trim() ||
+        connection.scopeHints?.accountId?.trim();
       if (!token) {
         return {
           status: "pending",
@@ -683,6 +687,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
       verified = await cloudflareCredentialDriver.verify({
         token,
+        ...(accountId ? { accountId } : {}),
         fetch: this.#fetch,
       });
     } else if (isAwsProvider(connection.provider)) {
