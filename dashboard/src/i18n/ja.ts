@@ -964,16 +964,7 @@ export const ja = {
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "Resources",
-  "cloudResources.docs.title": "仕様",
-  "cloudResources.docs.subtitle":
-    "エンドポイント、認証、互換範囲は docs にまとめています。",
   "cloudResources.docs.open": "docs を開く",
-  "cloudResources.catalog.title": "Cloud extension catalog",
-  "cloudResources.catalog.subtitle": "この環境で有効な Cloud 専用機能",
-  "cloudResources.catalog.configured": "設定済み",
-  "cloudResources.catalog.missing": "未設定",
-  "cloudResources.catalog.generated": "更新日時",
-  "cloudResources.catalog.extensions": "Extensions",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",

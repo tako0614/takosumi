@@ -951,16 +951,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "Resources",
-  "cloudResources.docs.title": "Specification",
-  "cloudResources.docs.subtitle":
-    "Endpoint, auth, and compatibility details live in the docs.",
   "cloudResources.docs.open": "Open docs",
-  "cloudResources.catalog.title": "Cloud extension catalog",
-  "cloudResources.catalog.subtitle": "Cloud-only features enabled here",
-  "cloudResources.catalog.configured": "Configured",
-  "cloudResources.catalog.missing": "Missing",
-  "cloudResources.catalog.generated": "Updated",
-  "cloudResources.catalog.extensions": "Extensions",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",
