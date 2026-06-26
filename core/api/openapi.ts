@@ -906,6 +906,14 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
           },
           additionalProperties: false,
         },
+        prebuiltArtifact: {
+          type: "object",
+          required: ["path"],
+          properties: {
+            path: { type: "string" },
+          },
+          additionalProperties: false,
+        },
         variableMapping: { type: "object", additionalProperties: true },
         outputAllowlist: {
           type: "object",
@@ -1832,7 +1840,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        origin: { enum: ["git", "upload"] },
+        origin: { enum: ["git", "upload", "artifact"] },
         spaceId: { type: "string" },
         sourceId: { type: "string" },
         url: { type: "string" },
@@ -1948,6 +1956,23 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       additionalProperties: false,
     },
     UploadSnapshotResponse: {
+      type: "object",
+      required: ["snapshot"],
+      properties: { snapshot: ref("SourceSnapshot") },
+      additionalProperties: false,
+    },
+    ArtifactSnapshotRequest: {
+      type: "object",
+      required: ["url", "digest"],
+      properties: {
+        url: { type: "string", format: "uri" },
+        digest: { type: "string" },
+        format: { enum: ["tar.zst"] },
+        path: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    ArtifactSnapshotResponse: {
       type: "object",
       required: ["snapshot"],
       properties: { snapshot: ref("SourceSnapshot") },

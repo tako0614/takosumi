@@ -493,6 +493,7 @@ export type {
   InstallationProviderEnvBindingSet,
   InstallBuildConfig,
   InstallConfig,
+  InstallPrebuiltArtifactConfig,
   Installation,
   InstallationStatus,
   InstallType,
@@ -669,6 +670,16 @@ export interface DispatchBuildSpec {
   readonly runtime: "bun";
   readonly commands: readonly string[];
   readonly artifactPath: string;
+}
+
+/**
+ * Prebuilt artifact path threaded onto the dispatch payload. Unlike
+ * DispatchBuildSpec, this runs no commands; the runner validates that `path`
+ * resolves inside the restored SourceSnapshot and exposes it as
+ * `TF_VAR_artifact_path`.
+ */
+export interface DispatchPrebuiltArtifactSpec {
+  readonly path: string;
 }
 
 /**

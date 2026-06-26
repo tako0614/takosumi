@@ -545,6 +545,25 @@ test("app_source install threads InstallConfig.build onto the dispatch (build pr
   });
 });
 
+test("opentofu_module install threads InstallConfig.prebuiltArtifact onto the dispatch", async () => {
+  const { runner, controller } = await installTypeFixture({
+    installConfig: {
+      installType: "opentofu_module",
+      variableMapping: {},
+      prebuiltArtifact: { path: "dist/worker.js" },
+      policy: {},
+    },
+    requiredProviders: [],
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toEqual("succeeded");
+  expect(runner.planJobs[0]!.prebuiltArtifact).toEqual({
+    path: "dist/worker.js",
+  });
+  expect(runner.planJobs[0]!.build).toBeUndefined();
+});
+
 test("app_source with build disabled falls back to the template build", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {

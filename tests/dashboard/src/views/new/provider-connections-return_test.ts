@@ -325,10 +325,12 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain("name={`genericEnvValue:${index}`}");
   });
 
-  test("Cloudflare OAuth start includes the typed display name", () => {
-    expect(connectionsTabSource).toContain("const startOAuth = async () =>");
+  test("guided provider connection submit includes the typed display name", () => {
     expect(connectionsTabSource).toContain(
-      "displayName: displayName().trim() || undefined",
+      "const createFromHelper = createAction",
+    );
+    expect(connectionsTabSource).toContain(
+      "displayName:\n        displayName().trim() || (d.providerSource ? d.label : undefined)",
     );
   });
 

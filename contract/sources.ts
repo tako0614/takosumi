@@ -66,8 +66,13 @@ export interface Source {
  *                Gate / plan / apply / Deployment / OutputSnapshot / DAG) is
  *                origin-agnostic because it only consumes the digest-pinned
  *                archive artifact, never git directly.
+ *   - `artifact` — fetched from a user-supplied HTTPS artifact URL, digest
+ *                  verified, stored in R2_SOURCE, and recorded as an immutable
+ *                  snapshot. This lets CI/source-side builds hand Takosumi an
+ *                  already-prepared Capsule archive without paying for runner
+ *                  git clone/build work on the first deploy.
  */
-export type SourceSnapshotOrigin = "git" | "upload";
+export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
 
 /**
  * Immutable archive snapshot of a Capsule pinned to a content digest.
@@ -76,13 +81,17 @@ export type SourceSnapshotOrigin = "git" | "upload";
  * Container (the worker only records the result) and `sourceId` references the
  * registered {@link Source}. For `origin: "upload"` it is produced by a direct
  * `takosumi deploy` upload: `sourceId` is absent and `url`/`ref`/`resolvedCommit`
- * carry self-describing upload identity (`url = "upload://{spaceId}"`,
- * `ref = "upload"`, `resolvedCommit = archiveDigest`) so existing readers that
- * treat these as descriptive strings keep working unchanged.
+ * carry self-describing upload identity (`url` under the Takosumi upload
+ * namespace, `ref = "upload"`, `resolvedCommit = archiveDigest`) so existing
+ * readers that treat these as descriptive strings keep working unchanged. For
+ * `origin: "artifact"` the snapshot was fetched from a supplied HTTPS artifact
+ * URL; `ref = "artifact"` and `resolvedCommit = archiveDigest`.
  *
  * The archive bytes live in R2_SOURCE under
  * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`
- * for git, and `spaces/{spaceId}/uploads/{snapshotId}/source.tar.zst` for upload.
+ * for git, `spaces/{spaceId}/uploads/{snapshotId}/source.tar.zst` for upload,
+ * and `spaces/{spaceId}/artifact-snapshots/{snapshotId}/source.tar.zst` for
+ * externally prepared artifacts.
  */
 export interface SourceSnapshot {
   readonly id: string;
@@ -247,6 +256,23 @@ export const SPACE_UPLOADS_PATH = (spaceId: string): string =>
 export const INTERNAL_SPACE_UPLOADS_PATH = (spaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
 
+/**
+ * Digest-pinned prepared artifact ingest for CI/source-side build pipelines.
+ * The request body is JSON containing an HTTPS `url` plus the expected
+ * `sha256:` digest; Takosumi fetches the artifact, verifies the digest, stores
+ * it as a SourceSnapshot archive, and records `origin = "artifact"`.
+ */
+export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (spaceId: string): string =>
+  `${API_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/artifact-snapshots`;
+
+/** INTERNAL artifact ingest seam path (`/internal/v1`, reached in-process). */
+export const INTERNAL_SPACE_ARTIFACT_SNAPSHOTS_PATH = (
+  spaceId: string,
+): string =>
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(
+    spaceId,
+  )}/artifact-snapshots`;
+
 export interface CreateSourceRequest {
   readonly spaceId: string;
   readonly name: string;
@@ -314,5 +340,24 @@ export interface UploadSnapshotRequest {
 
 /** Response of `POST {@link SPACE_UPLOADS_PATH}`: the recorded upload snapshot. */
 export interface UploadSnapshotResponse {
+  readonly snapshot: SourceSnapshot;
+}
+
+export type ArtifactSnapshotFormat = "tar.zst";
+
+/**
+ * Metadata for digest-pinned prepared artifact ingest. `url` must be an HTTPS
+ * artifact URL with no embedded credentials. `digest` must be the expected
+ * SHA-256 digest (`sha256:<64 lowercase hex>` accepted case-insensitively).
+ */
+export interface ArtifactSnapshotRequest {
+  readonly url: string;
+  readonly digest: string;
+  readonly format?: ArtifactSnapshotFormat;
+  readonly path?: string;
+}
+
+/** Response of `POST {@link SPACE_ARTIFACT_SNAPSHOTS_PATH}`. */
+export interface ArtifactSnapshotResponse {
   readonly snapshot: SourceSnapshot;
 }

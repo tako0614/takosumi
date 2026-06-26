@@ -4,9 +4,11 @@
  * An Installation is the OpenTofu Capsule execution unit directly under a Space
  * (`@space/name`): one Installation = one Capsule normalized into a generated
  * root, one tfstate lineage, outputs, deployments, and activity. It is
- * configured by a service-side InstallConfig and pinned to one Source. The App /
- * Environment / InstallProfile lanes model is retired; `environment` is a
- * column on the Installation (UNIQUE(space_id, name, environment)).
+ * configured by a service-side InstallConfig and optionally pinned to one
+ * Source. The App / Environment / InstallProfile lanes model is retired;
+ * `environment` is a column on the Installation (UNIQUE(space_id, name,
+ * environment)). Upload/artifact deploys omit Source and still use the same
+ * Installation ledger.
  *
  * This service owns Installation creation + lookup and InstallConfig /
  * InstallationProviderEnvBinding record passthroughs with validation. No secret material flows
@@ -102,8 +104,9 @@ export class InstallationsService {
         `spaceId ${request.spaceId} does not exist`,
       );
     }
-    // A git Source is optional: upload-origin Installations (takosumi deploy)
-    // have none. When supplied it must resolve in the same Space.
+    // A git Source is optional: upload/artifact-origin Installations
+    // (takosumi deploy) have none. When supplied it must resolve in the same
+    // Space.
     if (request.sourceId !== undefined) {
       requireNonEmptyString(request.sourceId, "sourceId");
       const source = await this.#store.getSource(request.sourceId);
@@ -255,6 +258,18 @@ export class InstallationsService {
         "opentofu_root is a legacy direct-root compatibility type; new InstallConfigs must use an OpenTofu Capsule install type",
       );
     }
+    if (config.build?.enabled && config.prebuiltArtifact) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "InstallConfig build and prebuiltArtifact are mutually exclusive",
+      );
+    }
+    if (config.prebuiltArtifact) {
+      assertSafeInstallConfigPath(
+        config.prebuiltArtifact.path,
+        "prebuiltArtifact.path",
+      );
+    }
     if (config.spaceId !== undefined) {
       const space = await this.#store.getSpace(config.spaceId);
       if (!space) {
@@ -353,6 +368,21 @@ export class InstallationsService {
       );
     }
     return installation;
+  }
+}
+
+function assertSafeInstallConfigPath(value: string, field: string): void {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.startsWith("/") ||
+    value.split(/[\\/]+/).some((part) => part === "..") ||
+    value.includes("\0")
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be a safe relative path inside the SourceSnapshot`,
+    );
   }
 }
 

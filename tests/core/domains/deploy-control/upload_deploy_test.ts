@@ -24,6 +24,7 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
+  artifactArchiveObjectKey,
   SourcesService,
   uploadArchiveObjectKey,
 } from "../../../../core/domains/sources/mod.ts";
@@ -360,6 +361,39 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   expect(installConfig.outputAllowlist).toEqual({
     endpoint: { from: "url", type: "url", required: true },
     worker_name: { from: "worker_name", type: "string" },
+  });
+});
+
+test("deployUpload creates a source-less Installation and plans an artifact snapshot", async () => {
+  const { runner, sources, installations, controller } = await setup();
+  const snapshot = await sources.recordArtifactSnapshot({
+    spaceId: "space_test",
+    url: "https://artifacts.example.com/app/source.tar.zst",
+    snapshotId: "snap_artifact1",
+    archiveObjectKey: artifactArchiveObjectKey("space_test", "snap_artifact1"),
+    archiveDigest: UPLOAD_DIGEST,
+    archiveSizeBytes: 512,
+  });
+
+  const result = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "artifact-app",
+      environment: "preview",
+      snapshotId: snapshot.id,
+      vars: { region: "ap-northeast-1" },
+      providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
+    },
+  );
+
+  expect(result.created).toBe(true);
+  expect(result.installation.sourceId).toBeUndefined();
+  expect(result.run.status).toBe("succeeded");
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.sourceArchive).toEqual({
+    objectKey: artifactArchiveObjectKey("space_test", "snap_artifact1"),
+    digest: UPLOAD_DIGEST,
   });
 });
 
@@ -892,7 +926,7 @@ test("deployUpload rejects provider env bindings without envId before persistenc
   ).toBeUndefined();
 });
 
-test("deployUpload rejects a snapshot that is not an upload snapshot", async () => {
+test("deployUpload rejects a snapshot that is not an upload/artifact snapshot", async () => {
   const { installations, controller } = await setup();
   // snap_fixture from seedInstallationModel is a git-origin snapshot.
   await expect(

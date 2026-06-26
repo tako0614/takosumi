@@ -714,6 +714,38 @@ inputs:
 
 Outputs-to-inputs is an OSS feature, not a Cloud-only feature.
 
+### 4.5 Source snapshots and fast first deploy
+
+Takosumi runs immutable SourceSnapshot archives, not mutable working trees.
+
+```text
+git:
+  source_sync runner clone -> deterministic tar.zst
+
+upload:
+  takosumi deploy local archive -> SourceSnapshot
+
+artifact:
+  HTTPS prepared archive + sha256 digest -> SourceSnapshot
+```
+
+The `artifact` origin exists for source-side build and CI pipelines. A caller can
+prebuild the source outside Takosumi, publish a `tar.zst` archive, and give
+Takosumi the HTTPS URL plus `sha256:` digest. Takosumi verifies and stores that
+archive, then the normal Capsule Gate / plan / apply / state / output pipeline
+runs without a runner git clone or runner build step for the first deploy.
+
+When the source archive already contains the deployable artifact, the service
+side InstallConfig may set:
+
+```yaml
+prebuiltArtifact:
+  path: dist/worker.js
+```
+
+The runner validates the path inside the restored SourceSnapshot and exposes it
+as `TF_VAR_artifact_path`. `build` and `prebuiltArtifact` are mutually exclusive.
+
 ## 11. Runner
 
 Runner responsibilities:

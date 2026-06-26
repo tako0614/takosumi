@@ -413,6 +413,24 @@ function fakeOperations(
         fetchedAt: "2026-01-01T00:00:00Z",
       };
     },
+    recordArtifactSnapshot: async (input) => {
+      record("recordArtifactSnapshot", input);
+      return {
+        id: "snap_artifact",
+        origin: "artifact",
+        spaceId: input.spaceId,
+        url: input.url,
+        ref: "artifact",
+        resolvedCommit:
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        path: input.path ?? ".",
+        archiveObjectKey: `spaces/${input.spaceId}/artifact-snapshots/snap_artifact/source.tar.zst`,
+        archiveDigest: input.digest,
+        archiveSizeBytes: 128,
+        fetchedByRunId: "artifact",
+        fetchedAt: "2026-01-01T00:00:00Z",
+      };
+    },
     getSourceSnapshot: async (id) => {
       record("getSourceSnapshot", id);
       return {
@@ -1396,6 +1414,48 @@ test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Sp
   expect(body.snapshot.id).toEqual("snap_upload");
   expect(operations.calls.recordUploadArchive).toEqual([
     { spaceId: "space_a", bytes: [1, 2, 3], path: "deploy" },
+  ]);
+});
+
+test("POST /api/v1/spaces/:id/artifact-snapshots records a prepared artifact snapshot", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/artifact-snapshots",
+    {
+      cookie,
+      body: {
+        url: "https://artifacts.example.com/app/source.tar.zst",
+        digest:
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        path: "infra",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const body = (await response!.json()) as {
+    snapshot: { id: string; origin: string };
+  };
+  expect(body.snapshot).toMatchObject({
+    id: "snap_artifact",
+    origin: "artifact",
+  });
+  expect(operations.calls.recordArtifactSnapshot).toEqual([
+    {
+      spaceId: "space_a",
+      url: "https://artifacts.example.com/app/source.tar.zst",
+      digest:
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      path: "infra",
+    },
   ]);
 });
 

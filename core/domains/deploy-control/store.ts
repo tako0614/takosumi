@@ -18,6 +18,7 @@ import type {
   Deployment,
   DispatchBuildSpec,
   DispatchGeneratedRoot,
+  DispatchPrebuiltArtifactSpec,
   InstallConfig,
   Installation,
   PlanRun,
@@ -104,13 +105,14 @@ export interface PlanRunInputs {
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly build?: DispatchBuildSpec;
+  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into
    * `variables` AND is baked as a literal into the generic Capsule's generated
    * `main.tf`; either would persist as a cleartext ledger value here. When a
    * sensitive value was injected, the controller seals `{ variables,
-   * generatedRoot, outputAllowlist, build }` into this blob with the SAME
+   * generatedRoot, outputAllowlist, build, prebuiltArtifact }` into this blob with the SAME
    * AES-GCM envelope used for state / plan / dependency-value artifacts and
    * leaves the cleartext fields empty/absent on the row; it unseals
    * transparently at plan/apply dispatch. The store only ever sees the

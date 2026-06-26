@@ -210,6 +210,7 @@ export const ALLOWED_KEYS: Record<
     "installationId",
     "installConfigId",
   ]),
+  artifactSnapshot: new Set(["url", "digest", "format", "path"]),
   providerEnvPut: new Set([
     "spaceId",
     "providerSource",
@@ -303,6 +304,7 @@ export type DeployControlRouteName =
   | "sourceCreate"
   | "sourcePatch"
   | "sourceCompatibilityCheck"
+  | "artifactSnapshot"
   | "spaceCreate"
   | "spacePatch"
   | "installationCreate"

@@ -30,6 +30,7 @@ import type {
   DispatchBuildSpec,
   DispatchDepState,
   DispatchGeneratedRoot,
+  DispatchPrebuiltArtifactSpec,
   DispatchSourceArchive,
   DispatchStateScope,
   GetInstallationResponse,
@@ -330,6 +331,7 @@ export interface RunTemplateDispatch {
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly build?: DispatchBuildSpec;
+  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 /**
@@ -1006,12 +1008,14 @@ interface GenericRootPlanContext {
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly moduleFiles?: readonly OpenTofuCapsuleSourceFile[];
   readonly build?: DispatchBuildSpec;
+  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 interface GenericRootDispatchContext {
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly build?: DispatchBuildSpec;
+  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 /**
@@ -1649,11 +1653,13 @@ export class OpenTofuDeploymentController {
       templatePlan?.generatedRoot ?? genericRootDispatch?.generatedRoot;
     const outputAllowlist = genericRootDispatch?.outputAllowlist;
     const build = genericRootDispatch?.build ?? templatePlan?.build;
+    const prebuiltArtifact = genericRootDispatch?.prebuiltArtifact;
     if (
       Object.keys(variables).length > 0 ||
       generatedRoot !== undefined ||
       outputAllowlist !== undefined ||
-      build !== undefined
+      build !== undefined ||
+      prebuiltArtifact !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` AND (for a
       // generic Capsule) is baked as a literal into the generated root's
@@ -1670,6 +1676,7 @@ export class OpenTofuDeploymentController {
           ...(generatedRoot ? { generatedRoot } : {}),
           ...(outputAllowlist ? { outputAllowlist } : {}),
           ...(build ? { build } : {}),
+          ...(prebuiltArtifact ? { prebuiltArtifact } : {}),
         },
         sealSidecar,
       );
@@ -1820,8 +1827,8 @@ export class OpenTofuDeploymentController {
       if (!pinnedSnapshotId) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `installation ${installationId} is upload-origin; a plan requires a ` +
-            `pinned upload SourceSnapshot (deploy a new upload via takosumi deploy)`,
+          `installation ${installationId} has no git Source; a plan requires a ` +
+            `pinned upload/artifact SourceSnapshot (deploy a new upload or artifact via takosumi deploy)`,
         );
       }
       const pinned = await this.#store.getSourceSnapshot(pinnedSnapshotId);
@@ -2005,8 +2012,8 @@ export class OpenTofuDeploymentController {
     if (!installation.sourceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation ${installation.id} is upload-origin (no git Source); ` +
-          `deploy a new upload snapshot via takosumi deploy`,
+        `installation ${installation.id} has no git Source; ` +
+          `deploy a new upload or artifact snapshot via takosumi deploy`,
       );
     }
     const source = await this.#store.getSource(installation.sourceId);
@@ -2495,6 +2502,9 @@ export class OpenTofuDeploymentController {
         providerEnvBindings: installTypePlan.providerEnvBindings,
         outputAllowlist: input.installConfig.outputAllowlist,
         ...(installTypePlan.build ? { build: installTypePlan.build } : {}),
+        ...(input.installConfig.prebuiltArtifact
+          ? { prebuiltArtifact: input.installConfig.prebuiltArtifact }
+          : {}),
       },
     };
   }
@@ -2530,6 +2540,9 @@ export class OpenTofuDeploymentController {
       },
       outputAllowlist: context.outputAllowlist,
       ...(context.build ? { build: context.build } : {}),
+      ...(context.prebuiltArtifact
+        ? { prebuiltArtifact: context.prebuiltArtifact }
+        : {}),
     };
   }
 
@@ -2568,6 +2581,9 @@ export class OpenTofuDeploymentController {
         outputAllowlist: installConfig.outputAllowlist,
         ...(installConfig.build?.enabled
           ? { build: installConfigBuildSpec(installConfig.build) }
+          : {}),
+        ...(installConfig.prebuiltArtifact
+          ? { prebuiltArtifact: installConfig.prebuiltArtifact }
           : {}),
       },
       compatibilityReport,
@@ -3547,6 +3563,9 @@ export class OpenTofuDeploymentController {
         ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
         : {}),
       ...(inputs.build ? { build: inputs.build as unknown as JsonValue } : {}),
+      ...(inputs.prebuiltArtifact
+        ? { prebuiltArtifact: inputs.prebuiltArtifact as unknown as JsonValue }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -3589,12 +3608,16 @@ export class OpenTofuDeploymentController {
       | Readonly<Record<string, OutputAllowlistEntry>>
       | undefined;
     const build = payload.build as unknown as DispatchBuildSpec | undefined;
+    const prebuiltArtifact = payload.prebuiltArtifact as unknown as
+      | DispatchPrebuiltArtifactSpec
+      | undefined;
     return {
       planRunId,
       variables,
       ...(generatedRoot ? { generatedRoot } : {}),
       ...(outputAllowlist ? { outputAllowlist } : {}),
       ...(build ? { build } : {}),
+      ...(prebuiltArtifact ? { prebuiltArtifact } : {}),
     };
   }
 
@@ -4013,6 +4036,23 @@ export class OpenTofuDeploymentController {
     readonly snapshotId?: string;
   }): Promise<SourceSnapshot> {
     return await this.#sources.recordUploadSnapshot(input);
+  }
+
+  /**
+   * Records a prepared-artifact SourceSnapshot. The archive bytes are fetched,
+   * digest-verified, and written to R2_SOURCE before this call; this persists the
+   * immutable ledger row for source-side build / CI fast deploy pipelines.
+   */
+  async recordArtifactSnapshot(input: {
+    readonly spaceId: string;
+    readonly url: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    return await this.#sources.recordArtifactSnapshot(input);
   }
 
   async createSourceCompatibilityCheck(
@@ -4874,6 +4914,9 @@ export class OpenTofuDeploymentController {
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
             ...(dispatch.build ? { build: dispatch.build } : {}),
+            ...(dispatch.prebuiltArtifact
+              ? { prebuiltArtifact: dispatch.prebuiltArtifact }
+              : {}),
             // M2 env dispatch (state scope + source archive). Absent without env ctx.
             ...(envDispatch.stateScope
               ? { stateScope: envDispatch.stateScope }
@@ -5790,6 +5833,9 @@ export class OpenTofuDeploymentController {
         ? { generatedRoot: dispatch.generatedRoot }
         : {}),
       ...(dispatch.build ? { build: dispatch.build } : {}),
+      ...(dispatch.prebuiltArtifact
+        ? { prebuiltArtifact: dispatch.prebuiltArtifact }
+        : {}),
       // M2 env dispatch (state scope at base+1 + source archive).
       ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
       ...(envDispatch.sourceArchive
@@ -6488,6 +6534,9 @@ export class OpenTofuDeploymentController {
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
             ...(dispatch.build ? { build: dispatch.build } : {}),
+            ...(dispatch.prebuiltArtifact
+              ? { prebuiltArtifact: dispatch.prebuiltArtifact }
+              : {}),
             // M2 env dispatch (state scope at base+1 + source archive).
             ...(envDispatch.stateScope
               ? { stateScope: envDispatch.stateScope }
@@ -7042,8 +7091,8 @@ function rawOutputArtifactKey(input: {
  * real fetch never uses this URL).
  */
 /**
- * In-memory Source for an upload-origin Installation that has no registered
- * Source row. It is never persisted; it only supplies the few fields the plan
+ * In-memory Source for a no-git Installation that has no registered Source row.
+ * It is never persisted; it only supplies the few fields the plan
  * pipeline reads (`url` / `defaultRef` / `defaultPath`) so the generated-root
  * module-source descriptor validates. The runner still restores the actual code
  * from the snapshot's `archiveObjectKey`, so the synthetic git url is metadata.
@@ -7098,9 +7147,10 @@ function normalizeGitUrlToHttps(url: string): string {
 
 /**
  * Reads generated-root dispatch fields off the persisted plan-run-inputs
- * sidecar. Sidecars carry `generatedRoot` (+ optional build/output allowlist)
- * for built-in modules and generic Capsules. Defensive copies are not needed
- * because the store hands back its own records and the runner job only reads.
+ * sidecar. Sidecars carry `generatedRoot` (+ optional build/prebuilt artifact /
+ * output allowlist) for built-in modules and generic Capsules. Defensive copies
+ * are not needed because the store hands back its own records and the runner job
+ * only reads.
  */
 function templateDispatchFromInputs(
   inputs:
@@ -7108,6 +7158,7 @@ function templateDispatchFromInputs(
         readonly generatedRoot?: DispatchGeneratedRoot;
         readonly outputAllowlist?: InstallConfig["outputAllowlist"];
         readonly build?: DispatchBuildSpec;
+        readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
       }
     | undefined,
 ): RunTemplateDispatch {
@@ -7118,6 +7169,9 @@ function templateDispatchFromInputs(
       ? { outputAllowlist: inputs.outputAllowlist }
       : {}),
     ...(inputs.build ? { build: inputs.build } : {}),
+    ...(inputs.prebuiltArtifact
+      ? { prebuiltArtifact: inputs.prebuiltArtifact }
+      : {}),
   };
 }
 

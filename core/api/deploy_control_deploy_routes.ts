@@ -1,11 +1,14 @@
 /**
- * `takosumi deploy` routes: upload ingest + deploy.
+ * `takosumi deploy` routes: upload/artifact ingest + deploy.
  *
  *   POST /internal/v1/spaces/:spaceId/uploads   binary tar(zstd) ingest ->
  *                                        R2_SOURCE -> upload SourceSnapshot
+ *   POST /internal/v1/spaces/:spaceId/artifact-snapshots
+ *                                        HTTPS tar.zst + sha256 ingest ->
+ *                                        R2_SOURCE -> artifact SourceSnapshot
  *   POST /internal/v1/deploy             resolve/create Installation + plan the
- *                                        upload snapshot (the `wrangler deploy`
- *                                        equivalent)
+ *                                        no-git snapshot (the `wrangler deploy`
+ *                                        / CI artifact deploy equivalent)
  *
  * The descriptor inventory models the upload body as `application/octet-stream`;
  * the control surface they expose is still the canonical Space / Installation /
@@ -14,9 +17,17 @@
 
 import type { InternalDeployRequest } from "@takosumi/internal/deploy-control-api";
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
-import type { SourceSnapshot } from "takosumi-contract/sources";
-import { uploadArchiveObjectKey } from "../domains/sources/mod.ts";
+import type {
+  ArtifactSnapshotRequest,
+  SourceSnapshot,
+} from "takosumi-contract/sources";
+import {
+  artifactArchiveObjectKey,
+  uploadArchiveObjectKey,
+} from "../domains/sources/mod.ts";
 import { deployUpload } from "../domains/deploy-control/upload_deploy.ts";
+import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
+import { evaluateSourceUrl } from "../domains/sources/url-policy.ts";
 import {
   authorizeDeployControl,
   defineRoute,
@@ -31,6 +42,8 @@ import {
 
 const SPACE_UPLOADS_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId/uploads` as const;
+const SPACE_ARTIFACT_SNAPSHOTS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/artifact-snapshots` as const;
 const DEPLOY_ROUTE = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
@@ -65,6 +78,21 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
     },
     {
       method: "POST",
+      path: SPACE_ARTIFACT_SNAPSHOTS_ROUTE,
+      summary:
+        "Fetches a digest-pinned prepared Capsule archive and records an artifact SourceSnapshot.",
+      auth: "deploy-control-token",
+      operationId: "createArtifactSourceSnapshot",
+      openapi: {
+        pathParams: ["spaceId"],
+        requestSchema: "ArtifactSnapshotRequest",
+        okStatus: "201",
+        okSchema: "ArtifactSnapshotResponse",
+      },
+      notImplementedMessage: "artifact snapshot storage not wired",
+    },
+    {
+      method: "POST",
       path: DEPLOY_ROUTE,
       summary:
         "Starts a deploy from an upload SourceSnapshot by resolving or creating the target Installation and plan Run.",
@@ -80,6 +108,8 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
 
 /** 64 MiB cap on a single upload archive (mirrors the artifact-route posture). */
 export const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
+/** 64 MiB cap on a prepared artifact archive. */
+export const DEFAULT_ARTIFACT_SNAPSHOT_MAX_BYTES = DEFAULT_UPLOAD_MAX_BYTES;
 
 export interface RecordUploadArchiveInput {
   readonly controller: DeployControlRouteContext["controller"];
@@ -105,6 +135,89 @@ export async function recordUploadArchive(
     archiveDigest: digest,
     archiveSizeBytes: input.bytes.byteLength,
     ...(input.path ? { path: input.path } : {}),
+  });
+}
+
+export interface RecordArtifactSnapshotInput {
+  readonly controller: DeployControlRouteContext["controller"];
+  readonly writeSourceArchive: NonNullable<
+    DeployControlRouteContext["dependencies"]["writeSourceArchive"]
+  >;
+  readonly spaceId: string;
+  readonly request: ArtifactSnapshotRequest;
+  readonly fetcher?: typeof fetch;
+  readonly maxBytes?: number;
+}
+
+export async function recordArtifactSnapshotFromUrl(
+  input: RecordArtifactSnapshotInput,
+): Promise<SourceSnapshot> {
+  const artifactUrl = validateArtifactUrl(input.request.url);
+  const expectedDigest = normalizeSha256Digest(input.request.digest);
+  const format = input.request.format ?? "tar.zst";
+  if (format !== "tar.zst") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot format must be tar.zst",
+    );
+  }
+  const maxBytes = input.maxBytes ?? DEFAULT_ARTIFACT_SNAPSHOT_MAX_BYTES;
+  const response = await (input.fetcher ?? fetch)(artifactUrl.toString(), {
+    redirect: "manual",
+  });
+  if (response.status >= 300 && response.status < 400) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot url redirects are not allowed",
+    );
+  }
+  if (!response.ok) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `artifact snapshot fetch failed (${response.status})`,
+    );
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsedLength = Number(contentLength);
+    if (Number.isFinite(parsedLength) && parsedLength > maxBytes) {
+      throw new OpenTofuControllerError(
+        "resource_exhausted",
+        "artifact snapshot archive too large",
+      );
+    }
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot body is empty",
+    );
+  }
+  if (bytes.byteLength > maxBytes) {
+    throw new OpenTofuControllerError(
+      "resource_exhausted",
+      "artifact snapshot archive too large",
+    );
+  }
+  const actualDigest = await sha256Digest(bytes);
+  if (actualDigest !== expectedDigest) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot digest mismatch",
+    );
+  }
+  const snapshotId = `snap_${randomHex()}`;
+  const archiveObjectKey = artifactArchiveObjectKey(input.spaceId, snapshotId);
+  await input.writeSourceArchive(archiveObjectKey, bytes);
+  return await input.controller.recordArtifactSnapshot({
+    spaceId: input.spaceId,
+    url: artifactUrl.toString(),
+    snapshotId,
+    archiveObjectKey,
+    archiveDigest: actualDigest,
+    archiveSizeBytes: bytes.byteLength,
+    ...(input.request.path ? { path: input.request.path } : {}),
   });
 }
 
@@ -162,6 +275,41 @@ export function mountDeployControlDeployRoutes(
   });
 
   app.post(
+    SPACE_ARTIFACT_SNAPSHOTS_ROUTE,
+    ctx.deployControlBodyLimit,
+    defineRoute({
+      ctx,
+      param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
+      enforceBody: true,
+      handler: async ({ c, principal, id: spaceId }) => {
+        const writeSourceArchive = dependencies.writeSourceArchive;
+        if (!writeSourceArchive) {
+          return c.json(
+            errorEnvelope(
+              c,
+              "not_implemented",
+              "artifact snapshot storage (R2_SOURCE) is not configured",
+            ),
+            501,
+          );
+        }
+        ensureSpacePermission(principal, spaceId);
+        const body = await readJsonBody<ArtifactSnapshotRequest>(
+          c,
+          "artifactSnapshot",
+        );
+        const snapshot = await recordArtifactSnapshotFromUrl({
+          controller,
+          writeSourceArchive,
+          spaceId,
+          request: body,
+        });
+        return c.json({ snapshot }, 201);
+      },
+    }),
+  );
+
+  app.post(
     DEPLOY_ROUTE,
     ctx.deployControlBodyLimit,
     defineRoute({
@@ -193,6 +341,58 @@ async function sha256Digest(bytes: Uint8Array): Promise<`sha256:${string}`> {
   const hex = Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+  return `sha256:${hex}`;
+}
+
+function validateArtifactUrl(raw: string): URL {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot url is required",
+    );
+  }
+  const policy = evaluateSourceUrl(raw);
+  if (!policy.ok || policy.scheme !== "https") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `artifact snapshot url is not allowed (${policy.ok ? "non_https" : policy.reason})`,
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot url is malformed",
+    );
+  }
+  if (url.username || url.password) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot url must not contain embedded credentials",
+    );
+  }
+  return url;
+}
+
+function normalizeSha256Digest(raw: string): `sha256:${string}` {
+  if (typeof raw !== "string") {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot digest is required",
+    );
+  }
+  const value = raw.trim().toLowerCase();
+  const hex = value.startsWith("sha256:")
+    ? value.slice("sha256:".length)
+    : value;
+  if (!/^[0-9a-f]{64}$/.test(hex)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "artifact snapshot digest must be sha256:<64 hex>",
+    );
+  }
   return `sha256:${hex}`;
 }
 
