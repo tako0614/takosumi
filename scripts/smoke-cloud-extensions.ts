@@ -56,7 +56,9 @@ export interface CloudExtensionSmokeOptions {
   readonly requireAiUpstreamProfile: boolean;
   readonly requireAiCloudflareUnifiedBillingProfile: boolean;
   readonly requireAiServiceGraphToken: boolean;
+  readonly requireAiUsageLedger: boolean;
   readonly aiServiceInstallationId?: string;
+  readonly aiUsageWorkspaceId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -85,7 +87,9 @@ export interface CloudExtensionSmokeResult {
   readonly requireAiUpstreamProfile: boolean;
   readonly requireAiCloudflareUnifiedBillingProfile: boolean;
   readonly requireAiServiceGraphToken: boolean;
+  readonly requireAiUsageLedger: boolean;
   readonly aiServiceInstallationId?: string;
+  readonly aiUsageWorkspaceId?: string;
   readonly platformVersion?: string;
   readonly extensionVersions?: {
     readonly aiGateway?: string;
@@ -108,7 +112,9 @@ interface CliArgs {
   readonly requireAiUpstreamProfile?: boolean;
   readonly requireAiCloudflareUnifiedBillingProfile?: boolean;
   readonly requireAiServiceGraphToken?: boolean;
+  readonly requireAiUsageLedger?: boolean;
   readonly aiServiceInstallationId?: string;
+  readonly aiUsageWorkspaceId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -173,9 +179,13 @@ export async function resolveOptions(
       requireAiCloudflareUnifiedBillingProfile:
         args.requireAiCloudflareUnifiedBillingProfile === true,
       requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
+      requireAiUsageLedger: args.requireAiUsageLedger === true,
       aiServiceInstallationId: optionalString(
         args.aiServiceInstallationId ??
           env.TAKOSUMI_AI_GATEWAY_SERVICE_INSTALLATION_ID,
+      ),
+      aiUsageWorkspaceId: optionalString(
+        args.aiUsageWorkspaceId ?? env.TAKOSUMI_AI_USAGE_WORKSPACE_ID,
       ),
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
@@ -205,9 +215,13 @@ export async function resolveOptions(
     requireAiCloudflareUnifiedBillingProfile:
       args.requireAiCloudflareUnifiedBillingProfile === true,
     requireAiServiceGraphToken: args.requireAiServiceGraphToken === true,
+    requireAiUsageLedger: args.requireAiUsageLedger === true,
     aiServiceInstallationId: optionalString(
       args.aiServiceInstallationId ??
         env.TAKOSUMI_AI_GATEWAY_SERVICE_INSTALLATION_ID,
+    ),
+    aiUsageWorkspaceId: optionalString(
+      args.aiUsageWorkspaceId ?? env.TAKOSUMI_AI_USAGE_WORKSPACE_ID,
     ),
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
@@ -361,7 +375,12 @@ export async function runCloudExtensionSmoke(
           },
         }),
   );
-  if (options.requireAiServiceGraphToken || options.aiServiceInstallationId) {
+  if (
+    options.requireAiServiceGraphToken ||
+    options.requireAiUsageLedger ||
+    options.aiServiceInstallationId ||
+    options.aiUsageWorkspaceId
+  ) {
     checks.push(
       await aiServiceGraphTokenCheck(
         fetchImpl,
@@ -485,6 +504,7 @@ export async function runCloudExtensionSmoke(
     requireAiUpstreamProfile: options.requireAiUpstreamProfile,
     requireAiCloudflareUnifiedBillingProfile:
       options.requireAiCloudflareUnifiedBillingProfile,
+    requireAiUsageLedger: options.requireAiUsageLedger,
   });
   const gaReady = checks.every((check) => check.ok) && gaps.length === 0;
   const status =
@@ -506,7 +526,9 @@ export async function runCloudExtensionSmoke(
     requireAiCloudflareUnifiedBillingProfile:
       options.requireAiCloudflareUnifiedBillingProfile,
     requireAiServiceGraphToken: options.requireAiServiceGraphToken,
+    requireAiUsageLedger: options.requireAiUsageLedger,
     aiServiceInstallationId: options.aiServiceInstallationId,
+    aiUsageWorkspaceId: options.aiUsageWorkspaceId,
     platformVersion: options.platformVersion,
     extensionVersions:
       options.aiGatewayVersion || options.cloudflareCompatVersion
@@ -617,6 +639,15 @@ async function aiServiceGraphTokenCheck(
       summary: { errorCode: "ai_service_graph_installation_id_required" },
     });
   }
+  if (options.requireAiUsageLedger && !options.aiUsageWorkspaceId) {
+    return syntheticCheck({
+      name: "aiServiceGraphToken",
+      method: "GET",
+      path: "/api/v1/workspaces/<workspace-id>/usage",
+      expected,
+      summary: { errorCode: "ai_usage_workspace_id_required", installationId },
+    });
+  }
 
   const completedSteps: string[] = [];
   try {
@@ -705,6 +736,15 @@ async function aiServiceGraphTokenCheck(
     const modelsBody = await readJson(modelsResponse);
     completedSteps.push("models");
 
+    const usageStartedAt = new Date().toISOString();
+    const usageBefore = options.aiUsageWorkspaceId
+      ? await aiUsageLedgerSnapshot(fetchImpl, options, ownerAuthHeaders, {
+          workspaceId: options.aiUsageWorkspaceId,
+          installationId,
+        })
+      : undefined;
+    if (usageBefore?.ok) completedSteps.push("usage-before");
+
     const chatResponse = await fetchImpl(
       `${options.url}/gateway/ai/v1/chat/completions`,
       {
@@ -742,8 +782,24 @@ async function aiServiceGraphTokenCheck(
       completedSteps.push("embeddings");
     }
 
+    const usageProof =
+      options.aiUsageWorkspaceId && usageBefore
+        ? await waitForAiUsageLedgerProof(
+            fetchImpl,
+            options,
+            ownerAuthHeaders,
+            {
+              workspaceId: options.aiUsageWorkspaceId,
+              installationId,
+              startedAt: usageStartedAt,
+              before: usageBefore,
+            },
+          )
+        : undefined;
+    if (usageProof?.ok) completedSteps.push("usage-after");
+
     const models = modelIds(modelsBody);
-    const ok =
+    const runtimeOk =
       statusResponse.status === 200 &&
       modelsResponse.status === 200 &&
       models.includes("takosumi/default") &&
@@ -751,6 +807,11 @@ async function aiServiceGraphTokenCheck(
       choicesCount(chatBody) > 0 &&
       (!serviceEmbeddingsModel ||
         (embeddingsStatus === 200 && embeddingCount > 0));
+    const usageOk =
+      !options.requireAiUsageLedger ||
+      (usageProof !== undefined && usageProof.aiUsageRecorded === true);
+    const ok = runtimeOk && usageOk;
+    const usageErrorCode = aiUsageProofErrorCode(usageProof);
 
     return {
       name: "aiServiceGraphToken",
@@ -777,6 +838,15 @@ async function aiServiceGraphTokenCheck(
         embeddingsStatus,
         embeddingCount,
         requestedEmbeddingsModel: serviceEmbeddingsModel ?? null,
+        usageLedgerChecked: usageProof !== undefined,
+        aiUsageRecorded: usageProof?.aiUsageRecorded ?? false,
+        aiUsageWorkspaceId: options.aiUsageWorkspaceId ?? null,
+        usageBeforeStatus: usageBefore?.status ?? null,
+        usageAfterStatus: usageProof?.status ?? null,
+        usageEventsBefore: usageBefore?.eventCount ?? null,
+        usageEventsAfter: usageProof?.eventCount ?? null,
+        matchingAiUsageEventsAfter: usageProof?.matchingEventCount ?? null,
+        ...(usageErrorCode ? { errorCode: usageErrorCode } : {}),
       },
     };
   } catch (error) {
@@ -798,6 +868,145 @@ async function aiServiceGraphTokenCheck(
       },
     };
   }
+}
+
+interface AiUsageLedgerSnapshot {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly eventCount: number;
+  readonly matchingEventCount: number;
+  readonly matchingEventKeys: readonly string[];
+  readonly matchingEvents: readonly Record<string, unknown>[];
+}
+
+interface AiUsageLedgerProof extends AiUsageLedgerSnapshot {
+  readonly aiUsageRecorded: boolean;
+  readonly attempts: number;
+}
+
+async function waitForAiUsageLedgerProof(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  input: {
+    readonly workspaceId: string;
+    readonly installationId: string;
+    readonly startedAt: string;
+    readonly before: AiUsageLedgerSnapshot;
+  },
+): Promise<AiUsageLedgerProof> {
+  const beforeKeys = new Set(input.before.matchingEventKeys);
+  let last: AiUsageLedgerSnapshot = input.before;
+  const startedAtMs = Date.parse(input.startedAt);
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const current = await aiUsageLedgerSnapshot(
+      fetchImpl,
+      options,
+      ownerAuthHeaders,
+      input,
+    );
+    last = current;
+    const aiUsageRecorded =
+      current.ok &&
+      current.matchingEvents.some((event) => {
+        if (beforeKeys.has(aiUsageEventKey(event))) return false;
+        const createdAt = usageEventCreatedAtMs(event);
+        return createdAt === undefined || createdAt >= startedAtMs;
+      });
+    if (aiUsageRecorded) {
+      return { ...current, aiUsageRecorded: true, attempts: attempt };
+    }
+    if (!current.ok) {
+      return { ...current, aiUsageRecorded: false, attempts: attempt };
+    }
+    if (attempt < 6) await sleep(250);
+  }
+  return { ...last, aiUsageRecorded: false, attempts: 6 };
+}
+
+async function aiUsageLedgerSnapshot(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  input: { readonly workspaceId: string; readonly installationId: string },
+): Promise<AiUsageLedgerSnapshot> {
+  const response = await fetchImpl(
+    `${options.url}${aiUsageLedgerPath(input.workspaceId)}`,
+    { headers: ownerAuthHeaders },
+  );
+  const body = await readJson(response);
+  const events = usageEvents(body);
+  const matchingEvents = events.filter((event) =>
+    aiUsageEventMatches(event, input.installationId),
+  );
+  return {
+    ok: response.status === 200,
+    status: response.status,
+    eventCount: events.length,
+    matchingEventCount: matchingEvents.length,
+    matchingEventKeys: matchingEvents.map(aiUsageEventKey),
+    matchingEvents,
+  };
+}
+
+function aiUsageLedgerPath(workspaceId: string): string {
+  return `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/usage`;
+}
+
+function usageEvents(body: unknown): Record<string, unknown>[] {
+  const events = record(body).usageEvents;
+  if (!Array.isArray(events)) return [];
+  return events.map(record);
+}
+
+function aiUsageEventMatches(
+  event: Record<string, unknown>,
+  installationId: string,
+): boolean {
+  return (
+    stringValue(event.kind) === "ai_request" &&
+    stringValue(event.source) === "resource_meter" &&
+    (stringValue(event.installationId) ??
+      stringValue(event.installation_id)) === installationId
+  );
+}
+
+function aiUsageEventKey(event: Record<string, unknown>): string {
+  return (
+    stringValue(event.id) ??
+    stringValue(event.idempotencyKey) ??
+    stringValue(event.idempotency_key) ??
+    [
+      stringValue(event.createdAt) ??
+        stringValue(event.created_at) ??
+        "unknown",
+      String(event.quantity ?? "unknown"),
+      String(event.credits ?? "unknown"),
+      stringValue(event.kind) ?? "unknown",
+    ].join(":")
+  );
+}
+
+function usageEventCreatedAtMs(
+  event: Record<string, unknown>,
+): number | undefined {
+  const value = stringValue(event.createdAt) ?? stringValue(event.created_at);
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function aiUsageProofErrorCode(
+  proof: AiUsageLedgerProof | undefined,
+): string | undefined {
+  if (!proof) return undefined;
+  if (proof.status !== 200) return "ai_usage_ledger_unavailable";
+  if (!proof.aiUsageRecorded) return "ai_usage_ledger_not_recorded";
+  return undefined;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 interface RequestCheckInput {
@@ -860,6 +1069,7 @@ function cloudExtensionGaps(
   options: {
     readonly requireAiUpstreamProfile?: boolean;
     readonly requireAiCloudflareUnifiedBillingProfile?: boolean;
+    readonly requireAiUsageLedger?: boolean;
   } = {},
 ): string[] {
   const gaps: string[] = [];
@@ -904,6 +1114,24 @@ function cloudExtensionGaps(
     "ai_service_graph_installation_id_required"
   ) {
     gaps.push("ai_gateway_service_graph_installation_id_required");
+  } else if (
+    options.requireAiUsageLedger === true &&
+    aiServiceGraphToken?.summary.errorCode === "ai_usage_workspace_id_required"
+  ) {
+    gaps.push("ai_gateway_usage_workspace_id_required");
+  } else if (
+    options.requireAiUsageLedger === true &&
+    aiServiceGraphToken?.summary.errorCode === "ai_usage_ledger_unavailable"
+  ) {
+    gaps.push("ai_gateway_usage_ledger_unavailable");
+  } else if (
+    options.requireAiUsageLedger === true &&
+    (aiServiceGraphToken?.summary.errorCode ===
+      "ai_usage_ledger_not_recorded" ||
+      (aiServiceGraphToken &&
+        aiServiceGraphToken.summary.aiUsageRecorded !== true))
+  ) {
+    gaps.push("ai_gateway_usage_ledger_not_recorded");
   } else if (aiServiceGraphToken && !aiServiceGraphToken.ok) {
     gaps.push("ai_gateway_service_graph_token_not_ready");
   }
@@ -2471,6 +2699,7 @@ async function runSelfTest(): Promise<void> {
     requireAiUpstreamProfile: false,
     requireAiCloudflareUnifiedBillingProfile: false,
     requireAiServiceGraphToken: false,
+    requireAiUsageLedger: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
     const parsed = new URL(url);
@@ -2723,6 +2952,8 @@ Options:
                                       fail unless a Cloudflare Unified Billing AI Gateway profile is configured
   --require-ai-service-graph-token     rotate an AI Gateway Service Graph runtime token and use it against /gateway/ai/v1
   --ai-service-installation-id <id>    installation projection id used for Service Graph runtime-token rotation
+  --require-ai-usage-ledger            fail unless the AI Gateway call records an ai_request usage event
+  --ai-usage-workspace-id <id>         workspace id whose usage ledger should record AI Gateway usage
   --platform-version <id>              include deployed platform version id in evidence
   --ai-gateway-version <id>            include deployed AI gateway worker version id in evidence
   --cloudflare-compat-version <id>     include deployed Cloudflare compat worker version id in evidence

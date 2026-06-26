@@ -303,6 +303,15 @@ provider-specific keys, or use `type: "workers_ai_binding"` for the base
 Cloudflare Workers AI binding. Any launch claim for external upstreams must run
 `smoke:cloud-extensions` with `--require-ai-upstream-profile`.
 
+AI Gateway billing readiness is proven through the usage ledger, not response
+headers. The platform strips internal usage headers before returning the
+OpenAI-compatible response, so GA smoke should rotate a Service Graph runtime
+token, call chat/embeddings, then read the target Workspace usage ledger and
+confirm a new `source: "resource_meter"` / `kind: "ai_request"` event for the
+same Installation. Use `--require-ai-service-graph-token
+--ai-service-installation-id <id> --require-ai-usage-ledger
+--ai-usage-workspace-id <workspace-id>` for that strict check.
+
 ## Secret Boundary
 
 There are two different keys:
