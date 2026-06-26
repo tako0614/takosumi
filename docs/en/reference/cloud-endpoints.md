@@ -49,22 +49,34 @@ Example:
 ```json
 {
   "kind": "takosumi.platform-cloud-extensions@v1",
+  "generatedAt": "2026-06-26T00:00:00.000Z",
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
       "id": "ai.openai_compatible.v1",
       "kind": "ai_gateway",
+      "protocol": "openai-compatible",
       "basePath": "/gateway/ai/v1",
-      "configured": true
+      "configured": true,
+      "capabilities": ["chat.completions", "embeddings", "models.list"],
+      "smokeChecks": ["GET /models", "POST /chat/completions"]
     },
     {
       "id": "provider.cloudflare.client_v4",
       "kind": "provider_compat",
       "provider": "cloudflare",
+      "protocol": "cloudflare-v4",
       "basePath": "/compat/cloudflare/client/v4",
-      "configured": true
+      "configured": true,
+      "capabilities": ["workers", "kv", "r2", "d1"],
+      "smokeChecks": ["GET /user/tokens/verify", "GET /accounts"]
     }
-  ]
+  ],
+  "summary": {
+    "total": 2,
+    "configured": 2,
+    "missing": 0
+  }
 }
 ```
 
@@ -94,9 +106,13 @@ Normal Cloud endpoint keys should use:
 mutating routes such as creating, updating, or deleting compatibility
 resources. `admin` is not needed for normal Cloud endpoint use.
 
-List responses must not expose the secret value again. Safe metadata includes
-`prefix`, `scopes`, `created_at`, `expires_at`, `revoked_at`, and
-`last_used_at`.
+List responses must not expose the secret value again. Safe metadata for UI
+display and revoke actions includes `id`, `name`, `prefix`, `scopes`,
+`created_at`, `expires_at`, `revoked_at`, and `last_used_at`. `subject` is
+account-plane ownership metadata, not a secret.
+
+`GET /v1/account/tokens` accepts `limit` and `cursor`, and returns
+`next_cursor`. The app reads pages until `next_cursor` is `null`.
 
 ## Usage
 
@@ -109,12 +125,12 @@ GET /api/v1/workspaces/{workspaceId}/usage
 
 The Usage card uses both endpoints.
 
-| UI value          | Meaning                                             |
-| ----------------- | --------------------------------------------------- |
-| This month        | Sum of `credits` for usage events in the month      |
+| UI value          | Meaning                                              |
+| ----------------- | ---------------------------------------------------- |
+| This month        | Sum of `credits` for usage events in the month       |
 | Gateway usage     | Sum of `credits` where `kind` starts with `gateway_` |
-| Available credits | Billing projection `balance.availableCredits`       |
-| Recent usage      | Newest usage events by `createdAt`                  |
+| Available credits | Billing projection `balance.availableCredits`        |
+| Recent usage      | Newest usage events by `createdAt`                   |
 
 Important usage kinds:
 
@@ -251,7 +267,8 @@ Cloud endpoints must:
 
 - never redisplay secret values after creation
 - keep secret-shaped values out of usage, catalog, status, and model metadata
-- verify API keys by account / Workspace scope and endpoint scope
+- have the platform worker verify API key / session validity and read/write scope
+- have the closed binding verify Workspace / account / virtual-account resource scope
 - fail closed for unsupported routes instead of pretending success
 - keep Cloud-only backends out of OSS Takosumi
 
@@ -266,6 +283,7 @@ The OSS repository contains:
 - smoke tests and provider E2E expectations
 
 The Cloudflare Compatibility backend and managed resource materialization are
-closed Takosumi Cloud service bindings. If the binding is not configured,
-`/compat/cloudflare/client/v4/*` intentionally returns not found from the
+closed Takosumi Cloud service bindings. If AI Gateway / Cloudflare
+Compatibility bindings are not configured, `/gateway/ai/v1/*` and
+`/compat/cloudflare/client/v4/*` intentionally return not found from the
 platform worker.
