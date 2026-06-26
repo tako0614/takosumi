@@ -114,6 +114,7 @@ type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
 type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
 type SmokeAuthTokenKind = "session" | "pat";
+type CloudflareResourcePreflightMode = "none" | "d1";
 type ReleaseActivationRequirement = "any" | "pending" | "succeeded" | "failed";
 type SecretInputSource = "env" | "file" | "not_required";
 type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
@@ -147,6 +148,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareWorkersSubdomain: string;
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly space: string;
   readonly appName: string;
@@ -202,6 +204,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
   readonly deploymentLedger?: DeploymentLedgerVerificationResult;
   readonly releaseActivation?: ReleaseActivationVerificationResult;
+  readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
@@ -226,6 +229,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareAccountIdDigest: string;
     readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
     readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+    readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
     readonly runnerProfileId?: string;
     readonly sourceMode: "upload" | "git";
     readonly verificationMode: SmokeVerificationMode;
@@ -258,6 +262,7 @@ interface CliArgs {
   readonly cloudflareWorkersSubdomain?: string;
   readonly cloudflareWorkersSubdomainFile?: string;
   readonly cloudflareConnectionMode?: string;
+  readonly cloudflareResourcePreflight?: string;
   readonly runnerProfileId?: string;
   readonly space?: string;
   readonly workspace?: string;
@@ -408,6 +413,12 @@ interface ReleaseActivationVerificationResult {
   readonly metadataKeys: readonly string[];
 }
 
+interface CloudflareResourcePreflightResult {
+  readonly mode: CloudflareResourcePreflightMode;
+  readonly status: "passed";
+  readonly checks: readonly string[];
+}
+
 interface BackupRestoreRehearsalResult {
   readonly backupId: string;
   readonly backupRunId?: string;
@@ -494,6 +505,10 @@ export async function resolveOptions(
   const verificationMode = parseVerificationMode(
     args.verificationMode ?? env.TAKOSUMI_SMOKE_VERIFICATION_MODE,
   );
+  const cloudflareResourcePreflight = parseCloudflareResourcePreflight(
+    args.cloudflareResourcePreflight ??
+      env.TAKOSUMI_SMOKE_CLOUDFLARE_RESOURCE_PREFLIGHT,
+  );
   if (
     cloudflareConnectionMode === "none" &&
     verificationMode === "cloudflare-worker"
@@ -504,7 +519,8 @@ export async function resolveOptions(
   }
   const cloudflareInputsRequired =
     cloudflareConnectionMode !== "none" ||
-    verificationMode === "cloudflare-worker";
+    verificationMode === "cloudflare-worker" ||
+    cloudflareResourcePreflight !== "none";
   const providerlessOpenTofuSmoke =
     cloudflareConnectionMode === "none" && verificationMode === "opentofu";
   const cloudflareAccountId = cloudflareInputsRequired
@@ -634,6 +650,7 @@ export async function resolveOptions(
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
+    cloudflareResourcePreflight,
     ...(runnerProfileId ? { runnerProfileId } : {}),
     space,
     appName,
@@ -721,6 +738,18 @@ export function dryRunResult(
     publicUrlVerified: options.verificationMode === "cloudflare-worker",
     deploymentLedgerVerified: true,
     destroyVerified: true,
+    ...(options.cloudflareResourcePreflight !== "none"
+      ? {
+          cloudflareResourcePreflight: {
+            mode: options.cloudflareResourcePreflight,
+            status: "passed",
+            checks:
+              options.cloudflareResourcePreflight === "d1"
+                ? ["cloudflare.d1.database.list"]
+                : [],
+          },
+        }
+      : {}),
     connectionRevoked:
       options.keepConnection || options.cloudflareConnectionMode === "none"
         ? undefined
@@ -790,6 +819,9 @@ export async function runPlatformControlPlaneSmoke(
   let connectionRevokeSkippedReason: string | undefined;
   let failureCleanup: FailureCleanupResult | undefined;
   let failure: unknown;
+  let cloudflareResourcePreflight:
+    | CloudflareResourcePreflightResult
+    | undefined;
 
   try {
     if (options.cloudflareConnectionMode !== "none") {
@@ -806,6 +838,11 @@ export async function runPlatformControlPlaneSmoke(
       completeStep("connectionVerified");
     } else {
       completeStep("providerConnectionNotRequired");
+    }
+    if (options.cloudflareResourcePreflight !== "none") {
+      cloudflareResourcePreflight =
+        await assertCloudflareResourcePreflight(options);
+      completeStep("cloudflareResourcePreflight");
     }
     const deploy =
       options.sourceMode === "git"
@@ -960,6 +997,7 @@ export async function runPlatformControlPlaneSmoke(
       backupRestoreRehearsal,
       deploymentLedger,
       releaseActivation,
+      cloudflareResourcePreflight,
       capsuleGateStatus: "passed",
       policyStatus:
         completedApply.policyStatus === "deny" ||
@@ -1035,6 +1073,7 @@ export async function runPlatformControlPlaneSmoke(
     backupRestoreRehearsal,
     deploymentLedger,
     releaseActivation,
+    cloudflareResourcePreflight,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -1065,6 +1104,7 @@ function failedResult(
     readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
     readonly deploymentLedger?: DeploymentLedgerVerificationResult;
     readonly releaseActivation?: ReleaseActivationVerificationResult;
+    readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -1110,6 +1150,7 @@ function failedResult(
     backupRestoreRehearsal: input.backupRestoreRehearsal,
     deploymentLedger: input.deploymentLedger,
     releaseActivation: input.releaseActivation,
+    cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl:
@@ -1145,6 +1186,12 @@ function failedNextAction(input: {
   readonly connectionRevokeSkippedReason?: string;
   readonly error: unknown;
 }): string {
+  if (
+    input.error instanceof Error &&
+    input.error.message.startsWith("cloudflare d1 preflight failed:")
+  ) {
+    return "Update the operator Cloudflare API token so it can read and create D1 resources for the configured account, or use a non-resource-creating Capsule smoke before rerunning this apply.";
+  }
   if (
     input.error instanceof RequestTimeoutError &&
     input.error.method === "POST" &&
@@ -1286,6 +1333,46 @@ async function verifyConnection(
       `connection ${connectionId} test ended as ${tested.status ?? "unknown"}`,
     );
   }
+}
+
+async function assertCloudflareResourcePreflight(
+  options: PlatformControlPlaneSmokeOptions,
+): Promise<CloudflareResourcePreflightResult> {
+  if (options.cloudflareResourcePreflight === "none") {
+    throw new Error("cloudflare resource preflight called with mode none");
+  }
+  if (options.cloudflareResourcePreflight === "d1") {
+    const check = "cloudflare.d1.database.list";
+    const path = `/client/v4/accounts/${encodeURIComponent(
+      options.cloudflareAccountId,
+    )}/d1/database?per_page=1`;
+    const response = await fetch(`https://api.cloudflare.com${path}`, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${options.cloudflareApiToken}`,
+        "content-type": "application/json",
+      },
+    }).catch((error) => {
+      throw new Error(
+        `cloudflare d1 preflight request failed: ${errorMessage(error)}`,
+      );
+    });
+    const bodyText = await response.text();
+    const body = parseResponseBody(bodyText, "cloudflare d1 preflight");
+    if (!response.ok || !cloudflareApiSuccess(body)) {
+      throw new Error(
+        `cloudflare d1 preflight failed: GET /accounts/<redacted>/d1/database returned http ${
+          response.status
+        }: ${cloudflareApiErrorCode(body)}. The Cloudflare token is active but cannot read D1 databases for the configured account; update CLOUDFLARE_API_TOKEN permissions or CLOUDFLARE_ACCOUNT_ID before applying resource-creating Capsules.`,
+      );
+    }
+    return {
+      mode: "d1",
+      status: "passed",
+      checks: [check],
+    };
+  }
+  return assertNever(options.cloudflareResourcePreflight);
 }
 
 async function lookupPublicProviderConnectionId(
@@ -2672,6 +2759,21 @@ function apiErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+function cloudflareApiSuccess(body: unknown): boolean {
+  return isRecord(body) && body.success === true;
+}
+
+function cloudflareApiErrorCode(body: unknown): string {
+  if (!isRecord(body)) return "unknown_error";
+  const errors = body.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return "unknown_error";
+  const first = errors[0];
+  if (!isRecord(first)) return "unknown_error";
+  const code = typeof first.code === "number" ? String(first.code) : undefined;
+  const message = typeof first.message === "string" ? first.message : undefined;
+  return [code, message].filter(Boolean).join(": ") || "unknown_error";
+}
+
 function publicErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
@@ -2681,6 +2783,14 @@ function publicErrorMessage(error: unknown): string {
       "$1<redacted>",
     )
     .replace(/(takosumi_session=)[^;\s]+/giu, "$1<redacted>");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unexpected value: ${String(value)}`);
 }
 
 function tarZstd(dir: string): Promise<Uint8Array> {
@@ -2878,6 +2988,16 @@ function parseVerificationMode(
   throw new Error("--verification-mode must be cloudflare-worker or opentofu");
 }
 
+function parseCloudflareResourcePreflight(
+  value: string | undefined,
+): CloudflareResourcePreflightMode {
+  if (value === undefined || value.trim() === "" || value === "none") {
+    return "none";
+  }
+  if (value === "d1") return "d1";
+  throw new Error("--cloudflare-resource-preflight must be d1 or none");
+}
+
 function parseReleaseActivationRequirement(
   value: string | undefined,
 ): ReleaseActivationRequirement | undefined {
@@ -3043,13 +3163,13 @@ function defaultAppName(): string {
 }
 
 function capsuleLabel(options: PlatformControlPlaneSmokeOptions): string {
+  if (options.sourceMode === "git") return "git-opentofu-capsule";
   if (options.capsuleDir === DEFAULT_CAPSULE_DIR) {
     return "cloudflare-hello-worker";
   }
   if (options.capsuleDir === DEFAULT_PROVIDERLESS_CAPSULE_DIR) {
     return "opentofu-basic";
   }
-  if (options.sourceMode === "git") return "git-opentofu-capsule";
   return "uploaded-opentofu-capsule";
 }
 
@@ -3061,6 +3181,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareAccountIdDigest: string;
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly sourceMode: "upload" | "git";
   readonly verificationMode: SmokeVerificationMode;
@@ -3082,6 +3203,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
         : sha256(options.cloudflareAccountId),
     cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
     cloudflareConnectionMode: options.cloudflareConnectionMode,
+    cloudflareResourcePreflight: options.cloudflareResourcePreflight,
     ...(options.runnerProfileId
       ? { runnerProfileId: options.runnerProfileId }
       : {}),
@@ -3134,6 +3256,7 @@ function requiredSteps(
     | "keepConnection"
     | "sourceMode"
     | "cloudflareConnectionMode"
+    | "cloudflareResourcePreflight"
     | "verificationMode"
     | "requireReleaseActivation"
   >,
@@ -3148,6 +3271,10 @@ function requiredSteps(
     ...(options?.cloudflareConnectionMode === "none"
       ? []
       : ["connectionVerified"]),
+    ...(options?.cloudflareResourcePreflight &&
+    options.cloudflareResourcePreflight !== "none"
+      ? ["cloudflareResourcePreflight"]
+      : []),
     ...(options?.sourceMode === "git" ? ["sourceRegistered"] : []),
     ...(options?.sourceMode === "git" ? ["sourceSynced"] : []),
     "scratchInstall",
@@ -3661,6 +3788,7 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
+  --cloudflare-resource-preflight <d1|none>       verify the Cloudflare token can read D1 for the configured account before resource-creating applies
   --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
   --capsule-dir <path>                            default cloudflare-hello-worker module

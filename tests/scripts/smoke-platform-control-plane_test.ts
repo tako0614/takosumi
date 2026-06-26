@@ -129,6 +129,54 @@ test("platform control-plane smoke infers production environment from URL", asyn
   expect(options.environment).toBe("production-smoke");
 });
 
+test("platform control-plane smoke records Cloudflare D1 resource preflight", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      cloudflareResourcePreflight: "d1",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.inputs.cloudflareResourcePreflight).toBe("d1");
+  expect(result.steps).toContain("cloudflareResourcePreflight");
+  expect(result.completedSteps).toContain("cloudflareResourcePreflight");
+  expect(result.cloudflareResourcePreflight).toEqual({
+    mode: "d1",
+    status: "passed",
+    checks: ["cloudflare.d1.database.list"],
+  });
+});
+
+test("platform control-plane smoke labels Git sources as Git OpenTofu Capsules", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      sourceGitUrl: "https://github.com/tako0614/takos.git",
+      sourceRef: "main",
+      sourcePath: "deploy/opentofu",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+    },
+  );
+
+  expect(dryRunResult(options).capsuleModule).toBe("git-opentofu-capsule");
+});
+
 test("platform control-plane smoke can include backup restore rehearsal in dry-run", async () => {
   const options = await resolveOptions(
     {
