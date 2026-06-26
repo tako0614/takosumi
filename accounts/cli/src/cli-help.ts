@@ -380,6 +380,8 @@ export function accountsMigrateD1HelpText(): string {
     "",
     "Options:",
     "  --database-id <name>   D1 database name or binding (Wrangler d1 execute positional)",
+    "  --wrangler-config <path>",
+    "                         Target Worker wrangler config when running from a sibling checkout",
     "  --account-id <id>      Cloudflare account ID (optional; required when",
     "                         the operator's default account differs from",
     "                         the deploy target)",

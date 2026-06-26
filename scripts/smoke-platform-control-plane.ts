@@ -968,10 +968,6 @@ export async function runPlatformControlPlaneSmoke(
     assertRunSucceeded(completedApply, "apply");
     completeStep("apply");
     if (options.verificationMode === "cloudflare-worker") {
-      await assertCloudflareWorkerExists(options);
-      completeStep("deploymentVerified");
-      await assertPublicWorkerUrl(options);
-      completeStep("publicUrlVerified");
       deploymentLedger = await assertDeploymentLedger(options, {
         spaceId,
         installationId,
@@ -993,6 +989,12 @@ export async function runPlatformControlPlaneSmoke(
         deploymentId: deploymentLedger.deploymentId,
       });
       completeStep("releaseActivationVerified");
+    }
+    if (options.verificationMode === "cloudflare-worker") {
+      await assertCloudflareWorkerExists(options);
+      completeStep("deploymentVerified");
+      await assertPublicWorkerUrl(options);
+      completeStep("publicUrlVerified");
     }
     if (
       options.verificationMode === "opentofu" &&
@@ -2528,7 +2530,7 @@ async function assertReleaseActivation(
     readonly deploymentId: string;
   },
 ): Promise<ReleaseActivationVerificationResult> {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
   while (Date.now() <= deadline) {
     const response = await requestJson<{
       readonly events?: readonly ActivityEventRecord[];

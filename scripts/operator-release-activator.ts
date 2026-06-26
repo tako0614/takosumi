@@ -428,13 +428,27 @@ function runReleaseCommand(
     cwd,
     env,
     encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
+    maxBuffer: 128 * 1024 * 1024,
   });
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
+    const stdoutTail = tailText(result.stdout);
+    const stderrTail = tailText(result.stderr);
     throw new Error(
-      `release command failed (${result.status ?? "unknown"}): ${command.id}\n${result.stderr}`,
+      [
+        `release command failed (${result.status ?? "unknown"}): ${command.id}`,
+        result.error ? `error: ${result.error.message}` : undefined,
+        stdoutTail ? `stdout tail:\n${stdoutTail}` : undefined,
+        stderrTail ? `stderr tail:\n${stderrTail}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
+}
+
+function tailText(value: string | null | undefined, limit = 16 * 1024): string {
+  if (!value) return "";
+  return value.length <= limit ? value : value.slice(value.length - limit);
 }
 
 function materializerBaseEnv(

@@ -422,17 +422,27 @@ export type D1ExecuteTarget = "remote" | "local";
  * argument, so operators should pass the realized database name from the
  * wrangler config. `target` selects `--remote` (default) or `--local`. An
  * optional `env` passes `--env <profile>` so operators can target a wrangler
- * deploy profile (e.g. `staging`) when one is configured.
+ * deploy profile (e.g. `staging`) when one is configured. `wranglerConfig`
+ * points wrangler at the target Worker's rendered config when the CLI runs from
+ * a sibling operator checkout.
  */
 export function defaultD1ExecuteCommand(
-  options: { readonly target?: D1ExecuteTarget; readonly env?: string } = {},
+  options: {
+    readonly target?: D1ExecuteTarget;
+    readonly env?: string;
+    readonly wranglerConfig?: string;
+  } = {},
 ): D1ExecuteCommand {
   const targetFlag = options.target === "local" ? "--local" : "--remote";
   const envArgs = options.env ? ["--env", options.env] : [];
+  const configArgs = options.wranglerConfig
+    ? ["--config", options.wranglerConfig]
+    : [];
   async function runWrangler(
     args: readonly string[],
+    env: Readonly<Record<string, string>> = {},
   ): Promise<{ readonly stdout: string }> {
-    const output = await commandOutput("npx", ["wrangler", ...args]);
+    const output = await commandOutput("npx", ["wrangler", ...args], env);
     const stdout = new TextDecoder().decode(output.stdout);
     const stderr = new TextDecoder().decode(output.stderr);
     if (!output.success) {
@@ -450,11 +460,11 @@ export function defaultD1ExecuteCommand(
         databaseId,
         targetFlag,
         ...envArgs,
+        ...configArgs,
         "--command",
         sql,
       ];
-      if (accountId) args.push("--account-id", accountId);
-      return await runWrangler(args);
+      return await runWrangler(args, accountIdEnv(accountId));
     },
     async query<T>({
       databaseId,
@@ -471,12 +481,12 @@ export function defaultD1ExecuteCommand(
         databaseId,
         targetFlag,
         ...envArgs,
+        ...configArgs,
         "--json",
         "--command",
         sql,
       ];
-      if (accountId) args.push("--account-id", accountId);
-      const { stdout } = await runWrangler(args);
+      const { stdout } = await runWrangler(args, accountIdEnv(accountId));
       const parsed: unknown = JSON.parse(stdout);
       const envelopes: ReadonlyArray<WranglerD1JsonEnvelope> = Array.isArray(
         parsed,
@@ -499,6 +509,7 @@ export function defaultD1ExecuteCommand(
 function commandOutput(
   command: string,
   args: readonly string[],
+  env: Readonly<Record<string, string>> = {},
 ): Promise<{
   readonly code: number;
   readonly success: boolean;
@@ -507,6 +518,7 @@ function commandOutput(
 }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], {
+      env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Uint8Array[] = [];
@@ -529,6 +541,12 @@ function commandOutput(
   });
 }
 
+function accountIdEnv(accountId: string | undefined): Record<string, string> {
+  return accountId
+    ? { CLOUDFLARE_ACCOUNT_ID: accountId, CF_ACCOUNT_ID: accountId }
+    : {};
+}
+
 /**
  * Apply pending D1 migrations.
  *
@@ -549,6 +567,7 @@ export async function applyD1AccountsMigrations(input: {
   readonly dryRun: boolean;
   readonly target?: D1ExecuteTarget;
   readonly env?: string;
+  readonly wranglerConfig?: string;
   readonly command?: D1ExecuteCommand;
 }): Promise<D1MigrateReport> {
   const command =
@@ -556,6 +575,7 @@ export async function applyD1AccountsMigrations(input: {
     defaultD1ExecuteCommand({
       ...(input.target ? { target: input.target } : {}),
       ...(input.env ? { env: input.env } : {}),
+      ...(input.wranglerConfig ? { wranglerConfig: input.wranglerConfig } : {}),
     });
   const migrations = D1_ACCOUNTS_MIGRATIONS;
   const plan: D1MigratePlan = {

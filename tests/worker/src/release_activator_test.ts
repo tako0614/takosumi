@@ -328,7 +328,9 @@ test("webhook release activator fails closed on non-2xx responses", async () => 
 
   await expect(
     activator.activate(fakeOperatorActivationInput()),
-  ).rejects.toThrow("release activator request failed: 403");
+  ).rejects.toThrow(
+    'release activator request failed: 403: {"error":"denied"}',
+  );
 });
 
 test("webhook release activator validates response status", async () => {
