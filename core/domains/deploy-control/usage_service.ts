@@ -463,6 +463,9 @@ function isUsageEventKind(value: unknown): value is UsageEventKind {
     value === "runner_minute" ||
     value === "gateway_compute" ||
     value === "gateway_storage_gb_hour" ||
+    value === "ai_request" ||
+    value === "ai_input_token" ||
+    value === "ai_output_token" ||
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb" ||
@@ -476,6 +479,9 @@ function isGatewayResourceUsageKind(
   return (
     value === "gateway_compute" ||
     value === "gateway_storage_gb_hour" ||
+    value === "ai_request" ||
+    value === "ai_input_token" ||
+    value === "ai_output_token" ||
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb"
