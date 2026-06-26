@@ -26,6 +26,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Model", link: "/reference/model" },
+        { text: "Cloud endpoints", link: "/reference/cloud-endpoints" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
           text: "Execution boundaries",
@@ -54,6 +55,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Model", link: "/en/reference/model" },
+        { text: "Cloud endpoints", link: "/en/reference/cloud-endpoints" },
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
