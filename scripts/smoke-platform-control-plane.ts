@@ -980,6 +980,15 @@ export async function runPlatformControlPlaneSmoke(
         applyRunId,
       });
     }
+    completeStep("deploymentLedgerVerified");
+    if (options.requireReleaseActivation) {
+      releaseActivation = await assertReleaseActivation(options, {
+        spaceId,
+        applyRunId,
+        deploymentId: deploymentLedger.deploymentId,
+      });
+      completeStep("releaseActivationVerified");
+    }
     if (
       options.verificationMode === "opentofu" &&
       options.publicUrlChecks.length > 0
@@ -989,15 +998,6 @@ export async function runPlatformControlPlaneSmoke(
         deploymentLedger.outputsPublic,
       );
       completeStep("publicUrlVerified");
-    }
-    completeStep("deploymentLedgerVerified");
-    if (options.requireReleaseActivation) {
-      releaseActivation = await assertReleaseActivation(options, {
-        spaceId,
-        applyRunId,
-        deploymentId: deploymentLedger.deploymentId,
-      });
-      completeStep("releaseActivationVerified");
     }
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
@@ -3596,15 +3596,18 @@ function requiredSteps(
     "plan",
     "apply",
     ...(options?.verificationMode === "opentofu"
-      ? [
-          "opentofuApplyVerified",
-          ...(options.publicUrlChecks.length > 0 ? ["publicUrlVerified"] : []),
-        ]
+      ? ["opentofuApplyVerified"]
       : ["deploymentVerified", "publicUrlVerified"]),
     "deploymentLedgerVerified",
   ];
   if (options?.requireReleaseActivation) {
     steps.push("releaseActivationVerified");
+  }
+  if (
+    options?.verificationMode === "opentofu" &&
+    options.publicUrlChecks.length > 0
+  ) {
+    steps.push("publicUrlVerified");
   }
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");

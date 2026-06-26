@@ -384,8 +384,8 @@ test("platform control-plane smoke can require public URL checks for generic Ope
     "plan",
     "apply",
     "opentofuApplyVerified",
-    "publicUrlVerified",
     "deploymentLedgerVerified",
+    "publicUrlVerified",
     "destroy",
   ]);
   expect(result.publicUrlVerified).toBe(true);
