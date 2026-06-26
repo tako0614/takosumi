@@ -19,7 +19,7 @@
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
-    "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers worker/src/index.ts --outfile /tmp/takosumi-cf-worker-check.mjs",
+    "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/worker.ts --outfile /tmp/takosumi-platform-worker-check.mjs",
     "test": "bun test ./tests",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
