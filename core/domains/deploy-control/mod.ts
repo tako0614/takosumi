@@ -447,7 +447,7 @@ export type ReleaseActivationStatus =
 
 export interface ReleaseActivationCommand {
   readonly id: string;
-  readonly phase: "post_apply";
+  readonly phase: "post_apply" | "pre_destroy";
   readonly command: readonly string[];
   readonly workingDirectory?: string;
   readonly env?: Readonly<Record<string, string>>;
@@ -6126,6 +6126,93 @@ export class OpenTofuDeploymentController {
     });
   }
 
+  async #activateReleaseBeforeDestroy(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly installation: Installation;
+  }): Promise<void> {
+    const deploymentId = input.installation.currentDeploymentId;
+    if (!deploymentId) return;
+    const deployment = await this.#store.getDeployment(deploymentId);
+    if (!deployment || deployment.status === "destroyed") return;
+    const outputSnapshot = await this.#store.getOutputSnapshot(
+      deployment.outputSnapshotId,
+    );
+    if (!outputSnapshot) return;
+    const nonSensitiveOutputs = jsonRecordFromPublicOutputs(
+      deployment.outputsPublic,
+    );
+    const commands = releaseActivationCommandsFromPublicOutputs(
+      nonSensitiveOutputs,
+      "pre_destroy",
+    );
+    if (commands.length === 0) return;
+    const sourceSnapshot = await this.#store.getSourceSnapshot(
+      deployment.sourceSnapshotId,
+    );
+    if (!this.#releaseActivator) {
+      await this.#recordReleaseActivationActivity({
+        applyRun: input.applyRun,
+        installation: input.installation,
+        deployment,
+        status: "failed",
+        kind: "takosumi.release-commands@v1",
+        message:
+          "pre-destroy release commands declared but no release activator is configured",
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "pre-destroy release commands require a release activator",
+      );
+    }
+    let result: ReleaseActivationResult;
+    try {
+      result = await this.#releaseActivator.activate({
+        planRun: input.planRun,
+        applyRun: input.applyRun,
+        installation: input.installation,
+        deployment,
+        outputSnapshot,
+        nonSensitiveOutputs,
+        commands,
+        ...(sourceSnapshot ? { sourceSnapshot } : {}),
+      });
+    } catch (error) {
+      await this.#recordReleaseActivationActivity({
+        applyRun: input.applyRun,
+        installation: input.installation,
+        deployment,
+        status: "failed",
+        message: errorMessage(error),
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+      throw error;
+    }
+    if (result.status === "skipped") return;
+    await this.#recordReleaseActivationActivity({
+      applyRun: input.applyRun,
+      installation: input.installation,
+      deployment,
+      status: result.status,
+      kind: result.kind,
+      message: result.message,
+      hasLaunchUrl: Boolean(result.launchUrl),
+      hasHealthUrl: Boolean(result.healthUrl),
+      metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+      commandCount: commands.length,
+      outputCount: Object.keys(nonSensitiveOutputs).length,
+    });
+    if (result.status !== "succeeded") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `pre-destroy release activation ended as ${result.status}`,
+      );
+    }
+  }
+
   async #recordReleaseActivationActivity(input: {
     readonly applyRun: ApplyRun;
     readonly installation: Installation;
@@ -6359,6 +6446,11 @@ export class OpenTofuDeploymentController {
           "runner does not implement destroy; refusing to mark installation destroyed without teardown",
         );
       }
+      await this.#activateReleaseBeforeDestroy({
+        planRun,
+        applyRun: running,
+        installation,
+      });
       runnerDispatched = true;
       const destroyFn = runner.destroy;
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
@@ -7116,6 +7208,18 @@ function releaseActivationOutputs(
   return safeOutputs;
 }
 
+function jsonRecordFromPublicOutputs(
+  outputs: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = {};
+  for (const [name, value] of Object.entries(outputs)) {
+    if (isJsonValue(value) && isReleaseActivationOutputSafe(name, value)) {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
 function releaseActivationCommands(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
 ): readonly ReleaseActivationCommand[] {
@@ -7124,7 +7228,7 @@ function releaseActivationCommands(
   const visit = (name: string, value: JsonValue, sensitive?: boolean): void => {
     if (sensitive === true) return;
     if (name === "takosumi_release") {
-      commands.push(...parseReleaseCommandDescriptor(value));
+      commands.push(...parseReleaseCommandDescriptor(value, "post_apply"));
     }
   };
   if (Array.isArray(outputs)) {
@@ -7139,19 +7243,32 @@ function releaseActivationCommands(
   return commands.slice(0, 20);
 }
 
+function releaseActivationCommandsFromPublicOutputs(
+  outputs: Readonly<Record<string, JsonValue>>,
+  phase: ReleaseActivationCommand["phase"],
+): readonly ReleaseActivationCommand[] {
+  const descriptor = outputs.takosumi_release;
+  if (descriptor === undefined) return [];
+  return parseReleaseCommandDescriptor(descriptor, phase).slice(0, 20);
+}
+
 function parseReleaseCommandDescriptor(
   descriptor: JsonValue,
+  phase: ReleaseActivationCommand["phase"],
 ): readonly ReleaseActivationCommand[] {
   if (!isRecord(descriptor)) return [];
-  const postApply = descriptor.post_apply ?? descriptor.postApply;
-  const rows = Array.isArray(postApply)
-    ? postApply
-    : isRecord(postApply) && Array.isArray(postApply.commands)
-      ? postApply.commands
+  const phaseRows =
+    phase === "post_apply"
+      ? (descriptor.post_apply ?? descriptor.postApply)
+      : (descriptor.pre_destroy ?? descriptor.preDestroy);
+  const rows = Array.isArray(phaseRows)
+    ? phaseRows
+    : isRecord(phaseRows) && Array.isArray(phaseRows.commands)
+      ? phaseRows.commands
       : [];
   const commands: ReleaseActivationCommand[] = [];
   for (const [index, row] of rows.entries()) {
-    const command = parseReleaseCommand(row, index);
+    const command = parseReleaseCommand(row, index, phase);
     if (command) commands.push(command);
   }
   return commands;
@@ -7160,11 +7277,12 @@ function parseReleaseCommandDescriptor(
 function parseReleaseCommand(
   value: unknown,
   index: number,
+  phase: ReleaseActivationCommand["phase"],
 ): ReleaseActivationCommand | undefined {
   if (!isRecord(value)) return undefined;
   const argv = releaseCommandArgv(value.command);
   if (!argv || argv.length === 0 || argv.length > 40) return undefined;
-  const id = releaseCommandId(value.id) ?? `post_apply_${index + 1}`;
+  const id = releaseCommandId(value.id) ?? `${phase}_${index + 1}`;
   const rawWorkingDirectory =
     nonEmptyString(value.workingDirectory) ??
     nonEmptyString(value.working_directory);
@@ -7178,7 +7296,7 @@ function parseReleaseCommand(
   const executor = releaseCommandExecutor(value.executor);
   return {
     id,
-    phase: "post_apply",
+    phase,
     command: argv,
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(env ? { env } : {}),
