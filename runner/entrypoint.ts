@@ -310,7 +310,7 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
     try {
       const result =
         action === "compatibility_check"
-          ? await runCompatibilityCheck(runId)
+          ? await runCompatibilityCheck(runId, body.request)
           : action === "backup"
             ? await runBackup(runId, body.request)
             : action === "release"
@@ -1381,21 +1381,27 @@ async function handlePlanArtifactRequest(
   );
 }
 
-async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
+async function runCompatibilityCheck(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
+  const modulePath = compatibilityModulePath(request);
+  const moduleRoot = resolveModulePath(workspace.sourceRoot, modulePath);
+  await assertDirectory(moduleRoot, "compatibility module root");
   const context: CommandContext = { env: buildPhaseEnv() };
   assertCommandEnvHasNoProviderCredentials(context.env);
   const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: workspace.sourceRoot,
+    cwd: moduleRoot,
     context,
   });
   if (init.exitCode !== 0) {
     return commandFailurePayload(runId, "compatibility_check", init, context);
   }
-  const files = await readCapsuleCompatibilityFiles(workspace.sourceRoot);
+  const files = await readCapsuleCompatibilityFiles(moduleRoot);
   const providerLockDigest = await digestFileIfExists(
-    join(workspace.sourceRoot, ".terraform.lock.hcl"),
+    join(moduleRoot, ".terraform.lock.hcl"),
   );
   return {
     runId,
@@ -1407,6 +1413,11 @@ async function runCompatibilityCheck(runId: string): Promise<JsonRecord> {
     stdout: redactRunnerOutput(init.stdout, context.redactionValues),
     stderr: redactRunnerOutput(init.stderr, context.redactionValues),
   };
+}
+
+function compatibilityModulePath(request: unknown): string | undefined {
+  const source = recordField(request, "source");
+  return isRecord(source) ? stringField(source, "modulePath") : undefined;
 }
 
 async function readCapsuleCompatibilityFiles(
@@ -3135,7 +3146,9 @@ function releaseCommandEnv(
       throw new Error(`release command env must not override reserved ${key}`);
     }
     if (RUNNER_SECRET_ENV_NAME_PATTERN.test(key)) {
-      throw new Error(`release command env must not include secret-like ${key}`);
+      throw new Error(
+        `release command env must not include secret-like ${key}`,
+      );
     }
     if (typeof value === "string") {
       if (RUNNER_SECRET_VALUE_PATTERN.test(value)) {

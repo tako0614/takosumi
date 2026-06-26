@@ -890,13 +890,20 @@ test("installation CompatibilityReport gate honors InstallConfig resource policy
 test("installation plan creates and pins a CompatibilityReport when SourcesService is wired", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
-  await seedRunnableInstallationModel(store, { environment: "preview" });
+  await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      modulePath: "deploy/opentofu",
+    },
+  });
+  const sourceFileReadOptions: unknown[] = [];
   const sourcesService = new SourcesService({
     store,
     now: () => new Date("2026-06-07T00:00:00.000Z"),
     newId: (prefix) => `${prefix}_compat_auto`,
-    readCapsuleSourceFiles: () =>
-      Promise.resolve([
+    readCapsuleSourceFiles: (_snapshot, options) => {
+      sourceFileReadOptions.push(options);
+      return Promise.resolve([
         {
           path: "main.tf",
           text: `
@@ -917,7 +924,8 @@ output "attachments_bucket" {
 }
 `,
         },
-      ]),
+      ]);
+    },
   });
   const controller = new OpenTofuDeploymentController({
     store,
@@ -935,6 +943,7 @@ output "attachments_bucket" {
   const installation = await store.getInstallation("inst_fixture");
   expect(installation?.compatibilityReportId).toBe("caprep_compat_auto");
   expect(installation?.compatibilityStatus).toBe("ready");
+  expect(sourceFileReadOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
   expect(runner.planJobs).toHaveLength(1);
 });
 

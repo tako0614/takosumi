@@ -9,6 +9,7 @@ import type {
   PatchSourceRequest,
 } from "takosumi-contract/sources";
 import type { CreateSourceCompatibilityCheckRequest } from "takosumi-contract/capsules";
+import { isAbsolute, normalize } from "node:path";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   authorizeDeployControl,
@@ -223,8 +224,18 @@ export function mountDeployControlSourceRoutes(
             c,
             "sourceCompatibilityCheck",
           );
+        const modulePath = modulePathValue(body.modulePath);
+        if (body.modulePath !== undefined && modulePath === undefined) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "modulePath must be a safe relative path inside the SourceSnapshot",
+          );
+        }
         return c.json(
-          await controller.createSourceCompatibilityCheck(id, body),
+          await controller.createSourceCompatibilityCheck(id, {
+            ...body,
+            ...(modulePath ? { modulePath } : {}),
+          }),
           201,
         );
       },
@@ -300,4 +311,28 @@ export function mountDeployControlSourceRoutes(
       },
     }),
   );
+}
+
+function modulePathValue(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (isAbsolute(raw) || raw.includes("\0") || /^[A-Za-z]:[\\/]/u.test(raw)) {
+    return undefined;
+  }
+  const normalized = normalize(raw)
+    .replace(/\\/gu, "/")
+    .replace(/^\.\/+/u, "")
+    .replace(/\/+$/u, "");
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return undefined;
+  }
+  return normalized;
 }

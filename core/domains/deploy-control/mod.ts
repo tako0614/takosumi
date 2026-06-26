@@ -578,6 +578,7 @@ export interface OpenTofuCapsuleSourceFile {
 export interface OpenTofuCapsuleSourceFilesJob {
   readonly runId: string;
   readonly sourceSnapshot: SourceSnapshot;
+  readonly modulePath?: string;
 }
 
 /**
@@ -1859,6 +1860,7 @@ export class OpenTofuDeploymentController {
             installation,
             source,
             snapshot,
+            installConfig.modulePath,
           );
     const {
       request: planRequest,
@@ -2051,6 +2053,7 @@ export class OpenTofuDeploymentController {
     installation: Installation,
     source: Source,
     snapshot: SourceSnapshot,
+    modulePath?: string,
   ): Promise<CapsuleCompatibilityReport | undefined> {
     const existing = installation.compatibilityReportId
       ? await this.#store.getCapsuleCompatibilityReport(
@@ -2110,10 +2113,14 @@ export class OpenTofuDeploymentController {
       ? await this.#sourcesService.createCompatibilityCheck(source.id, {
           sourceSnapshotId: snapshot.id,
           installationId: installation.id,
+          ...(modulePath ? { modulePath } : {}),
         })
       : await this.#sourcesService.createCompatibilityCheckForSnapshot(
           snapshot,
-          { installationId: installation.id },
+          {
+            installationId: installation.id,
+            ...(modulePath ? { modulePath } : {}),
+          },
         );
     await this.#store.patchInstallation(installation.id, {
       compatibilityReportId: report.id,
@@ -3442,6 +3449,7 @@ export class OpenTofuDeploymentController {
       installation,
       source,
       snapshot,
+      planRun.source.modulePath,
     );
     if (!report) return planRun;
     await this.#refreshPlanRunInputsForCompatibilityReport(

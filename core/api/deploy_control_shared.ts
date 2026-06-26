@@ -206,6 +206,7 @@ export const ALLOWED_KEYS: Record<
   ]),
   sourceCompatibilityCheck: new Set([
     "sourceSnapshotId",
+    "modulePath",
     "installationId",
     "installConfigId",
   ]),

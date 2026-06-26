@@ -238,17 +238,24 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
 });
 
 test("container runner reads Capsule compatibility source files", async () => {
+  let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(
-    envReturning({
-      files: [
-        { path: "main.tf", text: "terraform {}\n" },
-        { path: "outputs.tf", text: 'output "x" { value = 1 }\n' },
-      ],
-    }),
+    envReturning(
+      {
+        files: [
+          { path: "main.tf", text: "terraform {}\n" },
+          { path: "outputs.tf", text: 'output "x" { value = 1 }\n' },
+        ],
+      },
+      (body) => {
+        captured = body;
+      },
+    ),
   );
 
   const files = await runner.readCapsuleSourceFiles({
     runId: "compat_snap_1",
+    modulePath: "takos/deploy/opentofu",
     sourceSnapshot: {
       id: "snap_1",
       sourceId: "src_1",
@@ -269,6 +276,13 @@ test("container runner reads Capsule compatibility source files", async () => {
     { path: "main.tf", text: "terraform {}\n" },
     { path: "outputs.tf", text: 'output "x" { value = 1 }\n' },
   ]);
+  expect(captured?.request).toMatchObject({
+    sourceArchive: {
+      objectKey: "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+      digest: `sha256:${"a".repeat(64)}`,
+    },
+    source: { modulePath: "takos/deploy/opentofu" },
+  });
 });
 
 test("container runner times out stuck Capsule compatibility reads", async () => {

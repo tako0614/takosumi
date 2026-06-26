@@ -268,6 +268,9 @@ export class CloudflareContainerOpenTofuRunner
           objectKey: job.sourceSnapshot.archiveObjectKey,
           digest: job.sourceSnapshot.archiveDigest,
         },
+        source: {
+          ...(job.modulePath ? { modulePath: job.modulePath } : {}),
+        },
       },
       {
         timeoutMs: compatibilityCheckTimeoutMs(this.env),

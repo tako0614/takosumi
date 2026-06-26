@@ -85,6 +85,8 @@ export interface CapsuleGateResult {
 
 export interface CreateSourceCompatibilityCheckRequest {
   readonly sourceSnapshotId?: string;
+  /** Safe relative OpenTofu module path inside the SourceSnapshot archive. */
+  readonly modulePath?: string;
   readonly installationId?: string;
   /**
    * Curated InstallConfig to gate the pre-install compatibility check against,

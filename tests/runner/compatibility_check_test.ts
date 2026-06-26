@@ -67,6 +67,76 @@ test("compatibility_check returns restored OpenTofu source files only", async ()
   }
 });
 
+test("compatibility_check runs inside source.modulePath when provided", async () => {
+  const runId = `compat_module_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const moduleRoot = join(sourceRoot, "takos", "deploy", "opentofu");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(moduleRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "root.tf"), "terraform {}\n");
+    await writeFile(join(moduleRoot, "main.tf"), "terraform {}\n");
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    test -f main.tf
+    test ! -f root.tf
+    printf 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\\n' > .terraform.lock.hcl
+    echo "module init ok"
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: { source: { modulePath: "takos/deploy/opentofu" } },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "compatibility_check",
+      status: "succeeded",
+      exitCode: 0,
+      stdout: "module init ok\n",
+    });
+    expect(body.files).toEqual([
+      {
+        path: ".terraform.lock.hcl",
+        text: 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n',
+      },
+      { path: "main.tf", text: "terraform {}\n" },
+    ]);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
 test("compatibility_check runs tofu init without provider credentials and returns the lockfile", async () => {
   const runId = `compat_init_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
@@ -505,7 +575,10 @@ test("backup action prefers provider-scoped built-in provider_snapshot pointers"
   const previousPointerDir = Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR;
   const root = join(RUN_ROOT, runId);
   const pointerDir = join(root, "provider-snapshots");
-  const providerDir = join(pointerDir, "registry.opentofu.org_cloudflare_cloudflare");
+  const providerDir = join(
+    pointerDir,
+    "registry.opentofu.org_cloudflare_cloudflare",
+  );
   try {
     delete Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_COMMAND;
     Bun.env.TAKOSUMI_PROVIDER_SNAPSHOT_POINTER_DIR = pointerDir;
@@ -1077,9 +1150,7 @@ esac
     };
     expect(body.status).toBe("succeeded");
     expect(body.outputs?.worker_name?.value).toBe("demo-worker");
-    expect(body.outputs?.url?.value).toBe(
-      "https://demo-worker.example.test",
-    );
+    expect(body.outputs?.url?.value).toBe("https://demo-worker.example.test");
   } finally {
     if (previousPath === undefined) {
       delete Bun.env.PATH;
