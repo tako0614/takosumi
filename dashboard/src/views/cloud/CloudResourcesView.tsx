@@ -81,14 +81,23 @@ function Inner() {
         title={t("cloudResources.title")}
         subtitle={t("cloudResources.subtitle")}
         actions={
-          <Button
-            variant="secondary"
-            icon={<RefreshCw size={16} />}
-            onClick={() => void refetch()}
-            disabled={!isTakosumiCloudRuntime() || snapshot.loading}
-          >
-            {t("common.retry")}
-          </Button>
+          <div class="av-actions">
+            <Button
+              variant="ghost"
+              href="https://takosumi.com/docs/reference/cloud-endpoints"
+              icon={<ExternalLink size={16} />}
+            >
+              {t("cloudResources.docs.open")}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<RefreshCw size={16} />}
+              onClick={() => void refetch()}
+              disabled={!isTakosumiCloudRuntime() || snapshot.loading}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
         }
       />
 
@@ -336,40 +345,6 @@ function CloudResourceBody(props: {
         </Card>
 
         <CloudInventoryCard snapshot={props.snapshot} />
-
-        <Card class="av-cloud-card av-cloud-card-compact">
-          <CardHeader
-            title={
-              <IconTitle
-                icon={<KeyRound size={18} />}
-                label={t("cloudResources.docs.title")}
-              />
-            }
-            subtitle={t("cloudResources.docs.subtitle")}
-            actions={
-              <Button
-                variant="secondary"
-                size="sm"
-                href="https://takosumi.com/docs/reference/cloud-endpoints"
-                icon={<ExternalLink size={14} />}
-              >
-                {t("cloudResources.docs.open")}
-              </Button>
-            }
-          />
-          <KVList
-            items={[
-              {
-                label: t("cloudResources.catalog.configured"),
-                value: `${props.snapshot.catalog.summary.configured}/${props.snapshot.catalog.summary.total}`,
-              },
-              {
-                label: t("cloudResources.catalog.generated"),
-                value: formatDateTime(props.snapshot.catalog.generatedAt),
-              },
-            ]}
-          />
-        </Card>
       </div>
     </div>
   );
