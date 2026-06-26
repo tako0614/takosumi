@@ -896,7 +896,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
   "cloudResources.subtitle":
-    "Review API keys, endpoints, usage, and Cloud resources.",
+    "Review API keys, this month's usage, connection health, and Cloud resources.",
   "cloudResources.unavailable.title": "Takosumi Cloud only",
   "cloudResources.unavailable.body":
     "Cloud-only endpoints are not provided in this runtime.",
@@ -911,7 +911,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.capabilities": "Capabilities",
   "cloudResources.keys.title": "API keys",
   "cloudResources.keys.subtitle":
-    "Create and review keys for Cloud endpoints.",
+    "Create and review keys for external clients and providers.",
   "cloudResources.keys.scope": "read / write",
   "cloudResources.keys.defaultName": "Takosumi Cloud API key",
   "cloudResources.keys.name": "Key name",
@@ -934,23 +934,23 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.usage.kind.backupStorage": "Backup storage",
   "cloudResources.usage.kind.egress": "Egress",
   "cloudResources.ai.title": "AI Gateway",
-  "cloudResources.ai.subtitle": "OpenAI-compatible endpoint",
+  "cloudResources.ai.subtitle": "Connection status and available models",
   "cloudResources.ai.defaultModel": "Default model",
   "cloudResources.ai.profiles": "Profiles",
-  "cloudResources.ai.providers": "Providers",
+  "cloudResources.ai.providers": "Upstreams",
   "cloudResources.ai.models": "Models",
-  "cloudResources.compat.title": "Cloudflare Compatibility API",
-  "cloudResources.compat.subtitle": "Cloudflare v4-compatible endpoint",
-  "cloudResources.compat.token": "Session",
+  "cloudResources.compat.title": "Cloudflare connection",
+  "cloudResources.compat.subtitle": "Current endpoint and account",
+  "cloudResources.compat.token": "Auth status",
   "cloudResources.compat.account": "Account",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
-    "Compatibility resources currently present in Takosumi Cloud.",
+    "Resources currently present in Takosumi Cloud.",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
-  "cloudResources.inventory.names": "Resources",
+  "cloudResources.inventory.names": "Names",
   "cloudResources.docs.open": "Open docs",
 
   // --- billing -------------------------------------------------------------------
