@@ -1,34 +1,50 @@
 # Takosumi Cloud endpoints
 
-Takosumi Cloud endpoints are Cloud-only managed services. They are not part of
-Takosumi OSS or Takosumi for Operators.
+Takosumi Cloud endpoints は Takosumi Cloud 専用の managed service です。
+Takosumi OSS / Takosumi for Operators の public contract には含めません。
 
-The dashboard should show operational facts: API keys, base URLs, usage, and
-current Cloud resources. The full contract lives here.
+アプリ画面の役割は、日常的に見る運用情報をすぐ確認できるようにすることです。
+仕様、対象範囲、endpoint の契約はこのページに集約します。
 
-## Boundary
+## 画面と docs の分担
 
-Takosumi OSS runs existing OpenTofu/Terraform providers as-is.
+`app.takosumi.com/cloud` では次を優先して表示します。
 
-Takosumi Cloud adds:
+- API key の作成、一覧、失効
+- 今月の使用量、Gateway 使用量、利用可能クレジット
+- AI Gateway の Base URL、既定モデル、公開 model alias
+- Cloudflare Compatibility API の Base URL と現在の account
+- Takosumi Cloud 側に存在する KV / Object Storage / Database / Worker
+
+画面には全仕様を置きません。provider 互換の対応範囲、OpenTofu provider
+設定例、usage event の contract、secret の扱いは docs 側で確認します。
+
+## 境界
+
+Takosumi OSS は既存の OpenTofu/Terraform provider をそのまま実行する
+control plane です。
+
+Takosumi Cloud だけが次を持ちます。
 
 - AI Gateway
 - Cloudflare Compatibility API
-- managed resource backends
-- official usage, quota, billing, and support controls
+- managed resource backend
+- official usage / quota / billing / support controls
 
-The platform worker at `app.takosumi.com` owns the public route families and
-delegates Cloud-only implementation to closed service bindings. OSS code may
-contain catalog metadata, auth forwarding, dashboard clients, and smoke tests,
-but the managed resource backend is Cloud-only.
+`app.takosumi.com` の platform worker は Cloud-only route family を公開し、
+closed service binding に実装を委譲します。OSS code に入れてよいのは
+catalog metadata、auth forwarding、dashboard client、smoke test までです。
+managed resource backend は Takosumi Cloud 側の closed module です。
 
 ## Catalog
+
+Cloud extension の有効状態はこの route で確認できます。
 
 ```http
 GET /__takosumi/cloud/extensions
 ```
 
-Returns the Cloud-only extension catalog for the current deployment.
+例:
 
 ```json
 {
@@ -52,10 +68,12 @@ Returns the Cloud-only extension catalog for the current deployment.
 }
 ```
 
+`configured: false` の extension は画面に出ても、実行時は fail closed します。
+
 ## API keys
 
-Dashboard-created Cloud API keys are Takosumi Accounts personal access tokens.
-They are returned only once on creation.
+Dashboard で作成する Cloud API key は Takosumi Accounts の personal access
+token です。作成時に一度だけ secret value を返します。
 
 ```http
 GET  /v1/account/tokens
@@ -63,7 +81,7 @@ POST /v1/account/tokens
 POST /v1/account/tokens/{tokenId}/revoke
 ```
 
-Default Cloud endpoint keys should use:
+通常の Cloud endpoint 用 key は次の scope で作成します。
 
 ```json
 {
@@ -71,13 +89,45 @@ Default Cloud endpoint keys should use:
 }
 ```
 
-`read` is enough for `GET`/`HEAD`/`OPTIONS`. `write` is required for mutating
-Cloud endpoints such as creating or updating compatibility resources. `admin`
-is not needed for normal Cloud endpoint use.
+`read` は `GET` / `HEAD` / `OPTIONS` に使います。`write` は compatibility
+resource の作成、更新、削除などの mutating route に必要です。通常利用で
+`admin` は不要です。
 
-Secret values are not shown again after creation. List responses expose only
-metadata such as `prefix`, `scopes`, `created_at`, `expires_at`,
-`revoked_at`, and `last_used_at`.
+list response には secret value を返しません。表示してよい metadata は
+`prefix`、`scopes`、`created_at`、`expires_at`、`revoked_at`、`last_used_at`
+です。
+
+## Usage
+
+Cloud usage は Workspace 単位の usage event として記録します。
+
+```http
+GET /api/v1/workspaces/{workspaceId}/billing
+GET /api/v1/workspaces/{workspaceId}/usage
+```
+
+画面の Usage card はこの2つを使います。
+
+| 表示                       | 読み方                                                     |
+| -------------------------- | ---------------------------------------------------------- |
+| 今月の使用量               | 今月発生した usage event の `credits` 合計                 |
+| Gateway 使用量             | `gateway_` で始まる kind の `credits` 合計                 |
+| 利用可能クレジット         | billing projection の `balance.availableCredits`           |
+| 最近の使用量               | `createdAt` が新しい usage event                           |
+
+主な usage kind:
+
+- `gateway_compute`
+- `gateway_storage_gb_hour`
+- `runner_minute`
+- `operation`
+- `artifact_storage_gb_hour`
+- `backup_storage_gb_hour`
+- `egress_gb`
+
+usage event は quantity、credits、source、timestamp を持ちます。provider
+credential、API key、bearer token、database URL、DSN、password などの secret
+値を持ってはいけません。
 
 ## AI Gateway
 
@@ -87,7 +137,7 @@ Base URL:
 https://app.takosumi.com/gateway/ai/v1
 ```
 
-OpenAI-compatible endpoints:
+OpenAI-compatible routes:
 
 ```http
 GET  /gateway/ai/v1/models
@@ -96,17 +146,19 @@ POST /gateway/ai/v1/chat/completions
 POST /gateway/ai/v1/embeddings
 ```
 
-Clients can use:
+OpenAI-compatible client からは次のように使えます。
 
 ```bash
 OPENAI_BASE_URL=https://app.takosumi.com/gateway/ai/v1
 OPENAI_API_KEY=takpat_...
+OPENAI_MODEL=takosumi/default
 ```
 
-The public model id `takosumi/default` is the stable default alias. The
-operator may route it to Cloudflare AI Gateway / unified billing, Workers AI,
-or another configured OpenAI-compatible upstream. Model metadata returned from
-`/models` must not contain secret values.
+`takosumi/default` は安定した default alias です。operator はその alias を
+Cloudflare AI Gateway / Unified Billing、Workers AI、または別の
+OpenAI-compatible upstream に route できます。`/models` と status response は
+公開 model alias と readiness metadata だけを返し、upstream key や secret
+env 名を返してはいけません。
 
 ## Cloudflare Compatibility API
 
@@ -116,11 +168,11 @@ Base URL:
 https://app.takosumi.com/compat/cloudflare/client/v4
 ```
 
-The endpoint is a Cloudflare v4-compatible subset for Workers-oriented
-resources. It is intended for the `cloudflare/cloudflare` OpenTofu/Terraform
-provider by setting provider `base_url`.
+Cloudflare v4-compatible subset です。目的は `cloudflare/cloudflare`
+OpenTofu/Terraform provider の `base_url` を変えて、Workers-oriented resource
+を Takosumi Cloud managed resource に向けられるようにすることです。
 
-Supported response envelope:
+response envelope:
 
 ```json
 {
@@ -131,7 +183,7 @@ Supported response envelope:
 }
 ```
 
-Read-only dashboard inventory uses:
+Dashboard inventory が使う read route:
 
 ```http
 GET /compat/cloudflare/client/v4/user/tokens/verify
@@ -142,30 +194,30 @@ GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
 GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 ```
 
-The compatibility target is Workers-oriented:
+初期 target は Workers 系 subset に限定します。
 
 - Workers scripts
 - Workers routes
 - KV namespaces
 - R2 buckets
 - D1 databases
-- Worker vars, secrets, and bindings
+- Worker vars / secrets / bindings
 
-Out of scope for the initial compatibility API:
+初期 target ではないもの:
 
-- DNS as a full product
-- WAF and Rulesets
+- DNS 全般
+- WAF / Rulesets
 - Zero Trust
-- account IAM
+- Account IAM
 - billing
 - registrar
-- load balancers
+- load balancer
 - email routing
 - Turnstile
 
 ## OpenTofu provider usage
 
-Example provider configuration:
+Cloudflare provider の例:
 
 ```hcl
 provider "cloudflare" {
@@ -175,46 +227,45 @@ provider "cloudflare" {
 }
 ```
 
-The same Cloudflare Workers-oriented manifest can target real Cloudflare or
-Takosumi Cloud by changing the Provider Binding / Provider Connection. The
-manifest should not contain raw secrets.
+同じ Cloudflare Workers-oriented manifest を本物の Cloudflare と Takosumi
+Cloud のどちらにも向けられるようにするのが狙いです。切り替えは manifest
+ではなく Provider Binding / Provider Connection で行います。manifest に raw
+secret を書いてはいけません。
 
-## Usage
+## Cloud resources inventory
 
-Cloud usage is recorded as Workspace-scoped usage events.
+Cloud 画面の resource inventory は Compatibility API から読める現在状態の
+要約です。少なくとも次の group を表示します。
 
-Current dashboard usage is read from:
+- KV
+- Object Storage
+- Database
+- Workers
 
-```http
-GET /api/v1/workspaces/{workspaceId}/billing
-GET /api/v1/workspaces/{workspaceId}/usage
-```
+この inventory は運用確認用です。resource の完全な lifecycle contract は
+Compatibility API と OpenTofu provider の plan/apply result を正本にします。
 
-Important usage kinds:
+## Security contract
 
-- `gateway_compute`
-- `gateway_storage_gb_hour`
-- `runner_minute`
-- `operation`
-- `artifact_storage_gb_hour`
-- `backup_storage_gb_hour`
-- `egress_gb`
+Cloud endpoint の contract では次を守ります。
 
-Usage events carry quantity, credits, source, and timestamp. They must not
-carry provider credentials, API keys, bearer tokens, database URLs, or other
-secret values.
+- secret value は作成時以外に再表示しない
+- usage / catalog / status / model metadata に secret-shaped value を入れない
+- API key は Workspace / account scope と endpoint scope で検証する
+- unsupported route は互換っぽく成功させず fail closed する
+- OSS Takosumi に Cloud-only backend を持ち込まない
 
-## Implementation status
+## 実装状態
 
-The OSS repository currently contains:
+OSS repo にあるもの:
 
 - platform route catalog
 - same-origin session / PAT / service-token auth forwarding
-- AI Gateway OpenAI-compatible handler implementation
+- AI Gateway OpenAI-compatible handler seam
 - dashboard Cloud endpoint client
 - smoke tests and provider E2E expectations
 
-The Cloudflare Compatibility backend that materializes managed resources is a
-closed Takosumi Cloud service binding. If that binding is not configured,
-`/compat/cloudflare/client/v4/*` intentionally returns not found from the
-platform worker.
+Cloudflare Compatibility backend と managed resource materialization は closed
+Takosumi Cloud service binding です。binding が未設定の場合、
+`/compat/cloudflare/client/v4/*` は platform worker から意図的に not found を
+返します。
