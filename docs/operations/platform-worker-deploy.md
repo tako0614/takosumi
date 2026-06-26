@@ -305,14 +305,18 @@ AI Gateway status が `workers_ai_fallback` の場合、基礎の managed AI は
 動作しているが、明示 profile としてはまだ固定されていない。Production Cloud
 AI Gateway は `openai_compatible` または `workers_ai_binding` の profile を
 少なくとも1つ設定する。sandbox 完結の推奨形は Cloudflare AI Gateway REST API
-+ Unified Billing の `openai_compatible` profile で、`apiKeyEnv` には
+と Unified Billing の `openai_compatible` profile で、`apiKeyEnv` には
 `TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN` を使う。DeepSeek / Z.AI GLM /
 Gemini / OpenAI などを direct/BYOK provider として Takosumi が直接持つ場合だけ、
 provider-specific upstream key を repo 外の operator secret に置く。外部
 provider を Cloud の提供機能として告知する release では、明示 profile と
 operator-held credential を設定したうえで `--require-ai-upstream-profile` を付ける。
 Cloudflare Unified Billing を sandbox / default AI 経路にする場合は
-`--require-ai-cloudflare-unified-billing-profile` も付ける。
+`--require-ai-cloudflare-unified-billing-profile` も付ける。AI Gateway の
+請求証跡まで GA 判定に含める場合は、Service Graph runtime token 経由の
+chat/embeddings 呼び出し後に対象 Workspace の usage ledger を読み、
+同じ Installation の `resource_meter` / `ai_request` event が増えたことを
+`--require-ai-usage-ledger` で必須化する。
 Cloudflare Workers script materialization がまだ 501 の場合、script は `status: "passed"` でも
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
@@ -348,6 +352,10 @@ bun run smoke:cloud-extensions -- \
   --require-provider-e2e \
   --require-ai-upstream-profile \
   --require-ai-cloudflare-unified-billing-profile \
+  --require-ai-service-graph-token \
+  --ai-service-installation-id <ai-gateway-installation-id> \
+  --require-ai-usage-ledger \
+  --ai-usage-workspace-id <workspace-id> \
   --json
 ```
 
