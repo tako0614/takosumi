@@ -58,12 +58,105 @@
   gap: var(--tg-s-4);
 }
 
+/* ===== Takosumi Cloud resources ===== */
+.av-cloud-stack {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+.av-cloud-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-4);
+}
+.av-cloud-card {
+  min-width: 0;
+}
+.av-cloud-card-compact {
+  grid-column: 1 / -1;
+}
+.av-cloud-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.av-cloud-title-icon {
+  display: inline-flex;
+  color: var(--tg-accent);
+}
+.av-cloud-endpoint {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--tg-s-2);
+  margin: var(--tg-s-3) 0 var(--tg-s-4);
+}
+.av-cloud-endpoint-label {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
+.av-cloud-endpoint-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.av-cloud-chip-block {
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.av-cloud-chip-title {
+  margin: 0;
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+}
+.av-cloud-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+.av-cloud-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 /* ===== shared ===== */
 .av-actions {
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
   flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .av-cloud-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .av-cloud-endpoint {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .av-cloud-endpoint-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* ===== Workspace starter (home) ===== */

@@ -41,6 +41,7 @@ export const en: Record<keyof typeof ja, string> = {
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
   "store.noWorkspace": "Select a Workspace first.",
+  "nav.cloudResources": "Cloud",
   "nav.runs": "Updates",
   "nav.connections": "Hosting access",
   "nav.billing": "Billing",
@@ -736,7 +737,8 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
   "conn.empty.title": "No hosting access yet",
-  "conn.empty.message": "Add access when a service needs a cloud account or key.",
+  "conn.empty.message":
+    "Add access when a service needs a cloud account or key.",
   "conn.test": "Check access",
   "conn.testing": "Checking...",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",
@@ -891,6 +893,38 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.title": "Display settings",
   "account.preferences.body": "Change language and appearance.",
 
+  // --- cloud resources -------------------------------------------------------------
+  "cloudResources.title": "Takosumi Cloud",
+  "cloudResources.subtitle":
+    "Endpoints and managed resources provided by Takosumi Cloud.",
+  "cloudResources.unavailable.title": "Takosumi Cloud only",
+  "cloudResources.unavailable.body":
+    "Cloud-only endpoints are not provided in this runtime.",
+  "cloudResources.error": "Could not load cloud resources: {message}",
+  "cloudResources.partialError": "A check failed: {message}",
+  "cloudResources.copied": "Copied.",
+  "cloudResources.status.ready": "Ready",
+  "cloudResources.status.check": "Needs check",
+  "cloudResources.baseUrl": "Base URL",
+  "cloudResources.protocol": "Protocol",
+  "cloudResources.provider": "Provider",
+  "cloudResources.capabilities": "Capabilities",
+  "cloudResources.ai.title": "AI Gateway",
+  "cloudResources.ai.subtitle": "OpenAI-compatible endpoint",
+  "cloudResources.ai.defaultModel": "Default model",
+  "cloudResources.ai.profiles": "Profiles",
+  "cloudResources.ai.providers": "Providers",
+  "cloudResources.ai.models": "Models",
+  "cloudResources.compat.title": "Cloudflare Compatibility API",
+  "cloudResources.compat.subtitle": "Cloudflare v4-compatible endpoint",
+  "cloudResources.compat.token": "Session",
+  "cloudResources.catalog.title": "Cloud extension catalog",
+  "cloudResources.catalog.subtitle": "Cloud-only features enabled here",
+  "cloudResources.catalog.configured": "Configured",
+  "cloudResources.catalog.missing": "Missing",
+  "cloudResources.catalog.generated": "Updated",
+  "cloudResources.catalog.extensions": "Extensions",
+
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",
   "billing.subtitle":
@@ -899,6 +933,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usageQuotaSubtitle":
     "Review this workspace's quota mode, available capacity, and usage.",
   "billing.mode.disabled": "Billing is disabled for this workspace.",
+  "billing.mode.checkoutOpen":
+    "You can add credits. Credit-balance enforcement is not enabled yet.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a credit balance.",
   "billing.loading": "Loading billing status...",

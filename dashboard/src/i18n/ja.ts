@@ -44,6 +44,7 @@ export const ja = {
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
+  "nav.cloudResources": "クラウド機能",
   "nav.runs": "更新履歴",
   "nav.connections": "ホスト接続",
   "nav.billing": "お支払い",
@@ -904,6 +905,38 @@ export const ja = {
   "account.preferences.title": "表示設定",
   "account.preferences.body": "言語と見た目を変更できます。",
 
+  // --- cloud resources -------------------------------------------------------------
+  "cloudResources.title": "Takosumi Cloud",
+  "cloudResources.subtitle":
+    "Takosumi Cloud が提供するエンドポイントと管理リソースです。",
+  "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
+  "cloudResources.unavailable.body":
+    "この実行環境では Cloud 専用エンドポイントは提供されていません。",
+  "cloudResources.error": "クラウド機能を読み込めませんでした: {message}",
+  "cloudResources.partialError": "一部の確認に失敗しました: {message}",
+  "cloudResources.copied": "コピーしました。",
+  "cloudResources.status.ready": "利用可能",
+  "cloudResources.status.check": "確認が必要",
+  "cloudResources.baseUrl": "Base URL",
+  "cloudResources.protocol": "プロトコル",
+  "cloudResources.provider": "Provider",
+  "cloudResources.capabilities": "対応機能",
+  "cloudResources.ai.title": "AI Gateway",
+  "cloudResources.ai.subtitle": "OpenAI 互換エンドポイント",
+  "cloudResources.ai.defaultModel": "既定モデル",
+  "cloudResources.ai.profiles": "接続先",
+  "cloudResources.ai.providers": "Providers",
+  "cloudResources.ai.models": "Models",
+  "cloudResources.compat.title": "Cloudflare Compatibility API",
+  "cloudResources.compat.subtitle": "Cloudflare v4 互換エンドポイント",
+  "cloudResources.compat.token": "セッション",
+  "cloudResources.catalog.title": "Cloud extension catalog",
+  "cloudResources.catalog.subtitle": "この環境で有効な Cloud 専用機能",
+  "cloudResources.catalog.configured": "設定済み",
+  "cloudResources.catalog.missing": "未設定",
+  "cloudResources.catalog.generated": "更新日時",
+  "cloudResources.catalog.extensions": "Extensions",
+
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",
   "billing.subtitle":
@@ -912,6 +945,8 @@ export const ja = {
   "billing.usageQuotaSubtitle":
     "このワークスペースの上限モード、利用可能な容量、使用量を確認します。",
   "billing.mode.disabled": "このワークスペースでは課金は無効です。",
+  "billing.mode.checkoutOpen":
+    "クレジットを追加できます。残高によるデプロイ制限はまだ有効ではありません。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce": "デプロイにはクレジット残高が必要です。",
   "billing.loading": "課金状態を読み込み中です...",
