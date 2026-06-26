@@ -135,6 +135,22 @@ type SmokeOutputAllowlist = Readonly<
     }
   >
 >;
+type PublicUrlCheck = {
+  readonly name: string;
+  readonly output: string;
+  readonly path: string;
+  readonly expectedStatus: number;
+  readonly bodyIncludes: readonly string[];
+};
+type PublicUrlCheckResult = {
+  readonly name: string;
+  readonly output: string;
+  readonly url: string;
+  readonly status: number;
+  readonly ok: true;
+  readonly bodyIncludes: readonly string[];
+  readonly bodyDigest: string;
+};
 
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
@@ -158,6 +174,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly verificationMode: SmokeVerificationMode;
   readonly vars: Readonly<Record<string, JsonSmokeValue>>;
   readonly outputAllowlist: SmokeOutputAllowlist;
+  readonly publicUrlChecks: readonly PublicUrlCheck[];
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
@@ -205,6 +222,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly deploymentLedger?: DeploymentLedgerVerificationResult;
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
+  readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
@@ -235,6 +253,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly verificationMode: SmokeVerificationMode;
     readonly varsDigest: string;
     readonly outputAllowlistNames: readonly string[];
+    readonly publicUrlCheckNames: readonly string[];
     readonly capsuleDir?: string;
     readonly sourceGitUrlDigest?: string;
     readonly sourceRef?: string;
@@ -280,6 +299,8 @@ interface CliArgs {
   readonly varsJsonFile?: string;
   readonly outputAllowlistJson?: string;
   readonly outputAllowlistJsonFile?: string;
+  readonly publicUrlChecksJson?: string;
+  readonly publicUrlChecksJsonFile?: string;
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
@@ -399,6 +420,7 @@ interface DeploymentLedgerVerificationResult {
   readonly applyRunId: string;
   readonly publicOutputNames: readonly string[];
   readonly publicOutputDigest: string;
+  readonly outputsPublic?: Readonly<Record<string, unknown>>;
 }
 
 interface ReleaseActivationVerificationResult {
@@ -649,6 +671,18 @@ export async function resolveOptions(
       fallback: defaultSmokeOutputAllowlist(),
     }),
   );
+  const publicUrlChecks = parsePublicUrlChecks(
+    await readJsonValueInput({
+      inline:
+        args.publicUrlChecksJson ?? env.TAKOSUMI_SMOKE_PUBLIC_URL_CHECKS_JSON,
+      file:
+        args.publicUrlChecksJsonFile ??
+        env.TAKOSUMI_SMOKE_PUBLIC_URL_CHECKS_JSON_FILE,
+      label: "public URL checks",
+      fallback: [],
+    }),
+    outputAllowlist,
+  );
   const appName =
     args.appName ??
     stringRecordValue(vars, "appName") ??
@@ -687,6 +721,7 @@ export async function resolveOptions(
     verificationMode,
     vars,
     outputAllowlist,
+    publicUrlChecks,
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
     ...(sourceGitUrl ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
@@ -762,7 +797,9 @@ export function dryRunResult(
         : "",
     opentofuApplyVerified: options.verificationMode === "opentofu",
     deploymentVerified: options.verificationMode === "cloudflare-worker",
-    publicUrlVerified: options.verificationMode === "cloudflare-worker",
+    publicUrlVerified:
+      options.verificationMode === "cloudflare-worker" ||
+      options.publicUrlChecks.length > 0,
     deploymentLedgerVerified: true,
     destroyVerified: true,
     ...(options.cloudflareResourcePreflight !== "none"
@@ -788,6 +825,19 @@ export function dryRunResult(
       publicOutputNames: Object.keys(options.outputAllowlist).sort(),
       publicOutputDigest: `sha256:${"0".repeat(64)}`,
     },
+    ...(options.publicUrlChecks.length > 0
+      ? {
+          publicUrlChecks: options.publicUrlChecks.map((check) => ({
+            name: check.name,
+            output: check.output,
+            url: dryRunPublicUrl(check),
+            status: check.expectedStatus,
+            ok: true as const,
+            bodyIncludes: check.bodyIncludes,
+            bodyDigest: `sha256:${"0".repeat(64)}`,
+          })),
+        }
+      : {}),
     ...(options.requireReleaseActivation
       ? {
           releaseActivation: {
@@ -833,6 +883,7 @@ export async function runPlatformControlPlaneSmoke(
   let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
   let deploymentLedger: DeploymentLedgerVerificationResult | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
+  let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -929,6 +980,16 @@ export async function runPlatformControlPlaneSmoke(
         applyRunId,
       });
     }
+    if (
+      options.verificationMode === "opentofu" &&
+      options.publicUrlChecks.length > 0
+    ) {
+      publicUrlChecks = await assertConfiguredPublicUrls(
+        options,
+        deploymentLedger.outputsPublic,
+      );
+      completeStep("publicUrlVerified");
+    }
     completeStep("deploymentLedgerVerified");
     if (options.requireReleaseActivation) {
       releaseActivation = await assertReleaseActivation(options, {
@@ -1024,6 +1085,7 @@ export async function runPlatformControlPlaneSmoke(
       deploymentLedger,
       releaseActivation,
       cloudflareResourcePreflight,
+      publicUrlChecks,
       capsuleGateStatus: "passed",
       policyStatus:
         completedApply.policyStatus === "deny" ||
@@ -1036,7 +1098,10 @@ export async function runPlatformControlPlaneSmoke(
           : "",
       opentofuApplyVerified: options.verificationMode === "opentofu",
       deploymentVerified: options.verificationMode === "cloudflare-worker",
-      publicUrlVerified: options.verificationMode === "cloudflare-worker",
+      publicUrlVerified:
+        options.verificationMode === "cloudflare-worker" ||
+        options.publicUrlChecks.length > 0,
+      publicUrlChecks,
       deploymentLedgerVerified: true,
       destroyVerified: true,
       ...(connectionId ? { connectionRevoked } : {}),
@@ -1100,6 +1165,7 @@ export async function runPlatformControlPlaneSmoke(
     deploymentLedger,
     releaseActivation,
     cloudflareResourcePreflight,
+    publicUrlChecks,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -1131,6 +1197,7 @@ function failedResult(
     readonly deploymentLedger?: DeploymentLedgerVerificationResult;
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
+    readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -1177,6 +1244,7 @@ function failedResult(
     deploymentLedger: input.deploymentLedger,
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
+    publicUrlChecks: input.publicUrlChecks,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl:
@@ -2085,6 +2153,85 @@ async function assertPublicWorkerUrl(
   );
 }
 
+function dryRunPublicUrl(check: PublicUrlCheck): string {
+  const path = check.path === "/" ? "" : check.path;
+  return `https://example.invalid${path}`;
+}
+
+async function assertConfiguredPublicUrls(
+  options: PlatformControlPlaneSmokeOptions,
+  outputsPublic: Readonly<Record<string, unknown>> | undefined,
+): Promise<readonly PublicUrlCheckResult[]> {
+  if (!outputsPublic) {
+    throw new Error(
+      "deployment ledger did not expose outputsPublic for URL checks",
+    );
+  }
+  const results: PublicUrlCheckResult[] = [];
+  for (const check of options.publicUrlChecks) {
+    const rawUrl = outputsPublic[check.output];
+    if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+      throw new Error(
+        `public URL check ${check.name} expected string output ${check.output}`,
+      );
+    }
+    const url = publicCheckUrl(rawUrl, check);
+    const response = await fetch(url, { headers: { accept: "text/html,*/*" } });
+    const body = await response.text();
+    if (response.status !== check.expectedStatus) {
+      throw new Error(
+        `public URL check ${check.name} returned HTTP ${response.status}; expected ${check.expectedStatus}`,
+      );
+    }
+    for (const marker of check.bodyIncludes) {
+      if (!body.includes(marker)) {
+        throw new Error(
+          `public URL check ${check.name} response did not include marker ${JSON.stringify(
+            marker,
+          )}: ${redactResponseSnippet(body)}`,
+        );
+      }
+    }
+    results.push({
+      name: check.name,
+      output: check.output,
+      url,
+      status: response.status,
+      ok: true,
+      bodyIncludes: check.bodyIncludes,
+      bodyDigest: sha256(body),
+    });
+  }
+  return results;
+}
+
+function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(
+      `public URL check ${check.name} requires http(s) URL output`,
+    );
+  }
+  if (url.username || url.password) {
+    throw new Error(
+      `public URL check ${check.name} URL output must not contain credentials`,
+    );
+  }
+  if (url.search) {
+    throw new Error(
+      `public URL check ${check.name} URL output must not contain a query string`,
+    );
+  }
+  if (check.path !== "/") {
+    url.pathname = `${url.pathname.replace(/\/+$/u, "")}/${check.path.replace(
+      /^\/+/u,
+      "",
+    )}`;
+  }
+  url.hash = "";
+  return url.toString();
+}
+
 async function assertDeploymentLedger(
   options: PlatformControlPlaneSmokeOptions,
   input: {
@@ -2225,6 +2372,7 @@ async function assertDeploymentLedger(
     applyRunId: input.applyRunId,
     publicOutputNames,
     publicOutputDigest: digestJson(outputsPublic),
+    outputsPublic,
   };
 }
 
@@ -2361,6 +2509,7 @@ async function assertGenericDeploymentLedger(
     applyRunId: input.applyRunId,
     publicOutputNames,
     publicOutputDigest: digestJson(outputsPublic),
+    outputsPublic,
   };
 }
 
@@ -3114,10 +3263,33 @@ async function readJsonRecordInput(input: {
   return input.fallback;
 }
 
+async function readJsonValueInput(input: {
+  readonly inline?: string;
+  readonly file?: string;
+  readonly label: string;
+  readonly fallback: JsonSmokeValue;
+}): Promise<JsonSmokeValue> {
+  if (input.inline !== undefined) {
+    return parseJsonValue(input.inline, input.label);
+  }
+  if (input.file !== undefined) {
+    return parseJsonValue(await readFile(input.file, "utf8"), input.label);
+  }
+  return input.fallback;
+}
+
 function parseJsonRecord(
   raw: string,
   label: string,
 ): Readonly<Record<string, JsonSmokeValue>> {
+  const parsed = parseJsonValue(raw, label);
+  if (!isJsonRecord(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed;
+}
+
+function parseJsonValue(raw: string, label: string): JsonSmokeValue {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -3128,8 +3300,8 @@ function parseJsonRecord(
       }`,
     );
   }
-  if (!isJsonRecord(parsed)) {
-    throw new Error(`${label} must be a JSON object`);
+  if (!isJsonSmokeValue(parsed)) {
+    throw new Error(`${label} must be JSON-compatible`);
   }
   return parsed;
 }
@@ -3166,6 +3338,97 @@ function parseOutputAllowlist(
     };
   }
   return out;
+}
+
+function parsePublicUrlChecks(
+  value: JsonSmokeValue,
+  outputAllowlist: SmokeOutputAllowlist,
+): readonly PublicUrlCheck[] {
+  if (Array.isArray(value)) {
+    return value.map((entry, index) =>
+      parsePublicUrlCheck(entry, index, outputAllowlist),
+    );
+  }
+  if (isRecord(value) && Object.keys(value).length === 0) return [];
+  throw new Error("public URL checks must be a JSON array");
+}
+
+function parsePublicUrlCheck(
+  value: JsonSmokeValue,
+  index: number,
+  outputAllowlist: SmokeOutputAllowlist,
+): PublicUrlCheck {
+  if (!isRecord(value)) {
+    throw new Error(`public URL checks[${index}] must be an object`);
+  }
+  const output = stringField(value, "output");
+  if (!output || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(output)) {
+    throw new Error(
+      `public URL checks[${index}].output must be an output name`,
+    );
+  }
+  if (!(output in outputAllowlist)) {
+    throw new Error(
+      `public URL checks[${index}].output must also be in the output allowlist`,
+    );
+  }
+  const name = stringField(value, "name") ?? output;
+  if (!/^[A-Za-z0-9_.-]{1,80}$/u.test(name)) {
+    throw new Error(`public URL checks[${index}].name is invalid`);
+  }
+  const path = stringField(value, "path") ?? "/";
+  if (!path.startsWith("/") || /[\0\r\n]/u.test(path)) {
+    throw new Error(`public URL checks[${index}].path must start with /`);
+  }
+  const expectedStatus = numberField(value, "expectedStatus") ?? 200;
+  if (
+    !Number.isInteger(expectedStatus) ||
+    expectedStatus < 100 ||
+    expectedStatus > 599
+  ) {
+    throw new Error(
+      `public URL checks[${index}].expectedStatus must be an HTTP status`,
+    );
+  }
+  const bodyIncludes = stringArrayField(value, "bodyIncludes");
+  return {
+    name,
+    output,
+    path,
+    expectedStatus,
+    bodyIncludes,
+  };
+}
+
+function stringField(
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function stringArrayField(
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+): readonly string[] {
+  const value = record[key];
+  if (value === undefined) return [];
+  if (
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string" && entry.length > 0)
+  ) {
+    return value;
+  }
+  throw new Error(`${key} must be a string array`);
 }
 
 function isJsonRecord(
@@ -3237,6 +3500,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly verificationMode: SmokeVerificationMode;
   readonly varsDigest: string;
   readonly outputAllowlistNames: readonly string[];
+  readonly publicUrlCheckNames: readonly string[];
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
@@ -3261,6 +3525,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     verificationMode: options.verificationMode,
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
+    publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
     ...(options.sourceMode === "upload"
       ? { capsuleDir: options.capsuleDir }
       : {}),
@@ -3331,7 +3596,10 @@ function requiredSteps(
     "plan",
     "apply",
     ...(options?.verificationMode === "opentofu"
-      ? ["opentofuApplyVerified"]
+      ? [
+          "opentofuApplyVerified",
+          ...(options.publicUrlChecks.length > 0 ? ["publicUrlVerified"] : []),
+        ]
       : ["deploymentVerified", "publicUrlVerified"]),
     "deploymentLedgerVerified",
   ];
@@ -3852,6 +4120,8 @@ Options:
   --vars-json-file <path>                         read OpenTofu variable object from a JSON file
   --output-allowlist-json <json>                  output projection object; default url + worker_name for the hello-worker smoke
   --output-allowlist-json-file <path>             read output projection object from a JSON file
+  --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[]} checks against allowlisted public URL outputs
+  --public-url-checks-json-file <path>            read public URL checks from a JSON file
   --require-release-activation <any|pending|succeeded|failed|none>
                                                    require a release_activation Activity event for the apply Run; default none
   --timeout-seconds <n>                           default 600

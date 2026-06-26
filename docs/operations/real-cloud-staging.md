@@ -318,6 +318,44 @@ bun run build
 Production `takos.jp` must point to `https://app.takosumi.com/install?...` with
 a release tag or commit SHA, not `main`, `latest`, or `HEAD`.
 
+## App public URL rehearsal
+
+The generic OpenTofu resource smoke proves that Takosumi can create and destroy
+provider resources, state, outputs, and audit records. It does not prove that a
+Capsule's application artifact is publicly reachable.
+
+For apps that publish a non-secret URL output such as `launch_url`,
+`public_url`, `app_url`, or `url`, add a public URL check to the same private
+evidence run:
+
+```bash
+bun run smoke:platform-control-plane -- \
+  --verification-mode opentofu \
+  --output-allowlist-json-file "$TAKOSUMI_PRIVATE/evidence/<app>-outputs.json" \
+  --public-url-checks-json-file "$TAKOSUMI_PRIVATE/evidence/<app>-public-url-checks.json"
+```
+
+`<app>-public-url-checks.json` is an array of checks. Each `output` must also be
+present in the output allowlist.
+
+```json
+[
+  {
+    "name": "launch",
+    "output": "launch_url",
+    "path": "/",
+    "expectedStatus": 200,
+    "bodyIncludes": ["Takos"]
+  }
+]
+```
+
+Do not use this check as proof for Takos or yurucommu until their
+`takosumi_release.post_apply` path has actually materialized the Worker
+artifact and the output points at the published origin. A resource-only
+OpenTofu apply with `publicUrlVerified=false` is still incomplete for app
+reachability.
+
 ## Non-goals
 
 - Do not use production `app.takosumi.com` as the first real-cloud test cell.
