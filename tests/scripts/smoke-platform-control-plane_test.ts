@@ -403,6 +403,55 @@ test("platform control-plane smoke can require public URL checks for generic Ope
   expect(result.inputs.publicUrlCheckNames).toEqual(["launch"]);
 });
 
+test("platform control-plane smoke uses configured public checks for app Workers", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      appName: "takos-app-public-url-test",
+      cloudflareConnectionMode: "generic-env",
+      verificationMode: "cloudflare-worker",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      outputAllowlistJson: JSON.stringify({
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string", required: true },
+      }),
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "health",
+          output: "url",
+          path: "/health",
+          expectedStatus: 200,
+          bodyIncludes: ['"status":"ok"'],
+        },
+      ]),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.steps).toContain("deploymentVerified");
+  expect(result.steps).toContain("publicUrlVerified");
+  expect(result.publicUrlVerified).toBe(true);
+  expect(result.publicUrlChecks).toEqual([
+    {
+      name: "health",
+      output: "url",
+      url: "https://example.invalid/health",
+      status: 200,
+      ok: true,
+      bodyIncludes: ['"status":"ok"'],
+      bodyDigest: `sha256:${"0".repeat(64)}`,
+    },
+  ]);
+});
+
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
   expect(
     shouldMarkPendingSmokeInstallationError(
