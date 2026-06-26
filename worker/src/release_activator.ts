@@ -40,7 +40,7 @@ export function createWebhookReleaseActivator(
   );
   const token = options.token.trim();
   if (!token) throw new Error("release activator token is required");
-  const fetcher = options.fetcher ?? fetch;
+  const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 3000);
   const timeoutMs = Math.max(pollIntervalMs, options.timeoutMs ?? 45 * 60_000);
   return {
@@ -364,9 +364,10 @@ async function pollReleaseActivatorJob(input: {
   readonly timeoutMs: number;
 }): Promise<ReleaseActivationResult> {
   const deadline = Date.now() + input.timeoutMs;
+  const fetcher = input.fetcher;
   while (Date.now() <= deadline) {
     await sleep(input.pollIntervalMs);
-    const response = await input.fetcher(
+    const response = await fetcher(
       input.job.statusUrl ?? statusUrlForJob(input.endpoint, input.job.jobId),
       {
         method: "GET",
