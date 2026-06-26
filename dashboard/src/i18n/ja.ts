@@ -908,7 +908,7 @@ export const ja = {
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
   "cloudResources.subtitle":
-    "API key、エンドポイント、使用量、Cloud リソースを確認します。",
+    "API key、今月の使用量、接続状態、Cloud リソースを確認します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -923,7 +923,7 @@ export const ja = {
   "cloudResources.capabilities": "対応機能",
   "cloudResources.keys.title": "API keys",
   "cloudResources.keys.subtitle":
-    "Cloud endpoints から使うキーを発行・確認します。",
+    "外部クライアントや provider で使うキーを発行・確認します。",
   "cloudResources.keys.scope": "read / write",
   "cloudResources.keys.defaultName": "Takosumi Cloud API key",
   "cloudResources.keys.name": "キー名",
@@ -947,23 +947,23 @@ export const ja = {
   "cloudResources.usage.kind.backupStorage": "Backup storage",
   "cloudResources.usage.kind.egress": "Egress",
   "cloudResources.ai.title": "AI Gateway",
-  "cloudResources.ai.subtitle": "OpenAI 互換エンドポイント",
+  "cloudResources.ai.subtitle": "接続状態と利用できるモデル",
   "cloudResources.ai.defaultModel": "既定モデル",
   "cloudResources.ai.profiles": "接続先",
-  "cloudResources.ai.providers": "Providers",
-  "cloudResources.ai.models": "Models",
-  "cloudResources.compat.title": "Cloudflare Compatibility API",
-  "cloudResources.compat.subtitle": "Cloudflare v4 互換エンドポイント",
-  "cloudResources.compat.token": "セッション",
+  "cloudResources.ai.providers": "接続先",
+  "cloudResources.ai.models": "モデル",
+  "cloudResources.compat.title": "Cloudflare 接続",
+  "cloudResources.compat.subtitle": "現在の endpoint と account",
+  "cloudResources.compat.token": "認証状態",
   "cloudResources.compat.account": "Account",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
-    "Takosumi Cloud 側にある互換リソースの一覧です。",
+    "Takosumi Cloud 側に作成済みのリソースです。",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
-  "cloudResources.inventory.names": "Resources",
+  "cloudResources.inventory.names": "名前",
   "cloudResources.docs.open": "docs を開く",
 
   // --- billing -------------------------------------------------------------------
