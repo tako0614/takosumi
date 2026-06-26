@@ -43,18 +43,22 @@ export type {
 
 export {
   assertObjectAddress,
-  CORE_CONDITION_REASONS,
   encodeObjectAddressName,
-  isCoreConditionReason,
   isObjectAddress,
   joinObjectAddressSegments,
   objectAddress,
   objectAddressSegment,
+  type ObjectAddress,
+} from "./object-address.ts";
+export {
+  CORE_CONDITION_REASONS,
+  isCoreConditionReason,
+  type CoreConditionReason,
+} from "./condition-reasons.ts";
+export {
   type CoreBindingResolutionInput,
   type CoreBindingValueResolution,
-  type CoreConditionReason,
-  type ObjectAddress,
-} from "./takosumi-v1.ts";
+} from "./binding-resolution.ts";
 export * from "./internal-api.ts";
 export * from "./runtime-agent.ts";
 export * from "./runtime-agent-lifecycle.ts";
