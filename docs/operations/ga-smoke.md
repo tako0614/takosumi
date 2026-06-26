@@ -102,6 +102,10 @@ non-destructive equivalent and record the final transcript in private evidence a
   evidence gate. Required only when `TAKOSUMI_RELEASE_ACTIVATOR_URL` is enabled;
   it proves successful activation, failed/pending activation surfacing, ledger
   independence, and payload redaction.
+- `bun run smoke:platform-control-plane -- --verification-mode opentofu
+--public-url-checks-json-file ...` — optional app reachability proof for
+  generic OpenTofu Capsules that publish a non-secret URL output. This is
+  separate from the default Layer 2 resource/run ledger smoke.
 - `bun run smoke:cloudflare` — live Cloudflare integration (Layer 1).
 - `bun run smoke:platform-control-plane` — live platform control-plane loop
   (Layer 2, the GA go/no-go).

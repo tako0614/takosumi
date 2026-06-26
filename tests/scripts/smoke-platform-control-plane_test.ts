@@ -340,6 +340,69 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
   ]);
 });
 
+test("platform control-plane smoke can require public URL checks for generic OpenTofu Capsules", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      appName: "takosumi-public-url-test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+      }),
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "launch",
+          output: "launch_url",
+          path: "/healthz",
+          expectedStatus: 204,
+          bodyIncludes: ["ok"],
+        },
+      ]),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(options.publicUrlChecks).toEqual([
+    {
+      name: "launch",
+      output: "launch_url",
+      path: "/healthz",
+      expectedStatus: 204,
+      bodyIncludes: ["ok"],
+    },
+  ]);
+  expect(result.steps).toEqual([
+    "providerConnectionNotRequired",
+    "scratchInstall",
+    "plan",
+    "apply",
+    "opentofuApplyVerified",
+    "publicUrlVerified",
+    "deploymentLedgerVerified",
+    "destroy",
+  ]);
+  expect(result.publicUrlVerified).toBe(true);
+  expect(result.publicUrlChecks).toEqual([
+    {
+      name: "launch",
+      output: "launch_url",
+      url: "https://example.invalid/healthz",
+      status: 204,
+      ok: true,
+      bodyIncludes: ["ok"],
+      bodyDigest: `sha256:${"0".repeat(64)}`,
+    },
+  ]);
+  expect(result.inputs.publicUrlCheckNames).toEqual(["launch"]);
+});
+
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
   expect(
     shouldMarkPendingSmokeInstallationError(
