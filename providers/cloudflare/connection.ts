@@ -75,6 +75,7 @@ export const cloudflareCredentialDriver = {
   /** Verifies an already-opened Cloudflare API token against the CF API. */
   verify(input: {
     readonly token: string;
+    readonly accountId?: string;
     readonly fetch: CloudflareFetch;
   }): Promise<CloudflareVerifyResult> {
     return verifyCloudflareToken(input);

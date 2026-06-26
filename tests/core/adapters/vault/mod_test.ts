@@ -342,6 +342,61 @@ test("test() verifies a cloudflare token via injected fetch and persists verifie
   expect(persisted?.verifiedAt).toBeDefined();
 });
 
+test("test() accepts a cloudflare oauth bearer when account access probe succeeds", async () => {
+  const calls: { url: string; auth: string | null }[] = [];
+  const fakeFetch = (input: string, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    calls.push({ url: input, auth: headers.get("authorization") });
+    if (input.endsWith("/user/tokens/verify")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: false,
+            errors: [{ code: 1000, message: "Invalid API Token" }],
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
+    if (input.endsWith("/accounts/acct_oauth")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ success: true, result: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }));
+  };
+  const { store, vault } = makeVault({ fetch: fakeFetch as never });
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: {
+      CLOUDFLARE_API_TOKEN: "wrangler-oauth-bearer",
+      CLOUDFLARE_ACCOUNT_ID: "acct_oauth",
+    },
+  });
+
+  const result = await vault.test(connection.id);
+  expect(result.status).toBe("verified");
+  expect(calls).toEqual([
+    {
+      url: "https://api.cloudflare.com/client/v4/user/tokens/verify",
+      auth: "Bearer wrangler-oauth-bearer",
+    },
+    {
+      url: "https://api.cloudflare.com/client/v4/accounts/acct_oauth",
+      auth: "Bearer wrangler-oauth-bearer",
+    },
+  ]);
+
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("verified");
+  expect(persisted?.verifiedAt).toBeDefined();
+});
+
 test("test() reaches verified for a generic-env provider connection (was permanently pending)", async () => {
   // Before the per-kind verify drivers, a generic_env_provider backing Connection fell
   // through to a `pending` "no verification driver" result and could NEVER

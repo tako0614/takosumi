@@ -28,6 +28,8 @@ const CLOUDFLARE_API_TOKENS_URL =
   "https://api.cloudflare.com/client/v4/user/tokens";
 const CLOUDFLARE_API_TOKEN_VERIFY_URL =
   "https://api.cloudflare.com/client/v4/user/tokens/verify";
+const CLOUDFLARE_ACCOUNTS_URL =
+  "https://api.cloudflare.com/client/v4/accounts";
 
 /**
  * Injected fetch seam so the driver is unit-testable without real network.
@@ -75,6 +77,8 @@ export interface MintCloudflareApiTokenInput {
 export interface VerifyCloudflareTokenInput {
   /** The decrypted CF API token to verify. */
   readonly token: string;
+  /** Optional account id used to verify Wrangler OAuth bearer access. */
+  readonly accountId?: string;
   readonly fetch: CloudflareFetch;
 }
 
@@ -256,6 +260,19 @@ export async function verifyCloudflareToken(
     };
   }
   if (!response.ok) {
+    const accountId = input.accountId;
+    if (accountId) {
+      const accountProbe = await verifyCloudflareAccountAccess({
+        token: input.token,
+        accountId,
+        fetch: input.fetch,
+      });
+      if (accountProbe.ok) return { ok: true };
+      return {
+        ok: false,
+        detail: `token verify returned http ${response.status}; ${accountProbe.detail}`,
+      };
+    }
     return {
       ok: false,
       detail: `token verify returned http ${response.status}`,
@@ -271,6 +288,49 @@ export async function verifyCloudflareToken(
   return {
     ok: false,
     detail: "token verify reported the token is not active",
+  };
+}
+
+async function verifyCloudflareAccountAccess(
+  input: VerifyCloudflareTokenInput & { readonly accountId: string },
+): Promise<CloudflareVerifyResult> {
+  let response: Response;
+  try {
+    response = await input.fetch(
+      `${CLOUDFLARE_ACCOUNTS_URL}/${encodeURIComponent(input.accountId)}`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${input.token}`,
+          "content-type": "application/json",
+        },
+      },
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `cloudflare account probe failed: ${errorMessage(error)}`,
+    };
+  }
+  if (!response.ok) {
+    return {
+      ok: false,
+      detail: `cloudflare account probe returned http ${response.status}`,
+    };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return {
+      ok: false,
+      detail: "cloudflare account probe returned non-JSON body",
+    };
+  }
+  if (isCloudflareApiSuccess(body)) return { ok: true };
+  return {
+    ok: false,
+    detail: "cloudflare account probe did not confirm account access",
   };
 }
 
@@ -325,6 +385,10 @@ function isCloudflareVerifyOk(body: unknown): boolean {
   const result = record.result;
   if (result === null || typeof result !== "object") return false;
   return (result as { status?: unknown }).status === "active";
+}
+
+function isCloudflareApiSuccess(body: unknown): boolean {
+  return isRecord(body) && body.success === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
