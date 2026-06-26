@@ -782,6 +782,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
     authKind: string | null;
     scopes: string | null;
     subject: string | null;
+    installationId: string | null;
+    spaceId: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
@@ -797,6 +799,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
         "x-takosumi-cloud-auth-kind": "spoofed",
         "x-takosumi-cloud-scopes": "admin",
         "x-takosumi-cloud-subject": "spoofed",
+        "x-takosumi-cloud-installation-id": "spoofed",
+        "x-takosumi-cloud-space-id": "spoofed",
       },
     }),
     {
@@ -816,6 +820,10 @@ test("Cloud-only extension routes receive platform auth context without raw sess
             authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
             scopes: request.headers.get("x-takosumi-cloud-scopes"),
             subject: request.headers.get("x-takosumi-cloud-subject"),
+            installationId: request.headers.get(
+              "x-takosumi-cloud-installation-id",
+            ),
+            spaceId: request.headers.get("x-takosumi-cloud-space-id"),
           });
           return Response.json({ object: "list", data: [] });
         },
@@ -834,6 +842,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       authenticated: true,
       authKind: "session",
       subject: "tsub_cloud_extension_smoke",
+      installationId: "inst_cloud_extension_smoke",
+      spaceId: "space_cloud_extension_smoke",
     }),
   );
   expect(response.status).toBe(200);
@@ -850,6 +860,8 @@ test("Cloud-only extension routes receive platform auth context without raw sess
       authKind: "session",
       scopes: null,
       subject: "tsub_cloud_extension_smoke",
+      installationId: "inst_cloud_extension_smoke",
+      spaceId: "space_cloud_extension_smoke",
     },
   ]);
 });
@@ -867,6 +879,8 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
     authKind: string | null;
     scopes: string | null;
     subject: string | null;
+    installationId: string | null;
+    spaceId: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
@@ -882,6 +896,8 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
         "x-takosumi-cloud-auth-kind": "spoofed",
         "x-takosumi-cloud-scopes": "admin",
         "x-takosumi-cloud-subject": "spoofed",
+        "x-takosumi-cloud-installation-id": "spoofed",
+        "x-takosumi-cloud-space-id": "spoofed",
       },
     }),
     {
@@ -901,6 +917,10 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
             authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
             scopes: request.headers.get("x-takosumi-cloud-scopes"),
             subject: request.headers.get("x-takosumi-cloud-subject"),
+            installationId: request.headers.get(
+              "x-takosumi-cloud-installation-id",
+            ),
+            spaceId: request.headers.get("x-takosumi-cloud-space-id"),
           });
           return Response.json(
             {
@@ -939,6 +959,8 @@ test("Cloud-only extension routes strip raw credentials even when auth fails", a
       authKind: null,
       scopes: null,
       subject: null,
+      installationId: null,
+      spaceId: null,
     },
   ]);
 });
@@ -1125,6 +1147,10 @@ test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async 
         client_id: "service-graph-service:takosumi.ai.gateway",
         scope: "ai.model ai.models.read",
         sub: "service-graph-service:inst_ai",
+        takosumi: {
+          installation_id: "inst_ai",
+          space_id: "space_ai",
+        },
       });
     },
   );
@@ -1133,6 +1159,8 @@ test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async 
     authenticated: true,
     authKind: "service-token",
     subject: "service-graph-service:inst_ai",
+    installationId: "inst_ai",
+    spaceId: "space_ai",
     scopes: ["ai.model", "ai.models.read"],
   });
   expect(introspectionRequests[0]?.body).toContain("token=taksrv_runtime");
@@ -1154,9 +1182,17 @@ test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async 
         client_id: "service-graph-service:takosumi.ai.gateway",
         scope: "ai.model ai.models.read",
         sub: "service-graph-service:inst_ai",
+        takosumi: {
+          installation_id: "inst_ai",
+          space_id: "space_ai",
+        },
       }),
   );
-  expect(headContext.authenticated).toBe(true);
+  expect(headContext).toMatchObject({
+    authenticated: true,
+    installationId: "inst_ai",
+    spaceId: "space_ai",
+  });
 
   const missingChatScope = await verifyPlatformCloudExtensionServiceAccessToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {

@@ -13,6 +13,13 @@ import {
   type TakosumiWorkersAiGatewayOptions,
   type TakosumiWorkersAiBindingProfile,
 } from "takosumi-contract/ai-gateway";
+import {
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  type GatewayResourceUsageMeter,
+} from "takosumi-contract/billing";
 import type { JsonObject, JsonValue } from "takosumi-contract";
 import {
   containsSecretLikeString,
@@ -186,6 +193,7 @@ export async function handleTakosumiAiGatewayRequest(
         config: options.config,
         fetcher: options.fetcher ?? fetch,
         workersAi: options.workersAi,
+        authContext: auth.context,
       });
     case "embeddings":
       return await forwardModelRequest({
@@ -194,6 +202,7 @@ export async function handleTakosumiAiGatewayRequest(
         config: options.config,
         fetcher: options.fetcher ?? fetch,
         workersAi: options.workersAi,
+        authContext: auth.context,
       });
   }
 }
@@ -266,6 +275,7 @@ function handleStatus(
         contextWindow: model.contextWindow,
         maxOutputTokens: model.maxOutputTokens,
         billingClass: model.billingClass,
+        billingCreditsPerRequest: model.billingCreditsPerRequest,
         metadata: model.metadata,
       })),
     })),
@@ -321,6 +331,7 @@ async function forwardModelRequest(input: {
   readonly config: TakosumiAiGatewayConfig;
   readonly fetcher: typeof fetch;
   readonly workersAi?: TakosumiWorkersAiBinding;
+  readonly authContext?: TakosumiAiGatewayAuthContext;
 }): Promise<Response> {
   const body = await readJsonRecord(input.request);
   if (!body) {
@@ -350,6 +361,7 @@ async function forwardModelRequest(input: {
       profile: selected.profile,
       model: selected.model,
       workersAi: input.workersAi,
+      authContext: input.authContext,
     });
   }
 
@@ -360,6 +372,7 @@ async function forwardModelRequest(input: {
     profile: selected.profile,
     model: selected.model,
     fetcher: input.fetcher,
+    authContext: input.authContext,
   });
 }
 
@@ -370,6 +383,7 @@ async function forwardOpenAiCompatibleRequest(input: {
   readonly profile: ResolvedOpenAiCompatibleProfile;
   readonly model: TakosumiAiGatewayModelAlias;
   readonly fetcher: typeof fetch;
+  readonly authContext?: TakosumiAiGatewayAuthContext;
 }): Promise<Response> {
   const upstreamBody = {
     ...input.body,
@@ -414,10 +428,17 @@ async function forwardOpenAiCompatibleRequest(input: {
     });
   }
 
-  return upstreamPassthroughResponse(upstreamResponse, {
-    provider: input.profile.provider,
-    publicModel: input.model.publicModel,
-  });
+  return withAiGatewayUsageHeaders(
+    upstreamPassthroughResponse(upstreamResponse, {
+      provider: input.profile.provider,
+      publicModel: input.model.publicModel,
+    }),
+    {
+      endpoint: input.endpoint,
+      model: input.model,
+      authContext: input.authContext,
+    },
+  );
 }
 
 async function forwardWorkersAiBindingRequest(input: {
@@ -426,6 +447,7 @@ async function forwardWorkersAiBindingRequest(input: {
   readonly profile: ResolvedWorkersAiBindingProfile;
   readonly model: TakosumiAiGatewayModelAlias;
   readonly workersAi?: TakosumiWorkersAiBinding;
+  readonly authContext?: TakosumiAiGatewayAuthContext;
 }): Promise<Response> {
   if (!input.workersAi) {
     return aiGatewayError(
@@ -471,12 +493,19 @@ async function forwardWorkersAiBindingRequest(input: {
       "upstream model provider returned an invalid response",
     );
   }
-  return jsonResponse(normalized, {
-    headers: aiGatewayProviderHeaders({
-      provider: input.profile.provider,
-      publicModel: input.model.publicModel,
+  return withAiGatewayUsageHeaders(
+    jsonResponse(normalized, {
+      headers: aiGatewayProviderHeaders({
+        provider: input.profile.provider,
+        publicModel: input.model.publicModel,
+      }),
     }),
-  });
+    {
+      endpoint: input.endpoint,
+      model: input.model,
+      authContext: input.authContext,
+    },
+  );
 }
 
 function selectModel(
@@ -636,6 +665,63 @@ function aiGatewayProviderHeaders(metadata: {
   headers.set("x-takosumi-ai-gateway-provider", metadata.provider);
   headers.set("x-takosumi-ai-gateway-model", metadata.publicModel);
   return headers;
+}
+
+function withAiGatewayUsageHeaders(
+  response: Response,
+  input: {
+    readonly endpoint: "chat.completions" | "embeddings";
+    readonly model: TakosumiAiGatewayModelAlias;
+    readonly authContext?: TakosumiAiGatewayAuthContext;
+  },
+): Response {
+  if (!response.ok || !input.authContext?.spaceId) return response;
+  const meters = aiGatewayUsageMeters(input);
+  if (meters.length === 0) return response;
+  const now = Date.now();
+  const periodEnd = new Date(now).toISOString();
+  const periodStart = new Date(now - 1).toISOString();
+  const headers = new Headers(response.headers);
+  headers.set(
+    TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+    input.authContext.spaceId,
+  );
+  headers.set(TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER, periodStart);
+  headers.set(TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER, periodEnd);
+  headers.set(
+    TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+    JSON.stringify(meters),
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function aiGatewayUsageMeters(input: {
+  readonly endpoint: "chat.completions" | "embeddings";
+  readonly model: TakosumiAiGatewayModelAlias;
+  readonly authContext?: TakosumiAiGatewayAuthContext;
+}): GatewayResourceUsageMeter[] {
+  const credits = input.model.billingCreditsPerRequest ?? 0;
+  const installationId = input.authContext?.installationId;
+  return [
+    {
+      ...(installationId ? { installationId } : {}),
+      meterId: aiGatewayUsageMeterId(input.model.publicModel, input.endpoint),
+      kind: "ai_request",
+      quantity: 1,
+      credits,
+    },
+  ];
+}
+
+function aiGatewayUsageMeterId(
+  publicModel: string,
+  endpoint: "chat.completions" | "embeddings",
+): string {
+  return `ai:${publicModel.replace(/[^a-zA-Z0-9_.:-]+/g, "-")}:${endpoint}:request`;
 }
 
 function upstreamPassthroughResponse(
@@ -863,6 +949,10 @@ function parseModels(
       maxOutputTokens: optionalPositiveInteger(entry.maxOutputTokens),
       billingClass:
         typeof entry.billingClass === "string" ? entry.billingClass : undefined,
+      billingCreditsPerRequest: parseOptionalNonNegativeInteger(
+        entry.billingCreditsPerRequest,
+        `AI Gateway profile ${profileId}.models[${index}].billingCreditsPerRequest`,
+      ),
       metadata: parsePublicMetadata(
         entry.metadata,
         `AI Gateway profile ${profileId}.models[${index}].metadata`,
@@ -1293,6 +1383,17 @@ function optionalPositiveInteger(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return undefined;
+  }
+  return value;
+}
+
+function parseOptionalNonNegativeInteger(
+  value: unknown,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a non-negative integer`);
   }
   return value;
 }

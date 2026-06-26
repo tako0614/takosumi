@@ -135,6 +135,14 @@ Billing: the secret is a Cloudflare API token, and Cloudflare bills the
 configured provider credits. The OSS platform worker does not parse this config
 or forward model requests by itself.
 
+Takosumi customer billing is explicit and separate from upstream provider
+billing. A model may set `billingCreditsPerRequest`; successful attributed
+`chat.completions` and `embeddings` calls then emit an internal Cloud extension
+usage report with `ai_request`. The platform worker records that report in the
+Workspace usage ledger and strips the internal headers before returning the
+client response. If the auth context has no `spaceId`, the AI Gateway does not
+emit a usage report because the request cannot be billed to a Workspace.
+
 `workers_ai_binding` profiles may set `gateway.id` to route `env.AI.run()`
 through Cloudflare AI Gateway from inside the Worker. Use `default` unless the
 operator has explicitly created a named gateway in the same Cloudflare account.
@@ -158,12 +166,14 @@ is rejected if it contains secret-shaped keys or values.
         "upstreamModel": "openai/gpt-4.1-mini",
         "endpoints": ["chat.completions"],
         "default": true,
-        "billingClass": "operator-paid-preview"
+        "billingClass": "operator-paid-preview",
+        "billingCreditsPerRequest": 2
       },
       {
         "publicModel": "anthropic/sonnet",
         "upstreamModel": "anthropic/claude-sonnet-4-5",
-        "endpoints": ["chat.completions"]
+        "endpoints": ["chat.completions"],
+        "billingCreditsPerRequest": 4
       }
     ]
   },
@@ -183,7 +193,8 @@ is rejected if it contains secret-shaped keys or values.
         "publicModel": "workers-ai/llama-3.1-8b-instruct-fast",
         "upstreamModel": "@cf/meta/llama-3.1-8b-instruct-fast",
         "endpoints": ["chat.completions"],
-        "default": true
+        "default": true,
+        "billingCreditsPerRequest": 1
       },
       {
         "publicModel": "workers-ai/bge-base-en-v1.5",

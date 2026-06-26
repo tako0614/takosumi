@@ -136,6 +136,15 @@ export interface GatewayResourceUsageMeter {
   readonly meterId: string;
 }
 
+export const TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
+  "x-takosumi-cloud-usage-space-id";
+export const TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
+  "x-takosumi-cloud-usage-period-start";
+export const TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
+  "x-takosumi-cloud-usage-period-end";
+export const TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER =
+  "x-takosumi-cloud-usage-meters";
+
 export interface InvoiceUsageReconciliation {
   readonly invoiceId: string;
   readonly periodStart: string;

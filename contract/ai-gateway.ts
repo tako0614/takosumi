@@ -55,6 +55,12 @@ export interface TakosumiAiGatewayModelAlias {
   readonly maxOutputTokens?: number;
   readonly billingClass?: string;
   /**
+   * Operator-defined Takosumi credits charged for each successful model request
+   * emitted into the Cloud extension usage ledger. Upstream provider billing is
+   * still handled by the operator account.
+   */
+  readonly billingCreditsPerRequest?: number;
+  /**
    * Public model metadata returned from /gateway/ai/v1/models.
    * Must contain only display/protocol metadata, never secrets, bearer tokens,
    * API keys, credential URLs, or secret-shaped key names.
@@ -148,6 +154,7 @@ export interface TakosumiAiGatewayStatusResponse {
       readonly contextWindow?: number;
       readonly maxOutputTokens?: number;
       readonly billingClass?: string;
+      readonly billingCreditsPerRequest?: number;
       readonly metadata?: JsonObject;
     }[];
   }[];

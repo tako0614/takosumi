@@ -43,6 +43,12 @@ import type {
   GatewayResourceUsageMeter,
 } from "takosumi-contract/billing";
 import {
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+} from "takosumi-contract/billing";
+import {
   AI_GATEWAY_BASE_PATH,
   CLOUDFLARE_COMPAT_BASE_PATH,
   isPlatformCloudExtensionCatalogPath,
@@ -986,6 +992,8 @@ export interface PlatformCloudExtensionSessionContext {
   readonly authenticated: boolean;
   readonly authKind?: "service-token" | "personal-access-token" | "session";
   readonly subject?: string;
+  readonly installationId?: string;
+  readonly spaceId?: string;
   readonly scopes?: readonly string[];
 }
 
@@ -1011,13 +1019,13 @@ type PlatformCloudExtensionUsageOperationsInput =
   | (() => Promise<PlatformCloudExtensionUsageOperations>);
 
 export const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
-  "x-takosumi-cloud-usage-space-id";
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER;
 export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
-  "x-takosumi-cloud-usage-period-start";
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER;
 export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
-  "x-takosumi-cloud-usage-period-end";
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER;
 export const PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER =
-  "x-takosumi-cloud-usage-meters";
+  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER;
 
 const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
@@ -1031,6 +1039,9 @@ const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
 const PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER = "x-takosumi-cloud-subject";
 const PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER = "x-takosumi-cloud-auth-kind";
 const PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER = "x-takosumi-cloud-scopes";
+const PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER =
+  "x-takosumi-cloud-installation-id";
+const PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER = "x-takosumi-cloud-space-id";
 const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "authorization",
   "cookie",
@@ -1045,6 +1056,8 @@ const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
   PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
   PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
+  PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
+  PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
 ] as const;
 
 export async function requestWithPlatformCloudExtensionAuthContext(
@@ -1081,6 +1094,18 @@ export async function requestWithPlatformCloudExtensionAuthContext(
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
       safeCloudExtensionHeaderValue(session.subject),
+    );
+  }
+  if (session.installationId) {
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
+      safeCloudExtensionHeaderValue(session.installationId),
+    );
+  }
+  if (session.spaceId) {
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
+      safeCloudExtensionHeaderValue(session.spaceId),
     );
   }
   return clonePlatformCloudExtensionRequest(request, headers);
@@ -1415,14 +1440,21 @@ export async function verifyPlatformCloudExtensionServiceAccessToken(
     }
     const subject = record.sub;
     const scopes = platformCloudExtensionScopes(scope);
+    const takosumi = platformCloudExtensionTakosumiMetadata(record);
     return typeof subject === "string" && subject.length > 0
       ? {
           authenticated: true,
           authKind: "service-token",
           subject,
+          ...takosumi,
           scopes,
         }
-      : { authenticated: true, authKind: "service-token", scopes };
+      : {
+          authenticated: true,
+          authKind: "service-token",
+          ...takosumi,
+          scopes,
+        };
   } catch {
     return { authenticated: false };
   }
@@ -1482,17 +1514,47 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
     }
     const subject = record.sub;
     const scopes = platformCloudExtensionScopes(scope);
+    const takosumi = platformCloudExtensionTakosumiMetadata(record);
     return typeof subject === "string" && subject.length > 0
       ? {
           authenticated: true,
           authKind: "personal-access-token",
           subject,
+          ...takosumi,
           scopes,
         }
-      : { authenticated: true, authKind: "personal-access-token", scopes };
+      : {
+          authenticated: true,
+          authKind: "personal-access-token",
+          ...takosumi,
+          scopes,
+        };
   } catch {
     return { authenticated: false };
   }
+}
+
+function platformCloudExtensionTakosumiMetadata(
+  record: Record<string, unknown>,
+): { readonly installationId?: string; readonly spaceId?: string } {
+  const takosumi = record.takosumi;
+  if (!takosumi || typeof takosumi !== "object" || Array.isArray(takosumi)) {
+    return {};
+  }
+  const metadata = takosumi as Record<string, unknown>;
+  const installationId =
+    typeof metadata.installation_id === "string" &&
+    metadata.installation_id.trim()
+      ? metadata.installation_id.trim()
+      : undefined;
+  const spaceId =
+    typeof metadata.space_id === "string" && metadata.space_id.trim()
+      ? metadata.space_id.trim()
+      : undefined;
+  return {
+    ...(installationId ? { installationId } : {}),
+    ...(spaceId ? { spaceId } : {}),
+  };
 }
 
 async function defaultPlatformCloudExtensionIntrospectFetch(
