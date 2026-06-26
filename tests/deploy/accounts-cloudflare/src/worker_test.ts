@@ -4,7 +4,7 @@ import {
   generateIdentity,
   identityToRecipient,
 } from "age-encryption";
-import { test } from "bun:test";
+import { afterEach, test } from "bun:test";
 import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
@@ -28,6 +28,20 @@ import type {
   D1ExecResult,
   D1PreparedStatement,
 } from "@takosjp/takosumi-accounts-service";
+// Test-only reset for the process-global session-hash-salt singleton. Imported
+// from the source path because it is an internal test helper not re-exported by
+// the package umbrella.
+import { __resetSessionHashSaltConfigForTesting } from "../../../../accounts/service/src/session-hash-salt.ts";
+
+// `registerSessionHashSaltConfig` mutates a process-global singleton shared by
+// every test file in the same Bun process. Several tests below register a salt;
+// reset after each so the registration never leaks into a later test or file.
+// Without this, the "requires a session hash salt outside local substrate"
+// guard above (and the account-plane handler tests) would intermittently see a
+// salt configured by an unrelated, earlier-running test file.
+afterEach(() => {
+  __resetSessionHashSaltConfigForTesting();
+});
 
 test("Cloudflare Accounts Worker keeps edge health local", async () => {
   const d1 = new InitOnlyD1Database();
