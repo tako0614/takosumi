@@ -16,6 +16,27 @@ import type {
   D1Result,
 } from "../../../worker/src/bindings.ts";
 
+/**
+ * Cloudflare D1 enforces hard per-query limits that the in-process `bun:sqlite`
+ * engine (like libsql / better-sqlite3) does NOT, so a query that exceeds them
+ * passes tests but fails at runtime with a `D1_ERROR` 500. These guards
+ * reproduce the two limits we have actually hit in production so violations fail
+ * loudly in tests instead of leaking to prod.
+ *
+ * 1. At most 100 bound parameters per statement. Real D1 throws
+ *    "D1_ERROR: too many SQL variables". A Drizzle/SQL `IN (...)` over an
+ *    unbounded id list is the usual offender; it must be chunked (<=~90).
+ * 2. A LIKE pattern-complexity ceiling. SQLite rejects overly complex patterns
+ *    with "LIKE or GLOB pattern too complex"; D1's effective ceiling is far
+ *    lower than bun:sqlite's, and a value-derived `%<long needle>%` pattern is
+ *    the realistic trigger (use `instr()` for literal substring search instead).
+ *    We approximate the limit with the project's documented heuristic —
+ *    pattern length x wildcard (`%`/`_`) count — and reject above ~7500. A
+ *    string with no wildcards has complexity 0, so plain params never trip.
+ */
+const D1_MAX_BOUND_PARAMS = 100;
+const D1_MAX_LIKE_COMPLEXITY = 7500;
+
 export class SqliteFakeD1 implements D1Database {
   readonly #db = new Database(":memory:");
 
@@ -95,8 +116,48 @@ class SqliteFakeStatement implements D1PreparedStatement {
   // round-trip as SQL NULL exactly like the real D1 binder does. The cast is
   // safe: the store only ever binds string | number | null.
   #params(): SQLQueryBindings[] {
+    this.#enforceD1Limits();
     return this.#bound.map((value) =>
       value === undefined ? null : value
     ) as SQLQueryBindings[];
+  }
+
+  // Reproduce the D1-only hard limits that bun:sqlite silently tolerates so a
+  // query that would 500 on production D1 fails the test instead. Runs on the
+  // single execution chokepoint (every first/all/run/raw path calls #params()).
+  #enforceD1Limits(): void {
+    // (1) Cloudflare D1: at most 100 bound parameters per statement.
+    if (this.#bound.length > D1_MAX_BOUND_PARAMS) {
+      throw new Error(
+        `D1_ERROR: too many SQL variables: statement bound ${this.#bound.length} ` +
+          `parameters but D1 allows at most ${D1_MAX_BOUND_PARAMS} per query ` +
+          `(chunk the IN (...) / id list)`,
+      );
+    }
+    // (2) Cloudflare D1: LIKE pattern-complexity ceiling. Value-derived patterns
+    // arrive as bound params; a literal pattern lives in the SQL text. Check
+    // both. Complexity = length x wildcard count, so plain (wildcard-free)
+    // strings score 0 and never trip; only an actual %...% / _..._ pattern can.
+    if (/\bLIKE\b/i.test(this.query)) {
+      const patterns: string[] = [];
+      for (const value of this.#bound) {
+        if (typeof value === "string") patterns.push(value);
+      }
+      for (const match of this.query.matchAll(/\bLIKE\s+'((?:[^']|'')*)'/gi)) {
+        patterns.push(match[1] ?? "");
+      }
+      for (const pattern of patterns) {
+        const wildcards = (pattern.match(/[%_]/g) ?? []).length;
+        const complexity = pattern.length * wildcards;
+        if (complexity > D1_MAX_LIKE_COMPLEXITY) {
+          throw new Error(
+            `D1_ERROR: LIKE or GLOB pattern too complex: pattern length ` +
+              `${pattern.length} x ${wildcards} wildcards = ${complexity} ` +
+              `exceeds the D1 cap of ${D1_MAX_LIKE_COMPLEXITY} ` +
+              `(use instr() for literal substring search)`,
+          );
+        }
+      }
+    }
   }
 }
