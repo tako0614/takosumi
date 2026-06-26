@@ -66,6 +66,20 @@ export default function BillingTab(props: { readonly spaceId: string }) {
 
   const mode = createMemo(() => billing()?.settings?.mode);
   const balance = createMemo(() => billing()?.balance);
+  // This-month usage rollup, surfaced next to the balance so billing is the
+  // single home for usage (the detailed ledger stays folded below). Folded in
+  // from the retired standalone Cloud screen.
+  const monthCredits = createMemo(() =>
+    sumBy((usage() ?? []).filter(isThisMonthUsage), (e) => e.credits),
+  );
+  const gatewayCredits = createMemo(() =>
+    sumBy(
+      (usage() ?? []).filter(
+        (e) => isThisMonthUsage(e) && e.kind.startsWith("gateway_"),
+      ),
+      (e) => e.credits,
+    ),
+  );
   const subscriptions = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "subscription"),
   );
@@ -84,11 +98,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     if (billing.error)
       return t("billing.error", { message: errorMessage(billing.error) });
     const currentMode = mode() ?? "disabled";
-    if (
-      cloudBilling() &&
-      currentMode === "disabled" &&
-      hasBillingCatalog()
-    ) {
+    if (cloudBilling() && currentMode === "disabled" && hasBillingCatalog()) {
       return t("billing.mode.checkoutOpen");
     }
     return t(MODE_KEY[currentMode] ?? "billing.mode.disabled");
@@ -274,6 +284,18 @@ export default function BillingTab(props: { readonly spaceId: string }) {
                   label: availableLabel(),
                   value: formatBillingNumber(balance()?.availableCredits ?? 0),
                 },
+                ...(cloudBilling()
+                  ? [
+                      {
+                        label: t("billing.usage.thisMonth"),
+                        value: formatBillingNumber(monthCredits()),
+                      },
+                      {
+                        label: t("billing.usage.gateway"),
+                        value: formatBillingNumber(gatewayCredits()),
+                      },
+                    ]
+                  : []),
               ]}
             />
             <Show when={(balance()?.reservedCredits ?? 0) > 0}>
@@ -432,4 +454,18 @@ function formatBillingNumber(value: number): string {
   return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
     maximumFractionDigits: 3,
   }).format(value);
+}
+
+function isThisMonthUsage(event: UsageEvent): boolean {
+  const created = new Date(event.createdAt);
+  if (Number.isNaN(created.getTime())) return false;
+  const now = new Date();
+  return (
+    created.getUTCFullYear() === now.getUTCFullYear() &&
+    created.getUTCMonth() === now.getUTCMonth()
+  );
+}
+
+function sumBy<T>(items: readonly T[], fn: (item: T) => number): number {
+  return items.reduce((sum, item) => sum + fn(item), 0);
 }

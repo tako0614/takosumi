@@ -1,3 +1,9 @@
+/**
+ * Takosumi Cloud connection panel — embedded at the bottom of the Connections
+ * (接続) tab when running on Takosumi Cloud. The app surface stays operational:
+ * API keys, endpoint status, copyable base URLs, and current resource counts.
+ * Compatibility contracts and route-level specs live in docs.
+ */
 import "../../styles/wave-c.css";
 import {
   createMemo,
@@ -11,29 +17,24 @@ import {
 import type { JSX } from "solid-js";
 import {
   Activity,
-  BarChart3,
   BrainCircuit,
   CheckCircle2,
   Cloud,
   Copy,
   Database,
-  ExternalLink,
   HardDrive,
   KeyRound,
   RefreshCw,
   ShieldCheck,
   Trash2,
 } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
-import Page from "../account/components/auth/Page.tsx";
 import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
-import { currentSpaceId } from "../../lib/space-state.ts";
 import {
   createCloudApiKey,
+  type CloudConnectionSnapshot,
   type CloudResourceResult,
-  type CloudResourcesSnapshot,
+  getCloudConnectionSnapshot,
   revokeCloudApiKey,
-  getCloudResourcesSnapshot,
 } from "../../lib/cloud-resources.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
 import {
@@ -42,28 +43,18 @@ import {
   Card,
   CardHeader,
   CardSection,
-  EmptyState,
   FormField,
   Input,
   KVList,
-  PageHeader,
   Skeleton,
   Toast,
 } from "../../components/ui/index.ts";
-import type { UsageEvent } from "../../lib/control-api.ts";
 import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-contract";
 
-export default function CloudResourcesView() {
-  return <Page title={t("cloudResources.title")}>{() => <Inner />}</Page>;
-}
-
-function Inner() {
+export default function CloudConnectionPanel() {
   const [snapshot, { refetch }] = createResource(
-    () =>
-      isTakosumiCloudRuntime()
-        ? { spaceId: currentSpaceId() || undefined }
-        : undefined,
-    getCloudResourcesSnapshot,
+    () => (isTakosumiCloudRuntime() ? true : undefined),
+    getCloudConnectionSnapshot,
   );
   const [copied, setCopied] = createSignal<string | null>(null);
 
@@ -76,72 +67,53 @@ function Inner() {
   };
 
   return (
-    <AppShell>
-      <PageHeader
-        title={t("cloudResources.title")}
-        subtitle={t("cloudResources.subtitle")}
-        actions={
-          <div class="av-actions">
-            <Button
-              variant="ghost"
-              href="https://takosumi.com/docs/reference/cloud-endpoints"
-              icon={<ExternalLink size={16} />}
-            >
-              {t("cloudResources.docs.open")}
-            </Button>
-            <Button
-              variant="secondary"
-              icon={<RefreshCw size={16} />}
-              onClick={() => void refetch()}
-              disabled={!isTakosumiCloudRuntime() || snapshot.loading}
-            >
-              {t("common.retry")}
-            </Button>
-          </div>
-        }
-      />
+    <section class="av-cloud-stack">
+      <div class="av-cloud-section-head">
+        <div>
+          <h2 class="tg-card-title">{t("cloudResources.title")}</h2>
+          <p class="muted">{t("cloudResources.subtitle")}</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<RefreshCw size={16} />}
+          onClick={() => void refetch()}
+          disabled={snapshot.loading}
+        >
+          {t("common.retry")}
+        </Button>
+      </div>
 
-      <Show
-        when={isTakosumiCloudRuntime()}
-        fallback={
-          <EmptyState
-            icon={<Cloud size={24} />}
-            title={t("cloudResources.unavailable.title")}
-            message={t("cloudResources.unavailable.body")}
-          />
-        }
-      >
-        <Switch>
-          <Match when={snapshot.loading}>
-            <div class="av-cloud-grid">
-              <Skeleton variant="card" count={3} />
-            </div>
-          </Match>
-          <Match when={snapshot.error}>
-            <Toast tone="error">
-              {t("cloudResources.error", {
-                message: errorMessage(snapshot.error),
-              })}
-            </Toast>
-          </Match>
-          <Match when={snapshot()}>
-            {(loaded) => (
-              <CloudResourceBody
-                snapshot={loaded()}
-                copied={copied()}
-                copyText={copyText}
-                refetch={() => void refetch()}
-              />
-            )}
-          </Match>
-        </Switch>
-      </Show>
-    </AppShell>
+      <Switch>
+        <Match when={snapshot.loading}>
+          <div class="av-cloud-grid">
+            <Skeleton variant="card" count={3} />
+          </div>
+        </Match>
+        <Match when={snapshot.error}>
+          <Toast tone="error">
+            {t("cloudResources.error", {
+              message: errorMessage(snapshot.error),
+            })}
+          </Toast>
+        </Match>
+        <Match when={snapshot()}>
+          {(loaded) => (
+            <CloudConnectionBody
+              snapshot={loaded()}
+              copied={copied()}
+              copyText={copyText}
+              refetch={() => void refetch()}
+            />
+          )}
+        </Match>
+      </Switch>
+    </section>
   );
 }
 
-function CloudResourceBody(props: {
-  readonly snapshot: CloudResourcesSnapshot;
+function CloudConnectionBody(props: {
+  readonly snapshot: CloudConnectionSnapshot;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
@@ -182,30 +154,12 @@ function CloudResourceBody(props: {
       ? (props.snapshot.compatToken.data.result?.status ?? "active")
       : undefined,
   );
-  const usage = createMemo(() =>
-    props.snapshot.usage.usage.ok ? props.snapshot.usage.usage.data : [],
-  );
-  const monthUsage = createMemo(() => usage().filter(isThisMonthUsage));
-  const monthCredits = createMemo(() =>
-    sumBy(monthUsage(), (event) => event.credits),
-  );
-  const gatewayCredits = createMemo(() =>
-    sumBy(
-      monthUsage().filter((event) => event.kind.startsWith("gateway_")),
-      (event) => event.credits,
-    ),
-  );
-  const recentUsage = createMemo(() =>
-    [...usage()]
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-      .slice(0, 4),
-  );
   const tokens = createMemo(() =>
     props.snapshot.accountTokens.ok ? props.snapshot.accountTokens.data : [],
   );
 
   return (
-    <div class="av-cloud-stack">
+    <>
       <Show when={props.copied}>
         <Toast tone="success">{t("cloudResources.copied")}</Toast>
       </Show>
@@ -218,51 +172,6 @@ function CloudResourceBody(props: {
           refetch={props.refetch}
           result={props.snapshot.accountTokens}
         />
-
-        <Card class="av-cloud-card">
-          <CardHeader
-            title={
-              <IconTitle
-                icon={<BarChart3 size={18} />}
-                label={t("cloudResources.usage.title")}
-              />
-            }
-            subtitle={
-              props.snapshot.usage.spaceId
-                ? t("cloudResources.usage.subtitle")
-                : t("cloudResources.usage.noWorkspace")
-            }
-          />
-          <KVList
-            items={[
-              {
-                label: t("cloudResources.usage.monthCredits"),
-                value: formatNumber(monthCredits()),
-              },
-              {
-                label: t("cloudResources.usage.gatewayCredits"),
-                value: formatNumber(gatewayCredits()),
-              },
-              {
-                label: t("cloudResources.usage.balance"),
-                value: props.snapshot.usage.billing.ok
-                  ? formatNumber(
-                      props.snapshot.usage.billing.data.balance
-                        ?.availableCredits ?? 0,
-                    )
-                  : "—",
-              },
-            ]}
-          />
-          <Show when={recentUsage().length > 0}>
-            <CardSection>
-              <UsageList rows={recentUsage()} />
-            </CardSection>
-          </Show>
-          <Show when={props.snapshot.usage.spaceId}>
-            <ResultNotice result={props.snapshot.usage.usage} />
-          </Show>
-        </Card>
 
         <Card class="av-cloud-card">
           <CardHeader
@@ -286,7 +195,7 @@ function CloudResourceBody(props: {
             items={[
               {
                 label: t("cloudResources.ai.defaultModel"),
-                value: defaultModel() ?? "takosumi/default",
+                value: defaultModel() ?? "—",
               },
               {
                 label: t("cloudResources.ai.models"),
@@ -294,16 +203,19 @@ function CloudResourceBody(props: {
               },
               {
                 label: t("cloudResources.ai.providers"),
-                value: providers().join(", ") || "—",
+                value: String(providers().length),
               },
             ]}
           />
-          <CardSection>
-            <ChipBlock
-              title={t("cloudResources.ai.models")}
-              values={models().map((model) => model.id)}
-            />
-          </CardSection>
+          <Show when={models().length > 0}>
+            <details class="wb-disclosure av-cloud-detail">
+              <summary>{t("cloudResources.ai.modelDetails")}</summary>
+              <ChipBlock
+                title={t("cloudResources.ai.models")}
+                values={models().map((model) => model.id)}
+              />
+            </details>
+          </Show>
           <ResultNotice result={props.snapshot.aiStatus} />
         </Card>
 
@@ -328,10 +240,6 @@ function CloudResourceBody(props: {
           <KVList
             items={[
               {
-                label: t("cloudResources.provider"),
-                value: props.snapshot.compatRoute?.provider ?? "cloudflare",
-              },
-              {
                 label: t("cloudResources.compat.token"),
                 value: tokenStatus() ?? "—",
               },
@@ -346,7 +254,7 @@ function CloudResourceBody(props: {
 
         <CloudInventoryCard snapshot={props.snapshot} />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -355,9 +263,7 @@ function ApiKeysCard(props: {
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
-  readonly result: CloudResourceResult<
-    readonly TakosumiAccountsPatMetadata[]
-  >;
+  readonly result: CloudResourceResult<readonly TakosumiAccountsPatMetadata[]>;
 }): JSX.Element {
   const [name, setName] = createSignal(t("cloudResources.keys.defaultName"));
   const [busy, setBusy] = createSignal(false);
@@ -485,26 +391,8 @@ function ApiKeysCard(props: {
   );
 }
 
-function UsageList(props: { readonly rows: readonly UsageEvent[] }): JSX.Element {
-  return (
-    <div class="av-cloud-usage-list">
-      <For each={props.rows}>
-        {(row) => (
-          <div class="av-cloud-usage-row">
-            <span>{usageKindLabel(row.kind)}</span>
-            <span class="muted">
-              {formatNumber(row.quantity)} / {formatNumber(row.credits)}
-            </span>
-            <span class="muted">{formatDateTime(row.createdAt)}</span>
-          </div>
-        )}
-      </For>
-    </div>
-  );
-}
-
 function CloudInventoryCard(props: {
-  readonly snapshot: CloudResourcesSnapshot;
+  readonly snapshot: CloudConnectionSnapshot;
 }): JSX.Element {
   const inventory = props.snapshot.compatInventory;
   const resourceCards = createMemo(() => [
@@ -567,18 +455,22 @@ function CloudInventoryCard(props: {
                   {resource.result.ok ? resource.result.data.length : "!"}
                 </Badge>
               </div>
+              <Show when={!resource.result.ok}>
+                <span class="muted">{resultError(resource.result)}</span>
+              </Show>
               <Show
-                when={resource.result.ok}
-                fallback={
-                  <span class="muted">
-                    {resource.result.ok ? "" : resource.result.error}
-                  </span>
+                when={
+                  resource.result.ok &&
+                  resource.names.filter(Boolean).length > 0
                 }
               >
-                <ChipBlock
-                  title={t("cloudResources.inventory.names")}
-                  values={resource.names.filter(Boolean).slice(0, 6)}
-                />
+                <details class="wb-disclosure av-cloud-detail">
+                  <summary>{t("cloudResources.inventory.names")}</summary>
+                  <ChipBlock
+                    title={resource.label}
+                    values={resource.names.filter(Boolean).slice(0, 6)}
+                  />
+                </details>
               </Show>
             </div>
           )}
@@ -670,12 +562,24 @@ function ResultNotice<T>(props: {
       <CardSection>
         <Toast tone="error">
           {t("cloudResources.partialError", {
-            message: props.result.ok ? "" : props.result.error,
+            message: props.result.ok
+              ? ""
+              : cloudResourceErrorMessage(props.result.error),
           })}
         </Toast>
       </CardSection>
     </Show>
   );
+}
+
+function cloudResourceErrorMessage(message: string): string {
+  if (message === "not configured") return t("cloudResources.notConfigured");
+  if (message === "session expired") return t("cloudResources.sessionExpired");
+  return message;
+}
+
+function resultError(result: CloudResourceResult<unknown>): string {
+  return result.ok ? "" : cloudResourceErrorMessage(result.error);
 }
 
 function endpointUrl(
@@ -706,45 +610,4 @@ function workerScriptName(script: Readonly<Record<string, unknown>>): string {
     if (typeof value === "string" && value) return value;
   }
   return "";
-}
-
-function isThisMonthUsage(event: UsageEvent): boolean {
-  const created = new Date(event.createdAt);
-  if (Number.isNaN(created.getTime())) return false;
-  const now = new Date();
-  return (
-    created.getUTCFullYear() === now.getUTCFullYear() &&
-    created.getUTCMonth() === now.getUTCMonth()
-  );
-}
-
-function sumBy<T>(items: readonly T[], fn: (item: T) => number): number {
-  return items.reduce((sum, item) => sum + fn(item), 0);
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 2,
-  }).format(value);
-}
-
-function usageKindLabel(kind: string): string {
-  switch (kind) {
-    case "runner_minute":
-      return t("cloudResources.usage.kind.runnerMinute");
-    case "operation":
-      return t("cloudResources.usage.kind.operation");
-    case "gateway_compute":
-      return t("cloudResources.usage.kind.compute");
-    case "gateway_storage_gb_hour":
-      return t("cloudResources.usage.kind.storage");
-    case "artifact_storage_gb_hour":
-      return t("cloudResources.usage.kind.artifactStorage");
-    case "backup_storage_gb_hour":
-      return t("cloudResources.usage.kind.backupStorage");
-    case "egress_gb":
-      return t("cloudResources.usage.kind.egress");
-    default:
-      return kind;
-  }
 }

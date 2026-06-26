@@ -7,12 +7,6 @@ import {
   type TakosumiAccountsPatScope,
   type TakosumiAccountsRevokePatResponse,
 } from "@takosjp/takosumi-accounts-contract";
-import {
-  getSpaceBilling,
-  listSpaceUsage,
-  type SpaceBilling,
-  type UsageEvent,
-} from "./control-api.ts";
 
 export type CloudResourceResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -134,13 +128,13 @@ export interface CloudflareCompatInventory {
   >;
 }
 
-export interface CloudUsageSnapshot {
-  readonly spaceId?: string;
-  readonly billing: CloudResourceResult<SpaceBilling>;
-  readonly usage: CloudResourceResult<readonly UsageEvent[]>;
-}
-
-export interface CloudResourcesSnapshot {
+/**
+ * Cloud connection material surfaced inside the Connections (接続) tab: API
+ * keys, the AI gateway endpoint, and the Cloudflare compatibility connection +
+ * its inventory. Usage/billing is intentionally NOT part of this snapshot — it
+ * lives on the Billing (支払い) tab via `getSpaceBilling` / `listSpaceUsage`.
+ */
+export interface CloudConnectionSnapshot {
   readonly catalog: CloudExtensionCatalog;
   readonly aiRoute?: CloudExtensionCatalogItem;
   readonly compatRoute?: CloudExtensionCatalogItem;
@@ -151,7 +145,6 @@ export interface CloudResourcesSnapshot {
   readonly accountTokens: CloudResourceResult<
     readonly TakosumiAccountsPatMetadata[]
   >;
-  readonly usage: CloudUsageSnapshot;
 }
 
 export class CloudResourceError extends Error {
@@ -164,13 +157,7 @@ export class CloudResourceError extends Error {
   }
 }
 
-export interface CloudResourcesSnapshotInput {
-  readonly spaceId?: string;
-}
-
-export async function getCloudResourcesSnapshot(
-  input?: CloudResourcesSnapshotInput,
-): Promise<CloudResourcesSnapshot> {
+export async function getCloudConnectionSnapshot(): Promise<CloudConnectionSnapshot> {
   const catalog = await cloudFetch<CloudExtensionCatalog>(
     "/__takosumi/cloud/extensions",
   );
@@ -182,27 +169,20 @@ export async function getCloudResourcesSnapshot(
       extension.kind === "provider_compat" &&
       extension.provider === "cloudflare",
   );
-  const [
-    aiStatus,
-    aiModels,
-    compatToken,
-    compatInventory,
-    accountTokens,
-    usage,
-  ] = await Promise.all([
-    resultFor<AiGatewayStatus>(
-      aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
-    ),
-    resultFor<OpenAiModelList>(
-      aiRoute ? `${aiRoute.basePath}/models` : undefined,
-    ),
-    resultFor<CloudflareTokenVerify>(
-      compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
-    ),
-    getCloudflareCompatInventory(compatRoute),
-    getAccountTokens(),
-    getCloudUsage(input?.spaceId),
-  ]);
+  const [aiStatus, aiModels, compatToken, compatInventory, accountTokens] =
+    await Promise.all([
+      resultFor<AiGatewayStatus>(
+        aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
+      ),
+      resultFor<OpenAiModelList>(
+        aiRoute ? `${aiRoute.basePath}/models` : undefined,
+      ),
+      resultFor<CloudflareTokenVerify>(
+        compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
+      ),
+      getCloudflareCompatInventory(compatRoute),
+      getAccountTokens(),
+    ]);
   return {
     catalog,
     aiRoute,
@@ -212,7 +192,6 @@ export async function getCloudResourcesSnapshot(
     compatToken,
     compatInventory,
     accountTokens,
-    usage,
   };
 }
 
@@ -343,23 +322,6 @@ async function getAccountTokens(): Promise<
   }
 }
 
-async function getCloudUsage(
-  spaceId: string | undefined,
-): Promise<CloudUsageSnapshot> {
-  if (!spaceId) {
-    const noWorkspace = "no workspace selected";
-    return {
-      billing: { ok: false, error: noWorkspace },
-      usage: { ok: false, error: noWorkspace },
-    };
-  }
-  const [billing, usage] = await Promise.all([
-    resultFrom(() => getSpaceBilling(spaceId)),
-    resultFrom(() => listSpaceUsage(spaceId)),
-  ]);
-  return { spaceId, billing, usage };
-}
-
 async function cloudflareListResult<T>(
   path: string,
 ): Promise<CloudResourceResult<readonly T[]>> {
@@ -416,16 +378,6 @@ async function resultFor<T>(
   if (!path) return { ok: false, error: "not configured" };
   try {
     return { ok: true, data: await cloudFetch<T>(path) };
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) };
-  }
-}
-
-async function resultFrom<T>(
-  fn: () => Promise<T>,
-): Promise<CloudResourceResult<T>> {
-  try {
-    return { ok: true, data: await fn() };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }

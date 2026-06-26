@@ -28,6 +28,8 @@ import {
   isReservedProviderEnvName,
 } from "takosumi-contract";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
+import CloudConnectionPanel from "../../cloud/CloudConnectionPanel.tsx";
+import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
   providerConnectionStatusLabel,
@@ -46,10 +48,8 @@ import {
   type ControlApiError,
   type ProviderConnection,
   createConnection,
-  isOAuthUnavailable,
   listProviderConnections,
   revokeConnection,
-  startCloudflareOAuth,
   testConnection,
 } from "../../../lib/control-api.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
@@ -133,8 +133,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const [helperToken, setHelperToken] = createSignal("");
   const [helperCloudflareAccountId, setHelperCloudflareAccountId] =
     createSignal("");
-  const [oauthBusy, setOauthBusy] = createSignal(false);
-
   const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
   const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
     { name: "", value: "" },
@@ -338,41 +336,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
     await afterConnectionCreated(connection);
     await runTest(connection.id);
   });
-
-  // ----- optional Cloudflare OAuth (probed; no dead button) ------------------
-  const oauthProbeKey = createMemo(() => {
-    const d = descriptor();
-    if (!d?.oauthCandidate) return null;
-    return { spaceId: spaceId(), provider: d.provider };
-  });
-  const [oauthProbe] = createResource(oauthProbeKey, async (key) => {
-    try {
-      const started = await startCloudflareOAuth({ spaceId: key.spaceId });
-      return { authorizationUrl: started.authorizationUrl };
-    } catch (e) {
-      if (isOAuthUnavailable(e)) return { authorizationUrl: null };
-      return { authorizationUrl: null };
-    }
-  });
-  const oauthAvailable = createMemo(() => !!oauthProbe()?.authorizationUrl);
-
-  const startOAuth = async () => {
-    if (!oauthAvailable()) return;
-    setOauthBusy(true);
-    setOauthNotice(null);
-    try {
-      const started = await startCloudflareOAuth({
-        spaceId: spaceId(),
-        displayName: displayName().trim() || undefined,
-      });
-      window.location.assign(started.authorizationUrl);
-    } catch (e) {
-      if (isOAuthUnavailable(e)) return;
-      setOauthNotice({ kind: "error", code: "start_failed" });
-    } finally {
-      setOauthBusy(false);
-    }
-  };
 
   // Per-connection test / remove.
   const [testBusyId, setTestBusyId] = createSignal<string | null>(null);
@@ -802,25 +765,10 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
                 >
                   {(helper) => (
                     <>
-                      {/* Prefer OAuth when configured; keep manual tokens as fallback. */}
                       <div class="wc-guided">
-                        <Show when={oauthAvailable()}>
-                          <div class="wc-form-actions">
-                            <Button
-                              variant="primary"
-                              type="button"
-                              busy={oauthBusy()}
-                              onClick={() => void startOAuth()}
-                            >
-                              {t("conn.guided.oauth", {
-                                provider: descriptor()?.label ?? "",
-                              })}
-                            </Button>
-                          </div>
-                        </Show>
                         <details
                           class="connection-advanced connection-help"
-                          open={!oauthAvailable()}
+                          open
                         >
                           <summary>{t("conn.guided.stepsSummary")}</summary>
                           <div class="wc-form-actions">
@@ -1027,6 +975,13 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       <Show when={providerConnections.loading}>
         <Skeleton variant="card" count={2} />
+      </Show>
+
+      {/* Takosumi Cloud connection material (API keys, AI gateway, Cloudflare
+          compat connection + inventory). Folded in from the retired standalone
+          Cloud screen; Cloud-only. */}
+      <Show when={isTakosumiCloudRuntime()}>
+        <CloudConnectionPanel />
       </Show>
     </div>
   );
