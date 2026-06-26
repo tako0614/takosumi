@@ -409,9 +409,25 @@ function releaseActivatorJobReference(
   if (!jobId) return undefined;
   const statusUrl =
     typeof value.statusUrl === "string"
-      ? parseReleaseActivatorUrl(value.statusUrl, endpoint.startsWith("http:"))
+      ? sameOriginStatusUrl(value.statusUrl, endpoint)
       : undefined;
   return { jobId, ...(statusUrl ? { statusUrl } : {}) };
+}
+
+function sameOriginStatusUrl(
+  value: string,
+  endpoint: string,
+): string | undefined {
+  try {
+    const parsed = parseReleaseActivatorUrl(
+      value,
+      endpoint.startsWith("http:"),
+    );
+    if (new URL(parsed).origin !== new URL(endpoint).origin) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
 
 function statusUrlForJob(endpoint: string, jobId: string): string {

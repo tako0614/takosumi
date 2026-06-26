@@ -336,8 +336,7 @@ test("webhook release activator polls accepted operator jobs", async () => {
             kind: "takosumi.operator.release-commands@v1",
             message: "accepted",
             jobId: "rel_job_1",
-            statusUrl:
-              "https://materializer.example.test/activate?jobId=rel_job_1",
+            statusUrl: "http://127.0.0.1:8797/activate?jobId=rel_job_1",
           },
           { status: 202 },
         );
