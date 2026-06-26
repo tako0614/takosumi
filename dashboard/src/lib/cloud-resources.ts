@@ -129,12 +129,12 @@ export interface CloudflareCompatInventory {
 }
 
 /**
- * Cloud connection material surfaced inside the Connections (接続) tab: API
- * keys, the AI gateway endpoint, and the Cloudflare compatibility connection +
- * its inventory. Usage/billing is intentionally NOT part of this snapshot — it
+ * Material for the Cloud screen (`/cloud`): Cloud API keys, the AI gateway
+ * endpoint, and the Cloudflare compatibility endpoint + its managed-resource
+ * inventory. Usage/billing is intentionally NOT part of this snapshot — it
  * lives on the Billing (支払い) tab via `getSpaceBilling` / `listSpaceUsage`.
  */
-export interface CloudConnectionSnapshot {
+export interface CloudResourcesSnapshot {
   readonly catalog: CloudExtensionCatalog;
   readonly aiRoute?: CloudExtensionCatalogItem;
   readonly compatRoute?: CloudExtensionCatalogItem;
@@ -157,7 +157,7 @@ export class CloudResourceError extends Error {
   }
 }
 
-export async function getCloudConnectionSnapshot(): Promise<CloudConnectionSnapshot> {
+export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapshot> {
   const catalog = await cloudFetch<CloudExtensionCatalog>(
     "/__takosumi/cloud/extensions",
   );
@@ -293,6 +293,61 @@ export async function revokeCloudApiKey(
     takosumiAccountsAccountTokenRevokePath(tokenId),
     { method: "POST" },
   );
+}
+
+/** The Cloudflare compatibility resources the Cloud screen can manage. */
+export type CloudflareResourceKind = "kv" | "r2" | "d1" | "worker";
+
+/**
+ * Compat-API path for a single managed resource. The compat gateway mirrors the
+ * Cloudflare REST shape; deletes ride the same forwarding the inventory list
+ * uses, so they require a `write`-scoped session and only materialize when the
+ * Cloud backend implements them (otherwise the gateway answers 501 fail-closed).
+ */
+function cloudflareResourcePath(
+  compatBasePath: string,
+  accountId: string,
+  kind: CloudflareResourceKind,
+  id: string,
+): string {
+  const account = `${compatBasePath}/accounts/${encodeURIComponent(accountId)}`;
+  const ref = encodeURIComponent(id);
+  switch (kind) {
+    case "kv":
+      return `${account}/storage/kv/namespaces/${ref}`;
+    case "r2":
+      return `${account}/r2/buckets/${ref}`;
+    case "d1":
+      return `${account}/d1/database/${ref}`;
+    case "worker":
+      return `${account}/workers/scripts/${ref}`;
+  }
+}
+
+/** Delete one managed Cloudflare resource through the compat gateway. */
+export async function deleteCloudflareResource(input: {
+  readonly compatBasePath: string;
+  readonly accountId: string;
+  readonly kind: CloudflareResourceKind;
+  readonly id: string;
+}): Promise<void> {
+  const path = cloudflareResourcePath(
+    input.compatBasePath,
+    input.accountId,
+    input.kind,
+    input.id,
+  );
+  const body = await cloudFetch<CloudflareCompatEnvelope<unknown>>(path, {
+    method: "DELETE",
+  });
+  // cloudFetch already throws on non-2xx (incl. 501). Guard the 200-with-
+  // success:false envelope the Cloudflare API can return on a soft failure.
+  if (body && typeof body === "object" && body.success === false) {
+    throw new CloudResourceError(
+      200,
+      cloudflareEnvelopeError(body) ?? "delete failed",
+    );
+  }
 }
 
 async function getAccountTokens(): Promise<

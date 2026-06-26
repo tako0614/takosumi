@@ -5,6 +5,7 @@
 import { A, useLocation } from "@solidjs/router";
 import {
   ArrowLeft,
+  Cloud,
   CreditCard,
   LayoutGrid,
   Plug,
@@ -104,6 +105,16 @@ export default function Sidebar() {
             <span class="sidebar-link-label">{t(item.labelKey)}</span>
           </A>
         ))}
+        <Show when={isTakosumiCloudRuntime()}>
+          <A
+            href="/cloud"
+            class="sidebar-link"
+            classList={{ active: isActive({ href: "/cloud" }) }}
+          >
+            <Cloud size={18} />
+            <span class="sidebar-link-label">{t("nav.cloudResources")}</span>
+          </A>
+        </Show>
         <Show when={isTakosumiCloudRuntime()}>
           <A
             href="/billing"

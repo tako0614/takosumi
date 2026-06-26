@@ -63,17 +63,25 @@
   display: grid;
   gap: var(--tg-s-4);
 }
-/* Section header for the Cloud panel folded into the Connections tab. */
-.av-cloud-section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--tg-s-3);
-  padding-top: var(--tg-s-4);
-  border-top: 1px solid var(--tg-line);
+/* Manageable resource lists on the Cloud screen (KV / R2 / D1 / Workers). */
+.av-cloud-res-groups {
+  display: grid;
+  gap: var(--tg-s-4);
 }
-.av-cloud-section-head p {
-  margin: 2px 0 0;
+.av-cloud-res-group {
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.av-cloud-res-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  font-weight: 700;
+}
+.av-cloud-res-id {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  overflow-wrap: anywhere;
 }
 .av-cloud-grid {
   display: grid;

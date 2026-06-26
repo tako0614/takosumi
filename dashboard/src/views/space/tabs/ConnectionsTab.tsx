@@ -28,8 +28,6 @@ import {
   isReservedProviderEnvName,
 } from "takosumi-contract";
 import { PROVIDERS, providerDescriptor } from "../../account/lib/api.ts";
-import CloudConnectionPanel from "../../cloud/CloudConnectionPanel.tsx";
-import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
 import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
   providerConnectionStatusLabel,
@@ -975,13 +973,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
 
       <Show when={providerConnections.loading}>
         <Skeleton variant="card" count={2} />
-      </Show>
-
-      {/* Takosumi Cloud connection material (API keys, AI gateway, Cloudflare
-          compat connection + inventory). Folded in from the retired standalone
-          Cloud screen; Cloud-only. */}
-      <Show when={isTakosumiCloudRuntime()}>
-        <CloudConnectionPanel />
       </Show>
     </div>
   );

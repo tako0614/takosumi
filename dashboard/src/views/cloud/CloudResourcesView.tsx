@@ -1,8 +1,12 @@
 /**
- * Takosumi Cloud connection panel — embedded at the bottom of the Connections
- * (接続) tab when running on Takosumi Cloud. The app surface stays operational:
- * API keys, endpoint status, copyable base URLs, and current resource counts.
- * Compatibility contracts and route-level specs live in docs.
+ * Cloud screen (`/cloud`) — Takosumi Cloud only. Two management surfaces:
+ *   - Cloud API keys (create / list / revoke)
+ *   - Cloud resources (KV / Object Storage / Database / Workers): list, copy
+ *     identifiers, and DELETE through the Cloudflare compatibility gateway.
+ * Plus compact endpoint reference cards (AI gateway, Cloudflare compat).
+ *
+ * Usage / billing intentionally lives on the Billing (支払い) tab, not here, so
+ * this screen stays focused on keys + resources.
  */
 import "../../styles/wave-c.css";
 import {
@@ -28,12 +32,17 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-solid";
+import AppShell from "../account/components/shell/AppShell.tsx";
+import Page from "../account/components/auth/Page.tsx";
 import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
-  createCloudApiKey,
-  type CloudConnectionSnapshot,
+  type CloudflareResourceKind,
   type CloudResourceResult,
-  getCloudConnectionSnapshot,
+  type CloudResourcesSnapshot,
+  createCloudApiKey,
+  deleteCloudflareResource,
+  getCloudResourcesSnapshot,
   revokeCloudApiKey,
 } from "../../lib/cloud-resources.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
@@ -43,18 +52,24 @@ import {
   Card,
   CardHeader,
   CardSection,
+  EmptyState,
   FormField,
   Input,
   KVList,
+  PageHeader,
   Skeleton,
   Toast,
 } from "../../components/ui/index.ts";
 import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-contract";
 
-export default function CloudConnectionPanel() {
+export default function CloudResourcesView() {
+  return <Page title={t("cloudResources.title")}>{() => <Inner />}</Page>;
+}
+
+function Inner() {
   const [snapshot, { refetch }] = createResource(
     () => (isTakosumiCloudRuntime() ? true : undefined),
-    getCloudConnectionSnapshot,
+    getCloudResourcesSnapshot,
   );
   const [copied, setCopied] = createSignal<string | null>(null);
 
@@ -67,53 +82,63 @@ export default function CloudConnectionPanel() {
   };
 
   return (
-    <section class="av-cloud-stack">
-      <div class="av-cloud-section-head">
-        <div>
-          <h2 class="tg-card-title">{t("cloudResources.title")}</h2>
-          <p class="muted">{t("cloudResources.subtitle")}</p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={<RefreshCw size={16} />}
-          onClick={() => void refetch()}
-          disabled={snapshot.loading}
-        >
-          {t("common.retry")}
-        </Button>
-      </div>
+    <AppShell>
+      <PageHeader
+        title={t("cloudResources.title")}
+        subtitle={t("cloudResources.subtitle")}
+        actions={
+          <Button
+            variant="secondary"
+            icon={<RefreshCw size={16} />}
+            onClick={() => void refetch()}
+            disabled={!isTakosumiCloudRuntime() || snapshot.loading}
+          >
+            {t("common.retry")}
+          </Button>
+        }
+      />
 
-      <Switch>
-        <Match when={snapshot.loading}>
-          <div class="av-cloud-grid">
-            <Skeleton variant="card" count={3} />
-          </div>
-        </Match>
-        <Match when={snapshot.error}>
-          <Toast tone="error">
-            {t("cloudResources.error", {
-              message: errorMessage(snapshot.error),
-            })}
-          </Toast>
-        </Match>
-        <Match when={snapshot()}>
-          {(loaded) => (
-            <CloudConnectionBody
-              snapshot={loaded()}
-              copied={copied()}
-              copyText={copyText}
-              refetch={() => void refetch()}
-            />
-          )}
-        </Match>
-      </Switch>
-    </section>
+      <Show
+        when={isTakosumiCloudRuntime()}
+        fallback={
+          <EmptyState
+            icon={<Cloud size={24} />}
+            title={t("cloudResources.unavailable.title")}
+            message={t("cloudResources.unavailable.body")}
+          />
+        }
+      >
+        <Switch>
+          <Match when={snapshot.loading}>
+            <div class="av-cloud-grid">
+              <Skeleton variant="card" count={3} />
+            </div>
+          </Match>
+          <Match when={snapshot.error}>
+            <Toast tone="error">
+              {t("cloudResources.error", {
+                message: errorMessage(snapshot.error),
+              })}
+            </Toast>
+          </Match>
+          <Match when={snapshot()}>
+            {(loaded) => (
+              <CloudResourceBody
+                snapshot={loaded()}
+                copied={copied()}
+                copyText={copyText}
+                refetch={() => void refetch()}
+              />
+            )}
+          </Match>
+        </Switch>
+      </Show>
+    </AppShell>
   );
 }
 
-function CloudConnectionBody(props: {
-  readonly snapshot: CloudConnectionSnapshot;
+function CloudResourceBody(props: {
+  readonly snapshot: CloudResourcesSnapshot;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
@@ -159,20 +184,27 @@ function CloudConnectionBody(props: {
   );
 
   return (
-    <>
+    <div class="av-cloud-stack">
       <Show when={props.copied}>
         <Toast tone="success">{t("cloudResources.copied")}</Toast>
       </Show>
 
-      <div class="av-cloud-grid">
-        <ApiKeysCard
-          tokens={tokens()}
-          copied={props.copied}
-          copyText={props.copyText}
-          refetch={props.refetch}
-          result={props.snapshot.accountTokens}
-        />
+      <ApiKeysCard
+        tokens={tokens()}
+        copied={props.copied}
+        copyText={props.copyText}
+        refetch={props.refetch}
+        result={props.snapshot.accountTokens}
+      />
 
+      <ResourcesCard
+        snapshot={props.snapshot}
+        copied={props.copied}
+        copyText={props.copyText}
+        refetch={props.refetch}
+      />
+
+      <div class="av-cloud-grid">
         <Card class="av-cloud-card">
           <CardHeader
             title={
@@ -203,19 +235,16 @@ function CloudConnectionBody(props: {
               },
               {
                 label: t("cloudResources.ai.providers"),
-                value: String(providers().length),
+                value: providers().join(", ") || "—",
               },
             ]}
           />
-          <Show when={models().length > 0}>
-            <details class="wb-disclosure av-cloud-detail">
-              <summary>{t("cloudResources.ai.modelDetails")}</summary>
-              <ChipBlock
-                title={t("cloudResources.ai.models")}
-                values={models().map((model) => model.id)}
-              />
-            </details>
-          </Show>
+          <CardSection>
+            <ChipBlock
+              title={t("cloudResources.ai.modelDetails")}
+              values={models().map((model) => model.id)}
+            />
+          </CardSection>
           <ResultNotice result={props.snapshot.aiStatus} />
         </Card>
 
@@ -251,10 +280,8 @@ function CloudConnectionBody(props: {
           />
           <ResultNotice result={props.snapshot.compatToken} />
         </Card>
-
-        <CloudInventoryCard snapshot={props.snapshot} />
       </div>
-    </>
+    </div>
   );
 }
 
@@ -304,7 +331,7 @@ function ApiKeysCard(props: {
   };
 
   return (
-    <Card class="av-cloud-card av-cloud-card-compact">
+    <Card class="av-cloud-card">
       <CardHeader
         title={
           <IconTitle
@@ -391,48 +418,111 @@ function ApiKeysCard(props: {
   );
 }
 
-function CloudInventoryCard(props: {
-  readonly snapshot: CloudConnectionSnapshot;
+interface ResourceItem {
+  readonly id: string;
+  readonly name: string;
+}
+
+interface ResourceGroup {
+  readonly kind: CloudflareResourceKind;
+  readonly label: string;
+  readonly icon: JSX.Element;
+  readonly result: CloudResourceResult<readonly ResourceItem[]>;
+}
+
+function ResourcesCard(props: {
+  readonly snapshot: CloudResourcesSnapshot;
+  readonly copied: string | null;
+  readonly copyText: (key: string, value: string) => Promise<void>;
+  readonly refetch: () => void;
 }): JSX.Element {
-  const inventory = props.snapshot.compatInventory;
-  const resourceCards = createMemo(() => [
-    {
-      label: t("cloudResources.inventory.kv"),
-      icon: <Database size={16} />,
-      result: inventory.kvNamespaces,
-      names: inventory.kvNamespaces.ok
-        ? inventory.kvNamespaces.data.map((item) => item.title ?? item.id ?? "")
-        : [],
-    },
-    {
-      label: t("cloudResources.inventory.r2"),
-      icon: <HardDrive size={16} />,
-      result: inventory.r2Buckets,
-      names: inventory.r2Buckets.ok
-        ? inventory.r2Buckets.data.map((item) => item.name ?? "")
-        : [],
-    },
-    {
-      label: t("cloudResources.inventory.d1"),
-      icon: <Database size={16} />,
-      result: inventory.d1Databases,
-      names: inventory.d1Databases.ok
-        ? inventory.d1Databases.data.map(
-            (item) => item.name ?? item.uuid ?? item.id ?? "",
-          )
-        : [],
-    },
-    {
-      label: t("cloudResources.inventory.workers"),
-      icon: <Cloud size={16} />,
-      result: inventory.workerScripts,
-      names: inventory.workerScripts.ok
-        ? inventory.workerScripts.data.map(workerScriptName)
-        : [],
-    },
-  ]);
+  const { confirm } = useConfirmDialog();
+  const inventory = () => props.snapshot.compatInventory;
+  const accountId = () => inventory().selectedAccountId;
+  const compatBasePath = () => props.snapshot.compatRoute?.basePath;
+  const canManage = () => Boolean(accountId() && compatBasePath());
+
+  const [busy, setBusy] = createSignal<string | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [deleted, setDeleted] = createSignal<string | null>(null);
+
+  const groups = createMemo<readonly ResourceGroup[]>(() => {
+    const inv = inventory();
+    return [
+      {
+        kind: "kv",
+        label: t("cloudResources.inventory.kv"),
+        icon: <Database size={16} />,
+        result: mapResult(inv.kvNamespaces, (item) => ({
+          id: item.id ?? "",
+          name: item.title ?? item.id ?? "",
+        })),
+      },
+      {
+        kind: "r2",
+        label: t("cloudResources.inventory.r2"),
+        icon: <HardDrive size={16} />,
+        result: mapResult(inv.r2Buckets, (item) => ({
+          id: item.name ?? "",
+          name: item.name ?? "",
+        })),
+      },
+      {
+        kind: "d1",
+        label: t("cloudResources.inventory.d1"),
+        icon: <Database size={16} />,
+        result: mapResult(inv.d1Databases, (item) => ({
+          id: item.uuid ?? item.id ?? "",
+          name: item.name ?? item.uuid ?? item.id ?? "",
+        })),
+      },
+      {
+        kind: "worker",
+        label: t("cloudResources.inventory.workers"),
+        icon: <Cloud size={16} />,
+        result: mapResult(inv.workerScripts, (item) => {
+          const scriptName = workerScriptName(item);
+          return { id: scriptName, name: scriptName };
+        }),
+      },
+    ];
+  });
+
+  const removeResource = async (group: ResourceGroup, item: ResourceItem) => {
+    const account = accountId();
+    const base = compatBasePath();
+    if (!account || !base || !item.id) return;
+    const ok = await confirm({
+      title: t("cloudResources.resources.deleteTitle"),
+      message: t("cloudResources.resources.deleteMessage", {
+        name: item.name || item.id,
+      }),
+      confirmText: t("common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    const busyKey = `${group.kind}:${item.id}`;
+    setBusy(busyKey);
+    setError(null);
+    setDeleted(null);
+    try {
+      await deleteCloudflareResource({
+        compatBasePath: base,
+        accountId: account,
+        kind: group.kind,
+        id: item.id,
+      });
+      setDeleted(item.name || item.id);
+      props.refetch();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
-    <Card class="av-cloud-card av-cloud-card-compact">
+    <Card class="av-cloud-card">
       <CardHeader
         title={
           <IconTitle
@@ -442,42 +532,119 @@ function CloudInventoryCard(props: {
         }
         subtitle={t("cloudResources.inventory.subtitle")}
       />
-      <div class="av-cloud-resource-grid">
-        <For each={resourceCards()}>
-          {(resource) => (
-            <div class="av-cloud-resource-card">
-              <div class="av-cloud-resource-head">
+      <Show when={!canManage()}>
+        <CardSection>
+          <p class="muted">{t("cloudResources.resources.noAccount")}</p>
+        </CardSection>
+      </Show>
+      <Show when={error()}>
+        {(message) => <Toast tone="error">{message()}</Toast>}
+      </Show>
+      <Show when={deleted()}>
+        {(name) => (
+          <Toast tone="success">
+            {t("cloudResources.resources.deleted", { name: name() })}
+          </Toast>
+        )}
+      </Show>
+      <div class="av-cloud-res-groups">
+        <For each={groups()}>
+          {(group) => (
+            <section class="av-cloud-res-group">
+              <div class="av-cloud-res-group-head">
                 <span class="av-cloud-title-icon" aria-hidden="true">
-                  {resource.icon}
+                  {group.icon}
                 </span>
-                <span>{resource.label}</span>
-                <Badge tone={resource.result.ok ? "neutral" : "warn"}>
-                  {resource.result.ok ? resource.result.data.length : "!"}
+                <span>{group.label}</span>
+                <Badge tone={group.result.ok ? "neutral" : "warn"}>
+                  {group.result.ok ? group.result.data.length : "!"}
                 </Badge>
               </div>
-              <Show when={!resource.result.ok}>
-                <span class="muted">{resultError(resource.result)}</span>
-              </Show>
-              <Show
-                when={
-                  resource.result.ok &&
-                  resource.names.filter(Boolean).length > 0
-                }
-              >
-                <details class="wb-disclosure av-cloud-detail">
-                  <summary>{t("cloudResources.inventory.names")}</summary>
-                  <ChipBlock
-                    title={resource.label}
-                    values={resource.names.filter(Boolean).slice(0, 6)}
-                  />
-                </details>
-              </Show>
-            </div>
+              <Switch>
+                <Match when={!group.result.ok}>
+                  <span class="muted">
+                    {group.result.ok ? "" : group.result.error}
+                  </span>
+                </Match>
+                <Match when={group.result.ok && group.result.data.length === 0}>
+                  <span class="muted">{t("common.none")}</span>
+                </Match>
+                <Match when={group.result.ok}>
+                  <div class="av-cloud-token-list">
+                    <For
+                      each={group.result.ok ? group.result.data : []}
+                    >
+                      {(item) => (
+                        <div class="av-cloud-token-row">
+                          <div class="av-cloud-token-main">
+                            <span class="av-cloud-token-name">
+                              {item.name || item.id}
+                            </span>
+                            <Show when={item.id && item.id !== item.name}>
+                              <span class="muted av-cloud-res-id">
+                                {item.id}
+                              </span>
+                            </Show>
+                          </div>
+                          <div class="av-actions">
+                            <Show when={item.id}>
+                              <Button
+                                variant={
+                                  props.copied === `res:${group.kind}:${item.id}`
+                                    ? "primary"
+                                    : "secondary"
+                                }
+                                size="sm"
+                                type="button"
+                                icon={
+                                  props.copied ===
+                                  `res:${group.kind}:${item.id}` ? (
+                                    <CheckCircle2 size={14} />
+                                  ) : (
+                                    <Copy size={14} />
+                                  )
+                                }
+                                onClick={() =>
+                                  void props.copyText(
+                                    `res:${group.kind}:${item.id}`,
+                                    item.id,
+                                  )
+                                }
+                              >
+                                {t("common.copy")}
+                              </Button>
+                            </Show>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              type="button"
+                              icon={<Trash2 size={14} />}
+                              busy={busy() === `${group.kind}:${item.id}`}
+                              disabled={!canManage() || !item.id}
+                              onClick={() => void removeResource(group, item)}
+                            >
+                              {t("common.delete")}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Match>
+              </Switch>
+            </section>
           )}
         </For>
       </div>
     </Card>
   );
+}
+
+function mapResult<T, U>(
+  result: CloudResourceResult<readonly T[]>,
+  fn: (item: T) => U,
+): CloudResourceResult<readonly U[]> {
+  return result.ok ? { ok: true, data: result.data.map(fn) } : result;
 }
 
 function IconTitle(props: {
@@ -562,24 +729,12 @@ function ResultNotice<T>(props: {
       <CardSection>
         <Toast tone="error">
           {t("cloudResources.partialError", {
-            message: props.result.ok
-              ? ""
-              : cloudResourceErrorMessage(props.result.error),
+            message: props.result.ok ? "" : props.result.error,
           })}
         </Toast>
       </CardSection>
     </Show>
   );
-}
-
-function cloudResourceErrorMessage(message: string): string {
-  if (message === "not configured") return t("cloudResources.notConfigured");
-  if (message === "session expired") return t("cloudResources.sessionExpired");
-  return message;
-}
-
-function resultError(result: CloudResourceResult<unknown>): string {
-  return result.ok ? "" : cloudResourceErrorMessage(result.error);
 }
 
 function endpointUrl(

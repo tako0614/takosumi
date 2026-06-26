@@ -41,6 +41,7 @@ export const en: Record<keyof typeof ja, string> = {
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
   "store.noWorkspace": "Select a Workspace first.",
+  "nav.cloudResources": "Cloud",
   "nav.runs": "Updates",
   "nav.connections": "Hosting access",
   "nav.billing": "Billing",
@@ -894,10 +895,18 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle":
-    "Review API keys, connection health, and resource counts.",
+  "cloudResources.subtitle": "Manage API keys and Cloud resources.",
+  "cloudResources.unavailable.title": "Takosumi Cloud only",
+  "cloudResources.unavailable.body":
+    "Cloud-only endpoints are not provided in this runtime.",
   "cloudResources.error": "Could not load cloud resources: {message}",
   "cloudResources.partialError": "A check failed: {message}",
+  "cloudResources.resources.noAccount":
+    "No connected account found, so resources cannot be deleted.",
+  "cloudResources.resources.deleteTitle": "Delete resource",
+  "cloudResources.resources.deleteMessage":
+    "Delete “{name}”. This cannot be undone.",
+  "cloudResources.resources.deleted": "Deleted “{name}”.",
   "cloudResources.notConfigured": "Not configured",
   "cloudResources.sessionExpired": "Session expired. Sign in again.",
   "cloudResources.copied": "Copied.",

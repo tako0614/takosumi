@@ -44,6 +44,7 @@ export const ja = {
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
+  "nav.cloudResources": "クラウド",
   "nav.runs": "更新履歴",
   "nav.connections": "ホスト接続",
   "nav.billing": "お支払い",
@@ -906,9 +907,18 @@ export const ja = {
 
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle": "API key、接続状態、作成済みリソース数を確認します。",
+  "cloudResources.subtitle": "API key と Cloud リソースを管理します。",
+  "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
+  "cloudResources.unavailable.body":
+    "この実行環境では Cloud 専用エンドポイントは提供されていません。",
   "cloudResources.error": "クラウド機能を読み込めませんでした: {message}",
   "cloudResources.partialError": "一部の確認に失敗しました: {message}",
+  "cloudResources.resources.noAccount":
+    "接続済みアカウントが見つからないため、リソースは削除できません。",
+  "cloudResources.resources.deleteTitle": "リソースを削除",
+  "cloudResources.resources.deleteMessage":
+    "「{name}」を削除します。元に戻せません。",
+  "cloudResources.resources.deleted": "「{name}」を削除しました。",
   "cloudResources.notConfigured": "未設定",
   "cloudResources.sessionExpired":
     "セッションが切れました。再度ログインしてください。",
