@@ -253,20 +253,27 @@ The service token scope is `ai.model` plus one or more endpoint scopes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`               |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`         |
 
-Operator upstream provider keys stay in operator secrets/env vars referenced by
+Operator-held AI credentials stay in operator secrets/env vars referenced by
 the closed Takosumi Cloud AI Gateway service's
-`TAKOSUMI_AI_GATEWAY_PROFILES` config. An `openai_compatible` profile declares
-public model aliases and the env var name that contains the upstream key
-(`apiKeyEnv`); it must not contain the key value itself, including through
-static upstream `headers`. A `workers_ai_binding` profile instead uses the
-Cloud-only Worker `AI` binding directly and must not declare `baseUrl`,
-`apiKeyEnv`, `apiKeyHeader`, or static upstream headers.
+`TAKOSUMI_AI_GATEWAY_PROFILES` config. The preferred Takosumi Cloud profile is
+Cloudflare AI Gateway REST API with Unified Billing: an `openai_compatible`
+profile uses `baseUrl` set to
+`https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1` and an
+`apiKeyEnv` such as `TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN`; Cloudflare bills
+the selected provider credits and Takosumi does not store provider API keys.
+Direct/BYOK `openai_compatible` profiles are still allowed for providers that
+require Takosumi-owned upstream keys. In every case the key value must not be
+embedded in config, including through static upstream `headers`. A
+`workers_ai_binding` profile instead uses the Cloud-only Worker `AI` binding
+directly and must not declare `baseUrl`, `apiKeyEnv`, `apiKeyHeader`, or static
+upstream headers.
 Model alias `metadata` is returned by `GET /gateway/ai/v1/models`, so it is public display/protocol metadata only:
 secret-shaped keys, bearer-token strings, API keys, credential URLs, and password-bearing values are invalid profile
 config.
-At request time the gateway maps the public model alias to the provider-native model id, injects the upstream key for
-OpenAI-compatible profiles or calls the Workers AI binding for Workers AI profiles, and returns only safe response
-headers. The rotated Service Graph service token is the only key projected to an installed service.
+At request time the gateway maps the public model alias to the Cloudflare or provider-native model id, injects the
+operator-held credential for OpenAI-compatible profiles or calls the Workers AI binding for Workers AI profiles, and
+returns only safe response headers. The rotated Service Graph service token is the only key projected to an installed
+service.
 
 ### 5.2 Takos Runtime Profile
 

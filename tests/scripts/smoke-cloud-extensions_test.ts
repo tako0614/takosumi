@@ -15,6 +15,7 @@ const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   requireCompatMaterialization: false,
   requireProviderE2E: false,
   requireAiUpstreamProfile: false,
+  requireAiCloudflareUnifiedBillingProfile: false,
   requireAiServiceGraphToken: false,
 };
 
@@ -206,6 +207,96 @@ test("cloud extension smoke requires a non-Workers-AI upstream only when request
   );
   expect(strict.status).toBe("failed");
   expect(strict.gaps).toContain("ai_gateway_external_upstream_not_configured");
+});
+
+test("cloud extension smoke can require a Cloudflare Unified Billing AI profile", async () => {
+  const directProviderStatus = json({
+    kind: "takosumi.ai-gateway-status@v1",
+    mode: "configured_upstreams",
+    defaultModel: "takosumi/default",
+    summary: {
+      profileCount: 1,
+      publicModelCount: 2,
+      providers: ["deepseek"],
+    },
+    upstreamProfiles: [
+      {
+        id: "deepseek-main",
+        provider: "deepseek",
+        type: "openai_compatible",
+        endpointOrigin: "https://api.deepseek.example",
+        modelCount: 2,
+        publicModels: [
+          {
+            publicModel: "takosumi/default",
+            endpoints: ["chat.completions"],
+            default: true,
+          },
+          {
+            publicModel: "deepseek/text-embedding-v3",
+            endpoints: ["embeddings"],
+          },
+        ],
+      },
+    ],
+  });
+  const directProviderFetch = async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const parsed = new URL(url.toString());
+    if (parsed.pathname === "/gateway/ai/v1/__takosumi/status") {
+      return directProviderStatus.clone();
+    }
+    return responseForImplementedCompat(
+      parsed.pathname,
+      init?.method ?? "GET",
+      authorization(init) !== undefined,
+      "configured_upstreams",
+      requestBodyText(init),
+      parsed.searchParams,
+    );
+  };
+  const direct = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiUpstreamProfile: true,
+      requireAiCloudflareUnifiedBillingProfile: true,
+    },
+    directProviderFetch,
+  );
+  const unified = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireAiUpstreamProfile: true,
+      requireAiCloudflareUnifiedBillingProfile: true,
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+  );
+
+  expect(direct.status).toBe("failed");
+  expect(direct.gaps).not.toContain(
+    "ai_gateway_external_upstream_not_configured",
+  );
+  expect(direct.gaps).toContain(
+    "ai_gateway_cloudflare_unified_billing_profile_not_configured",
+  );
+  expect(unified.status).toBe("passed");
+  expect(unified.gaps).not.toContain(
+    "ai_gateway_cloudflare_unified_billing_profile_not_configured",
+  );
 });
 
 test("cloud extension smoke fails readiness when catalog bindings are missing", async () => {
@@ -647,7 +738,7 @@ function aiGatewayStatus(
   options: { readonly embeddingModel?: string } = {},
 ): Response {
   const embeddingModel =
-    options.embeddingModel ?? "workers-ai/bge-base-en-v1.5";
+    options.embeddingModel ?? "openai/text-embedding-3-small";
   return json({
     kind: "takosumi.ai-gateway-status@v1",
     mode,
@@ -656,15 +747,17 @@ function aiGatewayStatus(
       profileCount: mode === "configured_upstreams" ? 1 : 0,
       publicModelCount: mode === "configured_upstreams" ? 1 : 3,
       providers:
-        mode === "configured_upstreams" ? ["deepseek"] : ["workers_ai"],
+        mode === "configured_upstreams"
+          ? ["cloudflare_unified_billing"]
+          : ["workers_ai"],
     },
     upstreamProfiles:
       mode === "configured_upstreams"
         ? [
             {
-              id: "deepseek-main",
-              provider: "deepseek",
-              endpointOrigin: "https://api.deepseek.example",
+              id: "cloudflare-unified",
+              provider: "cloudflare_unified_billing",
+              endpointOrigin: "https://api.cloudflare.com",
               modelCount: 2,
               publicModels: [
                 {

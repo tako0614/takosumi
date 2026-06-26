@@ -212,7 +212,8 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
 # Optional (AI Gateway; set one secret per openai_compatible profile apiKeyEnv; workers_ai_binding uses [ai]):
-#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  upstream OpenAI-compatible provider key
+#   TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN       Cloudflare AI Gateway REST API / Unified Billing token
+#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  direct/BYOK OpenAI-compatible provider key
 # Optional (billing; set both when hosted billing is enabled):
 #   TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY / _WEBHOOK_SECRET
 # Optional (upstream OAuth provider):

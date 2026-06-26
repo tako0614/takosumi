@@ -8,12 +8,14 @@ gateway services as part of the public OSS contract.
 The Cloud extension is a Takosumi Cloud operator-backed, OpenAI-compatible
 runtime profile projected through Service Graph. It lets a deployed Capsule
 runtime use one Takosumi endpoint and one rotated Service Graph service token
-while Takosumi Cloud keeps upstream provider keys in platform secrets. The OSS
-platform worker carries only a fail-closed route seam and an optional
+while Takosumi Cloud keeps operator-held AI credentials in platform secrets.
+For Cloudflare Unified Billing that credential is a Cloudflare API token; for
+direct/BYOK profiles it is the provider API key. The OSS platform worker
+carries only a fail-closed route seam and an optional
 Cloud-extension service binding handoff. The platform Cloud extension registry
 currently contains exactly two routes: this AI Gateway and the Cloudflare
-Compatibility Gateway. Upstream profiles, provider keys, and request forwarding
-belong to the closed Takosumi Cloud deployment.
+Compatibility Gateway. Upstream profiles, operator-held credentials, and
+request forwarding belong to the closed Takosumi Cloud deployment.
 
 For the current GA scope, Takosumi Cloud compatibility APIs are limited to the
 Cloudflare Compatibility Gateway and this AI Gateway. Other providers should be
@@ -72,7 +74,8 @@ credentials and without the pre-authenticated header, so the downstream worker
 fails closed without seeing the original credential.
 Operator/dashboard sessions and Takosumi personal access tokens are accepted
 only for owner/operator smoke and diagnostics; deployed Capsule runtimes should
-not receive account sessions, PATs, or upstream provider keys.
+not receive account sessions, PATs, Cloudflare API tokens, or direct upstream
+provider keys.
 
 Tokens are rotated through the installation Service Graph service projection.
 That route is intentionally not documented as a stable Takosumi OSS customer
@@ -95,13 +98,40 @@ service that only needs model listing or chat completions.
 The closed Takosumi Cloud AI Gateway service reads upstream profiles from
 `TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. Each profile
 is either an OpenAI-compatible HTTPS upstream that names the env/secret
-containing its upstream key, or a Cloudflare Workers AI binding profile that
-uses the Cloudflare Worker `AI` binding and therefore has no upstream key. The
-OSS platform worker does not parse this config or forward model requests by
-itself.
+containing its upstream credential, or a Cloudflare Workers AI binding profile
+that uses the Cloudflare Worker `AI` binding and therefore has no upstream
+REST credential. For Takosumi Cloud, the preferred operator-paid sandbox path
+is a Cloudflare AI Gateway REST API profile backed by Cloudflare Unified
+Billing: the secret is a Cloudflare API token, and Cloudflare bills the
+configured provider credits. The OSS platform worker does not parse this config
+or forward model requests by itself.
 
 ```json
 [
+  {
+    "type": "openai_compatible",
+    "id": "cloudflare-unified",
+    "provider": "cloudflare_unified_billing",
+    "baseUrl": "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1",
+    "apiKeyEnv": "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
+    "headers": {
+      "cf-aig-gateway-id": "takosumi-cloud"
+    },
+    "models": [
+      {
+        "publicModel": "takosumi/default",
+        "upstreamModel": "openai/gpt-4.1-mini",
+        "endpoints": ["chat.completions"],
+        "default": true,
+        "billingClass": "operator-paid-preview"
+      },
+      {
+        "publicModel": "anthropic/sonnet",
+        "upstreamModel": "anthropic/claude-sonnet-4-5",
+        "endpoints": ["chat.completions"]
+      }
+    ]
+  },
   {
     "type": "workers_ai_binding",
     "id": "workers-ai",
@@ -171,6 +201,12 @@ Rules:
 
 - `type` defaults to `openai_compatible` for existing profiles.
 - `openai_compatible` profiles must set `baseUrl` and `apiKeyEnv`.
+- Cloudflare Unified Billing uses `type: "openai_compatible"`,
+  `baseUrl: "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1"`,
+  `apiKeyEnv: "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN"`, and Cloudflare model ids such as
+  `openai/gpt-4.1-mini`, `anthropic/claude-sonnet-4-5`, or Google AI Studio model ids as `upstreamModel`.
+  It does not require provider API keys in Takosumi; the Cloudflare API token authorizes Cloudflare AI Gateway
+  and Unified Billing.
 - `workers_ai_binding` profiles must not set `baseUrl`, `apiKeyEnv`,
   `apiKeyHeader`, or static `headers`; they run through the Worker `AI`
   binding configured on the closed Cloud worker.
@@ -190,11 +226,16 @@ Rules:
   rejected. Put only public display/protocol metadata there.
 - public model aliases are stable Takosumi-facing names and do not have to equal provider-native model ids.
 
-Provider examples such as DeepSeek, Z.AI GLM, Gemini, OpenAI, or any OpenAI-compatible host use
-`type: "openai_compatible"`: configure a profile, map public aliases to
-upstream model ids, and keep the upstream key behind `apiKeyEnv`. Cloudflare
-Workers AI uses `type: "workers_ai_binding"` when Takosumi Cloud calls the
-Worker `AI` binding directly without issuing or storing a REST API token.
+Cloudflare Unified Billing is the preferred Takosumi Cloud default for
+operator-paid external models because Takosumi stores only the Cloudflare API
+token and does not hold provider-specific API keys. Direct/BYOK provider
+examples such as DeepSeek, Z.AI GLM, Gemini, OpenAI, or any OpenAI-compatible
+host also use `type: "openai_compatible"`: configure a profile, map public
+aliases to upstream model ids, and keep the upstream key behind `apiKeyEnv`.
+Cloudflare Workers AI uses `type: "workers_ai_binding"` when Takosumi Cloud
+calls the Worker `AI` binding directly without issuing or storing a REST API
+token. Workers AI `@cf/...` models are separate from Cloudflare AI Gateway
+Unified Billing and follow Workers AI pricing.
 
 `GET /gateway/ai/v1/__takosumi/status` returns only public readiness
 metadata. Explicitly configured profiles report `configured_upstreams`, the
@@ -202,24 +243,26 @@ public providers/model aliases, and whether the Cloud worker has a Workers AI
 binding available for `workers_ai_binding` profiles. It never returns upstream
 keys, `apiKeyEnv` names, raw `Authorization` material, or service-binding
 names. Takosumi Cloud should configure at least one explicit profile before
-claiming AI Gateway readiness. Use `type: "workers_ai_binding"` for the base
-Cloudflare Workers AI capability, and use `type: "openai_compatible"` with a
-real upstream key behind `apiKeyEnv` for DeepSeek, Z.AI/GLM, Gemini, OpenAI, or
-another external upstream. Any launch claim for external upstreams must run
+claiming AI Gateway readiness. Use `type: "openai_compatible"` with Cloudflare
+AI Gateway REST API and Unified Billing for the default operator-paid sandbox,
+use direct/BYOK `openai_compatible` profiles when Takosumi intentionally owns
+provider-specific keys, or use `type: "workers_ai_binding"` for the base
+Cloudflare Workers AI binding. Any launch claim for external upstreams must run
 `smoke:cloud-extensions` with `--require-ai-upstream-profile`.
 
 ## Secret Boundary
 
 There are two different keys:
 
-| key                         | holder                       | purpose                                     |
-| --------------------------- | ---------------------------- | ------------------------------------------- |
-| upstream provider API key   | operator platform worker env | authorizes Takosumi to call the provider    |
-| Service Graph service token | Capsule runtime projection   | authorizes that runtime to call the gateway |
+| key                                   | holder                       | purpose                                             |
+| ------------------------------------- | ---------------------------- | --------------------------------------------------- |
+| Cloudflare AI Gateway API token       | operator platform worker env | authorizes Cloudflare Unified Billing REST profiles |
+| direct/BYOK upstream provider API key | operator platform worker env | authorizes Takosumi to call a provider directly     |
+| Service Graph service token           | Capsule runtime projection   | authorizes that runtime to call the gateway         |
 
-The Capsule runtime never receives the upstream provider key. It receives only the rotated Service Graph token and
-the gateway base URL. The gateway injects the upstream provider key at request time and strips hop-by-hop or unsafe
-response headers before returning the upstream response.
+The Capsule runtime never receives the Cloudflare API token or a direct upstream provider key. It receives only the
+rotated Service Graph token and the gateway base URL. The gateway injects the operator-held credential at request time
+and strips hop-by-hop or unsafe response headers before returning the upstream response.
 
 ## Failure Model
 

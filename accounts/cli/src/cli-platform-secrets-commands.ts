@@ -664,7 +664,7 @@ async function readWranglerConfigText(
 }
 
 function isAiGatewayApiKeySecretName(name: string): boolean {
-  return /^TAKOSUMI_AI_GATEWAY_[A-Z0-9_]+_API_KEY$/.test(name);
+  return /^TAKOSUMI_AI_GATEWAY_[A-Z0-9_]+_(?:API_KEY|API_TOKEN)$/.test(name);
 }
 
 function isWorkerSecretName(name: string): boolean {
@@ -1095,10 +1095,10 @@ function formatSecretStatus(
     `Missing required manual: ${input.missingRequiredManual.length ? input.missingRequiredManual.join(", ") : "none"}`,
     `AI Gateway profiles: ${input.aiGateway.configured ? input.aiGateway.profileCount : "none"}`,
     `AI Gateway providers: ${input.aiGateway.providers.length ? input.aiGateway.providers.join(", ") : "none"}`,
-    `AI Gateway external upstreams: ${input.aiGateway.openAiCompatibleProfileCount}`,
+    `AI Gateway OpenAI-compatible profiles: ${input.aiGateway.openAiCompatibleProfileCount}`,
     `AI Gateway Workers AI profiles: ${input.aiGateway.workersAiBindingProfileCount}`,
-    `AI Gateway required API key secrets: ${input.aiGateway.requiredApiKeySecrets.length ? input.aiGateway.requiredApiKeySecrets.join(", ") : "none"}`,
-    `AI Gateway missing API key secrets: ${input.aiGateway.missingApiKeySecrets.length ? input.aiGateway.missingApiKeySecrets.join(", ") : "none"}`,
+    `AI Gateway required credential secrets: ${input.aiGateway.requiredApiKeySecrets.length ? input.aiGateway.requiredApiKeySecrets.join(", ") : "none"}`,
+    `AI Gateway missing credential secrets: ${input.aiGateway.missingApiKeySecrets.length ? input.aiGateway.missingApiKeySecrets.join(", ") : "none"}`,
     `Unknown local: ${input.unknownLocal.length ? input.unknownLocal.join(", ") : "none"}`,
     `Remote only: ${input.remoteOnly.length ? input.remoteOnly.join(", ") : "none"}`,
   ].join("\n");
