@@ -3140,24 +3140,6 @@ export async function ensureD1OpenTofuLedgerSchema(
       on provider_catalog (primary_materialization)`,
     `create index if not exists provider_catalog_gateway_eligible_idx
       on provider_catalog (gateway_eligible)`,
-    `create table if not exists provider_envs (
-      id text primary key,
-      space_id text not null,
-      provider_source text not null,
-      materialization text not null check (materialization in ('oauth','secret')),
-      status text not null,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create index if not exists provider_envs_space_idx
-      on provider_envs (space_id)`,
-    `create index if not exists provider_envs_provider_source_idx
-      on provider_envs (provider_source)`,
-    `create index if not exists provider_envs_materialization_idx
-      on provider_envs (materialization)`,
-    `create index if not exists provider_envs_status_idx
-      on provider_envs (status)`,
     `create table if not exists provider_env_binding_sets (
       id text primary key,
       space_id text not null,
@@ -3449,12 +3431,49 @@ export async function ensureD1OpenTofuLedgerSchema(
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
+  // Guarded table renames run BEFORE the final-name `create table if not exists`
+  // ensure-DDL so a rename (e.g. spaces -> workspaces) renames the existing
+  // populated table instead of colliding with a freshly-created empty
+  // final-name table. Each entry no-ops unless its source exists and its target
+  // does not, so the pass converges identically on fresh, existing, and
+  // already-renamed databases. (Empty until the 17-noun rename populates it.)
+  await applyD1PreCreateRenames(db);
   for (const sql of tableStatements) {
     await db.prepare(sql).run();
   }
   await migrateD1OpenTofuLedgerSchema(db);
   for (const sql of indexStatements) {
     await db.prepare(sql).run();
+  }
+}
+
+/**
+ * Final-name table renames applied before the ensure-DDL in
+ * {@link ensureD1OpenTofuLedgerSchema}. Empty until the 17-noun rename (P4)
+ * populates it with entries such as `{ from: "spaces", to: "workspaces" }`.
+ */
+const D1_OPEN_TOFU_PRE_CREATE_RENAMES: readonly {
+  readonly from: string;
+  readonly to: string;
+}[] = [];
+
+async function applyD1PreCreateRenames(db: D1Database): Promise<void> {
+  await applyD1GuardedTableRenames(db, D1_OPEN_TOFU_PRE_CREATE_RENAMES);
+}
+
+/**
+ * Applies each `{ from, to }` table rename only when `from` exists and `to` does
+ * not, making the pass an idempotent no-op on fresh and already-renamed
+ * databases. Exported for boot-convergence tests.
+ */
+export async function applyD1GuardedTableRenames(
+  db: D1Database,
+  renames: readonly { readonly from: string; readonly to: string }[],
+): Promise<void> {
+  for (const { from, to } of renames) {
+    if ((await d1TableExists(db, from)) && !(await d1TableExists(db, to))) {
+      await db.prepare(`alter table ${from} rename to ${to}`).run();
+    }
   }
 }
 
