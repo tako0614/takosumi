@@ -21,6 +21,13 @@ export CLOUDFLARE_ACCOUNT_ID="$(cat "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLA
 The preflight checks file presence and mode only. It does not read or print the
 Cloudflare token or account id.
 
+Resource-creating Layer 2 smokes must also run the platform smoke with
+`--cloudflare-resource-preflight account-resources`. That checks the operator
+Cloudflare token can list D1, Workers KV, R2, and Queues for the configured
+account before OpenTofu starts an apply. This is a fail-closed guard against
+partial resource creation when the token is active but missing one resource
+permission.
+
 ## Layer 1 — provider/module integration (runnable now, no worker)
 
 ```sh
@@ -58,6 +65,7 @@ CLOUDFLARE_ACCOUNT_ID="$(
     --url https://app-staging.takosumi.com \
     --workspace <scratch-workspace-id-or-handle> \
     --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
+    --cloudflare-resource-preflight account-resources \
     --json
 ```
 

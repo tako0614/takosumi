@@ -2,9 +2,9 @@
 
 This runbook covers the public Takosumi website/docs property and the managed account surface.
 
-| Property | Resource type | Project / Worker name | Source |
-| --- | --- | --- | --- |
-| `takosumi.com` | Cloudflare Pages | `takosumi-website` | `website/` merged build |
+| Property       | Resource type    | Project / Worker name | Source                  |
+| -------------- | ---------------- | --------------------- | ----------------------- |
+| `takosumi.com` | Cloudflare Pages | `takosumi-website`    | `website/` merged build |
 
 The account plane (OIDC issuer / dashboard API / Installation ledger / billing) no
 longer ships as a separate account-plane Worker. It runs **in-process** inside
@@ -25,7 +25,13 @@ self-hosted Takos that host is the `takos/deploy/cloudflare/` template.
 bunx wrangler login
 ```
 
-For CI, set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The token needs Pages edit, Workers edit, D1 edit, R2 edit, routes edit, and account read permissions.
+For CI, set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The token needs
+Pages edit, Workers edit, account read, and read/create permissions for every
+Cloudflare resource the Capsule creates. The Takos/yurucommu staging smokes
+currently require D1, Workers KV Storage, R2, and Queues permissions. Run
+`smoke:platform-control-plane` with `--cloudflare-resource-preflight
+account-resources` before resource-creating applies so missing account-resource
+permissions fail before OpenTofu can partially create resources.
 
 ## `takosumi.com`
 
