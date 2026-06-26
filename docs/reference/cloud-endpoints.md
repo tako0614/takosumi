@@ -144,6 +144,9 @@ GET /api/v1/workspaces/{workspaceId}/usage
 
 - `gateway_compute`
 - `gateway_storage_gb_hour`
+- `ai_request`
+- `ai_input_token`
+- `ai_output_token`
 - `runner_minute`
 - `operation`
 - `artifact_storage_gb_hour`
@@ -153,6 +156,28 @@ GET /api/v1/workspaces/{workspaceId}/usage
 usage event は quantity、credits、source、timestamp を持ちます。provider
 credential、API key、bearer token、database URL、DSN、password などの secret
 値を持ってはいけません。
+
+Cloud extension は、実行結果に内部 usage report header を付けることで
+platform worker に使用量を報告できます。platform worker はこの header を
+client response から削除し、`recordGatewayResourceUsage` で Workspace usage
+ledger に記録します。usage report があるのに ledger へ記録できない場合は、
+未課金の成功を返さないため fail closed します。
+
+内部 header:
+
+```http
+x-takosumi-cloud-usage-space-id: space_xxx
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
+```
+
+この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
+正本入力にします。Cloudflare AI Gateway / Workers AI の上流請求は operator の
+Cloudflare account に来ますが、それだけでは Takosumi ユーザーへの請求完了を
+意味しません。Takosumi 側で請求できていると言える条件は、Cloud extension が
+usage report を出し、Workspace usage ledger に記録され、billing/Stripe 側で
+集計・請求されることです。
 
 ## AI Gateway
 

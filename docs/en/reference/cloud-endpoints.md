@@ -146,6 +146,9 @@ Important usage kinds:
 
 - `gateway_compute`
 - `gateway_storage_gb_hour`
+- `ai_request`
+- `ai_input_token`
+- `ai_output_token`
 - `runner_minute`
 - `operation`
 - `artifact_storage_gb_hour`
@@ -155,6 +158,29 @@ Important usage kinds:
 Usage events carry quantity, credits, source, and timestamp. They must not
 carry provider credentials, API keys, bearer tokens, database URLs, DSNs,
 passwords, or other secret values.
+
+Cloud extensions report billable runtime usage to the platform worker by adding
+internal usage report headers to their response. The platform worker strips
+those headers from the client response and records them through
+`recordGatewayResourceUsage` in the Workspace usage ledger. If an extension
+reports usage but the ledger write cannot be completed, the platform fails
+closed instead of returning an unmetered success.
+
+Internal headers:
+
+```http
+x-takosumi-cloud-usage-space-id: space_xxx
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
+```
+
+This ledger is the source input for billing reconciliation and Stripe invoices.
+Upstream Cloudflare AI Gateway / Workers AI charges still land on the
+operator's Cloudflare account; that alone does not mean the Takosumi customer
+has been billed. Takosumi billing is closed only when the Cloud extension emits
+usage reports, the Workspace usage ledger records them, and billing/Stripe
+aggregates them into an invoice or entitlement decision.
 
 ## AI Gateway
 
