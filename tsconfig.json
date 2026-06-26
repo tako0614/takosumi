@@ -27,6 +27,7 @@
         "./contract/internal-deploy-control-api.ts"
       ],
       "takosumi-contract/sources": ["./contract/sources.ts"],
+      "takosumi-contract/redaction": ["./contract/redaction.ts"],
       "takosumi-contract/provider-env-rules": [
         "./contract/provider-env-rules.ts"
       ],

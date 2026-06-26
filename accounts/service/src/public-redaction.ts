@@ -2,7 +2,7 @@ import {
   isSecretKey,
   REDACTED_VALUE,
   redactString,
-} from "../../../core/domains/observability/redaction.ts";
+} from "takosumi-contract/redaction";
 
 export function redactPublicValue(value: unknown): unknown {
   if (Array.isArray(value)) {

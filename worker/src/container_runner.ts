@@ -25,7 +25,7 @@ import type {
   CloudflareWorkerEnv,
   OpenTofuRunQueueMessage,
 } from "./bindings.ts";
-import { redactString } from "../../core/domains/observability/redaction.ts";
+import { redactString } from "takosumi-contract/redaction";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 /**

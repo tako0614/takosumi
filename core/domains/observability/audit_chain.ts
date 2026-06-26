@@ -1,5 +1,5 @@
 import type { AuditEvent } from "../audit/types.ts";
-import { redactJsonObject } from "./redaction.ts";
+import { redactJsonObject } from "takosumi-contract/redaction";
 
 export const AUDIT_CHAIN_GENESIS_HASH = "0".repeat(64);
 

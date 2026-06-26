@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { containsSecretLikeString, redactJsonObject, redactString } from "../../../../core/domains/observability/mod.ts";
+import { containsSecretLikeString, redactJsonObject, redactString } from "takosumi-contract/redaction";
 
 test("redaction masks nested secret and token fields", () => {
   const redacted = redactJsonObject({

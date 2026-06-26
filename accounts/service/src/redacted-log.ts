@@ -1,4 +1,4 @@
-import { redactString } from "../../../core/domains/observability/redaction.ts";
+import { redactString } from "takosumi-contract/redaction";
 
 export function redactedErrorText(error: unknown): string {
   if (error instanceof Error) {

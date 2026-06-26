@@ -204,7 +204,7 @@ import {
   DISABLED_BILLING_SETTINGS,
   type ReconcileStripeSpaceSubscriptionInput,
 } from "./billing_service.ts";
-import { redactString } from "../observability/redaction.ts";
+import { redactString } from "takosumi-contract/redaction";
 import type { ObservabilitySink } from "../observability/mod.ts";
 import { UsageReportingService } from "./usage_service.ts";
 // The usage input-type vocabulary is owned by the usage service; re-exported here
