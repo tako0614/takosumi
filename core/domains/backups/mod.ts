@@ -997,9 +997,9 @@ export interface ServiceDataArtifactPointer {
 /** SourceSnapshot metadata as captured in a control bundle. */
 export interface BundleSourceSnapshot {
   readonly id: string;
-  readonly origin: "git" | "upload";
+  readonly origin: "git" | "upload" | "artifact";
   readonly spaceId: string;
-  /** Present for git-origin snapshots; absent for upload-origin snapshots. */
+  /** Present for git-origin snapshots; absent for no-Source snapshots. */
   readonly sourceId?: string;
   readonly url: string;
   readonly ref: string;

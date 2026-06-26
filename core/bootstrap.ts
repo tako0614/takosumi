@@ -1,7 +1,10 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
 import type { SourceArchiveWriter } from "./api/deploy_control_shared.ts";
-import { recordUploadArchive } from "./api/deploy_control_deploy_routes.ts";
+import {
+  recordArtifactSnapshotFromUrl,
+  recordUploadArchive,
+} from "./api/deploy_control_deploy_routes.ts";
 import { createConnectionOAuthHelpersFromEnv } from "./api/connection_oauth_helpers.ts";
 import {
   createConsoleApiRequestLogger,
@@ -526,6 +529,12 @@ export interface TakosumiOperations {
   recordUploadArchive(input: {
     readonly spaceId: string;
     readonly bytes: Uint8Array;
+    readonly path?: string;
+  }): Promise<SourceSnapshot>;
+  recordArtifactSnapshot(input: {
+    readonly spaceId: string;
+    readonly url: string;
+    readonly digest: string;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot>;
@@ -1090,6 +1099,24 @@ export async function createTakosumiService(
         spaceId: input.spaceId,
         bytes: input.bytes,
         ...(input.path ? { path: input.path } : {}),
+      });
+    },
+    recordArtifactSnapshot: async (input) => {
+      if (!options.writeSourceArchive) {
+        throw new OpenTofuControllerError(
+          "not_implemented",
+          "artifact snapshot storage (R2_SOURCE) is not configured",
+        );
+      }
+      return await recordArtifactSnapshotFromUrl({
+        controller: opentofuController,
+        writeSourceArchive: options.writeSourceArchive,
+        spaceId: input.spaceId,
+        request: {
+          url: input.url,
+          digest: input.digest,
+          ...(input.path ? { path: input.path } : {}),
+        },
       });
     },
     getSourceSnapshot: (id) => opentofuController.getSourceSnapshot(id),

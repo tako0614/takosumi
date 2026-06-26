@@ -77,6 +77,7 @@ export type {
   InstallConfigCatalogText,
   InstallConfigSourceKind,
   InstallBuildConfig,
+  InstallPrebuiltArtifactConfig,
   InstallationStatus,
   NormalizationConfig,
   OutputAllowlistEntry,

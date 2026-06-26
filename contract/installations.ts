@@ -82,6 +82,16 @@ export interface InstallBuildConfig {
 }
 
 /**
+ * Service-side fast path for Capsules whose source already contains the
+ * deployable artifact. The runner does not execute build commands; it only
+ * validates that `path` stays inside the restored SourceSnapshot and exposes it
+ * as `TF_VAR_artifact_path` to the generated root.
+ */
+export interface InstallPrebuiltArtifactConfig {
+  readonly path: string;
+}
+
+/**
  * Policy attached to an InstallConfig. Layered evaluation happens
  * service-side over the OpenTofu plan JSON; this record carries the per-config
  * allowlists and knobs. Extended by later policy layers (scope boundary,
@@ -230,6 +240,7 @@ export interface InstallConfig {
   readonly modulePath?: string;
   readonly normalization?: NormalizationConfig;
   readonly build?: InstallBuildConfig;
+  readonly prebuiltArtifact?: InstallPrebuiltArtifactConfig;
   /**
    * Service-side runner preference for this Capsule. This is operator policy
    * selected at install/deploy time, not repo metadata.
@@ -280,11 +291,11 @@ export interface Installation {
   readonly name: string;
   readonly slug: string;
   /**
-   * Registered git {@link Source} this Installation tracks. Absent for
-   * upload-origin Installations created by `takosumi deploy`, which deploy a
-   * `SourceSnapshot(origin=upload)` directly with no Source. A git Source is an
-   * optional attachment (the `wrangler deploy` vs Workers-Builds relationship),
-   * not a precondition for an Installation to exist.
+   * Registered git {@link Source} this Installation tracks. Absent for no-git
+   * Installations created by `takosumi deploy`, which deploy an upload/artifact
+   * SourceSnapshot directly with no Source. A git Source is an optional
+   * attachment (the `wrangler deploy` vs Workers-Builds relationship), not a
+   * precondition for an Installation to exist.
    */
   readonly sourceId?: string;
   readonly installType: InstallType;

@@ -87,6 +87,37 @@ legacy implementation names while the codebase is being migrated. New public
 docs and UI should use Workspace, Project, Capsule, ProviderConnection,
 ProviderBinding, CredentialRecipe, Run, StateVersion, Output, and AuditEvent.
 
+## Source And First-Deploy Fast Path
+
+Takosumi plans and applies against immutable `SourceSnapshot` archives. A
+snapshot can come from:
+
+```text
+git      source_sync runner clone -> deterministic tar.zst archive
+upload   direct local archive upload from takosumi deploy
+artifact HTTPS prepared archive + sha256 digest verification
+```
+
+`artifact` snapshots are for CI/source-side build pipelines. The caller provides
+an HTTPS `source.tar.zst` URL and `sha256:` digest; Takosumi fetches it, rejects
+redirects and embedded credentials, verifies the digest, stores the archive in
+R2_SOURCE, and records `origin = "artifact"`. The downstream Capsule Gate,
+plan, apply, state, output, and audit paths consume it like any other
+SourceSnapshot.
+
+For Capsules whose source already contains a deployable artifact, an
+InstallConfig may set:
+
+```yaml
+prebuiltArtifact:
+  path: dist/worker.js
+```
+
+The runner executes no build commands for this setting. It validates that the
+path resolves inside the restored SourceSnapshot and exposes the absolute path
+as `TF_VAR_artifact_path` during plan/apply. `build` and `prebuiltArtifact` are
+mutually exclusive.
+
 ## Provider Connections
 
 A ProviderConnection stores credential material or a reference to credential

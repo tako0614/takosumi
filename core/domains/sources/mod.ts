@@ -357,11 +357,11 @@ export class SourcesService {
   }
 
   /**
-   * Compatibility check for an upload-origin {@link SourceSnapshot} that has no
-   * registered {@link Source}. The snapshot already carries its owning Space,
-   * and policy comes from the consumer Installation's InstallConfig (plus the
-   * Space policy) rather than from a Source. The Capsule Gate / Normalizer run
-   * exactly as they do for a git snapshot.
+   * Compatibility check for a no-Source {@link SourceSnapshot} (upload or
+   * prepared artifact). The snapshot already carries its owning Space, and
+   * policy comes from the consumer Installation's InstallConfig (plus the Space
+   * policy) rather than from a Source. The Capsule Gate / Normalizer run exactly
+   * as they do for a git snapshot.
    */
   async createCompatibilityCheckForSnapshot(
     snapshot: SourceSnapshot,
@@ -387,8 +387,8 @@ export class SourcesService {
 
   /**
    * Shared Capsule Gate / Normalizer core used by both the git-Source and the
-   * upload-origin compatibility paths. `sourceId` is recorded on the run/report
-   * only when the snapshot came from a registered Source.
+   * no-Source compatibility paths. `sourceId` is recorded on the run/report only
+   * when the snapshot came from a registered Source.
    */
   async #runCompatibilityAnalysis(input: {
     readonly snapshot: SourceSnapshot;
@@ -513,9 +513,7 @@ export class SourcesService {
     requireNonEmptyString(input.archiveObjectKey, "archiveObjectKey");
     requireNonEmptyString(input.archiveDigest, "archiveDigest");
     const snapshotId = nonEmpty(input.snapshotId) ?? this.#newId("snap");
-    const hexDigest = input.archiveDigest.startsWith("sha256:")
-      ? input.archiveDigest.slice("sha256:".length)
-      : input.archiveDigest;
+    const hexDigest = snapshotDigestHex(input.archiveDigest);
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "upload",
@@ -523,7 +521,7 @@ export class SourcesService {
       url: `https://uploads.takosumi.com/${input.spaceId}`,
       ref: "upload",
       resolvedCommit: hexDigest.toLowerCase(),
-      path: nonEmpty(input.path) ?? DEFAULT_PATH,
+      path: safeSnapshotPath(input.path),
       archiveObjectKey: input.archiveObjectKey,
       archiveDigest: input.archiveDigest,
       archiveSizeBytes: input.archiveSizeBytes,
@@ -535,9 +533,49 @@ export class SourcesService {
   }
 
   /**
-   * Capsule Gate policy for an upload-origin snapshot. Same merge of Space
+   * Records a digest-pinned prepared artifact as a SourceSnapshot. The artifact
+   * bytes are already verified and stored in R2_SOURCE by the API/facade route.
+   * This keeps source-side build output on the same immutable archive path as
+   * git-sync and local upload without requiring a Source row or runner build.
+   */
+  async recordArtifactSnapshot(input: {
+    readonly spaceId: string;
+    readonly url: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    requireNonEmptyString(input.spaceId, "spaceId");
+    requireNonEmptyString(input.url, "url");
+    requireNonEmptyString(input.archiveObjectKey, "archiveObjectKey");
+    requireNonEmptyString(input.archiveDigest, "archiveDigest");
+    const snapshotId = nonEmpty(input.snapshotId) ?? this.#newId("snap");
+    const hexDigest = snapshotDigestHex(input.archiveDigest);
+    const snapshot: SourceSnapshot = {
+      id: snapshotId,
+      origin: "artifact",
+      spaceId: input.spaceId,
+      url: input.url.trim(),
+      ref: "artifact",
+      resolvedCommit: hexDigest,
+      path: safeSnapshotPath(input.path),
+      archiveObjectKey: input.archiveObjectKey,
+      archiveDigest: input.archiveDigest,
+      archiveSizeBytes: input.archiveSizeBytes,
+      fetchedByRunId: "artifact",
+      fetchedAt: this.#now().toISOString(),
+    };
+    await this.#store.putSourceSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /**
+   * Capsule Gate policy for a no-Source snapshot. Same merge of Space
    * policy + InstallConfig policy as {@link #compatibilityPolicyForInstallation}
-   * but without the Source-id match (upload installations have no Source).
+   * but without the Source-id match (upload/artifact installations have no
+   * Source).
    */
   async #compatibilityPolicyForSnapshot(
     spaceId: string,
@@ -857,7 +895,38 @@ export function uploadArchiveObjectKey(
   return `spaces/${spaceId}/uploads/${snapshotId}/source.tar.zst`;
 }
 
+/**
+ * R2_SOURCE archive key layout for a digest-pinned prepared artifact snapshot.
+ */
+export function artifactArchiveObjectKey(
+  spaceId: string,
+  snapshotId: string,
+): string {
+  return `spaces/${spaceId}/artifact-snapshots/${snapshotId}/source.tar.zst`;
+}
+
 export { normalizedModuleObjectKey };
+
+function snapshotDigestHex(digest: string): string {
+  return (
+    digest.startsWith("sha256:") ? digest.slice("sha256:".length) : digest
+  ).toLowerCase();
+}
+
+function safeSnapshotPath(path: string | undefined): string {
+  const value = nonEmpty(path) ?? DEFAULT_PATH;
+  if (
+    value.startsWith("/") ||
+    value.split(/[\\/]+/).some((part) => part === "..") ||
+    value.includes("\0")
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "SourceSnapshot path must be a safe relative path",
+    );
+  }
+  return value;
+}
 
 function compatibilityCheckFailureAnalysis(
   snapshot: SourceSnapshot,

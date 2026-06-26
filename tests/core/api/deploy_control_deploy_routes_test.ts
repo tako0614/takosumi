@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
+import { recordArtifactSnapshotFromUrl } from "../../../core/api/deploy_control_deploy_routes.ts";
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../core/domains/sources/mod.ts";
@@ -81,6 +82,74 @@ test("POST /internal/v1/spaces/:id/uploads records an upload snapshot and stores
   expect(body.snapshot.archiveDigest.startsWith("sha256:")).toBe(true);
 });
 
+test("recordArtifactSnapshotFromUrl stores a digest-verified artifact snapshot", async () => {
+  const { store, archives } = await makeApp();
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-09T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_artifact0001`,
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    sourcesService,
+  });
+  const bytes = new Uint8Array([0x73, 0x72, 0x63, 0x0a]);
+  const digest = await sha256DigestForTest(bytes);
+  const snapshot = await recordArtifactSnapshotFromUrl({
+    controller,
+    writeSourceArchive: (key, data) => {
+      archives.set(key, data);
+      return Promise.resolve();
+    },
+    spaceId: "space_aaaaaaaa",
+    request: {
+      url: "https://artifacts.example.com/app/source.tar.zst",
+      digest,
+      path: "infra",
+    },
+    fetcher: async () =>
+      new Response(bytes, {
+        headers: { "content-length": String(bytes.byteLength) },
+      }),
+  });
+
+  expect(snapshot.origin).toBe("artifact");
+  expect(snapshot.spaceId).toBe("space_aaaaaaaa");
+  expect(snapshot.path).toBe("infra");
+  expect(snapshot.archiveDigest).toBe(digest);
+  expect(archives.get(snapshot.archiveObjectKey)).toEqual(bytes);
+});
+
+test("recordArtifactSnapshotFromUrl rejects a digest mismatch", async () => {
+  const { store, archives } = await makeApp();
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-09T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_artifact0001`,
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    sourcesService,
+  });
+  await expect(
+    recordArtifactSnapshotFromUrl({
+      controller,
+      writeSourceArchive: (key, data) => {
+        archives.set(key, data);
+        return Promise.resolve();
+      },
+      spaceId: "space_aaaaaaaa",
+      request: {
+        url: "https://artifacts.example.com/app/source.tar.zst",
+        digest:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      fetcher: async () => new Response(new Uint8Array([0x62, 0x61, 0x64])),
+    }),
+  ).rejects.toThrow(/digest mismatch/);
+  expect(archives.size).toBe(0);
+});
+
 test("POST /internal/v1/spaces/:id/uploads rejects a Space outside the principal scope (403)", async () => {
   const { app } = await makeApp();
   const res = await app.request("/internal/v1/spaces/space_bbbbbbbb/uploads", {
@@ -90,6 +159,16 @@ test("POST /internal/v1/spaces/:id/uploads rejects a Space outside the principal
   });
   expect(res.status).toBe(403);
 });
+
+async function sha256DigestForTest(
+  bytes: Uint8Array,
+): Promise<`sha256:${string}`> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256:${hex}`;
+}
 
 test("POST /internal/v1/deploy requires a bearer (401)", async () => {
   const { app } = await makeApp();
@@ -130,9 +209,9 @@ test("POST /internal/v1/deploy validates providerEnvBindings envId values (400)"
   expect(payload.error.message).toContain("providerEnvBindings[0].envId");
 });
 
-test("POST /internal/v1/deploy rejects a non-upload snapshot (4xx)", async () => {
+test("POST /internal/v1/deploy rejects a missing no-git snapshot (4xx)", async () => {
   const { app } = await makeApp();
-  // No such upload snapshot -> not_found / invalid_argument (never 5xx).
+  // No such upload/artifact snapshot -> not_found / invalid_argument (never 5xx).
   const res = await app.request("/internal/v1/deploy", {
     method: "POST",
     headers: {

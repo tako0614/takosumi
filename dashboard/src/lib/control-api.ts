@@ -669,7 +669,7 @@ export interface Source {
   readonly updatedAt: string;
 }
 
-export type SourceSnapshotOrigin = "git" | "upload";
+export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
 
 export interface SourceSnapshot {
   readonly id: string;

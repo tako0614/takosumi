@@ -3,6 +3,7 @@ import {
   buildPhaseEnv,
   parseBuild,
   parseGeneratedRoot,
+  parsePrebuiltArtifact,
   resourceChangesFromPlanJson,
 } from "../../../runner/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
@@ -69,25 +70,23 @@ test("parseGeneratedRoot validates filenames and content", () => {
   expect(ok).toEqual({ files: { "main.tf": "terraform {}" } });
   const withModuleFiles = parseGeneratedRoot({
     generatedRoot: {
-      files: { "main.tf": "module \"app\" {}" },
-      moduleFiles: [{ path: "modules/app/main.tf", text: "output \"x\" {}" }],
+      files: { "main.tf": 'module "app" {}' },
+      moduleFiles: [{ path: "modules/app/main.tf", text: 'output "x" {}' }],
     },
   });
   expect(withModuleFiles).toEqual({
-    files: { "main.tf": "module \"app\" {}" },
-    moduleFiles: [{ path: "modules/app/main.tf", text: "output \"x\" {}" }],
+    files: { "main.tf": 'module "app" {}' },
+    moduleFiles: [{ path: "modules/app/main.tf", text: 'output "x" {}' }],
   });
   expect(() =>
-    parseGeneratedRoot({ generatedRoot: { files: { "../escape.tf": "x" } } })
+    parseGeneratedRoot({ generatedRoot: { files: { "../escape.tf": "x" } } }),
   ).toThrow();
   expect(() =>
-    parseGeneratedRoot({ generatedRoot: { files: { "sub/main.tf": "x" } } })
+    parseGeneratedRoot({ generatedRoot: { files: { "sub/main.tf": "x" } } }),
   ).toThrow();
+  expect(() => parseGeneratedRoot({ generatedRoot: { files: {} } })).toThrow();
   expect(() =>
-    parseGeneratedRoot({ generatedRoot: { files: {} } })
-  ).toThrow();
-  expect(() =>
-    parseGeneratedRoot({ generatedRoot: { files: { "main.tf": 5 } } })
+    parseGeneratedRoot({ generatedRoot: { files: { "main.tf": 5 } } }),
   ).toThrow();
   expect(() =>
     parseGeneratedRoot({
@@ -95,7 +94,7 @@ test("parseGeneratedRoot validates filenames and content", () => {
         files: { "main.tf": "terraform {}" },
         moduleFiles: [{ path: "../escape.tf", text: "x" }],
       },
-    })
+    }),
   ).toThrow();
 });
 
@@ -116,20 +115,35 @@ test("parseBuild requires bun runtime, commands, and a safe artifactPath", () =>
   expect(() =>
     parseBuild({
       build: { runtime: "node", commands: ["x"], artifactPath: "dist" },
-    })
+    }),
   ).toThrow();
   expect(() =>
-    parseBuild({ build: { runtime: "bun", commands: [], artifactPath: "d" } })
+    parseBuild({ build: { runtime: "bun", commands: [], artifactPath: "d" } }),
   ).toThrow();
   expect(() =>
     parseBuild({
       build: { runtime: "bun", commands: ["x"], artifactPath: "/abs" },
-    })
+    }),
   ).toThrow();
   expect(() =>
     parseBuild({
       build: { runtime: "bun", commands: ["x"], artifactPath: "../escape" },
-    })
+    }),
+  ).toThrow();
+});
+
+test("parsePrebuiltArtifact requires a safe source-relative path", () => {
+  expect(parsePrebuiltArtifact({})).toBeUndefined();
+  expect(
+    parsePrebuiltArtifact({
+      prebuiltArtifact: { path: "dist/worker.js" },
+    }),
+  ).toEqual({ path: "dist/worker.js" });
+  expect(() =>
+    parsePrebuiltArtifact({ prebuiltArtifact: { path: "/abs" } }),
+  ).toThrow();
+  expect(() =>
+    parsePrebuiltArtifact({ prebuiltArtifact: { path: "../escape" } }),
   ).toThrow();
 });
 
@@ -169,7 +183,11 @@ test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadat
       actions: ["create"],
       scope: { cloudflareAccountId: "acct_allowed" },
     },
-    { address: "random_id.suffix", type: "random_id", actions: ["delete", "create"] },
+    {
+      address: "random_id.suffix",
+      type: "random_id",
+      actions: ["delete", "create"],
+    },
     { address: "random_pet.name", type: "random_pet", actions: ["no-op"] },
   ]);
   expect(resourceChangesFromPlanJson(JSON.stringify({}))).toEqual([]);

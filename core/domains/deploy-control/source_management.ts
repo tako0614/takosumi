@@ -93,6 +93,18 @@ export class SourceManagement {
     return await this.#require().recordUploadSnapshot(input);
   }
 
+  async recordArtifactSnapshot(input: {
+    readonly spaceId: string;
+    readonly url: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+    readonly path?: string;
+    readonly snapshotId?: string;
+  }): Promise<SourceSnapshot> {
+    return await this.#require().recordArtifactSnapshot(input);
+  }
+
   async createSourceCompatibilityCheck(
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},

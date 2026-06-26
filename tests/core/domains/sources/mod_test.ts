@@ -147,6 +147,36 @@ test("createSource accepts an authConnectionId present in the space", async () =
   expect(source.authConnectionId).toBe("conn_git1");
 });
 
+test("recordArtifactSnapshot stores a no-Source prepared artifact snapshot", async () => {
+  const { store, service } = makeService();
+  const snapshot = await service.recordArtifactSnapshot({
+    spaceId: "space_1",
+    url: "https://artifacts.example.com/capsule/source.tar.zst",
+    snapshotId: "snap_artifact0001",
+    archiveObjectKey:
+      "spaces/space_1/artifact-snapshots/snap_artifact0001/source.tar.zst",
+    archiveDigest:
+      "sha256:ABCDEFabcdef0000000000000000000000000000000000000000000000000000",
+    archiveSizeBytes: 1234,
+    path: "infra",
+  });
+
+  expect(snapshot).toMatchObject({
+    id: "snap_artifact0001",
+    origin: "artifact",
+    spaceId: "space_1",
+    url: "https://artifacts.example.com/capsule/source.tar.zst",
+    ref: "artifact",
+    resolvedCommit:
+      "abcdefabcdef0000000000000000000000000000000000000000000000000000",
+    path: "infra",
+    archiveSizeBytes: 1234,
+    fetchedByRunId: "artifact",
+  });
+  expect(snapshot.sourceId).toBeUndefined();
+  expect(await store.getSourceSnapshot(snapshot.id)).toEqual(snapshot);
+});
+
 test("listSources / getSource project public records only", async () => {
   const { service } = makeService();
   await service.createSource({

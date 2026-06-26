@@ -1,11 +1,12 @@
 /**
  * Upload deploy orchestration (`POST /api/deploy`).
  *
- * Composes the upload-origin deploy pipeline the way the dashboard cannot: it
- * takes a previously-ingested upload {@link SourceSnapshot}, resolves or creates
- * the target Installation `@space/name` (synthesizing a default InstallConfig
- * when the Installation is new), and returns the plan Run pinned to that
- * snapshot. Callers apply that reviewed plan through the normal apply route.
+ * Composes the no-git deploy pipeline the way the dashboard cannot: it takes a
+ * previously-ingested upload or prepared-artifact {@link SourceSnapshot},
+ * resolves or creates the target Installation `@space/name` (synthesizing a
+ * default InstallConfig when the Installation is new), and returns the plan Run
+ * pinned to that snapshot. Callers apply that reviewed plan through the normal
+ * apply route.
  * Everything heavy (Capsule Gate / generated root / plan) runs in the existing
  * controller pipeline; this only wires the create-or-update + plan steps.
  *
@@ -62,12 +63,15 @@ export async function deployUpload(
       ? validateInstallationProviderEnvBindings(request.providerEnvBindings)
       : undefined;
 
-  // 1. The upload snapshot must exist, be upload-origin, and live in the Space.
+  // 1. The no-git snapshot must exist and live in the Space.
   const snapshot = await deps.controller.getSourceSnapshot(request.snapshotId);
-  if (snapshot.origin !== "upload" || snapshot.spaceId !== request.spaceId) {
+  if (
+    (snapshot.origin !== "upload" && snapshot.origin !== "artifact") ||
+    snapshot.spaceId !== request.spaceId
+  ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `snapshot ${request.snapshotId} is not an upload snapshot in space ${request.spaceId}`,
+      `snapshot ${request.snapshotId} is not an upload/artifact snapshot in space ${request.spaceId}`,
     );
   }
 

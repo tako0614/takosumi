@@ -45,6 +45,7 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
+  ArtifactSnapshotRequest,
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
@@ -644,6 +645,12 @@ export interface ControlPlaneOperations {
     readonly bytes: Uint8Array;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
+  recordArtifactSnapshot(input: {
+    readonly spaceId: string;
+    readonly url: string;
+    readonly digest: string;
+    readonly path?: string;
+  }): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot>;
   deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   // --- Billing (§28) ---
@@ -1183,6 +1190,10 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (leaf === "uploads" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await uploadSpaceArchive(request, url, operations, spaceId);
+    }
+    if (leaf === "artifact-snapshots" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      return await createSpaceArtifactSnapshot(request, operations, spaceId);
     }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
@@ -2617,8 +2628,10 @@ function isUploadOriginSnapshotMissingError(error: unknown): boolean {
   if (controllerErrorCode(error) !== "failed_precondition") return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
-    message.includes("is upload-origin") &&
-    message.includes("pinned upload SourceSnapshot")
+    (message.includes("is upload-origin") ||
+      message.includes("has no git Source")) &&
+    (message.includes("pinned upload SourceSnapshot") ||
+      message.includes("pinned upload/artifact SourceSnapshot"))
   );
 }
 
@@ -3185,6 +3198,50 @@ async function uploadSpaceArchive(
     spaceId,
     bytes,
     ...(path ? { path } : {}),
+  });
+  return jsonStatus({ snapshot }, 201);
+}
+
+async function createSpaceArtifactSnapshot(
+  request: Request,
+  operations: ControlPlaneOperations,
+  spaceId: string,
+): Promise<Response> {
+  const body = await readJsonObject(request);
+  if (!body) {
+    return errorJson("invalid_argument", "invalid request", 400, request);
+  }
+  const artifactUrl = stringValue(body.url);
+  const digest = stringValue(body.digest);
+  const format = stringValue(body.format);
+  if (!artifactUrl || !digest) {
+    return errorJson(
+      "invalid_argument",
+      "url and digest are required",
+      400,
+      request,
+    );
+  }
+  if (format !== undefined && format !== "tar.zst") {
+    return errorJson(
+      "invalid_argument",
+      "format must be tar.zst",
+      400,
+      request,
+    );
+  }
+  const path = stringValue(body.path);
+  const artifactRequest: ArtifactSnapshotRequest = {
+    url: artifactUrl,
+    digest,
+    ...(format ? { format } : {}),
+    ...(path ? { path } : {}),
+  };
+  const snapshot = await operations.recordArtifactSnapshot({
+    spaceId,
+    url: artifactRequest.url,
+    digest: artifactRequest.digest,
+    ...(artifactRequest.path ? { path: artifactRequest.path } : {}),
   });
   return jsonStatus({ snapshot }, 201);
 }

@@ -110,6 +110,11 @@ interface BuildSpec {
   readonly artifactPath: string;
 }
 
+interface PrebuiltArtifactSpec {
+  /** File/dir relative to the restored source root. */
+  readonly path: string;
+}
+
 interface BackupSpec {
   readonly mode: "provider_snapshot" | "custom_command";
   readonly command?: readonly string[];
@@ -794,6 +799,10 @@ async function runGeneratedRootPlan(
 ): Promise<JsonRecord> {
   const operation = parseOperation(request);
   const build = parseBuild(request);
+  const prebuiltArtifact = parsePrebuiltArtifact(request);
+  if (build && prebuiltArtifact) {
+    throw new Error("build and prebuiltArtifact are mutually exclusive");
+  }
   const source = parseSource(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
@@ -835,9 +844,11 @@ async function runGeneratedRootPlan(
     );
   }
   await restoreUploadedState(workspace, workspace.generatedRootDir);
-  const planContext = build
-    ? withArtifactPathVar(commandContext, workspace, build)
-    : commandContext;
+  const planContext = await withRequestArtifactPathVar(
+    commandContext,
+    workspace,
+    { build, prebuiltArtifact },
+  );
   const preparedCredentials = await prepareProviderCredentialFiles(
     planContext,
     workspace,
@@ -1013,6 +1024,11 @@ async function runReviewedPlanApply(
   const commandContext = commandContextFromRequest(request, runnerProfile);
   const workspace = workspaceForRun(runId);
   const planArtifact = parsePlanArtifact(request);
+  const build = parseBuild(request);
+  const prebuiltArtifact = parsePrebuiltArtifact(request);
+  if (build && prebuiltArtifact) {
+    throw new Error("build and prebuiltArtifact are mutually exclusive");
+  }
   await verifyPlanArtifact(workspace.planPath, planArtifact);
   if (!generatedRoot) {
     throw new Error("generatedRoot is required for OpenTofu apply runs");
@@ -1024,8 +1040,13 @@ async function runReviewedPlanApply(
     commandContext,
     generatedRoot,
   );
-  const preparedCredentials = await prepareProviderCredentialFiles(
+  const applyBaseContext = await withRequestArtifactPathVar(
     commandContext,
+    workspace,
+    { build, prebuiltArtifact },
+  );
+  const preparedCredentials = await prepareProviderCredentialFiles(
+    applyBaseContext,
     workspace,
   );
   try {
@@ -1209,11 +1230,64 @@ function withArtifactPathVar(
   workspace: RunWorkspace,
   build: BuildSpec,
 ): CommandContext {
+  return withArtifactPathValue(
+    context,
+    join(workspace.artifactDir, build.artifactPath),
+  );
+}
+
+async function withRequestArtifactPathVar(
+  context: CommandContext,
+  workspace: RunWorkspace,
+  requestArtifact: {
+    readonly build?: BuildSpec;
+    readonly prebuiltArtifact?: PrebuiltArtifactSpec;
+  },
+): Promise<CommandContext> {
+  if (requestArtifact.build) {
+    return withArtifactPathVar(context, workspace, requestArtifact.build);
+  }
+  if (requestArtifact.prebuiltArtifact) {
+    return withArtifactPathValue(
+      context,
+      await resolvePrebuiltArtifactPath(
+        workspace,
+        requestArtifact.prebuiltArtifact,
+      ),
+    );
+  }
+  return context;
+}
+
+async function resolvePrebuiltArtifactPath(
+  workspace: RunWorkspace,
+  artifact: PrebuiltArtifactSpec,
+): Promise<string> {
+  const artifactSource = resolve(workspace.sourceRoot, artifact.path);
+  const normalizedRoot = resolve(workspace.sourceRoot);
+  if (
+    artifactSource !== normalizedRoot &&
+    !artifactSource.startsWith(`${normalizedRoot}/`)
+  ) {
+    throw new Error("prebuiltArtifact.path must stay inside source root");
+  }
+  await assertRealPathInsideSourceRoot(
+    artifactSource,
+    workspace.sourceRoot,
+    "prebuilt artifact path",
+  );
+  return artifactSource;
+}
+
+function withArtifactPathValue(
+  context: CommandContext,
+  artifactPath: string,
+): CommandContext {
   return {
     ...context,
     env: {
       ...context.env,
-      [ARTIFACT_PATH_TF_VAR]: join(workspace.artifactDir, build.artifactPath),
+      [ARTIFACT_PATH_TF_VAR]: artifactPath,
     },
   };
 }
@@ -2048,10 +2122,26 @@ async function createDeterministicArchive(
     { cwd: RUN_ROOT, context: git.context },
   );
   await runRequiredCommand(
-    ["zstd", "-q", "-19", "-f", "-o", archivePath, `${archivePath}.tar`],
+    [
+      "zstd",
+      "-q",
+      `-${sourceArchiveZstdLevel()}`,
+      "-f",
+      "-o",
+      archivePath,
+      `${archivePath}.tar`,
+    ],
     { cwd: RUN_ROOT, context: git.context },
   );
   await rm(`${archivePath}.tar`, { force: true });
+}
+
+function sourceArchiveZstdLevel(): number {
+  const raw = Bun.env.TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL;
+  if (raw === undefined || raw.trim() === "") return 3;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= 19) return value;
+  return 3;
 }
 
 function sourceArchivePath(workspace: RunWorkspace): string {
@@ -3043,6 +3133,16 @@ export function parseBuild(request: unknown): BuildSpec | undefined {
   const artifactPath = requiredStringField(build, "artifactPath");
   assertSafeRelativePath(artifactPath, "build.artifactPath");
   return { runtime: "bun", commands, artifactPath };
+}
+
+export function parsePrebuiltArtifact(
+  request: unknown,
+): PrebuiltArtifactSpec | undefined {
+  const artifact = recordField(request, "prebuiltArtifact");
+  if (!isRecord(artifact)) return undefined;
+  const path = requiredStringField(artifact, "path");
+  assertSafeRelativePath(path, "prebuiltArtifact.path");
+  return { path };
 }
 
 function parseBackup(request: unknown): BackupSpec {
