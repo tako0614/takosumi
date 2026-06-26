@@ -63,7 +63,7 @@
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",
     "website:preview": "cd website && bun run preview",
-    "website:deploy": "bash website/build.sh && bunx wrangler pages deploy website/.output/public --project-name=takosumi-website"
+    "website:deploy": "bash website/build.sh && bunx wrangler@latest pages deploy website/.output/public --project-name=takosumi-website --branch main"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.6",

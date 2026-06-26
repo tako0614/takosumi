@@ -65,12 +65,17 @@ cd takosumi
 bun run website:deploy
 ```
 
+This deploys the merged landing/docs artifact to the Pages production branch
+`main`. A deploy from a detached checkout without `--branch main` creates only a
+preview deployment and does not update `takosumi.com`.
+
 Smoke:
 
 ```bash
 curl -I https://takosumi.com/
 curl -I https://takosumi.com/docs/
 curl -I https://takosumi.com/docs/reference/model
+curl -I https://takosumi.com/docs/reference/cloud-endpoints
 ```
 
 ## Account plane (in-process)
