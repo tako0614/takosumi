@@ -71,7 +71,10 @@ export function createWebhookReleaseActivator(
         ),
       });
       if (!response.ok) {
-        throw new Error(`release activator request failed: ${response.status}`);
+        const detail = await releaseActivatorFailureDetail(response);
+        throw new Error(
+          `release activator request failed: ${response.status}${detail ? `: ${detail}` : ""}`,
+        );
       }
       if (response.status === 204) {
         return { status: "succeeded" };
@@ -286,6 +289,24 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
 
 function releaseCommandRunId(applyRunId: string): string {
   return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
+}
+
+async function releaseActivatorFailureDetail(
+  response: Response,
+): Promise<string> {
+  try {
+    const body = await response.text();
+    return redactFailureDetail(body).slice(0, 1200);
+  } catch {
+    return "";
+  }
+}
+
+function redactFailureDetail(value: string): string {
+  return value
+    .replace(/[\0\r\n\t]+/gu, " ")
+    .replace(/\s{2,}/gu, " ")
+    .trim();
 }
 
 function parseReleaseActivatorResponse(

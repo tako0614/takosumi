@@ -203,6 +203,7 @@ export async function runAccountsMigrateD1(
     return 2;
   }
   const env = optionalStringOption(options, "env");
+  const wranglerConfig = optionalStringOption(options, "wranglerConfig");
   try {
     const report = await applyD1AccountsMigrations({
       databaseId,
@@ -210,6 +211,7 @@ export async function runAccountsMigrateD1(
       dryRun,
       ...(local ? { target: "local" as const } : {}),
       ...(env ? { env } : {}),
+      ...(wranglerConfig ? { wranglerConfig } : {}),
       ...(injectedCommand ? { command: injectedCommand } : {}),
     });
     if (dryRun || booleanOption(options, "json")) {
