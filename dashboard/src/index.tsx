@@ -52,6 +52,9 @@ const ActivityView = lazy(() => import("./views/activity/ActivityView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
 );
+const CloudResourcesView = lazy(
+  () => import("./views/cloud/CloudResourcesView.tsx"),
+);
 const SpaceSettingsView = lazy(
   () => import("./views/space/SpaceSettingsView.tsx"),
 );
@@ -125,6 +128,7 @@ function App() {
       <Route path="/services" component={ServiceListView} />
       <Route path="/new" component={NewAppView} />
       <Route path="/store" component={StoreView} />
+      <Route path="/cloud" component={CloudResourcesView} />
       <Route path="/connections" component={ConnectionsView} />
       <Route path="/billing" component={BillingView} />
       <Route path="/services/:id" component={AppDetailView} />

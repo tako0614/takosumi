@@ -84,6 +84,13 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     if (billing.error)
       return t("billing.error", { message: errorMessage(billing.error) });
     const currentMode = mode() ?? "disabled";
+    if (
+      cloudBilling() &&
+      currentMode === "disabled" &&
+      hasBillingCatalog()
+    ) {
+      return t("billing.mode.checkoutOpen");
+    }
     return t(MODE_KEY[currentMode] ?? "billing.mode.disabled");
   });
   const availableLabel = createMemo(() =>
