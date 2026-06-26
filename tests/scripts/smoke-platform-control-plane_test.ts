@@ -168,6 +168,33 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
   });
 });
 
+test("platform control-plane smoke can require release activation evidence", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      requireReleaseActivation: "succeeded",
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      appName: "takosumi-release-smoke",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(options.requireReleaseActivation).toBe("succeeded");
+  expect(result.steps).toContain("releaseActivationVerified");
+  expect(result.releaseActivation).toMatchObject({
+    status: "succeeded",
+    action: "release_activation.succeeded",
+    runId: "apply_dry_run",
+  });
+});
+
 test("platform control-plane smoke resolves secret sources from environment", async () => {
   const options = await resolveOptions(
     {

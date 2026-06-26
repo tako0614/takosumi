@@ -114,6 +114,7 @@ type SmokeCheckStatus = "passed" | "denied" | "not_reached";
 type SmokeVerificationMode = "cloudflare-worker" | "opentofu";
 type SmokeProviderConnectionMode = "guided" | "generic-env" | "none";
 type SmokeAuthTokenKind = "session" | "pat";
+type ReleaseActivationRequirement = "any" | "pending" | "succeeded" | "failed";
 type SecretInputSource = "env" | "file" | "not_required";
 type NonSecretInputSource = "env" | "file" | "arg" | "not_required";
 type JsonSmokeValue =
@@ -165,6 +166,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly dryRun: boolean;
   readonly json: boolean;
   readonly outFile?: string;
+  readonly requireReleaseActivation?: ReleaseActivationRequirement;
   readonly keepConnection: boolean;
   readonly ensureSpace: boolean;
   readonly backupRestoreRehearsal: boolean;
@@ -199,6 +201,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly destroyApplyRunId?: string;
   readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
   readonly deploymentLedger?: DeploymentLedgerVerificationResult;
+  readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
@@ -275,6 +278,7 @@ interface CliArgs {
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
+  readonly requireReleaseActivation?: string;
 }
 
 interface RequestOptions {
@@ -392,6 +396,18 @@ interface DeploymentLedgerVerificationResult {
   readonly publicOutputDigest: string;
 }
 
+interface ReleaseActivationVerificationResult {
+  readonly eventId: string;
+  readonly action: string;
+  readonly status: Exclude<ReleaseActivationStatus, "skipped">;
+  readonly targetId: string;
+  readonly runId: string;
+  readonly activationKind?: string;
+  readonly commandCount?: number;
+  readonly outputCount?: number;
+  readonly metadataKeys: readonly string[];
+}
+
 interface BackupRestoreRehearsalResult {
   readonly backupId: string;
   readonly backupRunId?: string;
@@ -413,6 +429,15 @@ interface FailureCleanupResult {
   readonly cloudflareWorkerGone: boolean;
   readonly installationMarkedError: boolean;
   readonly error?: string;
+}
+
+interface ActivityEventRecord {
+  readonly id?: string;
+  readonly action?: string;
+  readonly targetType?: string;
+  readonly targetId?: string;
+  readonly runId?: string;
+  readonly metadata?: Record<string, unknown>;
 }
 
 if (import.meta.main) {
@@ -593,6 +618,10 @@ export async function resolveOptions(
     (providerlessOpenTofuSmoke
       ? DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID
       : undefined);
+  const requireReleaseActivation = parseReleaseActivationRequirement(
+    args.requireReleaseActivation ??
+      env.TAKOSUMI_SMOKE_REQUIRE_RELEASE_ACTIVATION,
+  );
   return {
     url: normalizeBaseUrl(url),
     accountSessionToken: accountSessionToken.value,
@@ -636,6 +665,7 @@ export async function resolveOptions(
     dryRun: args.dryRun === true,
     json: args.json === true,
     ...(args.outFile ? { outFile: resolve(args.outFile) } : {}),
+    ...(requireReleaseActivation ? { requireReleaseActivation } : {}),
     keepConnection: args.keepConnection === true,
     ensureSpace: args.ensureWorkspace === true || args.ensureSpace === true,
     backupRestoreRehearsal: args.backupRestoreRehearsal === true,
@@ -703,6 +733,25 @@ export function dryRunResult(
       publicOutputNames: Object.keys(options.outputAllowlist).sort(),
       publicOutputDigest: `sha256:${"0".repeat(64)}`,
     },
+    ...(options.requireReleaseActivation
+      ? {
+          releaseActivation: {
+            eventId: "evt_dry_run",
+            action: `release_activation.${dryRunReleaseActivationStatus(
+              options.requireReleaseActivation,
+            )}`,
+            status: dryRunReleaseActivationStatus(
+              options.requireReleaseActivation,
+            ),
+            targetId: "dep_dry_run",
+            runId: "apply_dry_run",
+            activationKind: "takosumi.release-commands@v1",
+            commandCount: 1,
+            outputCount: Object.keys(options.outputAllowlist).length,
+            metadataKeys: ["activationKind", "commandCount", "outputCount"],
+          },
+        }
+      : {}),
     inputs: publicInputSummary(options),
   };
 }
@@ -728,6 +777,7 @@ export async function runPlatformControlPlaneSmoke(
   let destroyApplyRunId: string | undefined;
   let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
   let deploymentLedger: DeploymentLedgerVerificationResult | undefined;
+  let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -817,6 +867,14 @@ export async function runPlatformControlPlaneSmoke(
       });
     }
     completeStep("deploymentLedgerVerified");
+    if (options.requireReleaseActivation) {
+      releaseActivation = await assertReleaseActivation(options, {
+        spaceId,
+        applyRunId,
+        deploymentId: deploymentLedger.deploymentId,
+      });
+      completeStep("releaseActivationVerified");
+    }
     if (options.backupRestoreRehearsal) {
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
         spaceId,
@@ -901,6 +959,7 @@ export async function runPlatformControlPlaneSmoke(
       destroyApplyRunId,
       backupRestoreRehearsal,
       deploymentLedger,
+      releaseActivation,
       capsuleGateStatus: "passed",
       policyStatus:
         completedApply.policyStatus === "deny" ||
@@ -975,6 +1034,7 @@ export async function runPlatformControlPlaneSmoke(
     destroyApplyRunId,
     backupRestoreRehearsal,
     deploymentLedger,
+    releaseActivation,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -1004,6 +1064,7 @@ function failedResult(
     readonly destroyApplyRunId?: string;
     readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
     readonly deploymentLedger?: DeploymentLedgerVerificationResult;
+    readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -1048,6 +1109,7 @@ function failedResult(
     destroyApplyRunId: input.destroyApplyRunId,
     backupRestoreRehearsal: input.backupRestoreRehearsal,
     deploymentLedger: input.deploymentLedger,
+    releaseActivation: input.releaseActivation,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl:
@@ -2168,6 +2230,98 @@ async function assertGenericDeploymentLedger(
   };
 }
 
+async function assertReleaseActivation(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly spaceId: string;
+    readonly applyRunId: string;
+    readonly deploymentId: string;
+  },
+): Promise<ReleaseActivationVerificationResult> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() <= deadline) {
+    const response = await requestJson<{
+      readonly events?: readonly ActivityEventRecord[];
+    }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      path: `${API_PREFIX}/spaces/${encodeURIComponent(input.spaceId)}/activity?limit=50`,
+    });
+    const event = (response.events ?? []).find((candidate) =>
+      isReleaseActivationEvent(candidate, input),
+    );
+    if (event) {
+      return releaseActivationVerificationResult(options, input, event);
+    }
+    await sleep(options.pollIntervalMs);
+  }
+  throw new Error(
+    `apply run ${input.applyRunId} did not emit release_activation Activity for deployment ${input.deploymentId}`,
+  );
+}
+
+function isReleaseActivationEvent(
+  candidate: ActivityEventRecord,
+  input: {
+    readonly applyRunId: string;
+    readonly deploymentId: string;
+  },
+): candidate is ActivityEventRecord & { readonly action: string } {
+  if (!candidate.action?.startsWith("release_activation.")) return false;
+  if (candidate.runId !== input.applyRunId) return false;
+  if (candidate.targetId !== input.deploymentId) return false;
+  return (
+    candidate.targetType === undefined || candidate.targetType === "deployment"
+  );
+}
+
+function releaseActivationVerificationResult(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly applyRunId: string;
+    readonly deploymentId: string;
+  },
+  event: ActivityEventRecord & { readonly action: string },
+): ReleaseActivationVerificationResult {
+  const status = releaseActivationStatusFromAction(event.action);
+  if (
+    options.requireReleaseActivation !== "any" &&
+    status !== options.requireReleaseActivation
+  ) {
+    throw new Error(
+      `release activation for apply run ${input.applyRunId} was ${status}; expected ${options.requireReleaseActivation}`,
+    );
+  }
+  const metadata = event.metadata ?? {};
+  return {
+    eventId: event.id ?? "",
+    action: event.action,
+    status,
+    targetId: event.targetId ?? input.deploymentId,
+    runId: event.runId ?? input.applyRunId,
+    ...(typeof metadata.activationKind === "string"
+      ? { activationKind: metadata.activationKind }
+      : {}),
+    ...(typeof metadata.commandCount === "number"
+      ? { commandCount: metadata.commandCount }
+      : {}),
+    ...(typeof metadata.outputCount === "number"
+      ? { outputCount: metadata.outputCount }
+      : {}),
+    metadataKeys: Object.keys(metadata).sort(),
+  };
+}
+
+function releaseActivationStatusFromAction(
+  action: string,
+): Exclude<ReleaseActivationStatus, "skipped"> {
+  const status = action.replace(/^release_activation\./u, "");
+  if (status === "pending" || status === "succeeded" || status === "failed") {
+    return status;
+  }
+  throw new Error(`release activation action ${action} has invalid status`);
+}
+
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -2724,6 +2878,31 @@ function parseVerificationMode(
   throw new Error("--verification-mode must be cloudflare-worker or opentofu");
 }
 
+function parseReleaseActivationRequirement(
+  value: string | undefined,
+): ReleaseActivationRequirement | undefined {
+  if (value === undefined || value.trim() === "" || value === "none") {
+    return undefined;
+  }
+  if (
+    value === "any" ||
+    value === "pending" ||
+    value === "succeeded" ||
+    value === "failed"
+  ) {
+    return value;
+  }
+  throw new Error(
+    "--require-release-activation must be any, pending, succeeded, failed, or none",
+  );
+}
+
+function dryRunReleaseActivationStatus(
+  requirement: ReleaseActivationRequirement,
+): Exclude<ReleaseActivationStatus, "skipped"> {
+  return requirement === "any" ? "succeeded" : requirement;
+}
+
 function defaultSmokeVars(input: {
   readonly accountId: string;
   readonly appName: string;
@@ -2956,6 +3135,7 @@ function requiredSteps(
     | "sourceMode"
     | "cloudflareConnectionMode"
     | "verificationMode"
+    | "requireReleaseActivation"
   >,
 ): readonly string[] {
   const steps = [
@@ -2978,6 +3158,9 @@ function requiredSteps(
       : ["deploymentVerified", "publicUrlVerified"]),
     "deploymentLedgerVerified",
   ];
+  if (options?.requireReleaseActivation) {
+    steps.push("releaseActivationVerified");
+  }
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");
   }
@@ -3023,6 +3206,9 @@ async function writeResult(
   console.log(
     `public URL verified: ${result.publicUrlVerified ? "yes" : "no"}`,
   );
+  if (result.releaseActivation) {
+    console.log(`release activation: ${result.releaseActivation.status}`);
+  }
   if (result.installationId)
     console.log(`installation: ${result.installationId}`);
   if (result.sourceSyncRunId)
@@ -3312,6 +3498,26 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("self-test result is missing backup/restore rehearsal");
   }
+  const releaseOptions = await resolveOptions(
+    {
+      dryRun: true,
+      requireReleaseActivation: "succeeded",
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      appName: "takosumi-release-selftest",
+      sessionTokenFile: "/private/account-session-token",
+    },
+    {},
+  );
+  const releaseResult = dryRunResult(releaseOptions);
+  if (
+    !releaseResult.steps.includes("releaseActivationVerified") ||
+    releaseResult.releaseActivation?.status !== "succeeded"
+  ) {
+    throw new Error("self-test result is missing release activation evidence");
+  }
   const failed = failedResult(options, {
     spaceId: "space_selftest",
     completedSteps: [],
@@ -3467,6 +3673,8 @@ Options:
   --vars-json-file <path>                         read OpenTofu variable object from a JSON file
   --output-allowlist-json <json>                  output projection object; default url + worker_name for the hello-worker smoke
   --output-allowlist-json-file <path>             read output projection object from a JSON file
+  --require-release-activation <any|pending|succeeded|failed|none>
+                                                   require a release_activation Activity event for the apply Run; default none
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
