@@ -106,6 +106,12 @@ Billing: the secret is a Cloudflare API token, and Cloudflare bills the
 configured provider credits. The OSS platform worker does not parse this config
 or forward model requests by itself.
 
+`workers_ai_binding` profiles may set `gateway.id` to route `env.AI.run()`
+through Cloudflare AI Gateway from inside the Worker. Use `default` unless the
+operator has explicitly created a named gateway in the same Cloudflare account.
+The optional `gateway.metadata` object is public routing/log metadata only and
+is rejected if it contains secret-shaped keys or values.
+
 ```json
 [
   {
@@ -115,7 +121,7 @@ or forward model requests by itself.
     "baseUrl": "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1",
     "apiKeyEnv": "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
     "headers": {
-      "cf-aig-gateway-id": "takosumi-cloud"
+      "cf-aig-gateway-id": "default"
     },
     "models": [
       {
@@ -136,6 +142,13 @@ or forward model requests by itself.
     "type": "workers_ai_binding",
     "id": "workers-ai",
     "provider": "workers_ai",
+    "gateway": {
+      "id": "default",
+      "collectLog": true,
+      "metadata": {
+        "surface": "takosumi-cloud"
+      }
+    },
     "models": [
       {
         "publicModel": "workers-ai/llama-3.1-8b-instruct-fast",

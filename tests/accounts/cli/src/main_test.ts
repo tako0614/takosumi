@@ -9355,7 +9355,7 @@ test("platform-secrets status accepts Cloudflare Unified Billing API token profi
       "[vars]",
       "TAKOSUMI_AI_GATEWAY_PROFILES = '''",
       "[",
-      '  {"id":"cloudflare-unified","provider":"cloudflare_unified_billing","baseUrl":"https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN","headers":{"cf-aig-gateway-id":"takosumi-cloud"},"models":[{"publicModel":"takosumi/default","upstreamModel":"openai/gpt-4.1-mini","endpoints":["chat.completions"],"default":true,"billingClass":"operator-paid-preview"}]}',
+      '  {"id":"cloudflare-unified","provider":"cloudflare_unified_billing","baseUrl":"https://api.cloudflare.com/client/v4/accounts/account_123/ai/v1","apiKeyEnv":"TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN","headers":{"cf-aig-gateway-id":"default"},"models":[{"publicModel":"takosumi/default","upstreamModel":"openai/gpt-4.1-mini","endpoints":["chat.completions"],"default":true,"billingClass":"operator-paid-preview"}]}',
       "]",
       "'''",
     ].join("\n"),
