@@ -3,22 +3,32 @@
 Takosumi Cloud endpoints are Cloud-only managed services. They are not part of
 the Takosumi OSS or Takosumi for Operators public contract.
 
-The app screen should show operational facts that people need day to day. The
-full endpoint contract, scope, and examples live in this document.
+The app screen should show operational facts that people need day to day: API
+keys, connection health, this month's usage, balance, and current resource
+counts. The full endpoint contract, scope, and examples live in this document.
 
 ## App and docs split
 
-`app.takosumi.com/cloud` prioritizes:
+The dedicated Cloud screen has been retired; Cloud operational information now
+lives under Connections (`app.takosumi.com/connections`) and Billing
+(`app.takosumi.com/billing`).
+
+The Connections tab (Cloud runtime only) shows:
 
 - creating, listing, and revoking API keys
-- this month's usage, Gateway usage, and available credits
-- AI Gateway base URL, default model, and public model aliases
+- AI Gateway base URL, connection health, default model, and model count
 - Cloudflare Compatibility API base URL and current account
-- KV / Object Storage / Database / Worker inventory in Takosumi Cloud
+- KV / Object Storage / Database / Worker counts in Takosumi Cloud
 
-The app does not carry the full specification. Provider compatibility scope,
-OpenTofu provider examples, usage event contracts, and secret-handling rules
-belong in docs.
+The Billing tab shows:
+
+- this month's usage, Gateway usage, and available credits
+- usage history (the usage event ledger)
+
+The app does not carry the full specification. Complete model aliases and
+resource names are secondary details that can be opened only when needed;
+provider compatibility scope, OpenTofu provider examples, usage event
+contracts, and secret-handling rules belong in docs.
 
 ## Boundary
 

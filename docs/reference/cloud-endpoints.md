@@ -4,20 +4,29 @@ Takosumi Cloud endpoints は Takosumi Cloud 専用の managed service です。
 Takosumi OSS / Takosumi for Operators の public contract には含めません。
 
 アプリ画面の役割は、日常的に見る運用情報をすぐ確認できるようにすることです。
+API key、接続状態、今月の使用量、残高、作成済みリソース数を優先して表示します。
 仕様、対象範囲、endpoint の契約はこのページに集約します。
 
 ## 画面と docs の分担
 
-`app.takosumi.com/cloud` では次を優先して表示します。
+専用の Cloud 画面は廃止し、Cloud の運用情報は接続 (`app.takosumi.com/connections`)
+と支払い (`app.takosumi.com/billing`) に統合しました。
+
+接続タブ (Cloud 実行時のみ) では次を表示します。
 
 - API key の作成、一覧、失効
-- 今月の使用量、Gateway 使用量、利用可能クレジット
-- AI Gateway の Base URL、既定モデル、公開 model alias
+- AI Gateway の Base URL、接続状態、既定モデル、モデル数
 - Cloudflare Compatibility API の Base URL と現在の account
-- Takosumi Cloud 側に存在する KV / Object Storage / Database / Worker
+- Takosumi Cloud 側に存在する KV / Object Storage / Database / Worker の件数
 
-画面には全仕様を置きません。provider 互換の対応範囲、OpenTofu provider
-設定例、usage event の contract、secret の扱いは docs 側で確認します。
+支払いタブでは次を表示します。
+
+- 今月の使用量、Gateway 使用量、利用可能クレジット
+- 使用履歴 (usage event の台帳)
+
+画面には全仕様を置きません。モデル alias の完全一覧や resource 名は必要な時だけ
+開く補助情報にし、provider 互換の対応範囲、OpenTofu provider 設定例、usage
+event の contract、secret の扱いは docs 側で確認します。
 
 ## 境界
 

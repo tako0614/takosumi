@@ -63,6 +63,18 @@
   display: grid;
   gap: var(--tg-s-4);
 }
+/* Section header for the Cloud panel folded into the Connections tab. */
+.av-cloud-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  padding-top: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
+}
+.av-cloud-section-head p {
+  margin: 2px 0 0;
+}
 .av-cloud-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -131,6 +143,14 @@
   font-size: var(--tg-fs-xs);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+.av-cloud-detail {
+  margin-top: var(--tg-s-3);
+}
+.av-cloud-detail summary {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
 }
 .av-cloud-key-create {
   display: grid;
