@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildWranglerR2GetArgs,
+  createReleaseActivatorFetchHandler,
   parsePayload,
   runReleaseActivation,
 } from "../../scripts/operator-release-activator.ts";
@@ -229,6 +230,70 @@ test("operator release activator forwards only explicitly allowlisted operator e
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("operator release activator accepts async jobs and exposes status", async () => {
+  let invoked = 0;
+  const handler = createReleaseActivatorFetchHandler({
+    token: "release-token",
+    host: "127.0.0.1",
+    port: 8797,
+    runActivation: async () => {
+      invoked += 1;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return {
+        status: "succeeded",
+        kind: "takosumi.operator.release-commands@v1",
+        message: "ran 1 operator release command(s)",
+        metadata: { commandCount: 1 },
+      };
+    },
+  });
+  const post = await handler(
+    new Request("http://localhost/activate", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer release-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(validPayload()),
+    }),
+  );
+
+  expect(post.status).toBe(202);
+  const accepted = (await post.json()) as {
+    readonly status: string;
+    readonly jobId: string;
+    readonly statusUrl: string;
+  };
+  expect(accepted.status).toBe("pending");
+  expect(accepted.jobId).toStartWith("rel_");
+  expect(accepted.statusUrl).toContain(`jobId=${accepted.jobId}`);
+
+  let latest:
+    | { readonly status: string; readonly message?: string }
+    | undefined;
+  for (let index = 0; index < 20; index += 1) {
+    const status = await handler(
+      new Request(accepted.statusUrl, {
+        method: "GET",
+        headers: { authorization: "Bearer release-token" },
+      }),
+    );
+    expect(status.status).toBe(200);
+    latest = (await status.json()) as {
+      readonly status: string;
+      readonly message?: string;
+    };
+    if (latest.status === "succeeded") break;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+
+  expect(invoked).toBe(1);
+  expect(latest).toMatchObject({
+    status: "succeeded",
+    message: "ran 1 operator release command(s)",
+  });
 });
 
 test("operator release activator rejects reserved operator env allowlist entries", async () => {
