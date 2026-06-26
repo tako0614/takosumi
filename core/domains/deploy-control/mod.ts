@@ -2366,7 +2366,11 @@ export class OpenTofuDeploymentController {
     readonly installTypePlan?: InstallTypePlanContext;
     readonly genericRootPlan?: GenericRootPlanContext;
   }> {
-    const moduleSource = snapshotModuleSource(input.source, input.snapshot);
+    const moduleSource = snapshotModuleSource(
+      input.source,
+      input.snapshot,
+      input.installConfig.modulePath,
+    );
     const installType = input.installConfig.installType;
     const templateBinding = installConfigTemplateBinding(input.installConfig);
     if (installType === "opentofu_root") {
@@ -7056,6 +7060,7 @@ function syntheticUploadSource(
 function snapshotModuleSource(
   source: Source,
   snapshot: SourceSnapshot,
+  modulePath?: string,
 ): OpenTofuModuleSource {
   return {
     kind: "git",
@@ -7063,6 +7068,7 @@ function snapshotModuleSource(
     ...(snapshot.resolvedCommit
       ? { commit: snapshot.resolvedCommit.toLowerCase() }
       : {}),
+    ...(modulePath ? { modulePath } : {}),
   };
 }
 

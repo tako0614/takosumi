@@ -18,6 +18,7 @@ import type {
   PublicInstallation,
 } from "takosumi-contract/installations";
 import type { JsonValue } from "takosumi-contract";
+import { isAbsolute, normalize } from "node:path";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -70,6 +71,7 @@ interface CreateInstallationRouteRequest extends Omit<
   CreateInstallationRequest,
   "spaceId"
 > {
+  readonly modulePath?: string;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
@@ -371,14 +373,16 @@ export function mountDeployControlInstallationRoutes(
         );
         const {
           outputAllowlist: rawOutputAllowlist,
+          modulePath: rawModulePath,
           vars: rawVars,
           runnerId: rawRunnerId,
           ...request
         } = body as Omit<
           CreateInstallationRouteRequest,
-          "outputAllowlist" | "vars" | "runnerId"
+          "outputAllowlist" | "modulePath" | "vars" | "runnerId"
         > & {
           readonly outputAllowlist?: unknown;
+          readonly modulePath?: unknown;
           readonly vars?: unknown;
           readonly runnerId?: unknown;
         };
@@ -390,6 +394,16 @@ export function mountDeployControlInstallationRoutes(
           throw new OpenTofuControllerError(
             "invalid_argument",
             "outputAllowlist must be an object of { from, type, required? } entries",
+          );
+        }
+        const modulePath =
+          rawModulePath === undefined
+            ? undefined
+            : modulePathValue(rawModulePath);
+        if (rawModulePath !== undefined && modulePath === undefined) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "modulePath must be a safe relative path inside the SourceSnapshot",
           );
         }
         const vars =
@@ -409,6 +423,7 @@ export function mountDeployControlInstallationRoutes(
         }
         const installConfigId =
           (vars !== undefined && Object.keys(vars).length > 0) ||
+          modulePath !== undefined ||
           runnerProfileId ||
           outputAllowlist !== undefined
             ? (
@@ -417,6 +432,7 @@ export function mountDeployControlInstallationRoutes(
                   spaceId: id,
                   baseInstallConfigId: request.installConfigId,
                   installationName: request.name,
+                  modulePath,
                   vars: vars ?? {},
                   outputAllowlist,
                   runnerProfileId,
@@ -747,6 +763,7 @@ async function createScopedInstallConfigForInstallation(input: {
   readonly spaceId: string;
   readonly baseInstallConfigId: string;
   readonly installationName: string;
+  readonly modulePath?: string;
   readonly vars: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly runnerProfileId?: string;
@@ -778,6 +795,7 @@ async function createScopedInstallConfigForInstallation(input: {
     spaceId: input.spaceId,
     name: `${input.installationName}-config`,
     internal: { reason: "per_install_overrides" },
+    ...(input.modulePath ? { modulePath: input.modulePath } : {}),
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
     ...(input.runnerProfileId ? { runnerId: input.runnerProfileId } : {}),
     outputAllowlist:
@@ -804,6 +822,29 @@ function scopedCloneOutputAllowlist(
   return baseConfig.sourceKind === "generic_capsule"
     ? defaultCapsuleOutputAllowlist()
     : baseConfig.outputAllowlist;
+}
+
+function modulePathValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (isAbsolute(raw) || raw.includes("\0") || /^[A-Za-z]:[\\/]/u.test(raw)) {
+    return undefined;
+  }
+  const normalized = normalize(raw)
+    .replaceAll("\\", "/")
+    .replace(/^\.\//u, "")
+    .replace(/\/+$/u, "");
+  if (
+    normalized.length === 0 ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function outputAllowlistValue(

@@ -2726,6 +2726,41 @@ test("POST /api/v1/spaces/:id/installations stores runnerId and outputAllowlist 
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/spaces/:id/installations stores modulePath in a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "staging",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        modulePath: "deploy/opentofu",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    internal?: unknown;
+    modulePath?: string;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.modulePath).toEqual("deploy/opentofu");
+});
+
 test("POST /api/v1/spaces/:id/installations rejects non-JSON vars", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

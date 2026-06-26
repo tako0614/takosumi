@@ -317,6 +317,7 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
       name: "uploaded-app",
       environment: "preview",
       snapshotId: snapshot.id,
+      modulePath: "deploy/opentofu",
       vars: { region: "ap-northeast-1" },
       outputAllowlist: {
         endpoint: { from: "url", type: "url", required: true },
@@ -346,6 +347,7 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
     objectKey: uploadArchiveObjectKey("space_test", "snap_up1"),
     digest: UPLOAD_DIGEST,
   });
+  expect(runner.planJobs[0]?.planRun.source.modulePath).toBe("deploy/opentofu");
 
   // A Capsule Gate report was pinned to the upload installation.
   const installation = await store.getInstallation(result.installation.id);
@@ -354,6 +356,7 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   const installConfig = await installations.getInstallConfig(
     result.installConfigId,
   );
+  expect(installConfig.modulePath).toBe("deploy/opentofu");
   expect(installConfig.outputAllowlist).toEqual({
     endpoint: { from: "url", type: "url", required: true },
     worker_name: { from: "worker_name", type: "string" },
@@ -827,6 +830,7 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
       name: "iter",
       environment: "preview",
       snapshotId: second.id,
+      modulePath: "deploy/updated",
       vars: { changed: "yes" },
       outputAllowlist: {
         url: { from: "url", type: "url", required: true },
@@ -836,6 +840,7 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
   expect(r2.created).toBe(false);
   expect(r2.installation.id).toBe(r1.installation.id);
   const config = await installations.getInstallConfig(r2.installConfigId);
+  expect(config.modulePath).toBe("deploy/updated");
   expect(config.variableMapping).toEqual({ changed: "yes" });
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url", required: true },

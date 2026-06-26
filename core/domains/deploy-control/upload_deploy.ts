@@ -50,6 +50,13 @@ export async function deployUpload(
   const newId = deps.newId ?? defaultId;
   const now = deps.now ?? (() => new Date());
   const environment = nonEmpty(request.environment) ?? DEFAULT_ENVIRONMENT;
+  const modulePath = modulePathValue(request.modulePath);
+  if (request.modulePath !== undefined && modulePath === undefined) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "modulePath must be a safe relative path inside the SourceSnapshot",
+    );
+  }
   const providerEnvBindings =
     request.providerEnvBindings !== undefined
       ? validateInstallationProviderEnvBindings(request.providerEnvBindings)
@@ -90,6 +97,7 @@ export async function deployUpload(
       request.vars,
       request.outputAllowlist,
       request.runnerProfileId,
+      modulePath,
       now,
     );
     effectiveRunnerProfileId = refreshed.runnerId;
@@ -101,6 +109,7 @@ export async function deployUpload(
       vars: request.vars,
       outputAllowlist: request.outputAllowlist,
       runnerProfileId: request.runnerProfileId,
+      modulePath,
       now,
     });
     await deps.installations.putInstallConfig(config);
@@ -229,6 +238,7 @@ async function refreshInstallConfigVars(
   vars: Readonly<Record<string, JsonValue>> | undefined,
   outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
   runnerProfileId: string | undefined,
+  modulePath: string | undefined,
   now: () => Date,
 ): Promise<InstallConfig> {
   const existing = await deps.installations.getInstallConfig(installConfigId);
@@ -237,6 +247,7 @@ async function refreshInstallConfigVars(
     variableMapping: { ...(vars ?? {}) },
     outputAllowlist: refreshedOutputAllowlist(existing, outputAllowlist),
     ...(runnerProfileId !== undefined ? { runnerId: runnerProfileId } : {}),
+    ...(modulePath !== undefined ? { modulePath } : {}),
     updatedAt: now().toISOString(),
   });
 }
@@ -264,6 +275,7 @@ function buildDefaultInstallConfig(input: {
     | InternalDeployRequest["outputAllowlist"]
     | undefined;
   readonly runnerProfileId: string | undefined;
+  readonly modulePath: string | undefined;
   readonly now: () => Date;
 }): InstallConfig {
   const nowIso = input.now().toISOString();
@@ -283,6 +295,7 @@ function buildDefaultInstallConfig(input: {
     ...(input.runnerProfileId !== undefined
       ? { runnerId: input.runnerProfileId }
       : {}),
+    ...(input.modulePath !== undefined ? { modulePath: input.modulePath } : {}),
     variableMapping: { ...(input.vars ?? {}) },
     outputAllowlist: input.outputAllowlist ?? defaultCapsuleOutputAllowlist(),
     policy: {},
@@ -300,6 +313,27 @@ function nonEmpty(value: string | undefined): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function modulePathValue(value: string | undefined): string | undefined {
+  const raw = nonEmpty(value);
+  if (!raw) return undefined;
+  if (
+    raw.includes("\0") ||
+    raw.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/u.test(raw)
+  ) {
+    return undefined;
+  }
+  const parts = raw
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/u, "")
+    .split("/")
+    .filter((part) => part.length > 0 && part !== ".");
+  if (parts.length === 0 || parts.some((part) => part === "..")) {
+    return undefined;
+  }
+  return parts.join("/");
 }
 
 function defaultId(prefix: string): string {

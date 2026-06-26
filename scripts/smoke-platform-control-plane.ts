@@ -178,6 +178,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
+  readonly modulePath?: string;
   readonly sourceName?: string;
   readonly timeoutSeconds: number;
   readonly deployTimeoutSeconds: number;
@@ -258,6 +259,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly sourceGitUrlDigest?: string;
     readonly sourceRef?: string;
     readonly sourcePath?: string;
+    readonly modulePath?: string;
   };
 }
 
@@ -293,6 +295,7 @@ interface CliArgs {
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
+  readonly modulePath?: string;
   readonly sourceName?: string;
   readonly verificationMode?: string;
   readonly varsJson?: string;
@@ -636,6 +639,7 @@ export async function resolveOptions(
       : undefined;
   const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
   const sourcePath = args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
+  const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
   const sourceMode = sourceGitUrl ? "git" : "upload";
@@ -725,6 +729,7 @@ export async function resolveOptions(
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
     ...(sourceGitUrl ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
+    ...(modulePath ? { modulePath } : {}),
     ...(sourceGitUrl && sourceName ? { sourceName } : {}),
     timeoutSeconds: parsePositiveInteger(
       args.timeoutSeconds,
@@ -1724,6 +1729,7 @@ async function createSourceInstallation(
       environment: options.environment,
       sourceId: input.sourceId,
       installConfigId: input.installConfigId,
+      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
       ...(options.runnerProfileId
         ? { runnerProfileId: options.runnerProfileId }
         : {}),
@@ -1805,6 +1811,7 @@ async function deploySnapshot(
       name: options.appName,
       environment: options.environment,
       snapshotId: input.snapshotId,
+      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
       ...(options.runnerProfileId
         ? { runnerProfileId: options.runnerProfileId }
         : {}),
@@ -3527,13 +3534,17 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
     ...(options.sourceMode === "upload"
-      ? { capsuleDir: options.capsuleDir }
+      ? {
+          capsuleDir: options.capsuleDir,
+          ...(options.modulePath ? { modulePath: options.modulePath } : {}),
+        }
       : {}),
     ...(options.sourceMode === "git" && options.sourceGitUrl
       ? {
           sourceGitUrlDigest: sha256(options.sourceGitUrl),
           sourceRef: options.sourceRef ?? "main",
           sourcePath: options.sourcePath ?? ".",
+          ...(options.modulePath ? { modulePath: options.modulePath } : {}),
         }
       : {}),
   };
@@ -4116,7 +4127,8 @@ Options:
   --capsule-dir <path>                            default cloudflare-hello-worker module
   --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
   --source-ref <ref>                              Git ref for --source-git-url, default main
-  --source-path <path>                            Capsule path inside the Git repo, default .
+  --source-path <path>                            Source archive path inside the Git repo, default .
+  --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
   --source-name <name>                            Source display name, default <app-name>-source
   --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
   --vars-json <json>                              OpenTofu variable object passed to the generated root

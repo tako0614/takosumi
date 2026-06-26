@@ -232,6 +232,7 @@ export const ALLOWED_KEYS: Record<
     "environment",
     "sourceId",
     "installConfigId",
+    "modulePath",
     "runnerId",
     "outputAllowlist",
     "vars",
