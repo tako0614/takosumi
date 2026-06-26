@@ -385,9 +385,15 @@ function AppsEmptyPanel() {
         <h2 class="av-start-title">{t("apps.empty.title")}</h2>
         <p class="av-start-sub">{t("apps.empty.body")}</p>
       </div>
-      <a href="/services" class="av-start-action">
-        <span>{t("apps.empty.viewServices")}</span>
-      </a>
+      <div class="av-start-actions">
+        <a href="/new" class="av-start-action">
+          <Sparkles size={18} aria-hidden="true" />
+          <span>{t("apps.add")}</span>
+        </a>
+        <a href="/services" class="av-start-secondary">
+          <span>{t("apps.empty.viewServices")}</span>
+        </a>
+      </div>
     </section>
   );
 }
