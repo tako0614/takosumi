@@ -277,6 +277,10 @@ function handleStatus(
         maxOutputTokens: model.maxOutputTokens,
         billingClass: model.billingClass,
         billingUsdMicrosPerRequest: model.billingUsdMicrosPerRequest,
+        billingUsdMicrosPerMillionInputTokens:
+          model.billingUsdMicrosPerMillionInputTokens,
+        billingUsdMicrosPerMillionOutputTokens:
+          model.billingUsdMicrosPerMillionOutputTokens,
         billingCreditsPerRequest: model.billingCreditsPerRequest,
         metadata: model.metadata,
       })),
@@ -430,7 +434,7 @@ async function forwardOpenAiCompatibleRequest(input: {
     });
   }
 
-  return withAiGatewayUsageHeaders(
+  return await withAiGatewayUsageHeaders(
     upstreamPassthroughResponse(upstreamResponse, {
       provider: input.profile.provider,
       publicModel: input.model.publicModel,
@@ -495,7 +499,7 @@ async function forwardWorkersAiBindingRequest(input: {
       "upstream model provider returned an invalid response",
     );
   }
-  return withAiGatewayUsageHeaders(
+  return await withAiGatewayUsageHeaders(
     jsonResponse(normalized, {
       headers: aiGatewayProviderHeaders({
         provider: input.profile.provider,
@@ -669,16 +673,17 @@ function aiGatewayProviderHeaders(metadata: {
   return headers;
 }
 
-function withAiGatewayUsageHeaders(
+async function withAiGatewayUsageHeaders(
   response: Response,
   input: {
     readonly endpoint: "chat.completions" | "embeddings";
     readonly model: TakosumiAiGatewayModelAlias;
     readonly authContext?: TakosumiAiGatewayAuthContext;
   },
-): Response {
+): Promise<Response> {
   if (!response.ok || !input.authContext?.spaceId) return response;
-  const meters = aiGatewayUsageMeters(input);
+  const usage = await aiGatewayResponseUsage(response, input.endpoint);
+  const meters = aiGatewayUsageMeters({ ...input, usage });
   if (meters.length === 0) return response;
   const now = Date.now();
   const periodEnd = new Date(now).toISOString();
@@ -705,13 +710,15 @@ function aiGatewayUsageMeters(input: {
   readonly endpoint: "chat.completions" | "embeddings";
   readonly model: TakosumiAiGatewayModelAlias;
   readonly authContext?: TakosumiAiGatewayAuthContext;
+  readonly usage?: AiGatewayTokenUsage;
 }): GatewayResourceUsageMeter[] {
-  const usdMicros =
+  const meters: GatewayResourceUsageMeter[] = [];
+  const requestUsdMicros =
     input.model.billingUsdMicrosPerRequest ??
     legacyCreditsToUsdMicros(input.model.billingCreditsPerRequest ?? 0);
   const installationId = input.authContext?.installationId;
-  return [
-    {
+  if (requestUsdMicros > 0) {
+    meters.push({
       ...(installationId ? { installationId } : {}),
       meterId: aiGatewayUsageMeterId(input.model.publicModel, input.endpoint),
       resourceFamily: "cloudflare.ai_gateway",
@@ -719,16 +726,104 @@ function aiGatewayUsageMeters(input: {
       resourceId: input.model.publicModel,
       kind: "ai_request",
       quantity: 1,
-      usdMicros,
-    },
-  ];
+      usdMicros: requestUsdMicros,
+    });
+  }
+  const inputTokenUsdMicros = tokenUsageUsdMicros(
+    input.usage?.inputTokens,
+    input.model.billingUsdMicrosPerMillionInputTokens,
+  );
+  if (inputTokenUsdMicros && input.usage?.inputTokens) {
+    meters.push({
+      ...(installationId ? { installationId } : {}),
+      meterId: aiGatewayUsageMeterId(
+        input.model.publicModel,
+        input.endpoint,
+        "input_token",
+      ),
+      resourceFamily: "cloudflare.ai_gateway",
+      operation: `${input.endpoint}.input_tokens`,
+      resourceId: input.model.publicModel,
+      kind: "ai_input_token",
+      quantity: input.usage.inputTokens,
+      usdMicros: inputTokenUsdMicros,
+    });
+  }
+  const outputTokenUsdMicros = tokenUsageUsdMicros(
+    input.usage?.outputTokens,
+    input.model.billingUsdMicrosPerMillionOutputTokens,
+  );
+  if (outputTokenUsdMicros && input.usage?.outputTokens) {
+    meters.push({
+      ...(installationId ? { installationId } : {}),
+      meterId: aiGatewayUsageMeterId(
+        input.model.publicModel,
+        input.endpoint,
+        "output_token",
+      ),
+      resourceFamily: "cloudflare.ai_gateway",
+      operation: `${input.endpoint}.output_tokens`,
+      resourceId: input.model.publicModel,
+      kind: "ai_output_token",
+      quantity: input.usage.outputTokens,
+      usdMicros: outputTokenUsdMicros,
+    });
+  }
+  return meters;
 }
 
 function aiGatewayUsageMeterId(
   publicModel: string,
   endpoint: "chat.completions" | "embeddings",
+  suffix = "request",
 ): string {
-  return `ai:${publicModel.replace(/[^a-zA-Z0-9_.:-]+/g, "-")}:${endpoint}:request`;
+  return `ai:${publicModel.replace(/[^a-zA-Z0-9_.:-]+/g, "-")}:${endpoint}:${suffix}`;
+}
+
+interface AiGatewayTokenUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+}
+
+async function aiGatewayResponseUsage(
+  response: Response,
+  endpoint: "chat.completions" | "embeddings",
+): Promise<AiGatewayTokenUsage | undefined> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("json")) return undefined;
+  let body: unknown;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return undefined;
+  }
+  if (!isPlainRecord(body) || !isPlainRecord(body.usage)) return undefined;
+  const usage = body.usage;
+  const promptTokens = nonNegativeSafeInteger(
+    usage.prompt_tokens ?? usage.input_tokens,
+  );
+  const completionTokens = nonNegativeSafeInteger(
+    usage.completion_tokens ?? usage.output_tokens,
+  );
+  const totalTokens = nonNegativeSafeInteger(usage.total_tokens);
+  return {
+    ...(promptTokens !== undefined
+      ? { inputTokens: promptTokens }
+      : endpoint === "embeddings" && totalTokens !== undefined
+        ? { inputTokens: totalTokens }
+        : {}),
+    ...(completionTokens !== undefined
+      ? { outputTokens: completionTokens }
+      : {}),
+  };
+}
+
+function tokenUsageUsdMicros(
+  quantity: number | undefined,
+  usdMicrosPerMillion: number | undefined,
+): number | undefined {
+  if (!quantity || !usdMicrosPerMillion) return undefined;
+  return Math.ceil((quantity * usdMicrosPerMillion) / 1_000_000);
 }
 
 function upstreamPassthroughResponse(
@@ -959,6 +1054,14 @@ function parseModels(
       billingUsdMicrosPerRequest: parseOptionalNonNegativeInteger(
         entry.billingUsdMicrosPerRequest,
         `AI Gateway profile ${profileId}.models[${index}].billingUsdMicrosPerRequest`,
+      ),
+      billingUsdMicrosPerMillionInputTokens: parseOptionalNonNegativeInteger(
+        entry.billingUsdMicrosPerMillionInputTokens,
+        `AI Gateway profile ${profileId}.models[${index}].billingUsdMicrosPerMillionInputTokens`,
+      ),
+      billingUsdMicrosPerMillionOutputTokens: parseOptionalNonNegativeInteger(
+        entry.billingUsdMicrosPerMillionOutputTokens,
+        `AI Gateway profile ${profileId}.models[${index}].billingUsdMicrosPerMillionOutputTokens`,
       ),
       billingCreditsPerRequest: parseOptionalNonNegativeInteger(
         entry.billingCreditsPerRequest,
@@ -1396,6 +1499,18 @@ function optionalPositiveInteger(value: unknown): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | undefined {
+  if (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    Number.isFinite(value) &&
+    value >= 0
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function parseOptionalNonNegativeInteger(

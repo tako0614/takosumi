@@ -77,6 +77,12 @@ export interface RecordGatewayResourceUsageInput {
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly meters: readonly GatewayResourceUsageMeter[];
+  /**
+   * Cloud-only hosted resources set this to true so successful resource usage
+   * consumes USD balance and fails closed even when the Workspace's OpenTofu run
+   * billing mode is showback/disabled.
+   */
+  readonly spendRequired?: boolean;
 }
 
 export interface ReconcileInvoiceUsageInput {
@@ -250,7 +256,8 @@ export class UsageReportingService {
     await this.#requireSpace(spaceId);
     const period = normalizeUsagePeriod(input);
     const settings = await this.#billing.billingSettingsForSpace(spaceId);
-    const spendRequired = billingReservationRequired(settings);
+    const spendRequired =
+      input.spendRequired === true || billingReservationRequired(settings);
     if (spendRequired) {
       await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
     }

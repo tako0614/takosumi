@@ -47,6 +47,7 @@ import type {
   GatewayResourceUsageMeter,
 } from "takosumi-contract/billing";
 import {
+  legacyCreditsToUsdMicros,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
@@ -1031,6 +1032,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
     upstreamResponse,
     usageOperations,
     { request, route, session: authContext.session },
+    platformCloudUsagePriceBookFromEnv(env),
   );
   if (!usageResult.ok) return usageResult.response;
   return responseForPlatformCloudExtensionClient(
@@ -1061,6 +1063,7 @@ export interface PlatformCloudExtensionUsageOperations {
     input: {
       readonly periodStart: string;
       readonly periodEnd: string;
+      readonly spendRequired?: boolean;
       readonly meters: readonly GatewayResourceUsageMeter[];
     },
   ): Promise<{ readonly usageEvents: readonly unknown[] }>;
@@ -1093,6 +1096,9 @@ const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
 ] as const;
 
+const PLATFORM_FALLBACK_USAGE_USD_MICROS = 1_000;
+const DEFAULT_PLATFORM_PRICE_BOOK_MIN_MARGIN_BPS = 3_000;
+
 const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
   "x-takosumi-cloud-authenticated";
 const PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER = "x-takosumi-cloud-subject";
@@ -1112,6 +1118,368 @@ const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
   PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
 ] as const;
+
+interface PlatformCloudUsagePriceBookEntry {
+  readonly meterId?: string;
+  readonly meterIdPrefix?: string;
+  readonly kind?: GatewayResourceUsageMeter["kind"];
+  readonly resourceFamily?: string;
+  readonly operation?: string;
+  readonly unit: string;
+  readonly chargeUsdMicrosPerUnit?: number;
+  readonly chargeUsdMicrosPerMillionUnits?: number;
+  readonly estimatedCostUsdMicrosPerUnit?: number;
+  readonly estimatedCostUsdMicrosPerMillionUnits?: number;
+  readonly minimumChargeUsdMicros?: number;
+}
+
+interface PlatformCloudUsagePriceBook {
+  readonly minimumGrossMarginBps: number;
+  readonly meters: readonly PlatformCloudUsagePriceBookEntry[];
+}
+
+type PlatformCloudExtensionUsageInput = Parameters<
+  PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+>[1];
+
+function platformCloudUsagePriceBookFromEnv(
+  env: CloudflareWorkerEnv,
+): PlatformCloudUsagePriceBook | undefined {
+  const raw = optionalString(env.TAKOSUMI_CLOUD_USAGE_PRICE_BOOK);
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new TypeError("TAKOSUMI_CLOUD_USAGE_PRICE_BOOK must be valid JSON", {
+      cause: error,
+    });
+  }
+  if (!isRecord(parsed)) {
+    throw new TypeError("TAKOSUMI_CLOUD_USAGE_PRICE_BOOK must be an object");
+  }
+  const minimumGrossMarginBps =
+    parsed.minimumGrossMarginBps === undefined
+      ? DEFAULT_PLATFORM_PRICE_BOOK_MIN_MARGIN_BPS
+      : platformPriceBookNonNegativeInteger(
+          parsed.minimumGrossMarginBps,
+          "minimumGrossMarginBps",
+        );
+  if (minimumGrossMarginBps >= 10_000) {
+    throw new TypeError(
+      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK minimumGrossMarginBps must be below 10000",
+    );
+  }
+  if (!Array.isArray(parsed.meters) || parsed.meters.length === 0) {
+    throw new TypeError(
+      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters must be a non-empty array",
+    );
+  }
+  return {
+    minimumGrossMarginBps,
+    meters: parsed.meters.map(platformCloudUsagePriceBookEntryFromJson),
+  };
+}
+
+function platformCloudUsagePriceBookEntryFromJson(
+  value: unknown,
+  index: number,
+): PlatformCloudUsagePriceBookEntry {
+  if (!isRecord(value)) {
+    throw new TypeError(
+      `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters[${index}] must be an object`,
+    );
+  }
+  const label = `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters[${index}]`;
+  const meterId = platformPriceBookOptionalString(value.meterId, "meterId");
+  const meterIdPrefix = platformPriceBookOptionalString(
+    value.meterIdPrefix,
+    "meterIdPrefix",
+  );
+  if ((meterId ? 1 : 0) + (meterIdPrefix ? 1 : 0) !== 1) {
+    throw new TypeError(
+      `${label} must set exactly one of meterId or meterIdPrefix`,
+    );
+  }
+  if (
+    (meterId && usageMeterNameLeaksInternalWorkersBackend(meterId)) ||
+    (meterIdPrefix && usageMeterNameLeaksInternalWorkersBackend(meterIdPrefix))
+  ) {
+    throw new TypeError(
+      `${label} must describe the customer-facing managed resource, not the internal Workers for Platforms backend`,
+    );
+  }
+  const kind =
+    value.kind === undefined
+      ? undefined
+      : isPlatformCloudExtensionUsageKind(value.kind)
+        ? value.kind
+        : undefined;
+  if (value.kind !== undefined && !kind) {
+    throw new TypeError(`${label}.kind is not supported`);
+  }
+  const resourceFamily = platformPriceBookOptionalString(
+    value.resourceFamily,
+    "resourceFamily",
+  );
+  if (
+    resourceFamily &&
+    usageMeterNameLeaksInternalWorkersBackend(resourceFamily)
+  ) {
+    throw new TypeError(
+      `${label}.resourceFamily must describe the customer-facing managed resource`,
+    );
+  }
+  return {
+    ...(meterId ? { meterId } : {}),
+    ...(meterIdPrefix ? { meterIdPrefix } : {}),
+    ...(kind ? { kind } : {}),
+    ...(resourceFamily ? { resourceFamily } : {}),
+    ...optionalProperty(
+      "operation",
+      platformPriceBookOptionalString(value.operation, "operation"),
+    ),
+    unit: platformPriceBookString(value.unit, "unit"),
+    ...singleRateProperty(
+      label,
+      "chargeUsdMicrosPerUnit",
+      value.chargeUsdMicrosPerUnit,
+      "chargeUsdMicrosPerMillionUnits",
+      value.chargeUsdMicrosPerMillionUnits,
+    ),
+    ...singleRateProperty(
+      label,
+      "estimatedCostUsdMicrosPerUnit",
+      value.estimatedCostUsdMicrosPerUnit,
+      "estimatedCostUsdMicrosPerMillionUnits",
+      value.estimatedCostUsdMicrosPerMillionUnits,
+    ),
+    ...optionalProperty(
+      "minimumChargeUsdMicros",
+      value.minimumChargeUsdMicros === undefined
+        ? undefined
+        : platformPriceBookNonNegativeInteger(
+            value.minimumChargeUsdMicros,
+            `${label}.minimumChargeUsdMicros`,
+          ),
+    ),
+  };
+}
+
+function platformCloudPricedUsageInput(
+  input: PlatformCloudExtensionUsageInput,
+  priceBook: PlatformCloudUsagePriceBook | undefined,
+): PlatformCloudExtensionUsageInput {
+  return {
+    ...input,
+    spendRequired: true,
+    meters: input.meters.map((meter) =>
+      platformCloudPricedUsageMeter(meter, priceBook),
+    ),
+  };
+}
+
+function platformCloudPricedUsageMeter(
+  meter: GatewayResourceUsageMeter,
+  priceBook: PlatformCloudUsagePriceBook | undefined,
+): GatewayResourceUsageMeter {
+  if (!priceBook) return meter;
+  const entry = platformCloudPriceBookEntryForMeter(meter, priceBook);
+  if (!entry) {
+    throw new TypeError(
+      `Cloud usage price book has no entry for meter ${meter.meterId}`,
+    );
+  }
+  const usdMicros = platformCloudUsageMeterChargeUsdMicros(
+    meter,
+    entry,
+    priceBook.minimumGrossMarginBps,
+  );
+  const { credits: _credits, usdMicros: _usdMicros, ...rest } = meter;
+  return { ...rest, usdMicros };
+}
+
+function platformCloudPriceBookEntryForMeter(
+  meter: GatewayResourceUsageMeter,
+  priceBook: PlatformCloudUsagePriceBook,
+): PlatformCloudUsagePriceBookEntry | undefined {
+  const exact = priceBook.meters.find(
+    (entry) =>
+      entry.meterId !== undefined && priceBookEntryMatches(entry, meter),
+  );
+  return (
+    exact ??
+    priceBook.meters.find((entry) => priceBookEntryMatches(entry, meter))
+  );
+}
+
+function priceBookEntryMatches(
+  entry: PlatformCloudUsagePriceBookEntry,
+  meter: GatewayResourceUsageMeter,
+): boolean {
+  const selectorMatches =
+    (entry.meterId !== undefined && entry.meterId === meter.meterId) ||
+    (entry.meterIdPrefix !== undefined &&
+      meter.meterId.startsWith(entry.meterIdPrefix));
+  if (!selectorMatches) return false;
+  if (entry.kind !== undefined && entry.kind !== meter.kind) return false;
+  if (
+    entry.resourceFamily !== undefined &&
+    entry.resourceFamily !== meter.resourceFamily
+  ) {
+    return false;
+  }
+  if (entry.operation !== undefined && entry.operation !== meter.operation) {
+    return false;
+  }
+  return true;
+}
+
+function platformCloudUsageMeterChargeUsdMicros(
+  meter: GatewayResourceUsageMeter,
+  entry: PlatformCloudUsagePriceBookEntry,
+  minimumGrossMarginBps: number,
+): number {
+  const charge = Math.max(
+    platformCloudUsageMeterAmountUsdMicros(
+      meter.quantity,
+      entry.chargeUsdMicrosPerUnit,
+      entry.chargeUsdMicrosPerMillionUnits,
+    ),
+    entry.minimumChargeUsdMicros ?? 0,
+  );
+  const estimatedCost = platformCloudUsageMeterAmountUsdMicros(
+    meter.quantity,
+    entry.estimatedCostUsdMicrosPerUnit,
+    entry.estimatedCostUsdMicrosPerMillionUnits,
+  );
+  const requiredCharge = platformCloudMinimumChargeForGrossMargin(
+    estimatedCost,
+    minimumGrossMarginBps,
+  );
+  if (charge < requiredCharge) {
+    throw new TypeError(
+      `Cloud usage price book entry for ${meter.meterId} does not satisfy minimum gross margin`,
+    );
+  }
+  return charge;
+}
+
+function platformCloudUsageMeterAmountUsdMicros(
+  quantity: number,
+  perUnit: number | undefined,
+  perMillionUnits: number | undefined,
+): number {
+  const rate =
+    perUnit !== undefined
+      ? quantity * perUnit
+      : (quantity * (perMillionUnits ?? 0)) / 1_000_000;
+  const usdMicros = Math.ceil(rate);
+  if (!Number.isSafeInteger(usdMicros) || usdMicros < 0) {
+    throw new TypeError("Cloud usage price calculation overflowed");
+  }
+  return usdMicros;
+}
+
+function platformCloudMinimumChargeForGrossMargin(
+  estimatedCostUsdMicros: number,
+  grossMarginBps: number,
+): number {
+  if (estimatedCostUsdMicros === 0) return 0;
+  const denominator = 10_000 - grossMarginBps;
+  const charge = Math.ceil((estimatedCostUsdMicros * 10_000) / denominator);
+  if (!Number.isSafeInteger(charge) || charge < 0) {
+    throw new TypeError("Cloud usage gross margin calculation overflowed");
+  }
+  return charge;
+}
+
+function singleRateProperty<
+  const UnitKey extends string,
+  const MillionKey extends string,
+>(
+  label: string,
+  unitKey: UnitKey,
+  unitValue: unknown,
+  millionKey: MillionKey,
+  millionValue: unknown,
+): { readonly [K in UnitKey | MillionKey]?: number } {
+  const unit = optionalPlatformPriceBookNonNegativeInteger(
+    unitValue,
+    `${label}.${unitKey}`,
+  );
+  const million = optionalPlatformPriceBookNonNegativeInteger(
+    millionValue,
+    `${label}.${millionKey}`,
+  );
+  if ((unit !== undefined ? 1 : 0) + (million !== undefined ? 1 : 0) !== 1) {
+    throw new TypeError(
+      `${label} must set exactly one of ${unitKey} or ${millionKey}`,
+    );
+  }
+  return {
+    ...(unit !== undefined ? { [unitKey]: unit } : {}),
+    ...(million !== undefined ? { [millionKey]: million } : {}),
+  } as { readonly [K in UnitKey | MillionKey]?: number };
+}
+
+function platformPriceBookString(value: unknown, label: string): string {
+  const text = platformPriceBookOptionalString(value, label);
+  if (!text) throw new TypeError(`Price book ${label} must be a string`);
+  return text;
+}
+
+function platformPriceBookOptionalString(
+  value: unknown,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError(`Price book ${label} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 256) {
+    throw new TypeError(
+      `Price book ${label} must be non-empty and at most 256 characters`,
+    );
+  }
+  return trimmed;
+}
+
+function optionalPlatformPriceBookNonNegativeInteger(
+  value: unknown,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  return platformPriceBookNonNegativeInteger(value, label);
+}
+
+function platformPriceBookNonNegativeInteger(
+  value: unknown,
+  label: string,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    throw new TypeError(
+      `Price book ${label} must be a non-negative safe integer`,
+    );
+  }
+  return value;
+}
+
+function optionalProperty<const Key extends string, Value>(
+  key: Key,
+  value: Value | undefined,
+): { readonly [K in Key]?: Value } {
+  return value === undefined
+    ? {}
+    : ({ [key]: value } as { readonly [K in Key]?: Value });
+}
+
 const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER,
   PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
@@ -1158,12 +1526,11 @@ async function platformCloudExtensionAuthContext(
   | { readonly ok: false; readonly response: Response }
 > {
   const session = await sessionVerifier(request, env, route);
-  const billingContext =
-    await platformCloudExtensionBillingContextFromRequest(
-      request,
-      env,
-      session,
-    );
+  const billingContext = await platformCloudExtensionBillingContextFromRequest(
+    request,
+    env,
+    session,
+  );
   if (!billingContext.ok) return billingContext;
   const effectiveSession: PlatformCloudExtensionSessionContext =
     session.authenticated
@@ -1378,6 +1745,7 @@ async function recordPlatformCloudExtensionUsage(
     readonly route: PlatformCloudExtensionRoute;
     readonly session: PlatformCloudExtensionSessionContext;
   },
+  priceBook?: PlatformCloudUsagePriceBook,
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly response: Response }
 > {
@@ -1425,11 +1793,18 @@ async function recordPlatformCloudExtensionUsage(
       typeof operationsInput === "function"
         ? await operationsInput()
         : operationsInput;
-    const result = await operations.recordGatewayResourceUsage(usage.spaceId, {
-      periodStart: usage.periodStart,
-      periodEnd: usage.periodEnd,
-      meters: usage.meters,
-    });
+    const pricedInput = platformCloudPricedUsageInput(
+      {
+        periodStart: usage.periodStart,
+        periodEnd: usage.periodEnd,
+        meters: usage.meters,
+      },
+      priceBook,
+    );
+    const result = await operations.recordGatewayResourceUsage(
+      usage.spaceId,
+      pricedInput,
+    );
     if (operations.recordBillingUsageReports) {
       try {
         await operations.recordBillingUsageReports({
@@ -1538,7 +1913,7 @@ function platformAiGatewayFallbackUsageMeter(
     operation,
     kind: "ai_request",
     quantity: 1,
-    credits: 1,
+    usdMicros: PLATFORM_FALLBACK_USAGE_USD_MICROS,
   };
 }
 
@@ -1572,7 +1947,7 @@ function platformCloudflareCompatFallbackUsageMeter(
       : {}),
     kind: "gateway_compute",
     quantity: 1,
-    credits: 1,
+    usdMicros: PLATFORM_FALLBACK_USAGE_USD_MICROS,
   };
 }
 
@@ -1775,16 +2150,7 @@ function platformCloudExtensionUsageMeterFromJson(
   ) {
     throw new TypeError("Cloud extension usage quantity must be non-negative");
   }
-  const credits = record.credits;
-  if (
-    typeof credits !== "number" ||
-    !Number.isInteger(credits) ||
-    credits < 0
-  ) {
-    throw new TypeError(
-      "Cloud extension usage credits must be a non-negative integer",
-    );
-  }
+  const amount = platformCloudExtensionUsageMeterUsdMicros(record);
   const meterId =
     typeof record.meterId === "string" ? record.meterId.trim() : "";
   if (!meterId)
@@ -1843,9 +2209,39 @@ function platformCloudExtensionUsageMeterFromJson(
     ...(Object.keys(resourceMetadata).length > 0 ? { resourceMetadata } : {}),
     kind,
     quantity,
-    credits,
+    ...(amount.usdMicros !== undefined ? { usdMicros: amount.usdMicros } : {}),
+    ...(amount.credits !== undefined ? { credits: amount.credits } : {}),
     meterId,
   };
+}
+
+function platformCloudExtensionUsageMeterUsdMicros(
+  record: Record<string, unknown>,
+): { readonly usdMicros?: number; readonly credits?: number } {
+  if (
+    typeof record.usdMicros === "number" &&
+    Number.isSafeInteger(record.usdMicros) &&
+    Number.isFinite(record.usdMicros) &&
+    record.usdMicros >= 0
+  ) {
+    return { usdMicros: record.usdMicros };
+  }
+  if (record.usdMicros !== undefined) {
+    throw new TypeError(
+      "Cloud extension usage usdMicros must be a non-negative USD micros integer",
+    );
+  }
+  if (
+    typeof record.credits === "number" &&
+    Number.isFinite(record.credits) &&
+    record.credits >= 0
+  ) {
+    return {
+      usdMicros: legacyCreditsToUsdMicros(record.credits),
+      credits: record.credits,
+    };
+  }
+  return {};
 }
 
 function optionalCloudExtensionUsageString(

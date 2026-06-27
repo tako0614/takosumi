@@ -1338,7 +1338,7 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
                     meterId: "ai:takosumi-default:request",
                     kind: "ai_request",
                     quantity: 1,
-                    credits: 2,
+                    usdMicros: 250_000,
                   },
                   {
                     meterId: "cloudflare:workers_script:request",
@@ -1348,7 +1348,7 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
                     operation: "request",
                     kind: "gateway_compute",
                     quantity: 42,
-                    credits: 3,
+                    usdMicros: 1_500,
                   },
                 ]),
               },
@@ -1370,12 +1370,13 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
       input: {
         periodStart: "2026-06-26T13:00:00.000Z",
         periodEnd: "2026-06-26T13:01:00.000Z",
+        spendRequired: true,
         meters: [
           {
             meterId: "ai:takosumi-default:request",
             kind: "ai_request",
             quantity: 1,
-            credits: 2,
+            usdMicros: 250_000,
           },
           {
             meterId: "cloudflare:workers_script:request",
@@ -1385,7 +1386,7 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
             operation: "request",
             kind: "gateway_compute",
             quantity: 42,
-            credits: 3,
+            usdMicros: 1_500,
           },
         ],
       },
@@ -1394,6 +1395,198 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
   expect(billingUsageImports).toEqual([
     [{ id: "usage_1", source: "resource_meter" }],
   ]);
+});
+
+test("Cloud extension route prices reported usage from the operator price book", async () => {
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!route) throw new Error("AI Gateway route missing");
+  const usageCalls: {
+    spaceId: string;
+    input: Parameters<
+      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+    >[1];
+  }[] = [];
+  const priceBook = {
+    minimumGrossMarginBps: 3_000,
+    meters: [
+      {
+        meterIdPrefix: "ai:",
+        kind: "ai_request",
+        unit: "request",
+        chargeUsdMicrosPerUnit: 2_000,
+        estimatedCostUsdMicrosPerUnit: 1_000,
+        minimumChargeUsdMicros: 2_000,
+      },
+      {
+        meterIdPrefix: "ai:",
+        kind: "ai_input_token",
+        unit: "token",
+        chargeUsdMicrosPerMillionUnits: 400_000,
+        estimatedCostUsdMicrosPerMillionUnits: 100_000,
+        minimumChargeUsdMicros: 1,
+      },
+      {
+        meterIdPrefix: "cloudflare:workers_script:",
+        kind: "gateway_compute",
+        unit: "operation",
+        chargeUsdMicrosPerUnit: 1_500,
+        estimatedCostUsdMicrosPerUnit: 500,
+        minimumChargeUsdMicros: 1_000,
+      },
+    ],
+  };
+
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: JSON.stringify(priceBook),
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl_1", choices: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "ai:takosumi-default:chat.completions:request",
+                    kind: "ai_request",
+                    quantity: 1,
+                  },
+                  {
+                    meterId: "ai:takosumi-default:chat.completions:input_token",
+                    kind: "ai_input_token",
+                    quantity: 2_500,
+                  },
+                  {
+                    meterId: "cloudflare:workers_script:request",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:api",
+                    operation: "request",
+                    kind: "gateway_compute",
+                    quantity: 2,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    {
+      recordGatewayResourceUsage: async (spaceId, input) => {
+        usageCalls.push({ spaceId, input });
+        return { usageEvents: [{ id: "usage_1", source: "resource_meter" }] };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(usageCalls).toEqual([
+    {
+      spaceId: "space_usage",
+      input: {
+        periodStart: "2026-06-26T13:00:00.000Z",
+        periodEnd: "2026-06-26T13:01:00.000Z",
+        spendRequired: true,
+        meters: [
+          {
+            meterId: "ai:takosumi-default:chat.completions:request",
+            kind: "ai_request",
+            quantity: 1,
+            usdMicros: 2_000,
+          },
+          {
+            meterId: "ai:takosumi-default:chat.completions:input_token",
+            kind: "ai_input_token",
+            quantity: 2_500,
+            usdMicros: 1_000,
+          },
+          {
+            meterId: "cloudflare:workers_script:request",
+            resourceFamily: "cloudflare.workers_script",
+            resourceId: "script:api",
+            operation: "request",
+            kind: "gateway_compute",
+            quantity: 2,
+            usdMicros: 3_000,
+          },
+        ],
+      },
+    },
+  ]);
+});
+
+test("Cloud extension route rejects a price book below the required margin", async () => {
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!route) throw new Error("AI Gateway route missing");
+  const usageCalls: unknown[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: JSON.stringify({
+        minimumGrossMarginBps: 3_000,
+        meters: [
+          {
+            meterIdPrefix: "ai:",
+            kind: "ai_request",
+            unit: "request",
+            chargeUsdMicrosPerUnit: 1_000,
+            estimatedCostUsdMicrosPerUnit: 1_000,
+          },
+        ],
+      }),
+      TAKOSUMI_CLOUD_AI_GATEWAY: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl_1", choices: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "ai:takosumi-default:chat.completions:request",
+                    kind: "ai_request",
+                    quantity: 1,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    {
+      recordGatewayResourceUsage: async (...args) => {
+        usageCalls.push(args);
+        return { usageEvents: [] };
+      },
+    },
+  );
+
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({
+    error: "usage metering failed",
+    error_description:
+      "Cloud extension usage could not be recorded, so the request was not returned as a billable success.",
+  });
+  expect(usageCalls).toEqual([]);
 });
 
 test("Cloud extension usage rejects Workers for Platforms as a public resource family", async () => {
@@ -1428,7 +1621,7 @@ test("Cloud extension usage rejects Workers for Platforms as a public resource f
                     operation: "deploy",
                     kind: "gateway_compute",
                     quantity: 1,
-                    credits: 2,
+                    usdMicros: 2_000,
                   },
                 ]),
               },
@@ -1483,7 +1676,7 @@ test("Cloud extension usage rejects WfP as a public meter id", async () => {
                     operation: "deploy",
                     kind: "gateway_compute",
                     quantity: 1,
-                    credits: 2,
+                    usdMicros: 2_000,
                   },
                 ]),
               },
@@ -1541,7 +1734,7 @@ test("Cloud extension usage rejects Workers for Platforms as public metadata", a
                     },
                     kind: "gateway_compute",
                     quantity: 1,
-                    credits: 2,
+                    usdMicros: 2_000,
                   },
                 ]),
               },
@@ -1578,7 +1771,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "deploy",
       kind: "gateway_compute",
       quantity: 1,
-      credits: 2,
+      usdMicros: 2_000,
     },
     {
       meterId: "cloudflare:workers_script:request",
@@ -1588,7 +1781,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "request",
       kind: "gateway_compute",
       quantity: 42,
-      credits: 3,
+      usdMicros: 1_500,
     },
     {
       meterId: "cloudflare:kv:list",
@@ -1598,7 +1791,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "list",
       kind: "gateway_storage_gb_hour",
       quantity: 0.25,
-      credits: 1,
+      usdMicros: 250,
     },
     {
       meterId: "cloudflare:r2:object_storage",
@@ -1608,7 +1801,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "storage_gb_hour",
       kind: "gateway_storage_gb_hour",
       quantity: 3.5,
-      credits: 4,
+      usdMicros: 4_000,
     },
     {
       meterId: "cloudflare:d1:query",
@@ -1618,7 +1811,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "query",
       kind: "gateway_compute",
       quantity: 7,
-      credits: 2,
+      usdMicros: 2_000,
     },
     {
       meterId: "cloudflare:workflows:step",
@@ -1628,7 +1821,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "step",
       kind: "gateway_compute",
       quantity: 5,
-      credits: 2,
+      usdMicros: 2_000,
     },
     {
       meterId: "cloudflare:containers:vcpu_second",
@@ -1638,7 +1831,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       operation: "vcpu_second",
       kind: "gateway_compute",
       quantity: 10,
-      credits: 6,
+      usdMicros: 6_000,
     },
   ] as const;
   const usageCalls: {
@@ -1692,6 +1885,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       input: {
         periodStart: "2026-06-26T13:00:00.000Z",
         periodEnd: "2026-06-26T13:01:00.000Z",
+        spendRequired: true,
         meters,
       },
     },
@@ -1752,6 +1946,7 @@ test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage 
   expect(Date.parse(usageCalls[0]!.input.periodEnd)).toBeGreaterThan(
     Date.parse(usageCalls[0]!.input.periodStart),
   );
+  expect(usageCalls[0]?.input.spendRequired).toBe(true);
   expect(usageCalls[0]?.input.meters).toEqual([
     {
       installationId: "inst_cf_compat",
@@ -1761,7 +1956,7 @@ test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage 
       operation: "deploy",
       kind: "gateway_compute",
       quantity: 1,
-      credits: 1,
+      usdMicros: 1_000,
     },
   ]);
 });
@@ -1823,6 +2018,7 @@ test("Cloud extension returns upstream success when billing export lags after us
 
   expect(usageCalls).toHaveLength(1);
   expect(usageCalls[0]?.spaceId).toBe("space_ai_usage");
+  expect(usageCalls[0]?.input.spendRequired).toBe(true);
   expect(usageCalls[0]?.input.meters).toEqual([
     {
       installationId: "inst_ai_gateway",
@@ -1832,7 +2028,7 @@ test("Cloud extension returns upstream success when billing export lags after us
       operation: "chat.completions",
       kind: "ai_request",
       quantity: 1,
-      credits: 1,
+      usdMicros: 1_000,
     },
   ]);
   expect(billingImports).toEqual([[{ id: "usage_ai_1" }]]);
@@ -1867,7 +2063,7 @@ test("Cloud extension route fails closed when reported usage cannot be recorded"
                     meterId: "ai:takosumi-default:request",
                     kind: "ai_request",
                     quantity: 1,
-                    credits: 2,
+                    usdMicros: 250_000,
                   },
                 ]),
               },

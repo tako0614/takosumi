@@ -84,6 +84,9 @@ Before enabling `enforce` for a customer cohort, the operator must verify Stripe
 checkout, webhook ingestion, entitlement projection, invoice handling, failed
 payment handling, dunning, recovery, refund/credit handling, and billing support
 procedures in the launch-readiness evidence.
+Cloud-only WfP / AI / managed resource pricing is configured separately in
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`; the price table, free tier rule, and minimum
+gross-margin guard are defined in [`cloud-pricing.md`](cloud-pricing.md).
 
 The dashboard may show empty plans or disabled billing in closed access. That is
 valid only while Takosumi Cloud remains pre-GA or closed.

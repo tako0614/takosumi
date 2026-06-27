@@ -28,6 +28,8 @@ function gatewayEnv() {
             default: true,
             metadata: { tier: "fast" },
             billingUsdMicrosPerRequest: 250_000,
+            billingUsdMicrosPerMillionInputTokens: 300_000,
+            billingUsdMicrosPerMillionOutputTokens: 900_000,
           },
         ],
       },
@@ -311,6 +313,82 @@ test("AI Gateway emits billable usage headers for attributed successful requests
       kind: "ai_request",
       quantity: 1,
       usdMicros: 250_000,
+    },
+  ]);
+});
+
+test("AI Gateway emits token usage meters when upstream reports OpenAI usage", async () => {
+  const config = createTakosumiAiGatewayConfigFromEnv(gatewayEnv());
+  const url = gatewayUrl("/gateway/ai/v1/chat/completions");
+  const response = await handleTakosumiAiGatewayRequest(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "deepseek/chat",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }),
+    url,
+    {
+      config,
+      fetcher: async () =>
+        Response.json({
+          id: "chatcmpl_usage_tokens_1",
+          object: "chat.completion",
+          model: "deepseek-chat",
+          usage: {
+            prompt_tokens: 1_000,
+            completion_tokens: 2_000,
+            total_tokens: 3_000,
+          },
+        }),
+      authorize: async () => ({
+        ok: true,
+        context: {
+          subject: "service-graph-service:inst_ai",
+          installationId: "inst_ai",
+          spaceId: "space_ai",
+        },
+      }),
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(
+    JSON.parse(
+      response.headers.get(TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER) ?? "",
+    ),
+  ).toEqual([
+    {
+      installationId: "inst_ai",
+      meterId: "ai:deepseek-chat:chat.completions:request",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "deepseek/chat",
+      operation: "chat.completions",
+      kind: "ai_request",
+      quantity: 1,
+      usdMicros: 250_000,
+    },
+    {
+      installationId: "inst_ai",
+      meterId: "ai:deepseek-chat:chat.completions:input_token",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "deepseek/chat",
+      operation: "chat.completions.input_tokens",
+      kind: "ai_input_token",
+      quantity: 1_000,
+      usdMicros: 300,
+    },
+    {
+      installationId: "inst_ai",
+      meterId: "ai:deepseek-chat:chat.completions:output_token",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "deepseek/chat",
+      operation: "chat.completions.output_tokens",
+      kind: "ai_output_token",
+      quantity: 2_000,
+      usdMicros: 1_800,
     },
   ]);
 });

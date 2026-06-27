@@ -136,10 +136,17 @@ configured provider credits. The OSS platform worker does not parse this config
 or forward model requests by itself.
 
 Takosumi customer billing is explicit and separate from upstream provider
-billing. A model may set `billingUsdMicrosPerRequest`; successful attributed
+billing. A model may set `billingUsdMicrosPerRequest`,
+`billingUsdMicrosPerMillionInputTokens`, and
+`billingUsdMicrosPerMillionOutputTokens`. Successful attributed
 `chat.completions` and `embeddings` calls then emit an internal Cloud extension
-usage report with `ai_request` and a USD-micros amount. The platform worker
-records that report in the Workspace usage ledger and strips the internal
+usage report with `ai_request`, and, when the upstream response includes an
+OpenAI-compatible `usage` object, `ai_input_token` / `ai_output_token`.
+Production pricing is finalized by the platform worker's
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`; model-level `billingUsdMicros*` values are
+accepted for closed AI Gateway fallback/compatibility and local tests, but the
+operator price book is the Cloud pricing source of truth. The platform worker
+records the priced report in the Workspace usage ledger and strips the internal
 headers before returning the client response. If the auth context has no
 `spaceId`, the AI Gateway does not emit a usage report because the request
 cannot be billed to a Workspace.
@@ -168,7 +175,9 @@ is rejected if it contains secret-shaped keys or values.
         "endpoints": ["chat.completions"],
         "default": true,
         "billingClass": "operator-paid-preview",
-        "billingUsdMicrosPerRequest": 250000
+        "billingUsdMicrosPerRequest": 1000,
+        "billingUsdMicrosPerMillionInputTokens": 300000,
+        "billingUsdMicrosPerMillionOutputTokens": 1000000
       },
       {
         "publicModel": "anthropic/sonnet",

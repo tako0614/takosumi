@@ -165,13 +165,24 @@ those headers from the client response and records them through
 reports usage but the ledger write cannot be completed, the platform fails
 closed instead of returning an unmetered success.
 
+Pricing is owned by the Takosumi Cloud platform worker, not by the Cloud
+extension. The canonical extension report carries `meterId`, `kind`, `quantity`,
+and resource metadata. Extension-provided `usdMicros` is still accepted as a
+legacy/fallback compatibility path, but production pricing comes from the
+operator config `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`. The price book validates
+unit charge, estimated unit cost, and minimum gross margin before it writes
+`usdMicros` to the ledger. Unknown meters or prices below the required margin
+fail closed, so WfP and AI requests cannot succeed without billable credit.
+The operating source of truth for prices and the free tier is
+[`../../operations/cloud-pricing.md`](../../operations/cloud-pricing.md).
+
 Internal headers:
 
 ```http
 x-takosumi-cloud-usage-space-id: space_xxx
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"usdMicros":250000}]
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1}]
 ```
 
 The Takosumi Cloud managed resource backend presents resources to users as
@@ -187,7 +198,7 @@ smoke coverage for them. Internal backend aliases are rejected in `meterId`,
 `resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"usdMicros":1000,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.

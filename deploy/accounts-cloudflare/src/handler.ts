@@ -74,11 +74,16 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES?: string;
   /**
    * Operator billing plan catalog (spec §32): JSON array of
-   * `{ id, kind: "subscription"|"pack", stripePriceId, credits,
+   * `{ id, kind: "subscription"|"pack", stripePriceId, usdMicros,
    *    name: {ja,en}, priceDisplay: {ja,en} }`.
    * Empty/absent → no plans offered (dashboard shows the empty catalog).
    */
   readonly TAKOSUMI_BILLING_PLANS?: string;
+  /**
+   * Cloud-only managed resource price book. The platform worker applies this to
+   * Cloud extension usage before it records and spends Workspace USD balance.
+   */
+  readonly TAKOSUMI_CLOUD_USAGE_PRICE_BOOK?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN?: string;
