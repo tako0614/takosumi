@@ -1275,13 +1275,86 @@ function platformCloudExtensionUsageMeterFromJson(
     typeof record.installationId === "string" && record.installationId.trim()
       ? record.installationId.trim()
       : undefined;
+  const resourceFamily = optionalCloudExtensionUsageString(
+    record.resourceFamily,
+    "resourceFamily",
+  );
+  if (resourceFamily && !/^[a-z0-9][a-z0-9_.:-]*$/u.test(resourceFamily)) {
+    throw new TypeError(
+      "Cloud extension usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
+    );
+  }
+  const resourceId = optionalCloudExtensionUsageString(
+    record.resourceId,
+    "resourceId",
+  );
+  const operation = optionalCloudExtensionUsageString(
+    record.operation,
+    "operation",
+  );
+  const resourceMetadata = cloudExtensionUsageResourceMetadata(
+    record.resourceMetadata,
+  );
   return {
     ...(installationId ? { installationId } : {}),
+    ...(resourceFamily ? { resourceFamily } : {}),
+    ...(resourceId ? { resourceId } : {}),
+    ...(operation ? { operation } : {}),
+    ...(Object.keys(resourceMetadata).length > 0 ? { resourceMetadata } : {}),
     kind,
     quantity,
     credits,
     meterId,
   };
+}
+
+function optionalCloudExtensionUsageString(
+  value: unknown,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError(`Cloud extension usage ${label} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 256) {
+    throw new TypeError(
+      `Cloud extension usage ${label} must be non-empty and at most 256 characters`,
+    );
+  }
+  return trimmed;
+}
+
+function cloudExtensionUsageResourceMetadata(
+  value: unknown,
+): NonNullable<GatewayResourceUsageMeter["resourceMetadata"]> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(
+      "Cloud extension usage resourceMetadata must be an object",
+    );
+  }
+  const normalized: Record<string, string | number | boolean | null> = {};
+  for (const [key, metadataValue] of Object.entries(value)) {
+    const metadataKey = key.trim();
+    if (!metadataKey) {
+      throw new TypeError(
+        "Cloud extension usage resourceMetadata keys must be non-empty strings",
+      );
+    }
+    if (
+      metadataValue !== null &&
+      typeof metadataValue !== "string" &&
+      typeof metadataValue !== "boolean" &&
+      (typeof metadataValue !== "number" || !Number.isFinite(metadataValue))
+    ) {
+      throw new TypeError(
+        "Cloud extension usage resourceMetadata values must be strings, numbers, booleans, or null",
+      );
+    }
+    normalized[metadataKey] = metadataValue;
+  }
+  return normalized;
 }
 
 function isPlatformCloudExtensionUsageKind(

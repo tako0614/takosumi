@@ -37,6 +37,9 @@ import type {
   SpaceSubscription,
   UsageEvent,
   UsageEventKind,
+  UsageResourceFamily,
+  UsageResourceMetadata,
+  UsageResourceMetadataValue,
   UsageEventSource,
 } from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
@@ -48,6 +51,11 @@ import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 export interface RecordMeteredUsageInput {
   readonly installationId?: string;
   readonly runId?: string;
+  readonly meterId?: string;
+  readonly resourceFamily?: UsageResourceFamily;
+  readonly resourceId?: string;
+  readonly operation?: string;
+  readonly resourceMetadata?: UsageResourceMetadata;
   readonly kind: UsageEventKind;
   readonly quantity: number;
   readonly credits: number;
@@ -236,6 +244,15 @@ export class UsageReportingService {
         ...(meter.installationId
           ? { installationId: meter.installationId }
           : {}),
+        meterId: meter.meterId,
+        ...(meter.resourceFamily
+          ? { resourceFamily: meter.resourceFamily }
+          : {}),
+        ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
+        ...(meter.operation ? { operation: meter.operation } : {}),
+        ...(meter.resourceMetadata
+          ? { resourceMetadata: meter.resourceMetadata }
+          : {}),
         kind: meter.kind,
         quantity: meter.quantity,
         credits: meter.credits,
@@ -378,6 +395,13 @@ function normalizeMeteredUsageEvent(
     );
   }
   requireNonEmptyString(input.idempotencyKey, "idempotencyKey");
+  const meterId = optionalNonEmptyString(input.meterId, "meterId");
+  const resourceFamily = normalizeUsageResourceFamily(input.resourceFamily);
+  const resourceId = optionalNonEmptyString(input.resourceId, "resourceId");
+  const operation = optionalNonEmptyString(input.operation, "operation");
+  const resourceMetadata = normalizeUsageResourceMetadata(
+    input.resourceMetadata,
+  );
   const createdAt = input.createdAt ?? nowIso();
   if (Number.isNaN(Date.parse(createdAt))) {
     throw new OpenTofuControllerError(
@@ -390,6 +414,11 @@ function normalizeMeteredUsageEvent(
     spaceId,
     ...(input.installationId ? { installationId: input.installationId } : {}),
     ...(input.runId ? { runId: input.runId } : {}),
+    ...(meterId ? { meterId } : {}),
+    ...(resourceFamily ? { resourceFamily } : {}),
+    ...(resourceId ? { resourceId } : {}),
+    ...(operation ? { operation } : {}),
+    ...(Object.keys(resourceMetadata).length > 0 ? { resourceMetadata } : {}),
     kind: input.kind,
     quantity: input.quantity,
     credits: input.credits,
@@ -429,6 +458,10 @@ function normalizeUsagePeriod(input: RecordGatewayResourceUsageInput): {
       );
     }
     requireNonEmptyString(meter.meterId, "meterId");
+    normalizeUsageResourceFamily(meter.resourceFamily);
+    optionalNonEmptyString(meter.resourceId, "resourceId");
+    optionalNonEmptyString(meter.operation, "operation");
+    normalizeUsageResourceMetadata(meter.resourceMetadata);
   }
   return {
     periodStart: new Date(periodStartMs).toISOString(),
@@ -458,6 +491,66 @@ function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
   };
 }
 
+function optionalNonEmptyString(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 256) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must be a non-empty string of at most 256 characters when provided`,
+    );
+  }
+  return trimmed;
+}
+
+function normalizeUsageResourceFamily(
+  value: UsageResourceFamily | undefined,
+): UsageResourceFamily | undefined {
+  if (value === undefined) return undefined;
+  const family = optionalNonEmptyString(value, "resourceFamily");
+  if (family === undefined) return undefined;
+  if (!/^[a-z0-9][a-z0-9_.:-]*$/u.test(family)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
+    );
+  }
+  return family;
+}
+
+function normalizeUsageResourceMetadata(
+  value: UsageResourceMetadata | undefined,
+): UsageResourceMetadata {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usage resourceMetadata must be an object",
+    );
+  }
+  const normalized: Record<string, UsageResourceMetadataValue> = {};
+  for (const [key, metadataValue] of Object.entries(value)) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage resourceMetadata keys must be non-empty strings",
+      );
+    }
+    if (!isUsageResourceMetadataValue(metadataValue)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage resourceMetadata values must be strings, numbers, booleans, or null",
+      );
+    }
+    normalized[normalizedKey] = metadataValue;
+  }
+  return normalized;
+}
+
 function isUsageEventKind(value: unknown): value is UsageEventKind {
   return (
     value === "runner_minute" ||
@@ -470,6 +563,17 @@ function isUsageEventKind(value: unknown): value is UsageEventKind {
     value === "backup_storage_gb_hour" ||
     value === "egress_gb" ||
     value === "operation"
+  );
+}
+
+function isUsageResourceMetadataValue(
+  value: unknown,
+): value is UsageResourceMetadataValue {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
   );
 }
 

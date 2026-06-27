@@ -2277,6 +2277,21 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         spaceId: { type: "string" },
         installationId: { type: "string" },
         runId: { type: "string" },
+        meterId: { type: "string" },
+        resourceFamily: { type: "string" },
+        resourceId: { type: "string" },
+        operation: { type: "string" },
+        resourceMetadata: {
+          type: "object",
+          additionalProperties: {
+            anyOf: [
+              { type: "string" },
+              { type: "number" },
+              { type: "boolean" },
+              { type: "null" },
+            ],
+          },
+        },
         kind: { type: "string" },
         quantity: { type: "number" },
         credits: { type: "number" },
