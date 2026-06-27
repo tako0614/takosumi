@@ -42,6 +42,7 @@ import type {
   UsageResourceMetadataValue,
   UsageEventSource,
 } from "takosumi-contract/billing";
+import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
@@ -399,6 +400,7 @@ function normalizeMeteredUsageEvent(
   }
   requireNonEmptyString(input.idempotencyKey, "idempotencyKey");
   const meterId = optionalNonEmptyString(input.meterId, "meterId");
+  rejectInternalWorkersBackendUsageName(meterId, "meterId");
   const resourceFamily = normalizeUsageResourceFamily(input.resourceFamily);
   const resourceId = optionalNonEmptyString(input.resourceId, "resourceId");
   const operation = optionalNonEmptyString(input.operation, "operation");
@@ -461,6 +463,7 @@ function normalizeUsagePeriod(input: RecordGatewayResourceUsageInput): {
       );
     }
     requireNonEmptyString(meter.meterId, "meterId");
+    rejectInternalWorkersBackendUsageName(meter.meterId, "meterId");
     normalizeUsageResourceFamily(meter.resourceFamily);
     optionalNonEmptyString(meter.resourceId, "resourceId");
     optionalNonEmptyString(meter.operation, "operation");
@@ -521,7 +524,21 @@ function normalizeUsageResourceFamily(
       "usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
     );
   }
+  rejectInternalWorkersBackendUsageName(family, "resourceFamily");
   return family;
+}
+
+function rejectInternalWorkersBackendUsageName(
+  value: string | undefined,
+  label: string,
+): void {
+  if (!value) return;
+  if (usageMeterNameLeaksInternalWorkersBackend(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `usage ${label} must describe the customer-facing managed resource, not the internal Workers for Platforms backend`,
+    );
+  }
 }
 
 function normalizeUsageResourceMetadata(

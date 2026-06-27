@@ -23,6 +23,7 @@ import {
   isPlatformMetricsPath,
   oidcMetricRoute,
   PLATFORM_CLOUD_EXTENSION_ROUTES,
+  PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
   PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
   PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
   PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
@@ -1643,6 +1644,75 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
         periodEnd: "2026-06-26T13:01:00.000Z",
         meters,
       },
+    },
+  ]);
+});
+
+test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage headers are absent", async () => {
+  const route = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!route) throw new Error("Cloudflare compat route missing");
+  const usageCalls: {
+    spaceId: string;
+    input: Parameters<
+      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+    >[1];
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+      {
+        method: "PUT",
+        headers: {
+          [PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER]:
+            "space_ignored_when_token_has_space",
+        },
+      },
+    ),
+    {
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async () =>
+          Response.json({
+            success: true,
+            result: { id: "api" },
+            errors: [],
+            messages: [],
+          }),
+      },
+    } as never,
+    route,
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
+    {
+      recordGatewayResourceUsage: async (spaceId, input) => {
+        usageCalls.push({ spaceId, input });
+        return { usageEvents: [{ id: "usage_fallback" }] };
+      },
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(usageCalls).toHaveLength(1);
+  expect(usageCalls[0]?.spaceId).toBe("space_cf_usage");
+  expect(
+    Date.parse(usageCalls[0]!.input.periodEnd),
+  ).toBeGreaterThan(Date.parse(usageCalls[0]!.input.periodStart));
+  expect(usageCalls[0]?.input.meters).toEqual([
+    {
+      installationId: "inst_cf_compat",
+      meterId: "cloudflare:workers_script:deploy",
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: "script:api",
+      operation: "deploy",
+      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
+      kind: "gateway_compute",
+      quantity: 1,
+      credits: 1,
     },
   ]);
 });

@@ -807,6 +807,12 @@ Users keep using Cloudflare provider Workers resources such as
 a `meterId`, `resourceFamily`, or Stripe usage meter, except as internal audit
 metadata such as `resourceMetadata.backend`.
 
+Cloud extension usage headers are the authoritative metering path. Takosumi
+Cloud may also record fallback operation usage at the platform worker when a
+successful Gateway request has verified billing Workspace context but the
+extension did not emit usage headers; this prevents silent free success while
+keeping Workers for Platforms internal.
+
 Initial scope:
 
 ```text

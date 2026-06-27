@@ -195,6 +195,15 @@ has been billed. Takosumi billing is closed only when the Cloud extension emits
 usage reports, the Workspace usage ledger records them, and billing/Stripe
 aggregates them into an invoice or entitlement decision.
 
+Precise usage headers from the Cloud extension are the authoritative path. As a
+leak-prevention fallback, when a successful request has a verified billing
+Workspace context but no usage headers, the platform worker records minimal
+operation usage instead of letting the request succeed for free. This fallback
+is operation metering, not precise token or storage accounting. Cloudflare
+Workers compatibility fallback usage is still recorded as
+`cloudflare.workers_script`; Workers for Platforms remains only
+`resourceMetadata.backend`.
+
 The Stripe integration rolls up unexported usage reports by billing account,
 meter, and unit, then creates Stripe invoice items for those rollups. After a
 successful invoice item creation, the source usage reports are marked with

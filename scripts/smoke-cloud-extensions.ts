@@ -288,6 +288,10 @@ export async function runCloudExtensionSmoke(
     authorization: `Bearer ${options.sessionToken}`,
     accept: "application/json",
   };
+  const compatAuthHeaders = {
+    ...authHeaders,
+    ...cloudflareCompatBillingHeaders(options),
+  };
   const compatSmokeScriptName = cloudflareCompatSmokeScriptName();
   const compatSmokeScriptPath = cloudflareCompatSmokeScriptPath(
     compatSmokeScriptName,
@@ -437,7 +441,7 @@ export async function runCloudExtensionSmoke(
       name: "cloudflareCompatVerifyAuth",
       path: "/compat/cloudflare/client/v4/user/tokens/verify",
       expected: "authenticated Cloudflare token verify compatibility succeeds",
-      headers: authHeaders,
+      headers: compatAuthHeaders,
       pass: (response, body) =>
         response.status === 200 && record(body).success === true,
       summarize: summarizeCloudflareEnvelope,
@@ -446,7 +450,7 @@ export async function runCloudExtensionSmoke(
       name: "cloudflareCompatAccountsAuth",
       path: "/compat/cloudflare/client/v4/accounts",
       expected: "authenticated Cloudflare accounts compatibility succeeds",
-      headers: authHeaders,
+      headers: compatAuthHeaders,
       pass: (response, body) =>
         response.status === 200 &&
         record(body).success === true &&
@@ -463,7 +467,7 @@ export async function runCloudExtensionSmoke(
       path: `/compat/cloudflare/client/v4/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts`,
       expected:
         "authenticated Cloudflare Workers scripts list compatibility succeeds",
-      headers: authHeaders,
+      headers: compatAuthHeaders,
       pass: (response, body) =>
         response.status === 200 &&
         record(body).success === true &&
@@ -477,7 +481,10 @@ export async function runCloudExtensionSmoke(
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization accepts a script upload"
         : "Cloudflare Workers script materialization upload is either implemented or explicitly fail-closed",
-      headers: { ...authHeaders, "content-type": "application/javascript" },
+      headers: {
+        ...compatAuthHeaders,
+        "content-type": "application/javascript",
+      },
       bodyText: CLOUDFLARE_COMPAT_SMOKE_SCRIPT_BODY,
       pass: (response, body) => {
         if (
@@ -500,7 +507,7 @@ export async function runCloudExtensionSmoke(
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization can read the uploaded script"
         : "Cloudflare Workers script materialization read is either implemented or explicitly fail-closed",
-      headers: authHeaders,
+      headers: compatAuthHeaders,
       pass: (response, body) => {
         if (response.status === 200 && record(body).success === true) {
           return true;
@@ -520,7 +527,7 @@ export async function runCloudExtensionSmoke(
       expected: options.requireCompatMaterialization
         ? "Cloudflare Workers script materialization cleanup succeeds"
         : "Cloudflare Workers script materialization cleanup is either implemented or explicitly fail-closed",
-      headers: authHeaders,
+      headers: compatAuthHeaders,
       pass: (response, body) => {
         if (response.status === 200 && record(body).success === true) {
           return true;
@@ -1320,6 +1327,25 @@ async function requestCheck(
     ok: input.pass(response, body),
     expected: input.expected,
     summary: input.summarize(body),
+  };
+}
+
+function cloudflareCompatBillingHeaders(
+  options: CloudExtensionSmokeOptions,
+): Record<string, string> {
+  return {
+    ...(options.cloudflareCompatUsageWorkspaceId
+      ? {
+          "x-takosumi-cloud-billing-workspace-id":
+            options.cloudflareCompatUsageWorkspaceId,
+        }
+      : {}),
+    ...(options.cloudflareCompatUsageInstallationId
+      ? {
+          "x-takosumi-cloud-billing-installation-id":
+            options.cloudflareCompatUsageInstallationId,
+        }
+      : {}),
   };
 }
 
@@ -2518,6 +2544,7 @@ async function cleanupCloudflareCompatWorkerScript(
         headers: {
           authorization: `Bearer ${options.sessionToken}`,
           accept: "application/json",
+          ...cloudflareCompatBillingHeaders(options),
         },
       },
     );
@@ -2557,6 +2584,7 @@ async function cleanupCloudflareCompatCollectionResource(
       headers: {
         authorization: `Bearer ${options.sessionToken}`,
         accept: "application/json",
+        ...cloudflareCompatBillingHeaders(options),
       },
     });
     const body = await readJson(listed);
@@ -2579,6 +2607,7 @@ async function cleanupCloudflareCompatCollectionResource(
           headers: {
             authorization: `Bearer ${options.sessionToken}`,
             accept: "application/json",
+            ...cloudflareCompatBillingHeaders(options),
           },
         },
       );
@@ -2621,6 +2650,7 @@ async function cloudflareCompatJson(
   const headers: Record<string, string> = {
     authorization: `Bearer ${options.sessionToken}`,
     accept: "application/json",
+    ...cloudflareCompatBillingHeaders(options),
   };
   if (input.body !== undefined) headers["content-type"] = "application/json";
   if (input.contentType) headers["content-type"] = input.contentType;

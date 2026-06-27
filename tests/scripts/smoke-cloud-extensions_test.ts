@@ -111,6 +111,7 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
 
 test("cloud extension smoke can require Cloudflare compat usage ledger evidence", async () => {
   let usageReads = 0;
+  const compatBillingWorkspaceHeaders: (string | null)[] = [];
   const result = await runCloudExtensionSmoke(
     {
       ...BASE_OPTIONS,
@@ -122,6 +123,11 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
     },
     async (url, init) => {
       const parsed = new URL(url);
+      if (parsed.pathname.startsWith("/compat/cloudflare/client/v4/")) {
+        compatBillingWorkspaceHeaders.push(
+          headerValue(init, "x-takosumi-cloud-billing-workspace-id"),
+        );
+      }
       if (parsed.pathname === "/api/v1/workspaces/space_compat_runtime/usage") {
         usageReads += 1;
         return json({
@@ -176,6 +182,7 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
   expect(result.gaReady).toBe(true);
   expect(result.gaps).toEqual([]);
   expect(usageReads).toBeGreaterThanOrEqual(2);
+  expect(compatBillingWorkspaceHeaders).toContain("space_compat_runtime");
   expect(
     result.checks.find((check) => check.name === "cloudflareCompatUsageLedger")
       ?.summary,
@@ -1269,6 +1276,15 @@ function authorization(init: RequestInit | undefined): string | undefined {
   return typeof init?.headers === "object" && init.headers !== null
     ? (init.headers as Record<string, string>).authorization
     : undefined;
+}
+
+function headerValue(
+  init: RequestInit | undefined,
+  name: string,
+): string | null {
+  if (typeof init?.headers !== "object" || init.headers === null) return null;
+  const headers = init.headers as Record<string, string>;
+  return headers[name] ?? null;
 }
 
 function requestBodyText(init: RequestInit | undefined): string {
