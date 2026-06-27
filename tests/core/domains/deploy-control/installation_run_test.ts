@@ -3161,7 +3161,7 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       },
       source: "resource_meter",
       idempotencyKey:
-        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:deploy:inst_fixture:gateway_compute",
+        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:deploy:inst_fixture:cloudflare.workers_script:script:inst_fixture:deploy:gateway_compute",
     }),
     expect.objectContaining({
       kind: "gateway_compute",
@@ -3176,7 +3176,7 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       },
       source: "resource_meter",
       idempotencyKey:
-        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:request:inst_fixture:gateway_compute",
+        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:request:inst_fixture:cloudflare.workers_script:script:inst_fixture:request:gateway_compute",
     }),
     expect.objectContaining({
       kind: "gateway_storage_gb_hour",
@@ -3191,7 +3191,7 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       },
       source: "resource_meter",
       idempotencyKey:
-        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:r2:object_storage:gb_hour:inst_fixture:gateway_storage_gb_hour",
+        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:r2:object_storage:gb_hour:inst_fixture:cloudflare.r2:bucket:inst_fixture:storage_gb_hour:gateway_storage_gb_hour",
     }),
     expect.objectContaining({
       kind: "gateway_storage_gb_hour",
@@ -3255,6 +3255,63 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       ],
     }),
   ).rejects.toThrow("Gateway resource usage kind is not supported");
+});
+
+test("Gateway resource usage idempotency keeps distinct resource ids separate", async () => {
+  const { store, controller } = await seededController();
+
+  await controller.recordGatewayResourceUsage("space_test", {
+    periodStart: "2026-06-07T00:00:00.000Z",
+    periodEnd: "2026-06-07T01:00:00.000Z",
+    meters: [
+      {
+        installationId: "inst_fixture",
+        kind: "gateway_compute",
+        quantity: 10,
+        credits: 1,
+        meterId: "cloudflare:workers_script:request",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "request",
+      },
+      {
+        installationId: "inst_fixture",
+        kind: "gateway_compute",
+        quantity: 20,
+        credits: 2,
+        meterId: "cloudflare:workers_script:request",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:admin",
+        operation: "request",
+      },
+    ],
+  });
+
+  expect(
+    (await store.listUsageEvents("space_test"))
+      .filter((event) => event.meterId === "cloudflare:workers_script:request")
+      .map((event) => ({
+        resourceId: event.resourceId,
+        quantity: event.quantity,
+        credits: event.credits,
+        idempotencyKey: event.idempotencyKey,
+      })),
+  ).toEqual([
+    {
+      resourceId: "script:api",
+      quantity: 10,
+      credits: 1,
+      idempotencyKey:
+        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:request:inst_fixture:cloudflare.workers_script:script:api:request:gateway_compute",
+    },
+    {
+      resourceId: "script:admin",
+      quantity: 20,
+      credits: 2,
+      idempotencyKey:
+        "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:request:inst_fixture:cloudflare.workers_script:script:admin:request:gateway_compute",
+    },
+  ]);
 });
 
 test("invoice usage reconciliation records billing adjustment idempotently", async () => {

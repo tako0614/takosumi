@@ -2,7 +2,10 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import {
   createStripeBillingPortalSession,
   createStripeCheckoutSession,
+  createStripeUsageInvoiceItemsForBillingAccount,
   handleStripeWebhook,
+  type StripeUsageInvoiceItemPrice,
+  type StripeUsageInvoiceItemExport,
 } from "./billing.ts";
 import {
   type BillingPlan,
@@ -19,6 +22,7 @@ import {
   errorJson,
   isRecord,
   json,
+  numberValue,
   readJsonObject,
   stringValue,
   takosumiSubjectValue,
@@ -254,11 +258,127 @@ export async function handleStripeBillingPortalRequest(input: {
   }
 }
 
+export async function handleStripeUsageInvoiceItemsSyncRequest(input: {
+  request: Request;
+  store: AccountsStore;
+  stripe: StripeBillingOptions;
+  prices: readonly StripeUsageInvoiceItemPrice[];
+}): Promise<Response> {
+  if (input.prices.length === 0) {
+    return errorJson(
+      "feature_unavailable",
+      "Stripe usage invoice item prices are not configured.",
+      503,
+    );
+  }
+  const body = await readJsonObject(input.request);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const billingAccountId = stringValue(body.billingAccountId);
+  if (!billingAccountId) {
+    return errorJson("invalid_request", "billingAccountId is required", 400);
+  }
+  const windowStart = optionalTimestampBodyValue(body.windowStart);
+  const windowEnd = optionalTimestampBodyValue(body.windowEnd);
+  const lateArrivalAcceptedUntil = optionalTimestampBodyValue(
+    body.lateArrivalAcceptedUntil,
+  );
+  if (
+    windowStart === "invalid" ||
+    windowEnd === "invalid" ||
+    lateArrivalAcceptedUntil === "invalid" ||
+    (windowStart !== undefined &&
+      windowEnd !== undefined &&
+      windowEnd < windowStart)
+  ) {
+    return errorJson(
+      "invalid_request",
+      "windowStart, windowEnd, and lateArrivalAcceptedUntil must be non-negative timestamps",
+      400,
+    );
+  }
+  const metadata = optionalStringMetadata(body.metadata);
+  if (metadata === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "metadata must be an object with string values",
+      400,
+    );
+  }
+
+  try {
+    const result = await createStripeUsageInvoiceItemsForBillingAccount({
+      store: input.store,
+      secretKey: input.stripe.secretKey,
+      billingAccountId,
+      prices: input.prices,
+      policy: {
+        ...(windowStart === undefined ? {} : { windowStart }),
+        ...(windowEnd === undefined ? {} : { windowEnd }),
+        ...(lateArrivalAcceptedUntil === undefined
+          ? {}
+          : { lateArrivalAcceptedUntil }),
+      },
+      ...(metadata === undefined ? {} : { metadata }),
+      fetch: input.stripe.fetch,
+      stripeApiBase: input.stripe.stripeApiBase,
+    });
+    return json({
+      billing_account_id: result.billingAccountId,
+      stripe_customer_id: result.stripeCustomerId,
+      exported: result.exported.map(serializeStripeUsageInvoiceItemExport),
+    });
+  } catch (error) {
+    consoleErrorRedacted("stripe_usage_invoice_item_sync_failed", error);
+    if (error instanceof TypeError) {
+      return errorJson("invalid_request", error.message, 400);
+    }
+    return errorJson(
+      "usage_invoice_item_sync_failed",
+      "Stripe usage invoice item sync failed",
+      502,
+    );
+  }
+}
+
 function resolveBillingPlans(
   configured: readonly BillingPlan[] | undefined,
 ): readonly BillingPlan[] {
   if (configured && configured.length > 0) return configured;
   return parseBillingPlans(readEnvVar("TAKOSUMI_BILLING_PLANS"));
+}
+
+function optionalTimestampBodyValue(
+  value: unknown,
+): number | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  return numberValue(value) ?? "invalid";
+}
+
+function optionalStringMetadata(
+  value: unknown,
+): Record<string, string> | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "invalid";
+  const output: Record<string, string> = {};
+  for (const [key, metadataValue] of Object.entries(value)) {
+    if (typeof metadataValue !== "string") return "invalid";
+    output[key] = metadataValue;
+  }
+  return output;
+}
+
+function serializeStripeUsageInvoiceItemExport(
+  entry: StripeUsageInvoiceItemExport,
+) {
+  return {
+    meter: entry.meter,
+    unit: entry.unit,
+    quantity: entry.quantity,
+    usage_report_count: entry.usageReportCount,
+    usage_report_ids: entry.usageReportIds,
+    export_id: entry.exportId,
+    invoice_item_id: entry.invoiceItemId,
+  };
 }
 
 function resolveBillingRedirectAllowlist(

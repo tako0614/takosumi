@@ -202,6 +202,24 @@ again. For Cloudflare Workers compatibility, the billing name remains
 `cloudflare.workers_script`; `resourceMetadata.backend:
 "cloudflare.workers_for_platforms"` is internal implementation evidence only.
 
+Operators trigger Stripe usage invoice item sync through the account-plane
+`POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only
+route, not a customer API, and requires the
+`x-takosumi-billing-usage-sync-token` header. Configure
+`TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` as a JSON array of meter / unit /
+unitAmount / currency mappings, for example:
+
+```json
+[
+  {
+    "meter": "cloudflare.workers_script",
+    "unit": "requests",
+    "unitAmount": 4,
+    "currency": "usd"
+  }
+]
+```
+
 ## AI Gateway
 
 Base URL:

@@ -19,6 +19,8 @@ export const TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH =
 export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH = "/v1/billing/stripe/portal";
 export const TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH =
   "/v1/billing/stripe/webhook";
+export const TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH =
+  "/v1/billing/stripe/usage-invoice-items";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
   "/v1/auth/upstream/authorize";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =

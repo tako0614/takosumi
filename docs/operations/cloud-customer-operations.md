@@ -179,6 +179,38 @@ not place secret values in `wrangler.toml` or evidence files. The readiness
 preflight uses `--checkout-smoke` after deploy so every configured plan proves it
 can create a Stripe Checkout Session through the live worker.
 
+Usage-based Cloud resources need a separate Stripe invoice item price map. The
+Cloud extension records customer-facing usage into the Workspace usage ledger;
+then an operator job calls the account-plane
+`POST /v1/billing/stripe/usage-invoice-items` route with
+`x-takosumi-billing-usage-sync-token`. Configure
+`TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` in the realized Worker config as a
+non-secret JSON array, for example:
+
+```json
+[
+  {
+    "meter": "cloudflare.workers_script",
+    "unit": "requests",
+    "unitAmount": 4,
+    "currency": "usd"
+  },
+  {
+    "meter": "cloudflare.ai_gateway",
+    "unit": "requests",
+    "unitAmount": 10,
+    "currency": "usd"
+  }
+]
+```
+
+Set `TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN` as an operator secret when a
+separate sync token is desired. If it is omitted, the route falls back to
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN`; production should prefer the narrower dedicated
+token before GA. Workers for Platforms stays internal implementation evidence:
+bill users as `cloudflare.workers_script`, with
+`resourceMetadata.backend: "cloudflare.workers_for_platforms"` only for audit.
+
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
 Stripe checkout/webhook, failed payment, invoice, tax, plan transition, and

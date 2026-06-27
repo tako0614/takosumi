@@ -10,6 +10,7 @@ import type {
   OidcClientRegistration,
   PasskeyHttpOptions,
   StripeBillingOptions,
+  StripeUsageInvoiceItemPrice,
   UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
   ServiceGraphMaterialResolverHttpOptions,
@@ -19,6 +20,7 @@ import {
   customOidcOAuthProvider,
   googleOAuthProvider,
   isRetiredUpstreamOAuthProviderId,
+  parseStripeUsageInvoiceItemPrices,
 } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
@@ -72,6 +74,10 @@ export interface NodeAccountsServerConfig {
     | ServiceGraphMaterialResolverHttpOptions
     | undefined;
   readonly stripeBilling: StripeBillingOptions | undefined;
+  readonly stripeUsageInvoiceItemPrices:
+    | readonly StripeUsageInvoiceItemPrice[]
+    | undefined;
+  readonly billingUsageSyncToken: string | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
@@ -100,6 +106,12 @@ export function parseEnv(
     platformAccess: parsePlatformAccess(env),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     stripeBilling: parseStripeBilling(env),
+    stripeUsageInvoiceItemPrices: parseStripeUsageInvoiceItemPrices(
+      optional(env, "TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES"),
+    ),
+    billingUsageSyncToken:
+      optional(env, "TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN") ??
+      optional(env, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -417,8 +429,10 @@ function parseLoginEmailAllowlist(
   return {
     emails,
     requireVerifiedEmail: !(
-      optional(env, "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED")
-        ?.toLowerCase() === "false"
+      optional(
+        env,
+        "TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED",
+      )?.toLowerCase() === "false"
     ),
   };
 }
