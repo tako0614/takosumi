@@ -2383,6 +2383,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         ownerId: { type: "string" },
         provider: { type: "string", enum: ["stripe", "manual", "none"] },
         stripeCustomerId: { type: "string" },
+        stripeDefaultPaymentMethodId: { type: "string" },
         status: {
           type: "string",
           enum: ["active", "past_due", "disabled", "trialing"],

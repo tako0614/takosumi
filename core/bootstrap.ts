@@ -55,6 +55,7 @@ import {
   type ReleaseActivator,
   type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
+import type { BillingAutoRechargePort } from "./domains/deploy-control/billing_service.ts";
 import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
 import {
   type EnqueueSourceSync,
@@ -398,6 +399,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly releaseActivator?: ReleaseActivator;
   /**
+   * Cloud/account-plane hook that can charge a saved Stripe payment method and
+   * grant USD balance before an enforce-mode billing reservation is attempted.
+   * OSS/self-host deployments omit this and simply fail closed on insufficient
+   * balance.
+   */
+  readonly billingAutoRecharge?: BillingAutoRechargePort;
+  /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
    * PlanRun / ApplyRun / RunnerProfile routes cannot be exposed by env drift.
@@ -504,7 +512,7 @@ export interface TakosumiOperations {
   }>;
   topUpSpaceCredits(
     spaceId: string,
-    input: { readonly credits: number },
+    input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }>;
   changeSpaceSubscription(
     spaceId: string,
@@ -516,6 +524,7 @@ export interface TakosumiOperations {
       readonly stripeCustomerId: string;
       readonly stripeSubscriptionId: string;
       readonly stripePriceId?: string;
+      readonly stripeDefaultPaymentMethodId?: string;
       readonly planCode: string;
       readonly status: string;
       readonly currentPeriodEndUnix?: number;
@@ -920,6 +929,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
+      : {}),
+    ...(options.billingAutoRecharge
+      ? { billingAutoRecharge: options.billingAutoRecharge }
       : {}),
     serviceGraphService,
     observability: context.adapters.observability,

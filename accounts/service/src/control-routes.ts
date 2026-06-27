@@ -684,6 +684,7 @@ export interface ControlPlaneOperations {
       readonly stripeCustomerId: string;
       readonly stripeSubscriptionId: string;
       readonly stripePriceId?: string;
+      readonly stripeDefaultPaymentMethodId?: string;
       readonly planCode: string;
       readonly status: string;
       readonly currentPeriodEndUnix?: number;

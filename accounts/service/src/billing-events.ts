@@ -22,6 +22,7 @@ export type StripeBillingEvent =
       customerId?: string;
       subscriptionId?: string;
       stripePriceId?: string;
+      stripeDefaultPaymentMethodId?: string;
       planCode?: string;
       paymentStatus?: string;
     }
@@ -60,6 +61,7 @@ export type StripeBillingEvent =
       customerId: string;
       status: BillingAccountStatus;
       stripePriceId?: string;
+      stripeDefaultPaymentMethodId?: string;
       planCode?: string;
       currentPeriodEndUnix?: number;
     }
@@ -132,6 +134,7 @@ export function normalizeStripeBillingEvent(
         customerId: stripeId(object.customer),
         subscriptionId: stripeId(object.subscription),
         stripePriceId: stripePriceIdFromObject(object),
+        stripeDefaultPaymentMethodId: stripePaymentMethodIdFromObject(object),
         planCode: planCodeFromMetadata(object.metadata),
         paymentStatus:
           typeof object.payment_status === "string"
@@ -246,6 +249,7 @@ export function normalizeStripeBillingEvent(
         customerId,
         status,
         stripePriceId: stripePriceIdFromObject(object),
+        stripeDefaultPaymentMethodId: stripePaymentMethodIdFromObject(object),
         planCode: planCodeFromMetadata(object.metadata),
         currentPeriodEndUnix: subscriptionCurrentPeriodEnd(object),
       };
@@ -527,6 +531,23 @@ function stripePriceIdFromObject(
   const firstLine = isRecord(lineData[0]) ? lineData[0] : undefined;
   const linePrice = isRecord(firstLine?.price) ? firstLine.price : undefined;
   return stripeId(itemPrice) ?? stripeId(linePrice) ?? stripeId(object.price);
+}
+
+function stripePaymentMethodIdFromObject(
+  object: Record<string, unknown>,
+): string | undefined {
+  const paymentIntent = isRecord(object.payment_intent)
+    ? object.payment_intent
+    : undefined;
+  const setupIntent = isRecord(object.setup_intent)
+    ? object.setup_intent
+    : undefined;
+  return (
+    stripeId(object.default_payment_method) ??
+    stripeId(object.payment_method) ??
+    stripeId(paymentIntent?.payment_method) ??
+    stripeId(setupIntent?.payment_method)
+  );
 }
 
 function planCodeFromMetadata(value: unknown): string | undefined {

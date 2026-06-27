@@ -345,6 +345,7 @@ test("PostgresAccountsStore maps billing dunning and credit state", async () => 
     stripeCustomerId: "cus_1",
     stripeSubscriptionId: "sub_1",
     stripePriceId: "price_pro",
+    stripeDefaultPaymentMethodId: "pm_default",
     planCode: "pro",
     currentPeriodEndUnix: 1_700_200_000,
     lastInvoiceId: "in_failed",
@@ -375,17 +376,18 @@ test("PostgresAccountsStore maps billing dunning and credit state", async () => 
   expect(client.calls[0].sql).toContain("last_credit_kind");
   expect(client.calls[0].sql).toContain("last_plan_transition_event_id");
   expect(client.calls[0].sql).toContain("tax_policy_ref");
-  expect(client.calls[0].args[8]).toEqual("in_failed");
-  expect(client.calls[0].args[9]).toEqual("1970-01-01T00:00:02.000Z");
-  expect(client.calls[0].args[10]).toEqual(1_700_300_000);
-  expect(client.calls[0].args[11]).toEqual(2);
-  expect(client.calls[0].args[12]).toEqual("marked_uncollectible");
-  expect(client.calls[0].args[13]).toEqual("1970-01-01T00:00:02.500Z");
-  expect(client.calls[0].args[15]).toEqual("credit_note");
-  expect(client.calls[0].args[17]).toEqual(500);
-  expect(client.calls[0].args[19]).toEqual("evt_plan");
-  expect(client.calls[0].args[22]).toEqual("1970-01-01T00:00:01.800Z");
-  expect(client.calls[0].args[24]).toEqual("tax-policy://us-sales-tax");
+  expect(client.calls[0].args[6]).toEqual("pm_default");
+  expect(client.calls[0].args[9]).toEqual("in_failed");
+  expect(client.calls[0].args[10]).toEqual("1970-01-01T00:00:02.000Z");
+  expect(client.calls[0].args[11]).toEqual(1_700_300_000);
+  expect(client.calls[0].args[12]).toEqual(2);
+  expect(client.calls[0].args[13]).toEqual("marked_uncollectible");
+  expect(client.calls[0].args[14]).toEqual("1970-01-01T00:00:02.500Z");
+  expect(client.calls[0].args[16]).toEqual("credit_note");
+  expect(client.calls[0].args[18]).toEqual(500);
+  expect(client.calls[0].args[20]).toEqual("evt_plan");
+  expect(client.calls[0].args[23]).toEqual("1970-01-01T00:00:01.800Z");
+  expect(client.calls[0].args[25]).toEqual("tax-policy://us-sales-tax");
 
   client.queuedRows.push([
     {
@@ -395,6 +397,7 @@ test("PostgresAccountsStore maps billing dunning and credit state", async () => 
       stripe_customer_id: "cus_1",
       stripe_subscription_id: "sub_1",
       stripe_price_id: "price_pro",
+      stripe_default_payment_method_id: "pm_default",
       plan_code: "pro",
       current_period_end_unix: "1700200000",
       last_invoice_id: "in_failed",
@@ -424,6 +427,7 @@ test("PostgresAccountsStore maps billing dunning and credit state", async () => 
 
   const record = await store.findBillingAccount("bill_1");
 
+  expect(record?.stripeDefaultPaymentMethodId).toEqual("pm_default");
   expect(record?.dunningStartedAt).toEqual(2_000);
   expect(record?.nextPaymentAttemptUnix).toEqual(1_700_300_000);
   expect(record?.dunningAttemptCount).toEqual(2);

@@ -299,6 +299,22 @@ async function buildAccountsHandler(
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(deployControl ? { deployControl } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    ...(controlPlaneOperations
+      ? {
+          billingReconciler:
+            controlPlaneOperations.reconcileStripeSpaceSubscription,
+          billingCreditReconciler: (
+            spaceId: string,
+            input: { readonly usdMicros?: number; readonly credits: number },
+          ) =>
+            controlPlaneOperations.topUpSpaceCredits(spaceId, {
+              ...(input.usdMicros !== undefined
+                ? { usdMicros: input.usdMicros }
+                : {}),
+              credits: input.credits,
+            }),
+        }
+      : {}),
     ...(exportWorker ? { exportWorker } : {}),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }

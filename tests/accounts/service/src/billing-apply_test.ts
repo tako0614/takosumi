@@ -25,6 +25,7 @@ test("applyStripeBillingEvent invoice.paid clears dunning state after payment_fa
       object: {
         customer: "cus_pay_recovery",
         subscription: "sub_pay",
+        payment_method: "pm_pay_recovery",
         payment_status: "paid",
         metadata: { takosumi_subject: "tsub_account" },
       },
@@ -48,6 +49,7 @@ test("applyStripeBillingEvent invoice.paid clears dunning state after payment_fa
 
   const afterFailed =
     store.findBillingAccountByStripeCustomerId("cus_pay_recovery");
+  expect(afterFailed?.stripeDefaultPaymentMethodId).toEqual("pm_pay_recovery");
   expect(afterFailed?.status).toEqual("past_due");
   expect(afterFailed?.dunningStartedAt).toEqual(3000);
   expect(afterFailed?.nextPaymentAttemptUnix).toEqual(1_700_300_000);

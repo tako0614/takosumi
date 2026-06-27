@@ -135,6 +135,7 @@ export async function applyStripeBillingEvent(
         stripeCustomerId: customerId,
         stripeSubscriptionId: normalized.subscriptionId,
         stripePriceId: normalized.stripePriceId,
+        stripeDefaultPaymentMethodId: normalized.stripeDefaultPaymentMethodId,
         planCode: normalized.planCode,
         status: checkoutStatus(normalized),
         createdAt: now,
@@ -146,6 +147,9 @@ export async function applyStripeBillingEvent(
         stripeSubscriptionId:
           normalized.subscriptionId ?? existing.stripeSubscriptionId,
         stripePriceId: normalized.stripePriceId ?? existing.stripePriceId,
+        stripeDefaultPaymentMethodId:
+          normalized.stripeDefaultPaymentMethodId ??
+          existing.stripeDefaultPaymentMethodId,
         planCode: normalized.planCode ?? existing.planCode,
         status: checkoutStatus(normalized),
         updatedAt: now,
@@ -388,6 +392,13 @@ function customerKeyedMutation(
           : subscriptionLike.kind === "subscription_canceled"
             ? undefined
             : existing.stripePriceId,
+      stripeDefaultPaymentMethodId:
+        subscriptionLike.kind === "subscription_updated"
+          ? (subscriptionLike.stripeDefaultPaymentMethodId ??
+            existing.stripeDefaultPaymentMethodId)
+          : subscriptionLike.kind === "subscription_canceled"
+            ? undefined
+            : existing.stripeDefaultPaymentMethodId,
       planCode:
         subscriptionLike.kind === "subscription_updated"
           ? (subscriptionLike.planCode ?? existing.planCode)

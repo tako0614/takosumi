@@ -25,6 +25,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly RUNNER?: DurableObjectNamespace;
   /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
+  readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   readonly TAKOSUMI_RUNTIME_CELL_ID?: string;
   readonly TAKOSUMI_RUNTIME_CELL?: string;

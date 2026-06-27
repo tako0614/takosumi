@@ -343,6 +343,7 @@ export interface ReconcileStripeSpaceSubscriptionInput {
   readonly stripeCustomerId: string;
   readonly stripeSubscriptionId: string;
   readonly stripePriceId?: string;
+  readonly stripeDefaultPaymentMethodId?: string;
   readonly planCode: string;
   readonly status: string;
   readonly currentPeriodStartUnix?: number;
@@ -351,6 +352,7 @@ export interface ReconcileStripeSpaceSubscriptionInput {
 
 export interface BillingAutoRechargeInput {
   readonly spaceId: string;
+  readonly runId: string;
   readonly estimatedUsdMicros: number;
   readonly availableUsdMicros: number;
   readonly shortfallUsdMicros: number;
@@ -452,6 +454,14 @@ export class BillingService {
       ownerId: spaceId,
       provider: "stripe",
       stripeCustomerId: input.stripeCustomerId,
+      ...(input.stripeDefaultPaymentMethodId
+        ? { stripeDefaultPaymentMethodId: input.stripeDefaultPaymentMethodId }
+        : existingAccount?.stripeDefaultPaymentMethodId
+          ? {
+              stripeDefaultPaymentMethodId:
+                existingAccount.stripeDefaultPaymentMethodId,
+            }
+          : {}),
       status: stripeCoreBillingStatus(input.status),
       createdAt: existingAccount?.createdAt ?? nowIso,
       updatedAt: nowIso,
@@ -608,6 +618,8 @@ export class BillingService {
     if (billingReservationRequired(settings)) {
       let balance = await this.#store.getCreditBalance(input.planRun.spaceId);
       let availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+      let billingAudit: Readonly<Record<string, JsonValue>> =
+        auditWithPlanLimits;
       const autoRecharge =
         settings.mode === "enforce" ? settings.autoRecharge : undefined;
       const postReserveUsdMicros = availableUsdMicros - estimatedUsdMicros;
@@ -626,6 +638,7 @@ export class BillingService {
         );
         const result = await this.#autoRecharge({
           spaceId: input.planRun.spaceId,
+          runId: input.planRun.id,
           estimatedUsdMicros,
           availableUsdMicros,
           shortfallUsdMicros: Math.max(
@@ -642,6 +655,21 @@ export class BillingService {
             : {}),
           now: input.now,
         });
+        billingAudit = {
+          ...billingAudit,
+          autoRecharge: result.chargedUsdMicros
+            ? {
+                status: "charged",
+                chargedUsdMicros: result.chargedUsdMicros,
+                chargedCredits: usdMicrosToLegacyCredits(
+                  result.chargedUsdMicros,
+                ),
+              }
+            : {
+                status: "skipped",
+                reason: result.skippedReason ?? "unknown",
+              },
+        };
         balance =
           result.balance ??
           (await this.#store.getCreditBalance(input.planRun.spaceId));
@@ -653,7 +681,7 @@ export class BillingService {
             `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(availableUsdMicros)} available`,
           ],
           audit: {
-            ...auditWithPlanLimits,
+            ...billingAudit,
             availableUsdMicros,
             availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
             reservationStatus: "insufficient_credits",
@@ -679,7 +707,7 @@ export class BillingService {
             `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(latestAvailableUsdMicros)} available`,
           ],
           audit: {
-            ...auditWithPlanLimits,
+            ...billingAudit,
             availableUsdMicros: latestAvailableUsdMicros,
             availableCredits: usdMicrosToLegacyCredits(
               latestAvailableUsdMicros,
@@ -688,15 +716,44 @@ export class BillingService {
           },
         };
       }
+      return await this.#recordCreditReservation({
+        planRun: input.planRun,
+        estimatedUsdMicros,
+        estimatedCredits,
+        settings,
+        now: input.now,
+        audit: billingAudit,
+      });
     }
+    return await this.#recordCreditReservation({
+      planRun: input.planRun,
+      estimatedUsdMicros,
+      estimatedCredits,
+      settings,
+      now: input.now,
+      audit: auditWithPlanLimits,
+    });
+  }
+
+  async #recordCreditReservation(input: {
+    readonly planRun: PlanRun;
+    readonly estimatedUsdMicros: number;
+    readonly estimatedCredits: number;
+    readonly settings: BillingSettings;
+    readonly now: number;
+    readonly audit: Readonly<Record<string, JsonValue>>;
+  }): Promise<{
+    readonly reasons: readonly string[];
+    readonly audit?: Readonly<Record<string, JsonValue>>;
+  }> {
     const reservation: CreditReservation = {
       id: this.#newId("creditres"),
       spaceId: input.planRun.spaceId,
       runId: input.planRun.id,
-      estimatedUsdMicros,
-      estimatedCredits,
+      estimatedUsdMicros: input.estimatedUsdMicros,
+      estimatedCredits: input.estimatedCredits,
       status: "reserved",
-      mode: settings.mode,
+      mode: input.settings.mode,
       createdAt: new Date(input.now).toISOString(),
       expiresAt: new Date(input.now + BILLING_RESERVATION_TTL_MS).toISOString(),
     };
@@ -704,7 +761,7 @@ export class BillingService {
     return {
       reasons: [],
       audit: {
-        ...auditWithPlanLimits,
+        ...input.audit,
         reservationId: reservation.id,
         reservationStatus: reservation.status,
       },

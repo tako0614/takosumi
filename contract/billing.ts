@@ -101,6 +101,7 @@ export interface BillingAccount {
   readonly ownerId: string;
   readonly provider: "stripe" | "manual" | "none";
   readonly stripeCustomerId?: string;
+  readonly stripeDefaultPaymentMethodId?: string;
   readonly status: "active" | "past_due" | "disabled" | "trialing";
   readonly createdAt: string;
   readonly updatedAt: string;

@@ -874,6 +874,7 @@ test("normalizeStripeBillingEvent maps known Stripe event shapes", () => {
         object: {
           customer: "cus_1",
           subscription: "sub_1",
+          payment_intent: { id: "pi_1", payment_method: "pm_checkout" },
           payment_status: "paid",
           line_items: { data: [{ price: { id: "price_plus" } }] },
           metadata: {
@@ -891,6 +892,7 @@ test("normalizeStripeBillingEvent maps known Stripe event shapes", () => {
     customerId: "cus_1",
     subscriptionId: "sub_1",
     stripePriceId: "price_plus",
+    stripeDefaultPaymentMethodId: "pm_checkout",
     planCode: "plus",
     paymentStatus: "paid",
   });
@@ -902,6 +904,7 @@ test("normalizeStripeBillingEvent maps known Stripe event shapes", () => {
         object: {
           customer: "cus_1",
           status: "active",
+          default_payment_method: "pm_subscription",
           current_period_end: 1_700_100_000,
           items: { data: [{ price: { id: "price_pro" } }] },
           metadata: { planCode: "pro" },
@@ -914,6 +917,7 @@ test("normalizeStripeBillingEvent maps known Stripe event shapes", () => {
     customerId: "cus_1",
     status: "active",
     stripePriceId: "price_pro",
+    stripeDefaultPaymentMethodId: "pm_subscription",
     planCode: "pro",
     currentPeriodEndUnix: 1_700_100_000,
   });

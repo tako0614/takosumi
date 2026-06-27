@@ -452,9 +452,12 @@ async function buildAccountsHandler(
             controlPlaneOperations.reconcileStripeSpaceSubscription,
           billingCreditReconciler: (
             spaceId: string,
-            input: { readonly credits: number },
+            input: { readonly usdMicros?: number; readonly credits: number },
           ) =>
             controlPlaneOperations.topUpSpaceCredits(spaceId, {
+              ...(input.usdMicros !== undefined
+                ? { usdMicros: input.usdMicros }
+                : {}),
               credits: input.credits,
             }),
         }
