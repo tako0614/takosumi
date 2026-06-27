@@ -129,6 +129,17 @@ bun run cli -- secrets apply \
   --secrets-dir ../takosumi-private/.secrets/production
 cd ..
 
+# Normal deploy path:
+TAKOSUMI_BUILDX_BUILDER=takosumi-remote \
+WRANGLER_DOCKER_BIN="$PWD/scripts/wrangler-docker-buildx-wrapper.sh" \
+  bunx wrangler@latest deploy \
+  --config takosumi-private/platform/wrangler.toml
+
+# Alternative for Worker-only deploys that do not change takosumi/runner/Dockerfile
+# or copied runner inputs. Use this instead of the normal deploy above; the
+# wrapper retags the existing local :worker image when Wrangler asks for a
+# versioned runner image tag.
+TAKOSUMI_REUSE_EXISTING_CONTAINER_IMAGE=1 \
 TAKOSUMI_BUILDX_BUILDER=takosumi-remote \
 WRANGLER_DOCKER_BIN="$PWD/scripts/wrangler-docker-buildx-wrapper.sh" \
   bunx wrangler@latest deploy \
