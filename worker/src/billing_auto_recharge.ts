@@ -30,9 +30,11 @@ export function createStripeBillingAutoRechargePort(input: {
     if (!billingAccount.stripeCustomerId) {
       return { skippedReason: "stripe_customer_missing" };
     }
+    const stripeCustomerId = billingAccount.stripeCustomerId;
     if (!billingAccount.stripeDefaultPaymentMethodId) {
       return { skippedReason: "stripe_payment_method_missing" };
     }
+    const stripePaymentMethodId = billingAccount.stripeDefaultPaymentMethodId;
     const idempotencyKey = `takosumi-autorecharge:${request.spaceId}:${request.runId}`;
     const nowIso = new Date(request.now).toISOString();
     const requestedUsdMicros = roundUpToStripeCent(request.rechargeUsdMicros);
@@ -65,8 +67,8 @@ export function createStripeBillingAutoRechargePort(input: {
       try {
         const paymentIntent = await createStripeAutoRechargePaymentIntent({
           secretKey,
-          stripeCustomerId: billingAccount.stripeCustomerId,
-          stripePaymentMethodId: billingAccount.stripeDefaultPaymentMethodId,
+          stripeCustomerId,
+          stripePaymentMethodId,
           usdMicros: claimedAttempt.requestedUsdMicros,
           idempotencyKey: claimedAttempt.idempotencyKey,
           description: "Takosumi automatic USD balance recharge",

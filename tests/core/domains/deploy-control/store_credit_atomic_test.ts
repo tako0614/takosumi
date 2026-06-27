@@ -113,3 +113,76 @@ test("reconcileMonthlyCredits with newMonthly 0 ends the grant (cancellation)", 
   expect(ended?.availableCredits).toBe(200);
   expect(ended?.monthlyIncludedCredits).toBe(0);
 });
+
+test("putUsageEventAndSpendCredits spends USD micros once per idempotency key", async () => {
+  const store = freshStore();
+  await store.addCredits("space_1", {
+    usdMicros: 1_500_000,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const event = {
+    id: "usage_1",
+    spaceId: "space_1",
+    kind: "ai_request" as const,
+    quantity: 1,
+    usdMicros: 250_000,
+    credits: 0.25,
+    source: "resource_meter" as const,
+    idempotencyKey: "ai:space_1:chat:1",
+    createdAt: "2026-06-07T00:01:00.000Z",
+  };
+  const first = await store.putUsageEventAndSpendCredits(event, {
+    usdMicros: 250_000,
+    updatedAt: "2026-06-07T00:01:00.000Z",
+  });
+  const second = await store.putUsageEventAndSpendCredits(
+    { ...event, id: "usage_retry" },
+    {
+      usdMicros: 250_000,
+      updatedAt: "2026-06-07T00:02:00.000Z",
+    },
+  );
+
+  expect(first?.inserted).toBe(true);
+  expect(second).toMatchObject({
+    inserted: false,
+    usageEvent: { id: "usage_1" },
+  });
+  expect(await store.listUsageEvents("space_1")).toHaveLength(1);
+  expect(await store.getCreditBalance("space_1")).toMatchObject({
+    availableUsdMicros: 1_250_000,
+  });
+});
+
+test("putUsageEventAndSpendCredits rejects insufficient USD balance without inserting usage", async () => {
+  const store = freshStore();
+  await store.addCredits("space_1", {
+    usdMicros: 100_000,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const result = await store.putUsageEventAndSpendCredits(
+    {
+      id: "usage_1",
+      spaceId: "space_1",
+      kind: "gateway_compute",
+      quantity: 1,
+      usdMicros: 250_000,
+      credits: 0.25,
+      source: "resource_meter",
+      idempotencyKey: "cf:space_1:request:1",
+      createdAt: "2026-06-07T00:01:00.000Z",
+    },
+    {
+      usdMicros: 250_000,
+      updatedAt: "2026-06-07T00:01:00.000Z",
+    },
+  );
+
+  expect(result).toBeUndefined();
+  expect(await store.listUsageEvents("space_1")).toEqual([]);
+  expect(await store.getCreditBalance("space_1")).toMatchObject({
+    availableUsdMicros: 100_000,
+  });
+});

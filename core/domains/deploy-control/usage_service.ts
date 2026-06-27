@@ -43,6 +43,7 @@ import type {
   UsageEventSource,
 } from "takosumi-contract/billing";
 import {
+  billingReservationRequired,
   legacyCreditsToUsdMicros,
   usageEventUsdMicros,
   usageMeterNameLeaksInternalWorkersBackend,
@@ -248,9 +249,14 @@ export class UsageReportingService {
     requireNonEmptyString(spaceId, "spaceId");
     await this.#requireSpace(spaceId);
     const period = normalizeUsagePeriod(input);
+    const settings = await this.#billing.billingSettingsForSpace(spaceId);
+    const spendRequired = billingReservationRequired(settings);
+    if (spendRequired) {
+      await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
+    }
     const usageEvents: UsageEvent[] = [];
     for (const meter of input.meters) {
-      const recorded = await this.#recordResourceMeterUsage(spaceId, {
+      const usageInput = {
         ...(meter.installationId
           ? { installationId: meter.installationId }
           : {}),
@@ -282,7 +288,42 @@ export class UsageReportingService {
           meter.kind,
         ].join(":"),
         createdAt: period.periodEnd,
+      } satisfies Omit<RecordMeteredUsageInput, "source">;
+      const usdMicros = usageInputUsdMicros({
+        ...usageInput,
+        source: "resource_meter",
       });
+      if (spendRequired && usdMicros > 0) {
+        const usageEvent = normalizeMeteredUsageEvent(
+          spaceId,
+          {
+            ...usageInput,
+            source: "resource_meter",
+          },
+          () => this.#newId("usage"),
+          () => new Date(this.#now()).toISOString(),
+        );
+        const recorded = await this.#store.putUsageEventAndSpendCredits(
+          usageEvent,
+          {
+            usdMicros,
+            credits: usdMicrosToLegacyCredits(usdMicros),
+            updatedAt: period.periodEnd,
+          },
+        );
+        if (!recorded) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "USD balance exhausted for Cloud resource usage",
+          );
+        }
+        usageEvents.push(recorded.usageEvent);
+        continue;
+      }
+      const recorded = await this.#recordResourceMeterUsage(
+        spaceId,
+        usageInput,
+      );
       usageEvents.push(recorded.usageEvent);
     }
     return { usageEvents };
