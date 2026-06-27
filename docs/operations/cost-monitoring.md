@@ -54,11 +54,15 @@ Capsule-attributed usage です。
 | Custom provider usage            | User provider account    | cost estimate may be unavailable; OSS Takosumi records showback/control/state evidence |
 | Artifact / backup storage usage  | Takosumi platform worker | object inventory joined to Workspace / Capsule attribution                             |
 | Showback ingest / reconciliation | Takosumi platform worker | resource meters idempotently joined to Workspace use                                   |
+| Cloud-only compat managed usage  | Takosumi Cloud closed    | Cloud extension usage reports joined to Workspace usage ledger                         |
 | Cloud provider infrastructure    | operator                 | Cloudflare / provider invoice/export                                                   |
 
 invoice、payment processor reconciliation、secret を含む official billing credential は
 repo 外の operator vault に残します。本 public doc は observable metric contract と
 dashboard artifact のみを定義します。
+Cloudflare Compatibility Gateway / Takosumi Managed Resources の請求可能性は
+Cloud-only extension smoke で usage ledger event を確認する必要があります。
+Cloudflare の上流請求書だけでは Workspace への請求・showback が成立した証拠にはなりません。
 
 ## Metric Contract
 
@@ -167,6 +171,10 @@ bun run docs:build
 Operator showback / basic quota validation は `showback` audit evidence を記録して続行することを前提にします。
 Payment/credit enforcement is Takosumi Cloud-only and must not be presented as an OSS/operator feature. Takosumi cost
 attribution dashboard artifact と validator が本 runbook の metric contract / dashboard reference を検証する状態が必要です。
+Cloud-only compat managed-resource usage は
+`smoke:cloud-extensions --require-cloudflare-compat-usage-ledger` で
+`resource_meter` / `gateway_compute` または `gateway_storage_gb_hour` が
+対象 Workspace ledger に増えたことを private evidence として残します。
 Platform opening evidence では
 `costAttribution.dashboardJsonPath` を
 `takosumi/deploy/observability/grafana/takosumi-cost-attribution.json` に固定し、fresh sample、required metrics /

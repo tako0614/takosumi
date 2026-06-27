@@ -321,7 +321,11 @@ Cloudflare Workers script materialization がまだ 501 の場合、script は `
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
 を必ず付け、501 と OpenTofu provider の `init -> plan -> apply -> destroy`
-不成立を失敗にする。
+不成立を失敗にする。Cloudflare Compatibility Gateway の請求証跡まで GA 判定に
+含める場合は、compat lifecycle / provider E2E 後に対象 Workspace の usage
+ledger を読み、`resource_meter` / `gateway_compute` または
+`gateway_storage_gb_hour` event が増えたことを
+`--require-cloudflare-compat-usage-ledger` で必須化する。
 
 ```bash
 cd takosumi
@@ -336,12 +340,15 @@ bun run smoke:cloud-extensions -- \
   --out-file ../takosumi-private/evidence/cloud-extension-smoke-production.json \
   --json
 
-# GA strict: Cloudflare Compatibility Gateway materialization が 501 の間は失敗させる
+# GA strict: Cloudflare Compatibility Gateway materialization / provider E2E / usage ledger
 bun run smoke:cloud-extensions -- \
   --url https://app.takosumi.com \
   --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \
   --require-compat-materialization \
   --require-provider-e2e \
+  --require-cloudflare-compat-usage-ledger \
+  --cloudflare-compat-usage-workspace-id <workspace-id> \
+  --cloudflare-compat-usage-installation-id <compat-installation-id> \
   --json
 
 # GA strict + external AI upstream claim only:
@@ -356,6 +363,9 @@ bun run smoke:cloud-extensions -- \
   --ai-service-installation-id <ai-gateway-installation-id> \
   --require-ai-usage-ledger \
   --ai-usage-workspace-id <workspace-id> \
+  --require-cloudflare-compat-usage-ledger \
+  --cloudflare-compat-usage-workspace-id <workspace-id> \
+  --cloudflare-compat-usage-installation-id <compat-installation-id> \
   --json
 ```
 
