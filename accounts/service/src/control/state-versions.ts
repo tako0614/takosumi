@@ -1,0 +1,219 @@
+/**
+ * Session-authed StateVersion / Deployment (`/api/v1/state-versions`, legacy
+ * `/api/v1/deployments`) read + rollback-plan control routes. Extracted from
+ * `control-routes.ts` (P3 god-file split).
+ */
+import type {
+  ApplyExpectedGuard,
+  ApplyRunResponse,
+  Connection,
+  ConnectionOAuthStartResponse,
+  ConnectionResponse,
+  ConnectionScopeHints,
+  CreateApplyRunRequest,
+  CreateConnectionFile,
+  CreateConnectionRequest,
+  DeployControlErrorCode,
+  Deployment,
+  InternalDeployRequest,
+  ListConnectionsResponse,
+  ListDeploymentsResponse,
+  ListRunnerProfilesResponse,
+  OpenTofuModuleSource,
+  PlanRunResponse,
+  PublicPlanRun,
+  TestConnectionResponse,
+} from "@takosumi/internal/deploy-control-api";
+import type {
+  ArtifactSnapshotRequest,
+  Source,
+  CreateSourceRequest,
+  CreateSourceResponse,
+  ListSourceSnapshotsResponse,
+  ListSourcesResponse,
+  PatchSourceRequest,
+  SourceResponse,
+  SourceSnapshot,
+} from "takosumi-contract/sources";
+import type {
+  DeployResponse,
+  PublicDeployResponse,
+} from "takosumi-contract/deploy";
+import type {
+  CapsuleCompatibilityReportResponse,
+  CreateSourceCompatibilityCheckRequest,
+  PublicCapsuleCompatibilityReportResponse,
+} from "takosumi-contract/capsules";
+import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type {
+  InstallationProviderEnvBindingSet,
+  InstallConfig,
+  Installation,
+  OutputAllowlistEntry,
+  PolicyConfig,
+  PublicInstallConfig,
+  PublicInstallation,
+} from "takosumi-contract/installations";
+import type {
+  Dependency,
+  DependencyMode,
+  DependencyOutputMapping,
+  DependencyVisibility,
+} from "takosumi-contract/dependencies";
+import type { ActivityEvent } from "takosumi-contract/activity";
+import type { Page, PageParams } from "takosumi-contract/pagination";
+import type {
+  InstallationProviderConnectionBinding,
+  InstallationProviderConnectionBindings,
+  InstallationProviderEnvBinding,
+  InstallationProviderEnvBindings,
+  InstallationProviderConnectionSet,
+  ProviderConnection,
+} from "takosumi-contract/connections";
+import type {
+  ProviderResolution,
+  PublicProviderResolution,
+} from "takosumi-contract/provider-resolution";
+import type {
+  OutputShare,
+  OutputShareEntry,
+} from "takosumi-contract/output-snapshots";
+import type { PublicDeployment } from "takosumi-contract/deployments";
+import type {
+  BackupRecord,
+  CreateBackupResponse,
+  CreateRestoreRequest,
+  ListBackupsResponse,
+} from "takosumi-contract/backups";
+import type {
+  BillingSettings,
+  CreditBalance,
+  CreditReservation,
+  UsageEvent,
+} from "takosumi-contract/billing";
+import type {
+  ListRunsResponse,
+  Run,
+  RunCostInfo,
+  RunEventsResponse,
+  RunLogsResponse,
+  PublicRun,
+} from "takosumi-contract/runs";
+import type { JsonValue } from "takosumi-contract";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type {
+  AppInstallationMode,
+  AppInstallationStatus,
+  InstallationRecord,
+  SpaceKind,
+} from "../ledger.ts";
+import type { SharedCellRuntimeAllocator } from "../runtime.ts";
+import type { AccountsStore } from "../store.ts";
+import type {
+  ControlPlaneOperations,
+  RunGroupWithRunsLike,
+  ControlSpaceRole,
+  ControlMembershipStatus,
+  PublicSpaceMember,
+  MembershipActor,
+} from "../control-operations.ts";
+import {
+  errorJson,
+  json,
+  methodNotAllowed,
+  readJsonObject,
+  readOptionalJsonObject,
+  stringValue,
+} from "../http-helpers.ts";
+import {
+  type ControlDispatchContext,
+  canAccessSpace,
+  controlPlaneUnavailable,
+  controllerErrorCode,
+  controllerErrorResponse,
+  isRecord,
+  jsonStatus,
+  parseControlPageParams,
+  publicApplyActionResponse,
+  publicCompatibilityReportResponse,
+  publicDeployResponse,
+  publicDeployment,
+  publicInstallation,
+  publicPlanActionResponse,
+  publicRun,
+  requireSpaceAccess,
+  resolveProviderConnectionBindings,
+} from "./shared.ts";
+import {
+  booleanValue,
+  connectionCredentialFiles,
+  connectionScopeHints,
+  connectionScopeHintsFromValues,
+  dependencyModeValue,
+  dependencyVisibilityValue,
+  isGoogleCloudProvider,
+  isJsonValue,
+  isOutputsMapping,
+  isPlainJsonObject,
+  jsonRecordValue,
+  modulePathValue,
+  outputAllowlistValue,
+  outputShareEntries,
+  outputShareSensitivePolicy,
+  parseInstallationProviderConnectionBinding,
+  parseInstallationProviderConnectionBindings,
+  parseLimit,
+  spaceTypeValue,
+  stringRecord,
+  stringRecordValue,
+} from "./parse.ts";
+import {
+  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  defaultCapsuleOutputAllowlist,
+} from "../../../../core/domains/installations/official_seed.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import { appendLedgerEvent } from "../installation-ledger-events.ts";
+import { base64UrlEncodeBytes } from "../encoding.ts";
+import { canTransitionAppInstallationStatus } from "../ledger.ts";
+
+export async function handleStateVersions(
+  ctx: ControlDispatchContext,
+  segments: readonly string[],
+  method: string,
+): Promise<Response | undefined> {
+  const { request, url, operations, store } = ctx;
+  // /api/v1/state-versions/:stateVersionId ; .../rollback-plan — session-authed
+  // (legacy-compatible: /api/v1/deployments/:deploymentId)
+  // deployment read + rollback (§30 GUI deploy). Each resolves the Deployment to
+  // learn its owning Space, then space-permission gates before projecting /
+  // mutating. The read returns ONLY the allowlist-projected outputsPublic (no
+  // raw output envelope, no outputSnapshotId pointer, no sensitive values).
+  if (segments[0] === "deployments" && segments.length >= 2) {
+    const deploymentId = decodeURIComponent(segments[1] ?? "");
+    const deployment = await operations.getDeployment(deploymentId);
+    const auth = await requireSpaceAccess({
+      operations,
+      store,
+      spaceId: deployment.spaceId,
+      subject: ctx.session.subject,
+    });
+    if (!auth.ok) return auth.response;
+    if (segments.length === 2) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json({ deployment: publicDeployment(deployment) });
+    }
+    if (segments[2] === "rollback-plan" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const response =
+        await operations.createDeploymentRollbackPlan(deploymentId);
+      return jsonStatus(
+        await publicPlanActionResponse(operations, response),
+        201,
+      );
+    }
+    return errorJson("not_found", "not found", 404);
+  }
+  return undefined;
+}
