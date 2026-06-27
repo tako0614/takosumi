@@ -24,9 +24,11 @@ export type {
   InstallationProviderConnectionBindings,
   InstallationProviderConnectionSet,
   ListProviderConnectionsResponse,
+  ProviderBinding,
+  ProviderBindings,
+  ProviderBindingSet,
   ProviderConnection,
   ProviderConnectionStatus,
-  ProviderCredentialOwnership,
 } from "./connections.ts";
 export type {
   ProviderRequirement,

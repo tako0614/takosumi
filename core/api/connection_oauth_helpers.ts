@@ -1,7 +1,4 @@
-import type {
-  ConnectionCredentialDriver,
-  CreateConnectionRequest,
-} from "@takosumi/internal/deploy-control-api";
+import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-api";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import type {
   ConnectionOAuthCallbackInput,
@@ -189,8 +186,7 @@ async function completeOAuth(
     ...(state.body.spaceId ? { spaceId: state.body.spaceId } : {}),
     provider: config.provider === "gcp" ? "google" : "cloudflare",
     kind: "generic_env_provider",
-    credentialDriver: providerCredentialDriverForOAuth(config.provider),
-    authMethod: "static_secret",
+    materialization: "oauth",
     ...(state.body.displayName ? { displayName: state.body.displayName } : {}),
     ...(state.body.scope ? { scope: state.body.scope } : {}),
     ...(state.body.scopeHints ? { scopeHints: state.body.scopeHints } : {}),
@@ -203,12 +199,6 @@ async function completeOAuth(
   // through `body` for older states.
   const subject = state.subject ?? state.body.subject;
   return subject ? { request, subject } : { request };
-}
-
-function providerCredentialDriverForOAuth(
-  provider: OAuthProviderConfig["provider"],
-): ConnectionCredentialDriver {
-  return provider === "gcp" ? "gcp_oauth_bootstrap" : "cloudflare_oauth";
 }
 
 async function exchangeCode(

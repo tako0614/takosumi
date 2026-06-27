@@ -223,18 +223,6 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("blob_json"),
   ]);
 
-  expect(getTableName(d1Schema.providerEnvs)).toBe("provider_envs");
-  expect(columnsOf(d1Schema.providerEnvs)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("provider_source"),
-    nn("materialization"),
-    nn("status"),
-    nn("record_json"),
-    nn("created_at"),
-    nn("updated_at"),
-  ]);
-
   expect(getTableName(d1Schema.providerEnvBindingSets)).toBe(
     "provider_env_binding_sets",
   );
@@ -540,7 +528,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -558,6 +546,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_usage_event_meter_metadata",
     "d1_opentofu_billing_usd_micros",
     "d1_opentofu_billing_auto_recharge_attempts",
+    "d1_opentofu_provider_credential_collapse",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -627,76 +616,6 @@ test("Worker D1 bootstrap rejects schema migration checksum drift", async () => 
   );
 });
 
-test("Worker D1 bootstrap enforces provider materialization constraints", async () => {
-  const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-
-  await expect(
-    (async () => {
-      await db
-        .prepare(
-          `insert into provider_catalog
-          (id, provider_source, primary_materialization, gateway_eligible, record_json, created_at, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          "pc_bad",
-          "registry.opentofu.org/example/bad",
-          "takosumi_managed",
-          0,
-          "{}",
-          "2026-06-17T00:00:00.000Z",
-          "2026-06-17T00:00:00.000Z",
-        )
-        .run();
-    })(),
-  ).rejects.toThrow();
-
-  await expect(
-    (async () => {
-      await db
-        .prepare(
-          `insert into provider_envs
-          (id, space_id, provider_source, materialization, status, record_json, created_at, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          "penv_bad_materialization",
-          "space_1",
-          "registry.opentofu.org/example/bad",
-          "takosumi_managed",
-          "active",
-          "{}",
-          "2026-06-17T00:00:00.000Z",
-          "2026-06-17T00:00:00.000Z",
-        )
-        .run();
-    })(),
-  ).rejects.toThrow();
-
-  await expect(
-    (async () => {
-      await db
-        .prepare(
-          `insert into provider_envs
-          (id, space_id, provider_source, materialization, status, record_json, created_at, updated_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          "penv_bad_global",
-          null,
-          "registry.opentofu.org/example/bad",
-          "secret",
-          "active",
-          "{}",
-          "2026-06-17T00:00:00.000Z",
-          "2026-06-17T00:00:00.000Z",
-        )
-        .run();
-    })(),
-  ).rejects.toThrow();
-});
-
 test("Worker D1 bootstrap converts legacy provider_templates to OSS-safe Provider Catalog rows", async () => {
   const db = new SqliteFakeD1();
   await db
@@ -752,10 +671,12 @@ test("Worker D1 bootstrap converts legacy provider_templates to OSS-safe Provide
 
   await ensureD1OpenTofuLedgerSchema(db);
 
+  // The live Provider Catalog table is retired (renamed aside) by migration 16;
+  // the canonicalized rows live in the recoverable `_retired` table.
   const rows = await db
     .prepare(
       `select id, primary_materialization, gateway_eligible
-      from provider_catalog
+      from provider_catalog_retired
       where id in ('pcat_legacy_gateway', 'pcat_legacy_secret')
       order by id`,
     )
@@ -995,10 +916,13 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
   expect(backupColumns).toContainEqual(nullable("installation_id"));
   expect(backupColumns).toContainEqual(nullable("environment"));
   expect(backupColumns).toContainEqual(nullable("created_by_run_id"));
+  // Provider Catalog / Provider Env tables are retired (renamed aside) by
+  // migration 16; the canonicalized rows live in the recoverable `_retired`
+  // tables.
   const providerCatalogRows = await db
     .prepare(
       `select id, primary_materialization
-      from provider_catalog
+      from provider_catalog_retired
       where id in ('pcat_old_gateway', 'pcat_old_secret')
       order by id`,
     )
@@ -1010,7 +934,7 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
   const providerEnvRows = await db
     .prepare(
       `select id, materialization
-      from provider_envs
+      from provider_envs_retired
       where id in ('penv_global_old', 'penv_space_old')
       order by id`,
     )
@@ -1048,20 +972,6 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
     nullable("rotated_at"),
     nn("blob_json"),
-  ]);
-
-  expect(getTableName(postgresSchema.providerEnvs)).toBe(
-    "takosumi_provider_envs",
-  );
-  expect(columnsOf(postgresSchema.providerEnvs)).toEqual([
-    pk("id"),
-    nn("space_id"),
-    nn("provider_source"),
-    nn("materialization"),
-    nn("status"),
-    nn("env_json"),
-    nn("created_at"),
-    nn("updated_at"),
   ]);
 
   expect(getTableName(postgresSchema.providerEnvBindingSets)).toBe(
@@ -1566,78 +1476,30 @@ test("takosumi_runs migration end-state carries the lease columns", async () => 
   }
 });
 
-test("Postgres provider materialization constraints reject stale resolver values", async () => {
+test("Postgres migration end-state retires the Provider Catalog / Provider Env tables", async () => {
   const client = await PGliteSqlClient.create();
   try {
-    await expect(
-      client.exec(
-        `insert into takosumi_provider_catalog (
-        id,
-        provider_source,
-        primary_materialization,
-        gateway_eligible,
-        entry_json,
-        created_at,
-        updated_at
-      ) values (
-        'pcat_bad',
-        'registry.opentofu.org/example/bad',
-        'user_env_set',
-        0,
-        '{}',
-        '2026-06-08T00:00:00.000Z',
-        '2026-06-08T00:00:00.000Z'
-      )`,
-      ),
-    ).rejects.toThrow();
-
-    await expect(
-      client.exec(
-        `insert into takosumi_provider_envs (
-        id,
-        space_id,
-        provider_source,
-        materialization,
-        status,
-        env_json,
-        created_at,
-        updated_at
-      ) values (
-        'penv_bad_value',
-        'space_1',
-        'registry.opentofu.org/example/bad',
-        'user_env_set',
-        'ready',
-        '{}',
-        '2026-06-08T00:00:00.000Z',
-        '2026-06-08T00:00:00.000Z'
-      )`,
-      ),
-    ).rejects.toThrow();
-
-    await expect(
-      client.exec(
-        `insert into takosumi_provider_envs (
-        id,
-        space_id,
-        provider_source,
-        materialization,
-        status,
-        env_json,
-        created_at,
-        updated_at
-      ) values (
-        'penv_bad_global',
-        null,
-        'registry.opentofu.org/hashicorp/aws',
-        'secret',
-        'ready',
-        '{}',
-        '2026-06-08T00:00:00.000Z',
-        '2026-06-08T00:00:00.000Z'
-      )`,
-      ),
-    ).rejects.toThrow();
+    // The live tables are renamed aside (non-destructive) by the credential
+    // collapse migration; only the recoverable `_retired` names remain.
+    const liveCatalog = await client.rawQuery<{ n: number }>(
+      `select count(*)::int as n from information_schema.tables ` +
+        `where table_name = 'takosumi_provider_catalog'`,
+    );
+    expect(liveCatalog.rows[0]?.n).toBe(0);
+    const liveEnvs = await client.rawQuery<{ n: number }>(
+      `select count(*)::int as n from information_schema.tables ` +
+        `where table_name = 'takosumi_provider_envs'`,
+    );
+    expect(liveEnvs.rows[0]?.n).toBe(0);
+    const retired = await client.rawQuery<{ name: string }>(
+      `select table_name as name from information_schema.tables ` +
+        `where table_name in ('takosumi_provider_catalog_retired', 'takosumi_provider_envs_retired') ` +
+        `order by table_name`,
+    );
+    expect(retired.rows.map((row) => row.name)).toEqual([
+      "takosumi_provider_catalog_retired",
+      "takosumi_provider_envs_retired",
+    ]);
   } finally {
     await client.close();
   }

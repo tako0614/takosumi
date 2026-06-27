@@ -96,45 +96,6 @@ export const secretBlobs = sqliteTable(
   ],
 );
 
-export const providerEnvs = sqliteTable(
-  names.providerEnvs,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    providerSource: text("provider_source").notNull(),
-    materialization: text("materialization").notNull(),
-    status: text("status").notNull(),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    index("provider_envs_space_idx").on(table.spaceId),
-    index("provider_envs_provider_source_idx").on(table.providerSource),
-    index("provider_envs_materialization_idx").on(table.materialization),
-    index("provider_envs_status_idx").on(table.status),
-  ],
-);
-
-export const providerCatalog = sqliteTable(
-  names.providerCatalog,
-  {
-    id: text("id").primaryKey(),
-    providerSource: text("provider_source").notNull(),
-    primaryMaterialization: text("primary_materialization").notNull(),
-    gatewayEligible: integer("gateway_eligible").notNull(),
-    recordJson: jsonText("record_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    uniqueIndex("provider_catalog_source_unique").on(table.providerSource),
-    index("provider_catalog_primary_materialization_idx").on(
-      table.primaryMaterialization,
-    ),
-    index("provider_catalog_gateway_eligible_idx").on(table.gatewayEligible),
-  ],
-);
 
 export const installConfigs = sqliteTable(
   names.installConfigs,

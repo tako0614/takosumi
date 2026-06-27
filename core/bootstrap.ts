@@ -143,7 +143,7 @@ import type {
   InvoiceUsageReconciliation,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { ListProviderCatalogEntriesResponse } from "takosumi-contract/providers";
+import type { ListProvidersResponse } from "takosumi-contract/providers";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -690,7 +690,7 @@ export interface TakosumiOperations {
   getCompatibilityReport(
     reportId: string,
   ): Promise<CapsuleCompatibilityReportResponse>;
-  listProviderCatalogEntries(): Promise<ListProviderCatalogEntriesResponse>;
+  listProviderCatalogEntries(): Promise<ListProvidersResponse>;
   listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   createRestoreRun(

@@ -241,14 +241,14 @@ function providerResolutionFromResolved(
     return {
       requirement,
       status: "blocked_policy",
-      envId: resolved.env.id,
+      envId: resolved.connection.id,
       materialization: resolved.materialization,
       blockedReason:
         "gateway materialization is Takosumi Cloud-only and is not available in OSS",
       evidence: {
         kind: "blocked",
         provider,
-        envId: resolved.env.id,
+        envId: resolved.connection.id,
         materialization: resolved.materialization,
         reason:
           "gateway materialization is Takosumi Cloud-only and is not available in OSS",
@@ -258,14 +258,14 @@ function providerResolutionFromResolved(
   return {
     requirement,
     status: "resolved_provider_env",
-    envId: resolved.env.id,
+    envId: resolved.connection.id,
     materialization: resolved.materialization,
     evidence: {
       kind: "provider_env",
       provider,
-      envId: resolved.env.id,
+      envId: resolved.connection.id,
       materialization: resolved.materialization,
-      requiredEnvNames: resolved.env.requiredEnvNames,
+      requiredEnvNames: resolved.connection.envNames,
     },
   };
 }

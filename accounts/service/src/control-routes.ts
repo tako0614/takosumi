@@ -64,7 +64,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProviderCatalogEntriesResponse } from "takosumi-contract/providers";
+import type { ListProvidersResponse } from "takosumi-contract/providers";
 import type { Space, SpaceType } from "takosumi-contract/spaces";
 import type {
   InstallationProviderEnvBindingSet,
@@ -75,7 +75,6 @@ import type {
   PublicInstallConfig,
   PublicInstallation,
 } from "takosumi-contract/installations";
-import { normalizeProviderCredentialOwnershipOptions } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencyMode,
@@ -100,10 +99,8 @@ import type {
   InstallationProviderEnvBinding,
   InstallationProviderEnvBindings,
   InstallationProviderConnectionSet,
-  ProviderEnv,
   ProviderConnection,
-  PublicProviderEnv,
-} from "takosumi-contract/provider-envs";
+} from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -282,19 +279,11 @@ async function publicProviderResolution(
   operations: ControlPlaneOperations,
   resolution: ProviderResolution,
 ): Promise<PublicProviderResolution> {
-  const connectionId = resolution.envId
-    ? await publicProviderConnectionId(resolution.envId)
-    : undefined;
-  const ownership = resolution.envId
-    ? await providerConnectionOwnershipForEnvId(operations, resolution.envId)
-    : resolution.materialization
-      ? "env"
-      : undefined;
+  const connectionId = resolution.envId ?? undefined;
   return {
     requirement: resolution.requirement,
     status: publicProviderResolutionStatus(resolution),
     ...(connectionId ? { connectionId } : {}),
-    ...(ownership ? { ownership } : {}),
     ...(resolution.blockedReason
       ? { blockedReason: publicProviderBlockedReason(resolution.blockedReason) }
       : {}),
@@ -319,16 +308,12 @@ async function publicProviderResolutionEvidence(
   resolution: ProviderResolution,
 ): Promise<PublicProviderResolution["evidence"]> {
   const evidence = resolution.evidence;
+  void operations;
   if (evidence.kind === "provider_env") {
-    const ownership = await providerConnectionOwnershipForEnvId(
-      operations,
-      evidence.envId,
-    );
     return {
       kind: "provider_connection",
       provider: evidence.provider,
-      connectionId: await publicProviderConnectionId(evidence.envId),
-      ownership,
+      connectionId: evidence.envId,
       requiredEnvNames: evidence.requiredEnvNames,
     };
   }
@@ -341,26 +326,6 @@ async function publicProviderResolutionEvidence(
 
 function publicProviderBlockedReason(reason: string): string {
   return reason.replace(/\bProvider Env\b/g, "Provider Connection");
-}
-
-async function providerConnectionOwnershipForEnvId(
-  operations: ControlPlaneOperations,
-  providerEnvId: string,
-): Promise<ProviderConnection["ownership"]> {
-  const providerEnv = await operations.connections
-    .getProviderEnv?.(providerEnvId)
-    .catch(() => undefined);
-  if (!providerEnv) return "env";
-  return await providerConnectionOwnership(operations, providerEnv);
-}
-
-async function providerConnectionOwnership(
-  operations: ControlPlaneOperations,
-  providerEnv: ProviderEnv,
-): Promise<ProviderConnection["ownership"]> {
-  void operations;
-  void providerEnv;
-  return "env";
 }
 
 async function publicCompatibilityReportResponse(
@@ -379,14 +344,7 @@ async function publicCompatibilityReportResponse(
   return {
     report: {
       ...report,
-      providers: report.providers.map((provider) => {
-        const ownershipOptions = normalizeProviderCredentialOwnershipOptions(
-          provider.ownershipOptions,
-        );
-        return ownershipOptions.length > 0
-          ? { ...provider, ownershipOptions }
-          : provider;
-      }),
+      providers: report.providers,
       ...(providerResolutions ? { providerResolutions } : {}),
     },
     ...(response.run ? { run: await publicRun(operations, response.run) } : {}),
@@ -674,8 +632,10 @@ export interface ControlPlaneOperations {
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
   // --- Connections (§9) ---
   readonly connections: {
-    listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
-    getProviderEnv?(id: string): Promise<ProviderEnv>;
+    listProviderConnections(
+      spaceId?: string,
+    ): Promise<readonly ProviderConnection[]>;
+    getProviderConnection?(id: string): Promise<ProviderConnection>;
   };
   // --- OutputShares (§18) ---
   readonly outputShares: {
@@ -868,7 +828,7 @@ export interface ControlPlaneOperations {
     reportId: string,
   ): Promise<CapsuleCompatibilityReportResponse>;
   // --- Providers (§7 / §8) ---
-  listProviderCatalogEntries(): Promise<ListProviderCatalogEntriesResponse>;
+  listProviderCatalogEntries(): Promise<ListProvidersResponse>;
   // --- Runner profiles (read; used by Provider Connection / Gateway views) ---
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
 }
@@ -2815,30 +2775,20 @@ async function putInstallationProviderConnectionSet(
   });
 }
 
-async function publicInstallationProviderConnectionSet(
+function publicInstallationProviderConnectionSet(
   profile: InstallationProviderEnvBindingSet,
-): Promise<InstallationProviderConnectionSet> {
+): InstallationProviderConnectionSet {
   return {
     id: profile.id,
     spaceId: profile.spaceId,
     installationId: profile.installationId,
     environment: profile.environment,
-    connections: await Promise.all(
-      profile.bindings.map(async (binding) => {
-        const connection: {
-          provider: string;
-          alias?: string;
-          connectionId: string;
-          region?: string;
-        } = {
-          provider: binding.provider,
-          connectionId: await publicProviderConnectionId(binding.envId),
-        };
-        if (binding.alias) connection.alias = binding.alias;
-        if (binding.region) connection.region = binding.region;
-        return connection;
-      }),
-    ),
+    bindings: profile.bindings.map((binding) => ({
+      provider: binding.provider,
+      connectionId: binding.connectionId,
+      ...(binding.alias ? { alias: binding.alias } : {}),
+      ...(binding.region ? { region: binding.region } : {}),
+    })),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };
@@ -4078,15 +4028,6 @@ async function createControlConnection(
   const createRequest: CreateConnectionRequest = {
     spaceId,
     provider: normalizedProvider,
-    credentialDriver: sourceGitKind
-      ? "static_secret"
-      : requestedGenericEnv
-        ? "generic_env"
-        : normalizedProvider === "cloudflare"
-          ? "cloudflare_api_token"
-          : normalizedProvider === "google"
-            ? "gcp_service_account_json"
-            : "generic_env",
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.
     kind: sourceGitKind
@@ -4098,7 +4039,6 @@ async function createControlConnection(
           : normalizedProvider === "google"
             ? "gcp_service_account_json"
             : "generic_env_provider",
-    authMethod: "static_secret",
     // Force Space scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
     scope: "space",
@@ -4178,6 +4118,7 @@ async function resolveConnectionItemTarget(
   | { readonly connection: Connection; readonly rawConnectionId: string }
   | undefined
 > {
+  void sessionSubject;
   try {
     return {
       connection: await operations.getConnection(connectionId),
@@ -4185,50 +4126,8 @@ async function resolveConnectionItemTarget(
     };
   } catch (error) {
     if (controllerErrorCode(error) !== "not_found") throw error;
+    return undefined;
   }
-  const rawConnectionId = connectionId.startsWith("pcn_")
-    ? await rawProviderConnectionIdFromPublicId(
-        operations,
-        sessionSubject,
-        connectionId,
-      )
-    : undefined;
-  if (!rawConnectionId) return undefined;
-  try {
-    return {
-      connection: await operations.getConnection(rawConnectionId),
-      rawConnectionId,
-    };
-  } catch (error) {
-    if (controllerErrorCode(error) === "not_found") return undefined;
-    throw error;
-  }
-}
-
-async function rawProviderConnectionIdFromPublicId(
-  operations: ControlPlaneOperations,
-  sessionSubject: string,
-  publicConnectionId: string,
-): Promise<string | undefined> {
-  const candidateSpaceIds = new Set<string | undefined>([undefined]);
-  const spaces = await operations.spaces
-    .listSpacesByOwner(sessionSubject)
-    .catch(() => []);
-  for (const space of spaces) candidateSpaceIds.add(space.id);
-  for (const spaceId of candidateSpaceIds) {
-    for (const providerEnv of await operations.connections.listProviderEnvs(
-      spaceId,
-    )) {
-      if (!providerEnv.spaceId) continue;
-      if (
-        (await publicProviderConnectionId(providerEnv.id)) ===
-        publicConnectionId
-      ) {
-        return providerEnv.secretRef ?? providerEnv.id;
-      }
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -4418,37 +4317,10 @@ async function listProviderConnections(
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
-  const providerConnections = await Promise.all(
-    (await operations.connections.listProviderEnvs(spaceId))
-      .filter((providerEnv) => providerEnv.spaceId !== undefined)
-      .map((providerEnv) => publicProviderConnection(operations, providerEnv)),
-  );
+  const providerConnections = (
+    await operations.connections.listProviderConnections(spaceId)
+  ).filter((connection) => connection.spaceId !== undefined);
   return json({ providerConnections });
-}
-
-function publicProviderEnv(providerEnv: ProviderEnv): PublicProviderEnv {
-  const { secretRef: _secretRef, ...publicEnv } = providerEnv;
-  void _secretRef;
-  return publicEnv;
-}
-
-async function publicProviderConnection(
-  operations: ControlPlaneOperations,
-  providerEnv: ProviderEnv,
-): Promise<ProviderConnection> {
-  const publicEnv = publicProviderEnv(providerEnv);
-  return {
-    id: await publicProviderConnectionId(publicEnv.id),
-    ...(publicEnv.spaceId ? { spaceId: publicEnv.spaceId } : {}),
-    providerSource: publicEnv.providerSource,
-    displayName: publicEnv.displayName,
-    ownership: await providerConnectionOwnership(operations, providerEnv),
-    status: publicEnv.status,
-    requiredEnvNames: publicEnv.requiredEnvNames,
-    ...(publicEnv.expiresAt ? { expiresAt: publicEnv.expiresAt } : {}),
-    createdAt: publicEnv.createdAt,
-    updatedAt: publicEnv.updatedAt,
-  };
 }
 
 async function resolveProviderConnectionBindings(
@@ -4459,20 +4331,15 @@ async function resolveProviderConnectionBindings(
   | { readonly ok: true; readonly bindings: InstallationProviderEnvBindings }
   | { readonly ok: false; readonly message: string }
 > {
-  const visibleProviderEnvs = (
-    await operations.connections.listProviderEnvs(spaceId)
-  ).filter((providerEnv) => providerEnv.spaceId !== undefined);
-  const envByPublicId = new Map<string, ProviderEnv>();
-  for (const providerEnv of visibleProviderEnvs) {
-    envByPublicId.set(
-      await publicProviderConnectionId(providerEnv.id),
-      providerEnv,
-    );
+  const visibleById = new Map<string, ProviderConnection>();
+  for (const connection of await operations.connections.listProviderConnections(
+    spaceId,
+  )) {
+    if (connection.spaceId !== undefined) visibleById.set(connection.id, connection);
   }
   const resolved: InstallationProviderEnvBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
-    const providerEnv = envByPublicId.get(binding.connectionId);
-    if (!providerEnv) {
+    if (!visibleById.has(binding.connectionId)) {
       return {
         ok: false,
         message: `connections[${index}]: unknown provider connection`,
@@ -4481,26 +4348,11 @@ async function resolveProviderConnectionBindings(
     resolved.push({
       provider: binding.provider,
       ...(binding.alias ? { alias: binding.alias } : {}),
-      envId: providerEnv.id,
+      connectionId: binding.connectionId,
       ...(binding.region ? { region: binding.region } : {}),
     });
   }
   return { ok: true, bindings: resolved };
-}
-
-async function publicProviderConnectionId(
-  providerEnvId: string,
-): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(
-      `takosumi-provider-connection:v1:${providerEnvId}`,
-    ),
-  );
-  const bytes = new Uint8Array(digest);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `pcn_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "").slice(0, 32)}`;
 }
 
 // --- OutputShares ----------------------------------------------------------

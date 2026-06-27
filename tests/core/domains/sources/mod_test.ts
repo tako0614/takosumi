@@ -56,10 +56,11 @@ async function seedConnection(
   const conn: Connection = {
     id,
     spaceId,
+    scope: "space",
     provider: "source_git_https_token",
+    providerSource: "git",
     kind: "source_git_https_token",
-    owner: "customer",
-    authMethod: "static_secret",
+    materialization: "secret",
     status: "pending",
     envNames: ["GIT_HTTPS_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -749,7 +750,13 @@ test("createCompatibilityCheck rejects an installation for another source", asyn
   ).rejects.toThrow(/does not use source/);
 });
 
-test("createCompatibilityCheck enriches provider ownership options from Provider Catalog", async () => {
+// After the credential-model collapse the standalone Provider Catalog (and its
+// per-provider `ownershipOptions` enrichment) is removed: provider setup is
+// computed from the provider registry, and a Capsule's required providers are
+// discovered straight from its source HCL. This test now verifies that
+// discovery + the guided-vs-generic provider distinction the catalog used to
+// drive.
+test("createCompatibilityCheck discovers required providers from Capsule source", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [
       {
@@ -780,25 +787,6 @@ output "public_url" {
       },
     ],
   });
-  await store.putProviderCatalogEntry({
-    id: "aws",
-    providerSource: "registry.opentofu.org/hashicorp/aws",
-    displayName: "AWS",
-    capabilities: ["storage"],
-    aliases: ["storage"],
-    recommendedEnvNames: [
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-      "AWS_REGION",
-    ],
-    helpers: ["aws_assume_role", "generic_env"],
-    ownershipOptions: ["env"],
-    allowedResources: ["aws_s3_bucket"],
-    allowedDataSources: [],
-    policyPackId: "aws-basic",
-    createdAt: "2026-06-06T00:00:00.000Z",
-    updatedAt: "2026-06-06T00:00:00.000Z",
-  });
   const { source } = await service.createSource({
     spaceId: "space_1",
     name: "providers",
@@ -823,15 +811,33 @@ output "public_url" {
     sourceSnapshotId: run.snapshotId,
   });
 
-  const ownershipOptionsBySource = new Map(
-    report.providers.map((provider) => [
-      provider.source,
-      provider.ownershipOptions,
-    ]),
+  const providerBySource = new Map(
+    report.providers.map((provider) => [provider.source, provider]),
   );
-  expect(ownershipOptionsBySource.get("hashicorp/aws")).toEqual(["env"]);
-  expect(ownershipOptionsBySource.get("vercel/vercel")).toBeUndefined();
-  expect(ownershipOptionsBySource.get("draft/provider")).toBeUndefined();
+  expect(providerBySource.get("hashicorp/aws")?.allowed).toBe(true);
+  expect(providerBySource.get("vercel/vercel")?.allowed).toBe(true);
+  expect(providerBySource.get("draft/provider")?.allowed).toBe(true);
+
+  // Guided providers (aws) need no explicit-connection nudge; unknown providers
+  // (vercel/draft) are flagged to wire an explicit Provider Connection.
+  const genericConnectionMessages = report.findings
+    .filter((finding) => finding.code === "generic_provider_connection_required")
+    .map((finding) => finding.message);
+  expect(
+    genericConnectionMessages.some((message) =>
+      message.includes("vercel/vercel"),
+    ),
+  ).toBe(true);
+  expect(
+    genericConnectionMessages.some((message) =>
+      message.includes("draft/provider"),
+    ),
+  ).toBe(true);
+  expect(
+    genericConnectionMessages.some((message) =>
+      message.includes("hashicorp/aws"),
+    ),
+  ).toBe(false);
 });
 
 test("createCompatibilityCheck returns an unsupported report when analysis fails", async () => {

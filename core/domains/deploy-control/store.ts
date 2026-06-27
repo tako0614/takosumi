@@ -34,10 +34,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { Space } from "takosumi-contract/spaces";
-import type {
-  InstallationProviderEnvBindingSet,
-  ProviderEnv,
-} from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -91,7 +88,6 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
@@ -615,18 +611,6 @@ export interface OpenTofuDeploymentStore {
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
 
-  putProviderCatalogEntry(
-    entry: ProviderCatalogEntry,
-  ): Promise<ProviderCatalogEntry>;
-  getProviderCatalogEntry(
-    id: string,
-  ): Promise<ProviderCatalogEntry | undefined>;
-  listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]>;
-
-  putProviderEnv(env: ProviderEnv): Promise<ProviderEnv>;
-  getProviderEnv(id: string): Promise<ProviderEnv | undefined>;
-  listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
-
   // Source records (public fields + internal hook-secret hash / lastSeenCommit /
   // autoSync). The hook secret plaintext is NEVER stored.
   putSource(source: StoredSource): Promise<StoredSource>;
@@ -948,8 +932,6 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #deployments = new Map<string, Deployment>();
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
-  readonly #providerCatalog = new Map<string, ProviderCatalogEntry>();
-  readonly #providerEnvs = new Map<string, ProviderEnv>();
   readonly #sources = new Map<string, StoredSource>();
   readonly #sourceSnapshots = new Map<string, SourceSnapshot>();
   readonly #capsuleCompatibilityReports = new Map<
@@ -1510,53 +1492,6 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   deleteSecretBlob(connectionId: string): Promise<boolean> {
     return Promise.resolve(this.#secretBlobs.delete(connectionId));
-  }
-
-  putProviderCatalogEntry(
-    entry: ProviderCatalogEntry,
-  ): Promise<ProviderCatalogEntry> {
-    this.#providerCatalog.set(entry.id, entry);
-    return Promise.resolve(entry);
-  }
-
-  getProviderCatalogEntry(
-    id: string,
-  ): Promise<ProviderCatalogEntry | undefined> {
-    return Promise.resolve(this.#providerCatalog.get(id));
-  }
-
-  listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
-    return Promise.resolve(
-      Array.from(this.#providerCatalog.values()).sort(
-        (a, b) =>
-          a.displayName.localeCompare(b.displayName) ||
-          a.id.localeCompare(b.id),
-      ),
-    );
-  }
-
-  putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
-    assertProviderEnvGlobalBoundary(env);
-    this.#providerEnvs.set(env.id, env);
-    return Promise.resolve(env);
-  }
-
-  getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
-    return Promise.resolve(this.#providerEnvs.get(id));
-  }
-
-  listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
-    const rows = Array.from(this.#providerEnvs.values()).filter((env) =>
-      spaceId === undefined ? true : env.spaceId === spaceId,
-    );
-    return Promise.resolve(
-      rows.sort(
-        (a, b) =>
-          a.providerSource.localeCompare(b.providerSource) ||
-          a.displayName.localeCompare(b.displayName) ||
-          a.id.localeCompare(b.id),
-      ),
-    );
   }
 
   putSource(source: StoredSource): Promise<StoredSource> {
@@ -2612,12 +2547,4 @@ function readEnvMap(): { get(name: string): string | undefined } | undefined {
     return undefined;
   }
   return runtime.env;
-}
-
-function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
-  if (env.spaceId === undefined) {
-    throw new Error(
-      "global provider resolver records are not supported in OSS Takosumi",
-    );
-  }
 }

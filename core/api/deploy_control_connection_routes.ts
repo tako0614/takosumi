@@ -8,7 +8,6 @@
 import type { Context } from "hono";
 import type {
   Connection,
-  ConnectionCredentialDriver,
   ConnectionKind,
   ConnectionScopeHints,
   CreateConnectionFile,
@@ -102,26 +101,12 @@ function buildGenericEnvProviderConnectionRequest(
     spaceId: body.spaceId,
     provider: body.provider,
     kind: "generic_env_provider",
-    credentialDriver: "generic_env",
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     scope: "space",
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
     ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
     values: body.values,
     ...(body.files ? { files: body.files } : {}),
-  };
-}
-
-function providerCredentialFields(
-  body: ConnectionSubrouteBody | GcpImpersonationConnectionBody,
-  driver: ConnectionCredentialDriver,
-): {
-  readonly credentialDriver: ConnectionCredentialDriver;
-} {
-  void body;
-  return {
-    credentialDriver: driver,
   };
 }
 
@@ -164,7 +149,6 @@ function buildSourceConnectionRequest(
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     provider: kind,
     kind,
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
@@ -202,8 +186,6 @@ function buildCloudflareConnectionRequest(
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     ...providerIdentityForKind("cloudflare_api_token"),
-    ...providerCredentialFields(body, "cloudflare_api_token"),
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
@@ -247,8 +229,6 @@ function buildAwsAssumeRoleConnectionRequest(
   return {
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     ...providerIdentityForKind("aws_assume_role"),
-    ...providerCredentialFields(body, "aws_assume_role"),
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
     scopeHints: hints,
@@ -277,8 +257,6 @@ function buildGcpImpersonationConnectionRequest(
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     provider: "google",
     kind: "gcp_service_account_impersonation",
-    ...providerCredentialFields(body, "gcp_service_account_impersonation"),
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
     scopeHints: hints,
@@ -295,8 +273,6 @@ function buildGcpServiceAccountJsonConnectionRequest(
     ...(body.spaceId ? { spaceId: body.spaceId } : {}),
     provider: "google",
     kind: "gcp_service_account_json",
-    ...providerCredentialFields(body, "gcp_service_account_json"),
-    authMethod: "static_secret",
     ...(body.displayName ? { displayName: body.displayName } : {}),
     ...(body.scope ? { scope: body.scope } : {}),
     ...(body.scopeHints ? { scopeHints: body.scopeHints } : {}),
@@ -765,9 +741,7 @@ function normalizeOAuthConnectionRequest(
       : request;
   return {
     ...normalized,
-    credentialDriver:
-      normalized.credentialDriver ??
-      (helperProvider === "gcp" ? "gcp_oauth_bootstrap" : "cloudflare_oauth"),
+    materialization: normalized.materialization ?? "oauth",
   };
 }
 

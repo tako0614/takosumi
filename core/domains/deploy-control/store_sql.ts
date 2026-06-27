@@ -48,10 +48,7 @@ import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
-import type {
-  InstallationProviderEnvBindingSet,
-  ProviderEnv,
-} from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencySnapshot,
@@ -94,7 +91,6 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   CommitAppliedDeploymentResult,
@@ -218,44 +214,6 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.runnerProfiles,
       pgSchema.runnerProfiles.profileJson,
       { orderBy: [asc(pgSchema.runnerProfiles.id)] },
-    );
-  }
-
-  async putProviderCatalogEntry(
-    entry: ProviderCatalogEntry,
-  ): Promise<ProviderCatalogEntry> {
-    await this.#pgUpsert(pgSchema.providerCatalog, {
-      id: entry.id,
-      providerSource: entry.providerSource,
-      primaryMaterialization: "secret",
-      gatewayEligible: 0,
-      entryJson: entry,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    });
-    return entry;
-  }
-
-  async getProviderCatalogEntry(
-    id: string,
-  ): Promise<ProviderCatalogEntry | undefined> {
-    return await this.#pgFirstJson<ProviderCatalogEntry>(
-      pgSchema.providerCatalog,
-      pgSchema.providerCatalog.entryJson,
-      eq(pgSchema.providerCatalog.id, id),
-    );
-  }
-
-  async listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
-    return await this.#pgManyJson<ProviderCatalogEntry>(
-      pgSchema.providerCatalog,
-      pgSchema.providerCatalog.entryJson,
-      {
-        orderBy: [
-          asc(pgSchema.providerCatalog.primaryMaterialization),
-          asc(pgSchema.providerCatalog.id),
-        ],
-      },
     );
   }
 
@@ -1336,49 +1294,6 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return await this.#pgDelete(
       pgSchema.secretBlobs,
       eq(pgSchema.secretBlobs.connectionId, connectionId),
-    );
-  }
-
-  // --- provider_envs ---------------------------------------------------------
-
-  async putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
-    assertProviderEnvGlobalBoundary(env);
-    await this.#pgUpsert(pgSchema.providerEnvs, {
-      id: env.id,
-      spaceId: env.spaceId ?? null,
-      providerSource: env.providerSource,
-      materialization: env.materialization,
-      status: env.status,
-      envJson: env,
-      createdAt: env.createdAt,
-      updatedAt: env.updatedAt,
-    });
-    return env;
-  }
-
-  async getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
-    return await this.#pgFirstJson<ProviderEnv>(
-      pgSchema.providerEnvs,
-      pgSchema.providerEnvs.envJson,
-      eq(pgSchema.providerEnvs.id, id),
-    );
-  }
-
-  async listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
-    return await this.#pgManyJson<ProviderEnv>(
-      pgSchema.providerEnvs,
-      pgSchema.providerEnvs.envJson,
-      {
-        where:
-          spaceId === undefined
-            ? isNull(pgSchema.providerEnvs.spaceId)
-            : eq(pgSchema.providerEnvs.spaceId, spaceId),
-        orderBy: [
-          asc(pgSchema.providerEnvs.providerSource),
-          asc(pgSchema.providerEnvs.materialization),
-          asc(pgSchema.providerEnvs.id),
-        ],
-      },
     );
   }
 
@@ -3701,10 +3616,3 @@ function selectedDriverColumns(query: string): readonly string[] {
   });
 }
 
-function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
-  if (env.spaceId === undefined) {
-    throw new Error(
-      "global provider resolver records are not supported in OSS Takosumi",
-    );
-  }
-}

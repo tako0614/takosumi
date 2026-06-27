@@ -390,7 +390,6 @@ export class BackupsService {
     capturedAt: string,
   ): Promise<ControlBackupBundle> {
     const space = await this.#store.getSpace(spaceId);
-    const providerCatalog = await this.#store.listProviderCatalogEntries();
     const sources = await this.#store.listSources(spaceId);
     const installConfigs = await this.#store.listInstallConfigs(spaceId);
     const installations = await this.#store.listInstallations(spaceId);
@@ -557,7 +556,6 @@ export class BackupsService {
       spaceId,
       capturedAt,
       space: space ?? null,
-      providerCatalog,
       sources: sources.map(stripSource),
       sourceSnapshots,
       installConfigs: [...installConfigs],
@@ -888,7 +886,6 @@ export interface ControlBackupBundle {
   readonly spaceId: string;
   readonly capturedAt: string;
   readonly space: unknown;
-  readonly providerCatalog: readonly unknown[];
   readonly sources: readonly PublicSource[];
   readonly sourceSnapshots: readonly BundleSourceSnapshot[];
   readonly installConfigs: readonly unknown[];

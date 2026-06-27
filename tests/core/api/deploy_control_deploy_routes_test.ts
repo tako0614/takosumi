@@ -184,7 +184,7 @@ test("POST /internal/v1/deploy requires a bearer (401)", async () => {
   expect(res.status).toBe(401);
 });
 
-test("POST /internal/v1/deploy validates providerEnvBindings envId values (400)", async () => {
+test("POST /internal/v1/deploy validates providerEnvBindings connectionId values (400)", async () => {
   const { app } = await makeApp();
   const res = await app.request("/internal/v1/deploy", {
     method: "POST",
@@ -206,7 +206,7 @@ test("POST /internal/v1/deploy validates providerEnvBindings envId values (400)"
   expect(res.status).toBe(400);
   const payload = await res.json();
   expect(payload.error.code).toBe("invalid_argument");
-  expect(payload.error.message).toContain("providerEnvBindings[0].envId");
+  expect(payload.error.message).toContain("providerBindings[0].connectionId");
 });
 
 test("POST /internal/v1/deploy rejects a missing no-git snapshot (4xx)", async () => {

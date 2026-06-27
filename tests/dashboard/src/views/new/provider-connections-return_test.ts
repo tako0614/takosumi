@@ -102,7 +102,7 @@ describe("/new Provider Connections return context", () => {
       'params.delete("connection_status")',
     );
     expect(connectionsTabSource).toContain(
-      'lastCreatedProviderConnection()?.status === "ready" ||',
+      'lastCreatedProviderConnection()?.status === "verified" ||',
     );
   });
 

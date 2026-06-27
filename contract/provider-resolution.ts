@@ -1,13 +1,15 @@
-import type { ProviderCredentialOwnership } from "./connections.ts";
 import {
-  PROVIDER_ENV_MATERIALIZATIONS,
-  type ProviderEnvMaterialization,
-} from "./provider-envs.ts";
+  PROVIDER_CONNECTION_MATERIALIZATIONS,
+  type ProviderConnectionMaterialization,
+} from "./connections.ts";
 import type { IsoTimestamp } from "./types.ts";
 
-export const PROVIDER_DELIVERY_MODES = PROVIDER_ENV_MATERIALIZATIONS;
+export const PROVIDER_DELIVERY_MODES = PROVIDER_CONNECTION_MATERIALIZATIONS;
 
-export type ProviderDeliveryMode = ProviderEnvMaterialization;
+export type ProviderDeliveryMode = ProviderConnectionMaterialization;
+
+/** @deprecated migration-debt alias for {@link ProviderConnectionMaterialization}. */
+export type ProviderEnvMaterialization = ProviderConnectionMaterialization;
 
 export function isProviderDeliveryMode(
   value: unknown,
@@ -103,13 +105,11 @@ export interface BasePublicProviderResolutionEvidence {
   readonly kind: "provider_connection" | "blocked";
   readonly provider: string;
   readonly connectionId?: string;
-  readonly ownership?: ProviderCredentialOwnership;
 }
 
 export interface PublicProviderConnectionResolutionEvidence extends BasePublicProviderResolutionEvidence {
   readonly kind: "provider_connection";
   readonly connectionId: string;
-  readonly ownership: ProviderCredentialOwnership;
   readonly requiredEnvNames: readonly string[];
 }
 
@@ -126,7 +126,6 @@ export interface PublicProviderResolution {
   readonly requirement: ProviderRequirement;
   readonly status: PublicProviderResolutionStatus;
   readonly connectionId?: string;
-  readonly ownership?: ProviderCredentialOwnership;
   readonly blockedReason?: string;
   readonly evidence: PublicProviderResolutionEvidence;
 }

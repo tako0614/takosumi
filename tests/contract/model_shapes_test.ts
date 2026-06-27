@@ -8,13 +8,9 @@ import { expect, test } from "bun:test";
 
 import type {
   InstallationProviderEnvBinding,
-  ProviderEnv,
-} from "../../contract/provider-envs.ts";
-import type { ProviderCatalogEntry } from "../../contract/providers.ts";
-import {
-  normalizeProviderCredentialOwnership,
-  normalizeProviderCredentialOwnershipOptions,
+  ProviderConnection,
 } from "../../contract/connections.ts";
+import type { ProviderListing } from "../../contract/providers.ts";
 import {
   isProviderDeliveryMode,
   isProviderResolutionStatus,
@@ -207,44 +203,45 @@ test("Capsule compatibility report shape", () => {
   expect(report.providerResolutions?.[0]?.status).toBe("blocked_missing_env");
 });
 
-test("internal provider resolver binding shape uses concrete env ids", () => {
-  const providerEnv: ProviderEnv = {
-    id: "penv_space_cf",
+test("unified Provider Connection + binding shape uses concrete connection ids", () => {
+  const providerConnection: ProviderConnection = {
+    id: "conn_space_cf",
     spaceId: "space_1",
+    provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    kind: "cloudflare_api_token",
+    scope: "space",
     displayName: "Cloudflare",
+    status: "verified",
     materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: "secret://space_1/cf",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
   const binding: InstallationProviderEnvBinding = {
     provider: "cloudflare",
     alias: "main",
-    envId: providerEnv.id,
+    connectionId: providerConnection.id,
   };
-  const catalogEntry: ProviderCatalogEntry = {
+  const listing: ProviderListing = {
     id: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     displayName: "Cloudflare",
     recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-    ownershipOptions: ["env"],
+    requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+    genericEnvSupported: true,
+    connectionKinds: ["cloudflare_api_token", "cloudflare_oauth"],
+    credentialRecipeIds: ["cloudflare", "generic-env"],
     allowedResources: ["cloudflare_workers_script"],
     allowedDataSources: [],
-    policyPackId: "cloudflare-default",
-    createdAt: "2026-06-06T00:00:00Z",
-    updatedAt: "2026-06-06T00:00:00Z",
   };
   const bindings: readonly InstallationProviderEnvBinding[] = [
-    { provider: "cloudflare", alias: "main", envId: "penv_cf_gateway" },
-    { provider: "cloudflare", alias: "zone", envId: providerEnv.id },
+    { provider: "cloudflare", alias: "main", connectionId: "conn_cf_other" },
+    { provider: "cloudflare", alias: "zone", connectionId: providerConnection.id },
   ];
-  expect(binding.envId).toBe("penv_space_cf");
-  expect(providerEnv.materialization).toBe("secret");
-  expect(catalogEntry.ownershipOptions).toEqual(["env"]);
+  expect(binding.connectionId).toBe("conn_space_cf");
+  expect(providerConnection.materialization).toBe("secret");
+  expect(listing.connectionKinds).toContain("cloudflare_api_token");
   expect(bindings).toHaveLength(2);
 });
 
@@ -275,12 +272,10 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
     requirement,
     status: "resolved_provider_connection",
     connectionId: "conn_cf_main",
-    ownership: "env",
     evidence: {
       kind: "provider_connection",
       provider: "cloudflare",
       connectionId: "conn_cf_main",
-      ownership: "env",
       requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     },
   };
@@ -323,17 +318,8 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
   expect(isProviderResolutionStatus(resolution.status)).toBe(true);
   expect(runEnvironment.providerResolutions[0]?.materialization).toBe("secret");
   expect(runEnvironment.providerResolutions[0]?.envId).toBe("penv_cf_secret");
-  expect(publicResolution.ownership).toBe("env");
+  expect(publicResolution.connectionId).toBe("conn_cf_main");
   expect(runtimeGrant.serviceBindingId).toBe("sb_1");
-});
-
-test("Provider credential ownership normalizes legacy own_key to env", () => {
-  expect(normalizeProviderCredentialOwnership("env")).toBe("env");
-  expect(normalizeProviderCredentialOwnership("own_key")).toBe("env");
-  expect(normalizeProviderCredentialOwnership("gateway")).toBeUndefined();
-  expect(
-    normalizeProviderCredentialOwnershipOptions(["own_key", "env", "gateway"]),
-  ).toEqual(["env"]);
 });
 
 test("Connection expiry shape", () => {
@@ -341,10 +327,11 @@ test("Connection expiry shape", () => {
     id: "conn_1",
     spaceId: "space_1",
     provider: "cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     kind: "cloudflare_api_token",
     scope: "space",
-    authMethod: "static_secret",
     status: "expired",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00Z",
     updatedAt: "2026-06-08T00:00:00Z",

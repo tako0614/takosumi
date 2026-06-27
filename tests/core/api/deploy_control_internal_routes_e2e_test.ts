@@ -3,7 +3,7 @@ import type {
   ApplyRunResponse,
   Connection,
   InstallConfig,
-  ListProviderCatalogEntriesResponse,
+  ListProvidersResponse,
   PlanRunResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -142,13 +142,14 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
     headers: headers(),
   });
   expect(providersRes.status).toBe(200);
-  const providersBody =
-    (await providersRes.json()) as ListProviderCatalogEntriesResponse;
+  const providersBody = (await providersRes.json()) as ListProvidersResponse;
   expect(providersBody.providers.map((provider) => provider.id).sort()).toEqual(
     [
       "aws",
+      "azure",
       "cloudflare",
       "digitalocean",
+      "docker",
       "gcp",
       "github",
       "hcloud",
@@ -161,8 +162,14 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(providersBody.providers).toContainEqual(
     expect.objectContaining({
       id: "cloudflare",
-      ownershipOptions: ["env"],
-      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+      recommendedEnvNames: [
+        "CF_API_TOKEN",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_API_KEY",
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_EMAIL",
+        "CLOUDFLARE_ZONE_ID",
+      ],
       credentialRecipeIds: ["cloudflare", "generic-env"],
       genericEnvSupported: true,
     }),
@@ -196,7 +203,6 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
     expect(providersBody.providers).toContainEqual(
       expect.objectContaining({
         id,
-        ownershipOptions: ["env"],
         genericEnvSupported: true,
       }),
     );
@@ -204,7 +210,6 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(providersBody.providers).toContainEqual(
     expect.objectContaining({
       id: "gcp",
-      ownershipOptions: ["env"],
       credentialRecipeIds: ["google", "generic-env"],
       genericEnvSupported: true,
     }),
@@ -230,7 +235,6 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(genericEnvProviderBody.connection).toMatchObject({
     provider: "registry.opentofu.org/vercel/vercel",
     kind: "generic_env_provider",
-    credentialDriver: "generic_env",
     scope: "space",
     envNames: ["VERCEL_API_TOKEN"],
   });
@@ -336,31 +340,23 @@ async function seedInstallationViaRoutes(
   expect(installRes.status).toBe(201);
   const installationId = (await installRes.json()).installation.id as string;
 
+  // After the credential-model collapse the Provider Connection row IS the
+  // resolver record (the former separate ProviderEnv projection is gone), so the
+  // binding points directly at the connection id.
   const providerConnection: Connection = {
     id: "conn_e2ecloudflare0001",
     spaceId,
     provider: "cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     scope: "space",
-    authMethod: "static_secret",
     status: "verified",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     verifiedAt: nowIso,
     createdAt: nowIso,
     updatedAt: nowIso,
   };
   await store.putConnection(providerConnection);
-  await store.putProviderEnv({
-    id: "penv_e2ecloudflare0001",
-    spaceId,
-    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-    displayName: "Cloudflare",
-    materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: providerConnection.id,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  });
   await operations.installations.putInstallationProviderEnvBindingSet({
     id: "ipcset_e2ecloudflare0001",
     spaceId,
@@ -370,7 +366,7 @@ async function seedInstallationViaRoutes(
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "penv_e2ecloudflare0001",
+        connectionId: providerConnection.id,
       },
     ],
     createdAt: nowIso,

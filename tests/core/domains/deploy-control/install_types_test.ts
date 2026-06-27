@@ -125,9 +125,10 @@ function connection(
     id,
     spaceId,
     provider,
+    providerSource: provider,
     scope: "space",
-    authMethod: "static_secret",
     status: "verified",
+    materialization: "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
@@ -138,18 +139,11 @@ async function putConnectionWithProviderEnv(
   store: OpenTofuDeploymentStore,
   conn: Connection,
 ): Promise<void> {
-  await store.putConnection(conn);
-  await store.putProviderEnv({
-    id: conn.id,
-    ...(conn.spaceId ? { spaceId: conn.spaceId } : {}),
-    providerSource: conn.provider,
-    displayName: conn.provider,
-    materialization: "secret",
-    status: conn.status === "verified" ? "ready" : "needs_setup",
-    requiredEnvNames: conn.envNames ?? [],
-    secretRef: conn.id,
-    createdAt: conn.createdAt,
-    updatedAt: conn.updatedAt,
+  // The connection row IS the resolver record now (no separate ProviderEnv).
+  await store.putConnection({
+    ...conn,
+    providerSource: conn.providerSource ?? conn.provider,
+    materialization: conn.materialization ?? "secret",
   });
 }
 
@@ -426,26 +420,11 @@ test("opentofu_module install leaves generic-env provider credentials in runner 
   expect(mainTf).not.toContain("  api_token = var.cloudflare_main_api_token");
 });
 
-test("OSS worker install rejects Cloud-only Gateway provider materialization before planning", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const seeded = await seedInstallationModel(store, {
-    environment: "preview",
-    installConfig: {
-      installType: "opentofu_module",
-      templateBinding: {
-        templateId: "cloudflare-worker-service",
-        templateVersion: "1.0.0",
-      },
-      variableMapping: { appName: "my-worker", accountId: "acct_123" },
-      policy: {},
-    },
-  });
-  await expect(
-    seedProviderConnections(store, seeded.installation, {
-      materialization: "gateway",
-    }),
-  ).rejects.toThrow(/global provider resolver records|materialization/);
-});
+// Cloud-only Gateway provider materialization is now structurally impossible in
+// OSS: the credential record's `materialization` is `oauth | secret` at the
+// contract layer, and the run-env resolver fails closed on any non-{oauth,secret}
+// materialization (covered by run_env_resolver_test). There is no install-time
+// path left to seed a gateway materialization, so that scenario test is retired.
 
 test("provider-using installation fails closed when the connection vault is absent", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -1260,7 +1239,7 @@ test("broken secret provider env binding does not fall back to space-wide provid
 
   await expect(
     controller.createInstallationPlan("inst_fixture"),
-  ).rejects.toThrow(/Provider Env conn_missing/);
+  ).rejects.toThrow(/Provider Connection conn_missing/);
   expect(runner.planJobs).toHaveLength(0);
 });
 

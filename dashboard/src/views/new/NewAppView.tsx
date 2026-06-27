@@ -81,7 +81,6 @@ import {
   type CapsuleCompatibilityProvider,
   type Connection,
   type ProviderConnection,
-  type ProviderCredentialOwnership,
   type RunStatus,
   type Space,
 } from "../../lib/control-api.ts";
@@ -108,7 +107,6 @@ interface ProviderConnectionRow {
   readonly provider: string;
   readonly alias: string;
   readonly connectionId: string;
-  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
   readonly resourceTypes: readonly string[];
 }
 
@@ -1063,48 +1061,28 @@ function Inner() {
     providerConnections() ?? providerConnections.latest ?? [];
   const readyProviderConnections = () =>
     visibleProviderConnections().filter(
-      (connection) => connection.status === "ready",
+      (connection) => connection.status === "verified",
     );
-  const connectionMatchesOwnershipOptions = (
-    connection: ProviderConnection,
-    ownershipOptions: readonly ProviderCredentialOwnership[],
-  ) => ownershipOptions.includes(connection.ownership);
-  const providerConnectionsForProvider = (
-    provider: string,
-    ownershipOptions: readonly ProviderCredentialOwnership[],
-  ) =>
-    readyProviderConnections().filter(
-      (connection) =>
-        connectionMatchesOwnershipOptions(connection, ownershipOptions) &&
-        sameProviderFamily(provider, connection.providerSource),
+  const providerConnectionsForProvider = (provider: string) =>
+    readyProviderConnections().filter((connection) =>
+      sameProviderFamily(provider, connection.providerSource),
     );
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
-    providerConnectionsForProvider(row.provider, row.ownershipOptions)
-      .length === 0;
+    providerConnectionsForProvider(row.provider).length === 0;
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
   const missingProviderRows = () =>
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
-    const candidates = providerConnectionsForProvider(
-      row.provider,
-      row.ownershipOptions,
-    );
+    const candidates = providerConnectionsForProvider(row.provider);
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
   };
   const providerRowsRequiringChoice = () =>
     providerRows().filter(providerRowNeedsVisibleChoice);
 
-  const defaultConnectionForProvider = (
-    provider: string,
-    ownershipOptions: readonly ProviderCredentialOwnership[],
-    _resourceTypes: readonly string[],
-  ): string => {
-    const candidates = providerConnectionsForProvider(
-      provider,
-      ownershipOptions,
-    );
+  const defaultConnectionForProvider = (provider: string): string => {
+    const candidates = providerConnectionsForProvider(provider);
     return candidates[0]?.id ?? "";
   };
 
@@ -1113,21 +1091,14 @@ function Inner() {
   ): ProviderConnectionRow[] => {
     let changed = false;
     const defaultedRows = rows.map((row) => {
-      const candidates = providerConnectionsForProvider(
-        row.provider,
-        row.ownershipOptions,
-      );
+      const candidates = providerConnectionsForProvider(row.provider);
       if (
         row.connectionId &&
         candidates.some((connection) => connection.id === row.connectionId)
       ) {
         return row;
       }
-      const connectionId = defaultConnectionForProvider(
-        row.provider,
-        row.ownershipOptions,
-        row.resourceTypes,
-      );
+      const connectionId = defaultConnectionForProvider(row.provider);
       if (!connectionId || connectionId === row.connectionId) {
         return row;
       }
@@ -1156,11 +1127,6 @@ function Inner() {
     await Promise.resolve();
   };
 
-  const ownershipOptionsForProvider = (
-    provider: CapsuleCompatibilityProvider,
-  ): readonly ProviderCredentialOwnership[] =>
-    provider.ownershipOptions.length > 0 ? provider.ownershipOptions : ["env"];
-
   const rowsFromCompatibility = (
     result: CapsuleCompatibilityResult,
   ): ProviderConnectionRow[] =>
@@ -1168,7 +1134,6 @@ function Inner() {
       .filter((provider) => provider.allowed)
       .flatMap((provider) => {
         const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
-        const ownershipOptions = ownershipOptionsForProvider(provider);
         const resourceTypes = result.resources
           .filter(
             (resource) =>
@@ -1181,12 +1146,7 @@ function Inner() {
         return aliases.map((alias) => ({
           provider: provider.source,
           alias,
-          connectionId: defaultConnectionForProvider(
-            provider.source,
-            ownershipOptions,
-            resourceTypes,
-          ),
-          ownershipOptions,
+          connectionId: defaultConnectionForProvider(provider.source),
           resourceTypes,
         }));
       });
@@ -1201,10 +1161,7 @@ function Inner() {
 
   const providerConnectionError = (): string | null => {
     for (const row of providerRows()) {
-      const candidates = providerConnectionsForProvider(
-        row.provider,
-        row.ownershipOptions,
-      );
+      const candidates = providerConnectionsForProvider(row.provider);
       if (!row.connectionId.trim()) {
         return t("new.providers.errorConnection", {
           provider: row.provider,
@@ -2300,10 +2257,7 @@ function Inner() {
                       <For each={providerRowsRequiringChoice()}>
                         {(row, index) => {
                           const options = () =>
-                            providerConnectionsForProvider(
-                              row.provider,
-                              row.ownershipOptions,
-                            );
+                            providerConnectionsForProvider(row.provider);
                           return (
                             <div class="wb-provider-row">
                               <div class="wb-provider-meta">

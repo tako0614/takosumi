@@ -362,18 +362,16 @@ function credentialMintAuditEntries(
     { readonly connectionId?: string; readonly providers: Set<string> }
   >();
   for (const entry of resolved) {
-    const providerEnvId = entry.env.id;
+    const providerEnvId = entry.connection.id;
     let bucket = byProviderEnv.get(providerEnvId);
     if (!bucket) {
       bucket = {
-        ...(entry.connection ? { connectionId: entry.connection.id } : {}),
+        connectionId: entry.connection.id,
         providers: new Set<string>(),
       };
       byProviderEnv.set(providerEnvId, bucket);
     }
-    bucket.providers.add(
-      entry.connection?.provider ?? entry.env.providerSource,
-    );
+    bucket.providers.add(entry.connection.provider);
   }
   return Array.from(byProviderEnv.entries())
     .sort(([a], [b]) => a.localeCompare(b))

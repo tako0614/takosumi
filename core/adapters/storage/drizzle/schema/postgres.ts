@@ -103,54 +103,6 @@ export const secretBlobs = pgTable(
   ],
 );
 
-export const providerEnvs = pgTable(
-  names.providerEnvs,
-  {
-    id: text("id").primaryKey(),
-    spaceId: text("space_id").notNull(),
-    providerSource: text("provider_source").notNull(),
-    materialization: text("materialization").notNull(),
-    status: text("status").notNull(),
-    envJson: json("env_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    index("takosumi_provider_envs_space_idx").on(table.spaceId),
-    index("takosumi_provider_envs_provider_source_idx").on(
-      table.providerSource,
-    ),
-    index("takosumi_provider_envs_materialization_idx").on(
-      table.materialization,
-    ),
-    index("takosumi_provider_envs_status_idx").on(table.status),
-  ],
-);
-
-export const providerCatalog = pgTable(
-  names.providerCatalog,
-  {
-    id: text("id").primaryKey(),
-    providerSource: text("provider_source").notNull(),
-    primaryMaterialization: text("primary_materialization").notNull(),
-    gatewayEligible: integer("gateway_eligible").notNull(),
-    entryJson: json("entry_json").notNull(),
-    createdAt: text("created_at").notNull(),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (table) => [
-    uniqueIndex("takosumi_provider_catalog_source_unique").on(
-      table.providerSource,
-    ),
-    index("takosumi_provider_catalog_primary_materialization_idx").on(
-      table.primaryMaterialization,
-    ),
-    index("takosumi_provider_catalog_gateway_eligible_idx").on(
-      table.gatewayEligible,
-    ),
-  ],
-);
-
 export const installConfigs = pgTable(
   names.installConfigs,
   {

@@ -139,7 +139,7 @@ test("composed app builds accounts handler with an in-process service deploy con
       // plan/apply deploy-control facade above.
       controlPlaneOperationsWired =
         typeof controlPlaneOperations.spaces.listSpacesByOwner === "function" &&
-        typeof controlPlaneOperations.connections.listProviderEnvs ===
+        typeof controlPlaneOperations.connections.listProviderConnections ===
           "function";
       return spy.handler;
     },
