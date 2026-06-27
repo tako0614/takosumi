@@ -265,10 +265,20 @@ export type BillingSettings =
       readonly mode: "enforce";
       readonly provider: Exclude<BillingProvider, "none">;
       readonly reservationRequired: true;
+      readonly autoRecharge?: {
+        readonly enabled: boolean;
+        readonly thresholdUsdMicros: number;
+        readonly rechargeUsdMicros: number;
+        readonly monthlyLimitUsdMicros?: number;
+      };
     };
 
 export interface CreditBalance {
   readonly spaceId: string;
+  readonly availableUsdMicros?: number;
+  readonly reservedUsdMicros?: number;
+  readonly monthlyIncludedUsdMicros?: number;
+  readonly purchasedUsdMicros?: number;
   readonly availableCredits: number;
   readonly reservedCredits: number;
   readonly monthlyIncludedCredits: number;
@@ -332,6 +342,7 @@ export interface UsageEvent {
   readonly runId?: string;
   readonly kind: UsageEventKind;
   readonly quantity: number;
+  readonly usdMicros?: number;
   readonly credits: number;
   readonly source: string;
   readonly idempotencyKey: string;
@@ -1009,6 +1020,7 @@ export async function listSpaceCreditReservations(
 export interface PublicBillingPlan {
   readonly id: string;
   readonly kind: "subscription" | "pack";
+  readonly usdMicros?: number;
   readonly credits: number;
   readonly name: { readonly ja: string; readonly en: string };
   readonly priceDisplay: { readonly ja: string; readonly en: string };

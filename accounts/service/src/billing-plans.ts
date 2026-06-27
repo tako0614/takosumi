@@ -3,9 +3,9 @@
  *
  * The hosted offering sells two shapes through Stripe Checkout:
  *   - `subscription` plans — a recurring Stripe price; every paid invoice
- *     grants `credits` to the Space named in the subscription metadata.
+ *     grants USD balance to the Space named in the subscription metadata.
  *   - `pack`s — a one-time Stripe price; the completed payment grants
- *     `credits` once.
+ *     USD balance once.
  *
  * The catalog is operator configuration (`TAKOSUMI_BILLING_PLANS`, a JSON
  * array), NOT data synced from Stripe: the operator decides what is offered
@@ -15,13 +15,19 @@
  * the server resolves the Stripe price + checkout mode + metadata, so a client
  * can never drive checkout against an arbitrary price.
  *
- * POLICY — credits are non-refundable and final (spec §32.3). A purchased
+ * POLICY — purchased USD balance is non-refundable and final (spec §32.3). A purchased
  * grant is never reversed: there is no voluntary refund flow. A chargeback
  * (`charge.dispute.*`) freezes the BillingAccount (status `disputed` →
  * entitlements suspended via `shouldSuspendForBilling`) rather than refunding
- * credits, so "reversing the purchase also stops usage" — the credit balance
+ * balance, so "reversing the purchase also stops usage" — the USD balance
  * itself is not reversed.
  */
+
+import {
+  legacyCreditsToUsdMicros,
+  usdMicrosFromUsd,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 
 export interface BillingPlanText {
   readonly ja: string;
@@ -34,7 +40,9 @@ export interface BillingPlan {
   readonly kind: "subscription" | "pack";
   /** The Stripe price this plan checks out (server-side only). */
   readonly stripePriceId: string;
-  /** Credits granted per paid invoice (subscription) or per purchase (pack). */
+  /** USD balance granted per paid invoice (subscription) or per purchase. */
+  readonly usdMicros: number;
+  /** @deprecated Use usdMicros. Compatibility alias interpreted as USD. */
   readonly credits: number;
   readonly name: BillingPlanText;
   /** Display price ("¥1,000 / 月" etc.) — presentation only, Stripe charges. */
@@ -116,18 +124,54 @@ function parsePlanEntry(entry: unknown): BillingPlan | undefined {
       ? record.kind
       : undefined;
   const stripePriceId = nonEmptyString(record.stripePriceId);
-  const credits =
-    typeof record.credits === "number" &&
-    Number.isSafeInteger(record.credits) &&
-    record.credits > 0
-      ? record.credits
-      : undefined;
+  const usdMicros = planUsdMicros(record);
   const name = localizedText(record.name);
   const priceDisplay = localizedText(record.priceDisplay);
-  if (!id || !kind || !stripePriceId || !credits || !name || !priceDisplay) {
+  if (
+    !id ||
+    !kind ||
+    !stripePriceId ||
+    usdMicros === undefined ||
+    !name ||
+    !priceDisplay
+  ) {
     return undefined;
   }
-  return { id, kind, stripePriceId, credits, name, priceDisplay };
+  const credits = usdMicrosToLegacyCredits(usdMicros);
+  return { id, kind, stripePriceId, usdMicros, credits, name, priceDisplay };
+}
+
+function planUsdMicros(record: Record<string, unknown>): number | undefined {
+  if (
+    typeof record.usdMicros === "number" &&
+    Number.isSafeInteger(record.usdMicros) &&
+    record.usdMicros > 0
+  ) {
+    return record.usdMicros;
+  }
+  if (
+    typeof record.usd === "number" &&
+    Number.isFinite(record.usd) &&
+    record.usd > 0
+  ) {
+    try {
+      return usdMicrosFromUsd(record.usd);
+    } catch {
+      return undefined;
+    }
+  }
+  if (
+    typeof record.credits === "number" &&
+    Number.isFinite(record.credits) &&
+    record.credits > 0
+  ) {
+    try {
+      return legacyCreditsToUsdMicros(record.credits);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

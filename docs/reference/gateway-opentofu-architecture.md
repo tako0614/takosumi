@@ -35,7 +35,7 @@ Cloudflare provider base_url endpoint
 OpenAI-compatible AI endpoint
 short-lived Cloud run keys
 virtual account/resource IDs
-Workers for Platforms backend integration
+closed managed resource backend integration
 managed edge/storage/database/container resources
 official billing/quota/usage/support
 ```

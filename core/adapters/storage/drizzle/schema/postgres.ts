@@ -452,6 +452,7 @@ export const billingPlans = pgTable(names.billingPlans, {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   monthlyBasePrice: integer("monthly_base_price").notNull(),
+  includedUsdMicros: bigint("included_usd_micros", { mode: "number" }),
   includedCredits: integer("included_credits").notNull(),
   limitsJson: json("limits_json").notNull(),
   planJson: json("plan_json").notNull(),
@@ -481,6 +482,12 @@ export const spaceSubscriptions = pgTable(
 
 export const creditBalances = pgTable(names.creditBalances, {
   spaceId: text("space_id").primaryKey(),
+  availableUsdMicros: bigint("available_usd_micros", { mode: "number" }),
+  reservedUsdMicros: bigint("reserved_usd_micros", { mode: "number" }),
+  monthlyIncludedUsdMicros: bigint("monthly_included_usd_micros", {
+    mode: "number",
+  }),
+  purchasedUsdMicros: bigint("purchased_usd_micros", { mode: "number" }),
   availableCredits: integer("available_credits").notNull(),
   reservedCredits: integer("reserved_credits").notNull(),
   monthlyIncludedCredits: integer("monthly_included_credits").notNull(),
@@ -502,6 +509,7 @@ export const usageEvents = pgTable(
     resourceMetadataJson: json("resource_metadata_json"),
     kind: text("kind").notNull(),
     quantity: real("quantity").notNull(),
+    usdMicros: bigint("usd_micros", { mode: "number" }),
     credits: integer("credits").notNull(),
     source: text("source").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -522,6 +530,7 @@ export const creditReservations = pgTable(
     id: text("id").primaryKey(),
     spaceId: text("space_id").notNull(),
     runId: text("run_id").notNull(),
+    estimatedUsdMicros: bigint("estimated_usd_micros", { mode: "number" }),
     estimatedCredits: integer("estimated_credits").notNull(),
     status: text("status").notNull(),
     mode: text("mode").notNull(),

@@ -1,5 +1,9 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
+import {
+  USD_MICROS_PER_CENT,
+  positiveUsdMicros,
+  usageMeterNameLeaksInternalWorkersBackend,
+} from "takosumi-contract/billing";
 
 import type { AccountsStore, BillingWebhookEventStatus } from "./store.ts";
 import {
@@ -141,6 +145,26 @@ export interface CreateStripeInvoiceItemInput {
 
 export interface StripeInvoiceItemResult {
   invoiceItemId: string;
+}
+
+export interface CreateStripeAutoRechargePaymentIntentInput {
+  secretKey: string;
+  stripeCustomerId: string;
+  stripePaymentMethodId: string;
+  usdMicros: number;
+  currency?: "usd";
+  description?: string;
+  metadata?: Record<string, string>;
+  idempotencyKey: string;
+  fetch?: typeof fetch;
+  stripeApiBase?: string;
+}
+
+export interface StripeAutoRechargePaymentIntentResult {
+  paymentIntentId: string;
+  status: string;
+  amount: number;
+  currency: string;
 }
 
 export interface CreateStripeUsageInvoiceItemInput {
@@ -350,12 +374,57 @@ export async function createStripeInvoiceItem(
   return { invoiceItemId: data.id };
 }
 
+export async function createStripeAutoRechargePaymentIntent(
+  input: CreateStripeAutoRechargePaymentIntentInput,
+): Promise<StripeAutoRechargePaymentIntentResult> {
+  const body = stripeAutoRechargePaymentIntentParams(input);
+  const response = await (input.fetch ?? fetch)(
+    `${input.stripeApiBase ?? STRIPE_API_BASE}/payment_intents`,
+    {
+      method: "POST",
+      headers: stripeRequestHeaders(input.secretKey, input.idempotencyKey),
+      body,
+    },
+  );
+  if (!response.ok) {
+    const summary = await summarizeStripeErrorResponse(response);
+    console.error(
+      "stripe_api_error",
+      JSON.stringify({
+        endpoint: "payment_intents",
+        status: response.status,
+        requestId: summary.requestId,
+        errorCode: summary.errorCode,
+        errorType: summary.errorType,
+      }),
+    );
+    throw new Error("stripe_api_error");
+  }
+
+  const data: unknown = await response.json();
+  if (
+    !isRecord(data) ||
+    typeof data.id !== "string" ||
+    typeof data.status !== "string" ||
+    typeof data.amount !== "number" ||
+    typeof data.currency !== "string"
+  ) {
+    throw new TypeError("Stripe payment intent response is missing fields");
+  }
+  return {
+    paymentIntentId: data.id,
+    status: data.status,
+    amount: data.amount,
+    currency: data.currency,
+  };
+}
+
 export async function createStripeUsageInvoiceItem(
   input: CreateStripeUsageInvoiceItemInput,
 ): Promise<StripeInvoiceItemResult> {
   if (usageMeterNameLeaksInternalWorkersBackend(input.rollup.meter)) {
     throw new TypeError(
-      "Stripe usage rollup meter must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+      "Stripe usage rollup meter must describe the customer-facing managed resource",
     );
   }
   const amount = stripeUsageRollupAmount(input.rollup, input.unitAmount);
@@ -548,6 +617,47 @@ export function stripeInvoiceItemParams(
   return params;
 }
 
+export function stripeAutoRechargePaymentIntentParams(
+  input: Omit<
+    CreateStripeAutoRechargePaymentIntentInput,
+    "fetch" | "stripeApiBase"
+  >,
+): URLSearchParams {
+  const stripeCustomerId = input.stripeCustomerId.trim();
+  const paymentMethodId = input.stripePaymentMethodId.trim();
+  if (!stripeCustomerId) {
+    throw new TypeError("Stripe auto recharge requires stripeCustomerId");
+  }
+  if (!paymentMethodId) {
+    throw new TypeError("Stripe auto recharge requires stripePaymentMethodId");
+  }
+  const usdMicros = positiveUsdMicros(input.usdMicros, "usdMicros");
+  const amount = Math.ceil(usdMicros / USD_MICROS_PER_CENT);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new TypeError("Stripe auto recharge amount must be positive");
+  }
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (!idempotencyKey) {
+    throw new TypeError("Stripe auto recharge requires an idempotency key");
+  }
+  const params = new URLSearchParams();
+  params.set("customer", stripeCustomerId);
+  params.set("payment_method", paymentMethodId);
+  params.set("amount", String(amount));
+  params.set("currency", input.currency ?? "usd");
+  params.set("confirm", "true");
+  params.set("off_session", "true");
+  params.set(
+    "description",
+    input.description?.trim() || "Takosumi automatic credit recharge",
+  );
+  for (const [key, value] of Object.entries(input.metadata ?? {})) {
+    params.set(`metadata[${key}]`, value);
+  }
+  params.set("metadata[takosumi_usd_micros]", String(usdMicros));
+  return params;
+}
+
 function stripeUsageRollupAmount(
   rollup: BillingUsageRollup,
   unitAmount: number,
@@ -642,7 +752,7 @@ function stripeUsageInvoiceItemPriceFromValue(
   const meter = stringField(value.meter, "meter");
   if (usageMeterNameLeaksInternalWorkersBackend(meter)) {
     throw new TypeError(
-      "Stripe usage invoice item price meter must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+      "Stripe usage invoice item price meter must describe the customer-facing managed resource",
     );
   }
   const unit = stringField(value.unit, "unit");
@@ -706,7 +816,7 @@ function stripeStringMetadata(
     }
     if (usageMeterNameLeaksInternalWorkersBackend(metadataValue)) {
       throw new TypeError(
-        `Stripe usage invoice item price ${label} must not expose the internal Workers for Platforms backend`,
+        `Stripe usage invoice item price ${label} must not expose an internal resource backend`,
       );
     }
     output[key] = metadataValue;

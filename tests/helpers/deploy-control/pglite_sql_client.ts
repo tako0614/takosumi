@@ -26,12 +26,63 @@ import { postgresStorageMigrationStatements } from "../../../core/adapters/stora
 
 type PGliteQueryRunner = Pick<PGlite, "query"> | PGliteTransaction;
 
-/** Splits a multi-statement migration body on `;` boundaries. */
-function splitSqlStatements(sql: string): string[] {
-  return sql
-    .split(/;\s*(?:\n|$)/)
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
+/** Splits a multi-statement migration body on SQL `;` boundaries. */
+export function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let dollarTag: string | undefined;
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql[index];
+    if (singleQuoted) {
+      if (char === "'" && sql[index + 1] === "'") {
+        index += 1;
+      } else if (char === "'") {
+        singleQuoted = false;
+      }
+      continue;
+    }
+    if (doubleQuoted) {
+      if (char === '"' && sql[index + 1] === '"') {
+        index += 1;
+      } else if (char === '"') {
+        doubleQuoted = false;
+      }
+      continue;
+    }
+    if (dollarTag) {
+      if (sql.startsWith(dollarTag, index)) {
+        index += dollarTag.length - 1;
+        dollarTag = undefined;
+      }
+      continue;
+    }
+    if (char === "'") {
+      singleQuoted = true;
+      continue;
+    }
+    if (char === '"') {
+      doubleQuoted = true;
+      continue;
+    }
+    if (char === "$") {
+      const match = /^\$[A-Za-z0-9_]*\$/.exec(sql.slice(index));
+      if (match) {
+        dollarTag = match[0];
+        index += dollarTag.length - 1;
+      }
+      continue;
+    }
+    if (char === ";") {
+      const statement = sql.slice(start, index).trim();
+      if (statement.length > 0) statements.push(statement);
+      start = index + 1;
+    }
+  }
+  const tail = sql.slice(start).trim();
+  if (tail.length > 0) statements.push(tail);
+  return statements;
 }
 
 function toParamArray(parameters?: SqlParameters): unknown[] | undefined {

@@ -907,6 +907,22 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["owner_type", "owner_id"], ["status"]],
     },
     {
+      name: "takosumi_plans",
+      domain: "deploy",
+      columns: [
+        "id",
+        "name",
+        "monthly_base_price",
+        "included_usd_micros",
+        "included_credits",
+        "limits_json",
+        "plan_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+    },
+    {
       name: "takosumi_space_subscriptions",
       domain: "deploy",
       columns: [
@@ -927,6 +943,10 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       domain: "deploy",
       columns: [
         "space_id",
+        "available_usd_micros",
+        "reserved_usd_micros",
+        "monthly_included_usd_micros",
+        "purchased_usd_micros",
         "available_credits",
         "reserved_credits",
         "monthly_included_credits",
@@ -950,6 +970,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "resource_metadata_json",
         "kind",
         "quantity",
+        "usd_micros",
         "credits",
         "source",
         "idempotency_key",
@@ -966,6 +987,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "id",
         "space_id",
         "run_id",
+        "estimated_usd_micros",
         "estimated_credits",
         "status",
         "mode",
@@ -2091,6 +2113,7 @@ create table if not exists takosumi_plans (
   id                 text    primary key,
   name               text    not null,
   monthly_base_price integer not null,
+  included_usd_micros bigint,
   included_credits   integer not null,
   limits_json        jsonb   not null,
   plan_json          jsonb   not null,
@@ -2113,6 +2136,10 @@ create index if not exists takosumi_space_subscriptions_billing_account_idx
   on takosumi_space_subscriptions (billing_account_id);
 create table if not exists takosumi_credit_balances (
   space_id                 text    primary key,
+  available_usd_micros     bigint,
+  reserved_usd_micros      bigint,
+  monthly_included_usd_micros bigint,
+  purchased_usd_micros     bigint,
   available_credits        integer not null,
   reserved_credits         integer not null,
   monthly_included_credits integer not null,
@@ -2131,6 +2158,7 @@ create table if not exists takosumi_usage_events (
   resource_metadata_json jsonb,
   kind            text             not null,
   quantity        double precision not null,
+  usd_micros      bigint,
   credits         integer          not null,
   source          text             not null,
   idempotency_key text             not null unique,
@@ -2144,6 +2172,7 @@ create table if not exists takosumi_credit_reservations (
   id                text    primary key,
   space_id          text    not null,
   run_id            text    not null,
+  estimated_usd_micros bigint,
   estimated_credits integer not null,
   status            text    not null
     check (status in ('reserved','captured','released','expired')),
@@ -2790,5 +2819,183 @@ alter table takosumi_usage_events
   drop column if exists resource_family;
 alter table takosumi_usage_events
   drop column if exists meter_id;`,
+    },
+    {
+      id: "deploy.billing_usd_micros_columns.add",
+      version: 53,
+      domain: "deploy",
+      description:
+        "Add nullable persisted USD micros columns alongside legacy credit columns for billing plans, balances, reservations, and usage events. Backfills existing rows from legacy credits while preserving the legacy columns for compatibility.",
+      sql: `alter table takosumi_plans
+  add column if not exists included_usd_micros bigint;
+alter table takosumi_plans
+  alter column included_usd_micros type bigint;
+update takosumi_plans
+  set included_usd_micros = included_credits * 1000000
+  where included_usd_micros is null;
+
+alter table takosumi_credit_balances
+  add column if not exists available_usd_micros bigint;
+alter table takosumi_credit_balances
+  alter column available_usd_micros type bigint;
+alter table takosumi_credit_balances
+  add column if not exists reserved_usd_micros bigint;
+alter table takosumi_credit_balances
+  alter column reserved_usd_micros type bigint;
+alter table takosumi_credit_balances
+  add column if not exists monthly_included_usd_micros bigint;
+alter table takosumi_credit_balances
+  alter column monthly_included_usd_micros type bigint;
+alter table takosumi_credit_balances
+  add column if not exists purchased_usd_micros bigint;
+alter table takosumi_credit_balances
+  alter column purchased_usd_micros type bigint;
+update takosumi_credit_balances
+  set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000),
+      reserved_usd_micros = coalesce(reserved_usd_micros, reserved_credits * 1000000),
+      monthly_included_usd_micros = coalesce(monthly_included_usd_micros, monthly_included_credits * 1000000),
+      purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000);
+
+alter table takosumi_usage_events
+  add column if not exists usd_micros bigint;
+alter table takosumi_usage_events
+  alter column usd_micros type bigint;
+update takosumi_usage_events
+  set usd_micros = credits * 1000000
+  where usd_micros is null;
+
+alter table takosumi_credit_reservations
+  add column if not exists estimated_usd_micros bigint;
+alter table takosumi_credit_reservations
+  alter column estimated_usd_micros type bigint;
+update takosumi_credit_reservations
+  set estimated_usd_micros = estimated_credits * 1000000
+  where estimated_usd_micros is null;
+
+create or replace function takosumi_billing_usd_micros_compat()
+returns trigger
+language plpgsql
+as $$
+begin
+  if TG_TABLE_NAME = 'takosumi_plans' then
+    if TG_OP = 'INSERT' then
+      if NEW.included_usd_micros is null then
+        NEW.included_usd_micros := NEW.included_credits * 1000000;
+      end if;
+    elsif NEW.included_usd_micros is null
+       or (
+         NEW.included_usd_micros is not distinct from OLD.included_usd_micros
+         and NEW.included_credits is distinct from OLD.included_credits
+       ) then
+      NEW.included_usd_micros := NEW.included_credits * 1000000;
+    end if;
+  elsif TG_TABLE_NAME = 'takosumi_credit_balances' then
+    if TG_OP = 'INSERT' then
+      if NEW.available_usd_micros is null then
+        NEW.available_usd_micros := NEW.available_credits * 1000000;
+      end if;
+      if NEW.reserved_usd_micros is null then
+        NEW.reserved_usd_micros := NEW.reserved_credits * 1000000;
+      end if;
+      if NEW.monthly_included_usd_micros is null then
+        NEW.monthly_included_usd_micros := NEW.monthly_included_credits * 1000000;
+      end if;
+      if NEW.purchased_usd_micros is null then
+        NEW.purchased_usd_micros := NEW.purchased_credits * 1000000;
+      end if;
+    else
+      if NEW.available_usd_micros is null
+         or (
+           NEW.available_usd_micros is not distinct from OLD.available_usd_micros
+           and NEW.available_credits is distinct from OLD.available_credits
+         ) then
+        NEW.available_usd_micros := NEW.available_credits * 1000000;
+      end if;
+      if NEW.reserved_usd_micros is null
+         or (
+           NEW.reserved_usd_micros is not distinct from OLD.reserved_usd_micros
+           and NEW.reserved_credits is distinct from OLD.reserved_credits
+         ) then
+        NEW.reserved_usd_micros := NEW.reserved_credits * 1000000;
+      end if;
+      if NEW.monthly_included_usd_micros is null
+         or (
+           NEW.monthly_included_usd_micros is not distinct from OLD.monthly_included_usd_micros
+           and NEW.monthly_included_credits is distinct from OLD.monthly_included_credits
+         ) then
+        NEW.monthly_included_usd_micros := NEW.monthly_included_credits * 1000000;
+      end if;
+      if NEW.purchased_usd_micros is null
+         or (
+           NEW.purchased_usd_micros is not distinct from OLD.purchased_usd_micros
+           and NEW.purchased_credits is distinct from OLD.purchased_credits
+         ) then
+        NEW.purchased_usd_micros := NEW.purchased_credits * 1000000;
+      end if;
+    end if;
+  elsif TG_TABLE_NAME = 'takosumi_usage_events' then
+    if TG_OP = 'INSERT' then
+      if NEW.usd_micros is null then
+        NEW.usd_micros := NEW.credits * 1000000;
+      end if;
+    elsif NEW.usd_micros is null
+       or (
+         NEW.usd_micros is not distinct from OLD.usd_micros
+         and NEW.credits is distinct from OLD.credits
+       ) then
+      NEW.usd_micros := NEW.credits * 1000000;
+    end if;
+  elsif TG_TABLE_NAME = 'takosumi_credit_reservations' then
+    if TG_OP = 'INSERT' then
+      if NEW.estimated_usd_micros is null then
+        NEW.estimated_usd_micros := NEW.estimated_credits * 1000000;
+      end if;
+    elsif NEW.estimated_usd_micros is null
+       or (
+         NEW.estimated_usd_micros is not distinct from OLD.estimated_usd_micros
+         and NEW.estimated_credits is distinct from OLD.estimated_credits
+       ) then
+      NEW.estimated_usd_micros := NEW.estimated_credits * 1000000;
+    end if;
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists takosumi_plans_billing_usd_micros_compat on takosumi_plans;
+create trigger takosumi_plans_billing_usd_micros_compat
+  before insert or update on takosumi_plans
+  for each row execute function takosumi_billing_usd_micros_compat();
+drop trigger if exists takosumi_credit_balances_billing_usd_micros_compat on takosumi_credit_balances;
+create trigger takosumi_credit_balances_billing_usd_micros_compat
+  before insert or update on takosumi_credit_balances
+  for each row execute function takosumi_billing_usd_micros_compat();
+drop trigger if exists takosumi_usage_events_billing_usd_micros_compat on takosumi_usage_events;
+create trigger takosumi_usage_events_billing_usd_micros_compat
+  before insert or update on takosumi_usage_events
+  for each row execute function takosumi_billing_usd_micros_compat();
+drop trigger if exists takosumi_credit_reservations_billing_usd_micros_compat on takosumi_credit_reservations;
+create trigger takosumi_credit_reservations_billing_usd_micros_compat
+  before insert or update on takosumi_credit_reservations
+  for each row execute function takosumi_billing_usd_micros_compat();`,
+      down: `drop trigger if exists takosumi_credit_reservations_billing_usd_micros_compat on takosumi_credit_reservations;
+drop trigger if exists takosumi_usage_events_billing_usd_micros_compat on takosumi_usage_events;
+drop trigger if exists takosumi_credit_balances_billing_usd_micros_compat on takosumi_credit_balances;
+drop trigger if exists takosumi_plans_billing_usd_micros_compat on takosumi_plans;
+drop function if exists takosumi_billing_usd_micros_compat();
+alter table takosumi_credit_reservations
+  drop column if exists estimated_usd_micros;
+alter table takosumi_usage_events
+  drop column if exists usd_micros;
+alter table takosumi_credit_balances
+  drop column if exists purchased_usd_micros;
+alter table takosumi_credit_balances
+  drop column if exists monthly_included_usd_micros;
+alter table takosumi_credit_balances
+  drop column if exists reserved_usd_micros;
+alter table takosumi_credit_balances
+  drop column if exists available_usd_micros;
+alter table takosumi_plans
+  drop column if exists included_usd_micros;`,
     },
   ]);

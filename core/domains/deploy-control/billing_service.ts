@@ -21,12 +21,27 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type {
   BillingAccount,
+  BillingAutoRechargeSettings,
   BillingProvider,
   BillingSettings,
+  CreditBalance,
   CreditReservation,
   SpaceSubscription,
 } from "takosumi-contract/billing";
-import { billingReservationRequired } from "takosumi-contract/billing";
+import {
+  billingPlanIncludedUsdMicros,
+  billingPlanMaxEstimatedUsdMicros,
+  billingReservationRequired,
+  creditBalanceAvailableUsdMicros,
+  creditBalanceMonthlyIncludedUsdMicros,
+  creditBalanceReservedUsdMicros,
+  creditReservationEstimatedUsdMicros,
+  legacyCreditsToUsdMicros,
+  nonNegativeUsdMicros,
+  positiveUsdMicros,
+  usdFromMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
 import { evaluateQuotaPolicy } from "takosumi-policy";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -122,12 +137,87 @@ function estimatePlanCredits(
   return Math.max(PLAN_CREDIT_BASE, sum);
 }
 
+function estimatePlanUsdMicros(
+  planRun: PlanRun,
+  result: OpenTofuPlanResult,
+): number {
+  return legacyCreditsToUsdMicros(estimatePlanCredits(planRun, result));
+}
+
+function formatUsdMicros(value: number): string {
+  return `$${usdFromMicros(value)
+    .toFixed(6)
+    .replace(/\.?0+$/u, "")}`;
+}
+
+function requirePositiveUsdMicros(value: unknown, label: string): number {
+  try {
+    return positiveUsdMicros(value, label);
+  } catch {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must be a positive USD micros integer`,
+    );
+  }
+}
+
+function requireNonNegativeUsdMicros(value: unknown, label: string): number {
+  try {
+    return nonNegativeUsdMicros(value, label);
+  } catch {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${label} must be a non-negative USD micros integer`,
+    );
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isBillingProvider(value: unknown): value is BillingProvider {
   return value === "stripe" || value === "manual" || value === "none";
+}
+
+function normalizeAutoRechargeSettings(
+  value: unknown,
+): BillingAutoRechargeSettings | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "autoRecharge must be an object",
+    );
+  }
+  if (value.enabled !== true) {
+    return {
+      enabled: false,
+      thresholdUsdMicros: 0,
+      rechargeUsdMicros: 0,
+    };
+  }
+  const thresholdUsdMicros = requireNonNegativeUsdMicros(
+    value.thresholdUsdMicros,
+    "autoRecharge.thresholdUsdMicros",
+  );
+  const rechargeUsdMicros = requirePositiveUsdMicros(
+    value.rechargeUsdMicros,
+    "autoRecharge.rechargeUsdMicros",
+  );
+  return {
+    enabled: true,
+    thresholdUsdMicros,
+    rechargeUsdMicros,
+    ...(value.monthlyLimitUsdMicros !== undefined
+      ? {
+          monthlyLimitUsdMicros: requirePositiveUsdMicros(
+            value.monthlyLimitUsdMicros,
+            "autoRecharge.monthlyLimitUsdMicros",
+          ),
+        }
+      : {}),
+  };
 }
 
 function normalizeBillingSettings(value: unknown): BillingSettings {
@@ -183,10 +273,18 @@ function normalizeBillingSettings(value: unknown): BillingSettings {
         "enforced billing requires reservationRequired true",
       );
     }
+    const autoRecharge = normalizeAutoRechargeSettings(value.autoRecharge);
+    if (autoRecharge?.enabled && value.provider !== "stripe") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "autoRecharge requires stripe billing",
+      );
+    }
     return {
       mode: "enforce",
       provider: value.provider,
       reservationRequired: true,
+      ...(autoRecharge ? { autoRecharge } : {}),
     };
   }
   throw new OpenTofuControllerError("invalid_argument", "unknown billing mode");
@@ -251,6 +349,27 @@ export interface ReconcileStripeSpaceSubscriptionInput {
   readonly currentPeriodEndUnix?: number;
 }
 
+export interface BillingAutoRechargeInput {
+  readonly spaceId: string;
+  readonly estimatedUsdMicros: number;
+  readonly availableUsdMicros: number;
+  readonly shortfallUsdMicros: number;
+  readonly thresholdUsdMicros: number;
+  readonly rechargeUsdMicros: number;
+  readonly monthlyLimitUsdMicros?: number;
+  readonly now: number;
+}
+
+export interface BillingAutoRechargeResult {
+  readonly balance?: CreditBalance;
+  readonly chargedUsdMicros?: number;
+  readonly skippedReason?: string;
+}
+
+export type BillingAutoRechargePort = (
+  input: BillingAutoRechargeInput,
+) => Promise<BillingAutoRechargeResult>;
+
 /**
  * Ports the controller injects into {@link BillingService}. The Space guard is
  * passed as a callback; `store` / `newId` / `now` mirror the controller's own
@@ -264,6 +383,11 @@ export interface BillingServiceDependencies {
   readonly defaultBillingSettings: BillingSettings;
   /** Shared Space-existence guard (used by many non-billing controller methods too). */
   readonly requireSpace: (spaceId: string) => Promise<Space>;
+  /**
+   * Cloud/account-plane hook that can create an off-session Stripe charge and
+   * grant USD balance before a reservation is attempted.
+   */
+  readonly autoRecharge?: BillingAutoRechargePort;
 }
 
 /**
@@ -277,6 +401,7 @@ export class BillingService {
   readonly #now: () => number;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #requireSpace: (spaceId: string) => Promise<Space>;
+  readonly #autoRecharge?: BillingAutoRechargePort;
 
   constructor(dependencies: BillingServiceDependencies) {
     this.#store = dependencies.store;
@@ -284,6 +409,7 @@ export class BillingService {
     this.#now = dependencies.now;
     this.#defaultBillingSettings = dependencies.defaultBillingSettings;
     this.#requireSpace = dependencies.requireSpace;
+    this.#autoRecharge = dependencies.autoRecharge;
   }
 
   async changeSpaceSubscription(
@@ -398,12 +524,18 @@ export class BillingService {
     }
     const balance = await this.#store.getCreditBalance(spaceId);
     const nowIso = new Date(this.#now()).toISOString();
+    const includedUsdMicros = billingPlanIncludedUsdMicros(billingPlan.plan);
+    const includedCredits = usdMicrosToLegacyCredits(includedUsdMicros);
     if (!balance) {
       await this.#store.putCreditBalance({
         spaceId,
-        availableCredits: billingPlan.plan.includedCredits,
+        availableUsdMicros: includedUsdMicros,
+        reservedUsdMicros: 0,
+        monthlyIncludedUsdMicros: includedUsdMicros,
+        purchasedUsdMicros: 0,
+        availableCredits: includedCredits,
         reservedCredits: 0,
-        monthlyIncludedCredits: billingPlan.plan.includedCredits,
+        monthlyIncludedCredits: includedCredits,
         purchasedCredits: 0,
         updatedAt: nowIso,
       });
@@ -413,7 +545,7 @@ export class BillingService {
     if (
       Number.isFinite(balanceUpdatedAtMs) &&
       balanceUpdatedAtMs >= periodStartMs &&
-      balance.monthlyIncludedCredits === billingPlan.plan.includedCredits
+      creditBalanceMonthlyIncludedUsdMicros(balance) === includedUsdMicros
     ) {
       return;
     }
@@ -422,7 +554,7 @@ export class BillingService {
     // UPDATE, so a concurrent top-up can no longer clobber the read-modify-
     // write).
     await this.#store.reconcileMonthlyCredits(spaceId, {
-      newMonthly: billingPlan.plan.includedCredits,
+      newMonthly: includedCredits,
       periodStartIso: new Date(periodStartMs).toISOString(),
       updatedAt: nowIso,
     });
@@ -441,18 +573,27 @@ export class BillingService {
     if (settings.mode === "disabled") {
       return {
         reasons: [],
-        audit: { mode: settings.mode, estimatedCredits: 0 },
+        audit: {
+          mode: settings.mode,
+          estimatedUsdMicros: 0,
+          estimatedCredits: 0,
+        },
       };
     }
     await this.reconcileSpaceMonthlyCredits(input.planRun.spaceId);
-    const estimatedCredits = estimatePlanCredits(input.planRun, input.result);
+    const estimatedUsdMicros = estimatePlanUsdMicros(
+      input.planRun,
+      input.result,
+    );
+    const estimatedCredits = usdMicrosToLegacyCredits(estimatedUsdMicros);
     const auditBase = {
       mode: settings.mode,
+      estimatedUsdMicros,
       estimatedCredits,
     } satisfies Readonly<Record<string, JsonValue>>;
     const planLimit = await this.#evaluateBillingPlanLimits({
       spaceId: input.planRun.spaceId,
-      estimatedCredits,
+      estimatedUsdMicros,
       changes: input.result.planResourceChanges ?? [],
     });
     const auditWithPlanLimits = planLimit.audit
@@ -465,16 +606,56 @@ export class BillingService {
       return { reasons: planLimit.reasons, audit: auditWithPlanLimits };
     }
     if (billingReservationRequired(settings)) {
-      const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
-      const available = balance?.availableCredits ?? 0;
-      if (available < estimatedCredits) {
+      let balance = await this.#store.getCreditBalance(input.planRun.spaceId);
+      let availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+      const autoRecharge =
+        settings.mode === "enforce" ? settings.autoRecharge : undefined;
+      const postReserveUsdMicros = availableUsdMicros - estimatedUsdMicros;
+      const shouldAutoRecharge =
+        autoRecharge?.enabled === true &&
+        settings.provider === "stripe" &&
+        this.#autoRecharge !== undefined &&
+        (availableUsdMicros < estimatedUsdMicros ||
+          postReserveUsdMicros < autoRecharge.thresholdUsdMicros);
+      if (shouldAutoRecharge && autoRecharge) {
+        const neededUsdMicros = Math.max(
+          0,
+          estimatedUsdMicros +
+            autoRecharge.thresholdUsdMicros -
+            availableUsdMicros,
+        );
+        const result = await this.#autoRecharge({
+          spaceId: input.planRun.spaceId,
+          estimatedUsdMicros,
+          availableUsdMicros,
+          shortfallUsdMicros: Math.max(
+            0,
+            estimatedUsdMicros - availableUsdMicros,
+          ),
+          thresholdUsdMicros: autoRecharge.thresholdUsdMicros,
+          rechargeUsdMicros: Math.max(
+            autoRecharge.rechargeUsdMicros,
+            neededUsdMicros,
+          ),
+          ...(autoRecharge.monthlyLimitUsdMicros !== undefined
+            ? { monthlyLimitUsdMicros: autoRecharge.monthlyLimitUsdMicros }
+            : {}),
+          now: input.now,
+        });
+        balance =
+          result.balance ??
+          (await this.#store.getCreditBalance(input.planRun.spaceId));
+        availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+      }
+      if (availableUsdMicros < estimatedUsdMicros) {
         return {
           reasons: [
-            `credit reservation failed: ${estimatedCredits} credits estimated but only ${available} available`,
+            `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(availableUsdMicros)} available`,
           ],
           audit: {
             ...auditWithPlanLimits,
-            availableCredits: available,
+            availableUsdMicros,
+            availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
             reservationStatus: "insufficient_credits",
           },
         };
@@ -482,6 +663,7 @@ export class BillingService {
       const reservedBalance = await this.#store.reserveCredits(
         input.planRun.spaceId,
         {
+          usdMicros: estimatedUsdMicros,
           credits: estimatedCredits,
           updatedAt: new Date(input.now).toISOString(),
         },
@@ -490,13 +672,18 @@ export class BillingService {
         const latest = await this.#store.getCreditBalance(
           input.planRun.spaceId,
         );
+        const latestAvailableUsdMicros =
+          creditBalanceAvailableUsdMicros(latest);
         return {
           reasons: [
-            `credit reservation failed: ${estimatedCredits} credits estimated but only ${latest?.availableCredits ?? 0} available`,
+            `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(latestAvailableUsdMicros)} available`,
           ],
           audit: {
             ...auditWithPlanLimits,
-            availableCredits: latest?.availableCredits ?? 0,
+            availableUsdMicros: latestAvailableUsdMicros,
+            availableCredits: usdMicrosToLegacyCredits(
+              latestAvailableUsdMicros,
+            ),
             reservationStatus: "insufficient_credits",
           },
         };
@@ -506,6 +693,7 @@ export class BillingService {
       id: this.#newId("creditres"),
       spaceId: input.planRun.spaceId,
       runId: input.planRun.id,
+      estimatedUsdMicros,
       estimatedCredits,
       status: "reserved",
       mode: settings.mode,
@@ -525,7 +713,7 @@ export class BillingService {
 
   async #evaluateBillingPlanLimits(input: {
     readonly spaceId: string;
-    readonly estimatedCredits: number;
+    readonly estimatedUsdMicros: number;
     readonly changes: readonly PlanResourceChange[];
   }): Promise<{
     readonly reasons: readonly string[];
@@ -535,14 +723,14 @@ export class BillingService {
     if (!billingPlan) return { reasons: [] };
     const reasons: string[] = [];
     const limits = billingPlan.plan.limits;
-    const maxEstimatedCredits = limits.maxEstimatedCreditsPerRun;
+    const maxEstimatedUsdMicros = billingPlanMaxEstimatedUsdMicros(limits);
     if (
-      maxEstimatedCredits !== undefined &&
-      Number.isFinite(maxEstimatedCredits) &&
-      input.estimatedCredits > maxEstimatedCredits
+      maxEstimatedUsdMicros !== undefined &&
+      Number.isFinite(maxEstimatedUsdMicros) &&
+      input.estimatedUsdMicros > maxEstimatedUsdMicros
     ) {
       reasons.push(
-        `billing plan ${billingPlan.plan.id} limits estimated credits per run to ${maxEstimatedCredits}; plan estimated ${input.estimatedCredits}`,
+        `billing plan ${billingPlan.plan.id} limits estimated USD per run to ${formatUsdMicros(maxEstimatedUsdMicros)}; plan estimated ${formatUsdMicros(input.estimatedUsdMicros)}`,
       );
     }
     const quota = evaluateQuotaPolicy(input.changes, limits.quota);
@@ -556,8 +744,13 @@ export class BillingService {
       audit: {
         planId: billingPlan.plan.id,
         subscriptionId: billingPlan.subscription.id,
-        ...(maxEstimatedCredits !== undefined
-          ? { maxEstimatedCreditsPerRun: maxEstimatedCredits }
+        ...(maxEstimatedUsdMicros !== undefined
+          ? {
+              maxEstimatedUsdMicrosPerRun: maxEstimatedUsdMicros,
+              maxEstimatedCreditsPerRun: usdMicrosToLegacyCredits(
+                maxEstimatedUsdMicros,
+              ),
+            }
           : {}),
         ...(limits.quota ? { quota: limits.quota } : {}),
         exceeded: reasons,
@@ -602,6 +795,7 @@ export class BillingService {
     );
     if (!reservation) return;
     if (reservation.status !== "reserved") return;
+    const reservedUsdMicros = creditReservationEstimatedUsdMicros(reservation);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
       spaceId: input.planRun.spaceId,
@@ -611,7 +805,8 @@ export class BillingService {
       runId: input.applyRun.id,
       kind: "operation",
       quantity: 1,
-      credits: reservation.estimatedCredits,
+      usdMicros: reservedUsdMicros,
+      credits: usdMicrosToLegacyCredits(reservedUsdMicros),
       source: "runner",
       idempotencyKey: `${input.applyRun.id}:operation`,
       createdAt: new Date(input.now).toISOString(),
@@ -622,12 +817,14 @@ export class BillingService {
     });
     const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
     if (balance && reservation.mode === "enforce") {
+      const nextReservedUsdMicros = Math.max(
+        0,
+        creditBalanceReservedUsdMicros(balance) - reservedUsdMicros,
+      );
       await this.#store.putCreditBalance({
         ...balance,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
+        reservedUsdMicros: nextReservedUsdMicros,
+        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
         updatedAt: new Date(input.now).toISOString(),
       });
     }
@@ -644,14 +841,20 @@ export class BillingService {
     });
     const balance = await this.#store.getCreditBalance(planRun.spaceId);
     if (balance && reservation.mode === "enforce") {
+      const reservationUsdMicros =
+        creditReservationEstimatedUsdMicros(reservation);
+      const nextAvailableUsdMicros =
+        creditBalanceAvailableUsdMicros(balance) + reservationUsdMicros;
+      const nextReservedUsdMicros = Math.max(
+        0,
+        creditBalanceReservedUsdMicros(balance) - reservationUsdMicros,
+      );
       await this.#store.putCreditBalance({
         ...balance,
-        availableCredits:
-          balance.availableCredits + reservation.estimatedCredits,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
+        availableUsdMicros: nextAvailableUsdMicros,
+        reservedUsdMicros: nextReservedUsdMicros,
+        availableCredits: usdMicrosToLegacyCredits(nextAvailableUsdMicros),
+        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
         updatedAt: new Date(this.#now()).toISOString(),
       });
     }
@@ -666,14 +869,20 @@ export class BillingService {
     });
     const balance = await this.#store.getCreditBalance(reservation.spaceId);
     if (balance && reservation.mode === "enforce") {
+      const reservationUsdMicros =
+        creditReservationEstimatedUsdMicros(reservation);
+      const nextAvailableUsdMicros =
+        creditBalanceAvailableUsdMicros(balance) + reservationUsdMicros;
+      const nextReservedUsdMicros = Math.max(
+        0,
+        creditBalanceReservedUsdMicros(balance) - reservationUsdMicros,
+      );
       await this.#store.putCreditBalance({
         ...balance,
-        availableCredits:
-          balance.availableCredits + reservation.estimatedCredits,
-        reservedCredits: Math.max(
-          0,
-          balance.reservedCredits - reservation.estimatedCredits,
-        ),
+        availableUsdMicros: nextAvailableUsdMicros,
+        reservedUsdMicros: nextReservedUsdMicros,
+        availableCredits: usdMicrosToLegacyCredits(nextAvailableUsdMicros),
+        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
         updatedAt: new Date(this.#now()).toISOString(),
       });
     }

@@ -42,7 +42,12 @@ import type {
   UsageResourceMetadataValue,
   UsageEventSource,
 } from "takosumi-contract/billing";
-import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
+import {
+  legacyCreditsToUsdMicros,
+  usageEventUsdMicros,
+  usageMeterNameLeaksInternalWorkersBackend,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
@@ -59,7 +64,9 @@ export interface RecordMeteredUsageInput {
   readonly resourceMetadata?: UsageResourceMetadata;
   readonly kind: UsageEventKind;
   readonly quantity: number;
-  readonly credits: number;
+  readonly usdMicros?: number;
+  /** @deprecated Use usdMicros. Legacy credits are interpreted as USD amounts. */
+  readonly credits?: number;
   readonly source: Exclude<UsageEventSource, "runner">;
   readonly idempotencyKey: string;
   readonly createdAt?: string;
@@ -75,7 +82,9 @@ export interface ReconcileInvoiceUsageInput {
   readonly invoiceId: string;
   readonly periodStart: string;
   readonly periodEnd: string;
-  readonly invoicedCredits: number;
+  readonly invoicedUsdMicros?: number;
+  /** @deprecated Use invoicedUsdMicros. */
+  readonly invoicedCredits?: number;
   readonly createdAt?: string;
 }
 
@@ -256,7 +265,10 @@ export class UsageReportingService {
           : {}),
         kind: meter.kind,
         quantity: meter.quantity,
-        credits: meter.credits,
+        ...(meter.usdMicros !== undefined
+          ? { usdMicros: meter.usdMicros }
+          : {}),
+        ...(meter.credits !== undefined ? { credits: meter.credits } : {}),
         idempotencyKey: [
           "provider-runtime",
           spaceId,
@@ -285,7 +297,8 @@ export class UsageReportingService {
     requireNonEmptyString(input.invoiceId, "invoiceId");
     const period = normalizeInvoiceUsagePeriod(input);
     const events = await this.#store.listUsageEvents(spaceId);
-    const meteredCredits = events
+    const invoicedUsdMicros = invoiceInputUsdMicros(input);
+    const meteredUsdMicros = events
       .filter((event) => isMeteredInvoiceUsageSource(event.source))
       .filter((event) =>
         isUsageEventInInvoicePeriod(
@@ -294,14 +307,14 @@ export class UsageReportingService {
           period.periodEnd,
         ),
       )
-      .reduce((sum, event) => sum + event.credits, 0);
-    const adjustmentCredits = input.invoicedCredits - meteredCredits;
+      .reduce((sum, event) => sum + usageEventUsdMicros(event), 0);
+    const adjustmentUsdMicros = invoicedUsdMicros - meteredUsdMicros;
     const { usageEvent } = await this.#recordBillingReconciliationUsage(
       spaceId,
       {
         kind: "operation",
         quantity: 1,
-        credits: adjustmentCredits,
+        usdMicros: adjustmentUsdMicros,
         source: "billing_reconciliation",
         idempotencyKey: [
           "invoice-reconciliation",
@@ -317,9 +330,12 @@ export class UsageReportingService {
       invoiceId: input.invoiceId,
       periodStart: period.periodStart,
       periodEnd: period.periodEnd,
-      meteredCredits,
-      invoicedCredits: input.invoicedCredits,
-      adjustmentCredits,
+      meteredUsdMicros,
+      invoicedUsdMicros,
+      adjustmentUsdMicros,
+      meteredCredits: usdMicrosToLegacyCredits(meteredUsdMicros),
+      invoicedCredits: usdMicrosToLegacyCredits(invoicedUsdMicros),
+      adjustmentCredits: usdMicrosToLegacyCredits(adjustmentUsdMicros),
       usageEvent,
     };
   }
@@ -336,27 +352,19 @@ export class UsageReportingService {
 
   async topUpSpaceCredits(
     spaceId: string,
-    input: { readonly credits: number },
+    input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }> {
     requireNonEmptyString(spaceId, "spaceId");
     await this.#requireSpace(spaceId);
-    if (
-      !Number.isInteger(input.credits) ||
-      !Number.isFinite(input.credits) ||
-      input.credits <= 0
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "credits must be a positive integer",
-      );
-    }
+    const usdMicros = topUpInputUsdMicros(input);
     await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
     const nowIso = new Date(this.#now()).toISOString();
     // Atomic grant (single UPDATE): concurrent webhook deliveries — or a top-up
     // racing the monthly reconcile — cannot lose updates (was a read-modify-
     // write get→compute→putCreditBalance).
     const balance = await this.#store.addCredits(spaceId, {
-      credits: input.credits,
+      usdMicros,
+      credits: usdMicrosToLegacyCredits(usdMicros),
       updatedAt: nowIso,
     });
     return { balance };
@@ -387,17 +395,7 @@ function normalizeMeteredUsageEvent(
       "usage quantity must be a non-negative finite number",
     );
   }
-  if (
-    !Number.isInteger(input.credits) ||
-    (input.source !== "billing_reconciliation" && input.credits < 0)
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      input.source === "billing_reconciliation"
-        ? "usage credits must be an integer"
-        : "usage credits must be a non-negative integer",
-    );
-  }
+  const usdMicros = usageInputUsdMicros(input);
   requireNonEmptyString(input.idempotencyKey, "idempotencyKey");
   const meterId = optionalNonEmptyString(input.meterId, "meterId");
   rejectInternalWorkersBackendUsageName(meterId, "meterId");
@@ -426,7 +424,8 @@ function normalizeMeteredUsageEvent(
     ...(Object.keys(resourceMetadata).length > 0 ? { resourceMetadata } : {}),
     kind: input.kind,
     quantity: input.quantity,
-    credits: input.credits,
+    usdMicros,
+    credits: usdMicrosToLegacyCredits(usdMicros),
     source: input.source,
     idempotencyKey: input.idempotencyKey,
     createdAt,
@@ -497,6 +496,83 @@ function normalizeInvoiceUsagePeriod(input: ReconcileInvoiceUsageInput): {
   };
 }
 
+function usageInputUsdMicros(input: RecordMeteredUsageInput): number {
+  const value =
+    input.usdMicros !== undefined
+      ? input.usdMicros
+      : input.credits !== undefined
+        ? finiteCreditsToUsdMicros(input.credits)
+        : undefined;
+  if (
+    value === undefined ||
+    !Number.isSafeInteger(value) ||
+    !Number.isFinite(value) ||
+    (input.source !== "billing_reconciliation" && value < 0)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      input.source === "billing_reconciliation"
+        ? "usage usdMicros must be a safe integer"
+        : "usage usdMicros must be a non-negative safe integer",
+    );
+  }
+  return value;
+}
+
+function invoiceInputUsdMicros(input: ReconcileInvoiceUsageInput): number {
+  const value =
+    input.invoicedUsdMicros !== undefined
+      ? input.invoicedUsdMicros
+      : input.invoicedCredits !== undefined
+        ? finiteCreditsToUsdMicros(input.invoicedCredits)
+        : undefined;
+  if (
+    value === undefined ||
+    !Number.isSafeInteger(value) ||
+    !Number.isFinite(value) ||
+    value < 0
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "invoicedUsdMicros must be a non-negative safe integer",
+    );
+  }
+  return value;
+}
+
+function topUpInputUsdMicros(input: {
+  readonly usdMicros?: number;
+  readonly credits?: number;
+}): number {
+  const value =
+    input.usdMicros !== undefined
+      ? input.usdMicros
+      : input.credits !== undefined
+        ? finiteCreditsToUsdMicros(input.credits)
+        : undefined;
+  if (
+    value === undefined ||
+    !Number.isSafeInteger(value) ||
+    !Number.isFinite(value) ||
+    value <= 0
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "usdMicros must be a positive safe integer",
+    );
+  }
+  return value;
+}
+
+function finiteCreditsToUsdMicros(value: number): number | undefined {
+  if (!Number.isFinite(value)) return undefined;
+  try {
+    return legacyCreditsToUsdMicros(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function optionalNonEmptyString(
   value: string | undefined,
   label: string,
@@ -536,7 +612,7 @@ function rejectInternalWorkersBackendUsageName(
   if (usageMeterNameLeaksInternalWorkersBackend(value)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `usage ${label} must describe the customer-facing managed resource, not the internal Workers for Platforms backend`,
+      `usage ${label} must describe the customer-facing managed resource`,
     );
   }
 }
@@ -572,7 +648,7 @@ function normalizeUsageResourceMetadata(
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "usage resourceMetadata must not expose the internal Workers for Platforms backend",
+        "usage resourceMetadata must not expose an internal resource backend",
       );
     }
     normalized[normalizedKey] = metadataValue;
