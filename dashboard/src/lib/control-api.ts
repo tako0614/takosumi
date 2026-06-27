@@ -1027,7 +1027,8 @@ export interface PublicBillingPlan {
   readonly id: string;
   readonly kind: "subscription" | "pack";
   readonly usdMicros?: number;
-  readonly credits: number;
+  /** @deprecated Compatibility fallback for older platform projections. */
+  readonly credits?: number;
   readonly name: { readonly ja: string; readonly en: string };
   readonly priceDisplay: { readonly ja: string; readonly en: string };
 }

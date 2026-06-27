@@ -957,7 +957,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Review this workspace's quota mode, available capacity, and usage.",
   "billing.mode.disabled": "Billing is disabled for this workspace.",
   "billing.mode.checkoutOpen":
-    "You can add USD balance. Balance enforcement is not enabled yet.",
+    "Add USD balance for Takosumi Cloud resources. Cloud resources stop when the balance runs out.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce": "Deploys require a USD balance.",
   "billing.loading": "Loading billing status...",
@@ -982,6 +982,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.plans.perMonth": "{n} per month",
   "billing.packs.title": "Balance packs",
   "billing.packs.amount": "{n}",
+  "billing.packs.balance": "{n} balance",
   "billing.packs.buy": "Buy",
   "billing.portal": "Manage payment and invoices",
   "billing.portalUnavailable":

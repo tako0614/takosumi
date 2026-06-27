@@ -970,7 +970,7 @@ export const ja = {
     "このワークスペースの上限モード、利用可能な容量、使用量を確認します。",
   "billing.mode.disabled": "このワークスペースでは課金は無効です。",
   "billing.mode.checkoutOpen":
-    "USD 残高を追加できます。残高によるデプロイ制限はまだ有効ではありません。",
+    "Takosumi Cloud のリソースに使う USD 残高を追加できます。残高がなくなると Cloud リソースは停止します。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce": "デプロイには USD 残高が必要です。",
   "billing.loading": "課金状態を読み込み中です...",
@@ -995,6 +995,7 @@ export const ja = {
   "billing.plans.perMonth": "毎月 {n}",
   "billing.packs.title": "残高パック",
   "billing.packs.amount": "{n}",
+  "billing.packs.balance": "{n} 残高",
   "billing.packs.buy": "購入する",
   "billing.portal": "支払い方法と請求を管理",
   "billing.portalUnavailable":

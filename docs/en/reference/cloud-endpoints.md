@@ -174,7 +174,7 @@ unit charge, estimated unit cost, and minimum gross margin before it writes
 `usdMicros` to the ledger. Unknown meters or prices below the required margin
 fail closed, so WfP and AI requests cannot succeed without billable credit.
 The operating source of truth for prices and the free tier is
-[`../../operations/cloud-pricing.md`](../../operations/cloud-pricing.md).
+`docs/operations/cloud-pricing.md`.
 
 Internal headers:
 

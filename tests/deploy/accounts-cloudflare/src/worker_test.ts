@@ -85,6 +85,48 @@ test("the dashboard SPA owns /install (external install link is client-handled)"
   assert.equal(response.headers.get("location"), null);
 });
 
+test("Cloudflare Accounts Worker does not serve SPA HTML for missing dashboard chunks", async () => {
+  const worker = createCloudflareWorker();
+  const env = createEnv(new InitOnlyD1Database(), {
+    ASSETS: {
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname;
+        if (path === "/assets/current.js") {
+          return new Response("export {}", {
+            status: 200,
+            headers: { "content-type": "text/javascript" },
+          });
+        }
+        return new Response('<!doctype html><div id="root"></div>', {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      },
+    },
+  });
+
+  const current = await worker.fetch(
+    new Request("https://accounts.example/assets/current.js"),
+    env,
+  );
+  assert.equal(current.status, 200);
+  assert.equal(current.headers.get("content-type"), "text/javascript");
+
+  const stale = await worker.fetch(
+    new Request("https://accounts.example/assets/stale-old-hash.js"),
+    env,
+  );
+  assert.equal(stale.status, 404);
+  assert.equal(stale.headers.get("content-type"), "text/plain; charset=utf-8");
+
+  const deepLink = await worker.fetch(
+    new Request("https://accounts.example/billing"),
+    env,
+  );
+  assert.equal(deepLink.status, 200);
+  assert.match(await deepLink.text(), /<div id="root"><\/div>/);
+});
+
 test("Cloudflare Accounts Worker handles account-plane routes directly", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
@@ -765,9 +807,9 @@ test("Cloudflare Accounts Worker writes age-encrypted metadata exports to R2", a
     result.archiveDigest,
   );
   assert.equal(
-    new TextDecoder().decode(bucket.puts[0]?.body ?? new Uint8Array()).includes(
-      "takosumi.accounts.cloudflare-r2-installation-export@v1",
-    ),
+    new TextDecoder()
+      .decode(bucket.puts[0]?.body ?? new Uint8Array())
+      .includes("takosumi.accounts.cloudflare-r2-installation-export@v1"),
     false,
     "age ciphertext must not include plaintext JSON markers",
   );
