@@ -704,6 +704,11 @@ function stripeStringMetadata(
         `Stripe usage invoice item price ${label} values must be strings`,
       );
     }
+    if (usageMeterNameLeaksInternalWorkersBackend(metadataValue)) {
+      throw new TypeError(
+        `Stripe usage invoice item price ${label} must not expose the internal Workers for Platforms backend`,
+      );
+    }
     output[key] = metadataValue;
   }
   return output;

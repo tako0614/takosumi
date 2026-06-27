@@ -2277,12 +2277,22 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         spaceId: { type: "string" },
         installationId: { type: "string" },
         runId: { type: "string" },
-        meterId: { type: "string" },
-        resourceFamily: { type: "string" },
+        meterId: {
+          type: "string",
+          description:
+            "Stable customer-facing managed-resource meter id. Cloudflare Workers for Platforms/WfP is an internal backend and must not appear here.",
+        },
+        resourceFamily: {
+          type: "string",
+          description:
+            "Stable customer-facing resource family such as cloudflare.workers_script, cloudflare.kv, cloudflare.r2, cloudflare.d1, cloudflare.workflows, or cloudflare.containers. Internal backends belong in resourceMetadata only.",
+        },
         resourceId: { type: "string" },
         operation: { type: "string" },
         resourceMetadata: {
           type: "object",
+          description:
+            "Optional non-secret metadata. Internal implementation backend hints such as cloudflare.workers_for_platforms may appear here, never in meterId or resourceFamily.",
           additionalProperties: {
             anyOf: [
               { type: "string" },

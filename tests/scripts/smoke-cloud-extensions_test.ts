@@ -130,31 +130,52 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
       }
       if (parsed.pathname === "/api/v1/workspaces/space_compat_runtime/usage") {
         usageReads += 1;
+        expect(parsed.searchParams.get("limit")).toBe("500");
         return json({
           usageEvents:
             usageReads === 1
               ? []
-              : [
-                  {
-                    id: "usage_compat_runtime_1",
-                    spaceId: "space_compat_runtime",
-                    installationId: "inst_compat_runtime",
-                    meterId: "cloudflare:workers_script:deploy",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:smoke",
-                    operation: "deploy",
-                    resourceMetadata: {
-                      backend: "cloudflare.workers_for_platforms",
+              : parsed.searchParams.get("cursor") === "page_2"
+                ? [
+                    {
+                      id: "usage_compat_runtime_1",
+                      spaceId: "space_compat_runtime",
+                      installationId: "inst_compat_runtime",
+                      meterId: "cloudflare:workers_script:deploy",
+                      resourceFamily: "cloudflare.workers_script",
+                      resourceId: "script:smoke",
+                      operation: "deploy",
+                      resourceMetadata: {
+                        backend: "cloudflare.workers_for_platforms",
+                      },
+                      kind: "gateway_compute",
+                      quantity: 1,
+                      credits: 2,
+                      source: "resource_meter",
+                      idempotencyKey:
+                        "provider-runtime:space_compat_runtime:compat",
+                      createdAt: "2999-01-01T00:00:00.000Z",
                     },
-                    kind: "gateway_compute",
-                    quantity: 1,
-                    credits: 2,
-                    source: "resource_meter",
-                    idempotencyKey:
-                      "provider-runtime:space_compat_runtime:compat",
-                    createdAt: "2999-01-01T00:00:00.000Z",
-                  },
-                ],
+                  ]
+                : [
+                    {
+                      id: "usage_compat_runtime_old",
+                      spaceId: "space_compat_runtime",
+                      installationId: "inst_compat_runtime",
+                      meterId: "cloudflare:workers_script:list",
+                      resourceFamily: "cloudflare.workers_script",
+                      resourceId: "script:collection",
+                      operation: "list",
+                      kind: "gateway_compute",
+                      quantity: 1,
+                      credits: 1,
+                      source: "resource_meter",
+                      createdAt: "2000-01-01T00:00:00.000Z",
+                    },
+                  ],
+          ...(usageReads > 1 && !parsed.searchParams.get("cursor")
+            ? { nextCursor: "page_2" }
+            : {}),
         });
       }
       const parsedMethod = init?.method ?? "GET";
@@ -192,8 +213,8 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
     usageLedgerChecked: true,
     cloudflareCompatUsageRecorded: true,
     usageEventsBefore: 0,
-    usageEventsAfter: 1,
-    matchingCloudflareCompatUsageEventsAfter: 1,
+    usageEventsAfter: 2,
+    matchingCloudflareCompatUsageEventsAfter: 2,
   });
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
 });

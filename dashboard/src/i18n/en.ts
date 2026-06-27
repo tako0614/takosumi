@@ -942,6 +942,9 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "Names",
+  "cloudResources.inventory.showAll": "Show all {count}",
+  "cloudResources.inventory.showLess": "Collapse",
+  "cloudResources.inventory.remaining": "Show {count} more",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",

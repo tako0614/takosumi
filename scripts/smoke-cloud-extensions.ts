@@ -944,6 +944,7 @@ interface UsageLedgerSnapshot {
   readonly ok: boolean;
   readonly status: number;
   readonly eventCount: number;
+  readonly pageCount: number;
   readonly matchingEventCount: number;
   readonly matchingEventKeys: readonly string[];
   readonly matchingEvents: readonly Record<string, unknown>[];
@@ -1108,19 +1109,20 @@ async function cloudflareCompatUsageLedgerSnapshot(
   ownerAuthHeaders: Record<string, string>,
   input: { readonly workspaceId: string; readonly installationId?: string },
 ): Promise<UsageLedgerSnapshot> {
-  const response = await fetchImpl(
-    `${options.url}${cloudflareCompatUsageLedgerPath(input.workspaceId)}`,
-    { headers: ownerAuthHeaders },
+  const snapshot = await usageLedgerSnapshot(
+    fetchImpl,
+    options,
+    ownerAuthHeaders,
+    input.workspaceId,
   );
-  const body = await readJson(response);
-  const events = usageEvents(body);
-  const matchingEvents = events.filter((event) =>
+  const matchingEvents = snapshot.events.filter((event) =>
     cloudflareCompatUsageEventMatches(event, input.installationId),
   );
   return {
-    ok: response.status === 200,
-    status: response.status,
-    eventCount: events.length,
+    ok: snapshot.ok,
+    status: snapshot.status,
+    eventCount: snapshot.events.length,
+    pageCount: snapshot.pageCount,
     matchingEventCount: matchingEvents.length,
     matchingEventKeys: matchingEvents.map(usageEventKey),
     matchingEvents,
@@ -1177,19 +1179,20 @@ async function aiUsageLedgerSnapshot(
   ownerAuthHeaders: Record<string, string>,
   input: { readonly workspaceId: string; readonly installationId: string },
 ): Promise<UsageLedgerSnapshot> {
-  const response = await fetchImpl(
-    `${options.url}${aiUsageLedgerPath(input.workspaceId)}`,
-    { headers: ownerAuthHeaders },
+  const snapshot = await usageLedgerSnapshot(
+    fetchImpl,
+    options,
+    ownerAuthHeaders,
+    input.workspaceId,
   );
-  const body = await readJson(response);
-  const events = usageEvents(body);
-  const matchingEvents = events.filter((event) =>
+  const matchingEvents = snapshot.events.filter((event) =>
     aiUsageEventMatches(event, input.installationId),
   );
   return {
-    ok: response.status === 200,
-    status: response.status,
-    eventCount: events.length,
+    ok: snapshot.ok,
+    status: snapshot.status,
+    eventCount: snapshot.events.length,
+    pageCount: snapshot.pageCount,
     matchingEventCount: matchingEvents.length,
     matchingEventKeys: matchingEvents.map(usageEventKey),
     matchingEvents,
@@ -1198,6 +1201,49 @@ async function aiUsageLedgerSnapshot(
 
 function aiUsageLedgerPath(workspaceId: string): string {
   return `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/usage`;
+}
+
+async function usageLedgerSnapshot(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  workspaceId: string,
+): Promise<{
+  readonly ok: boolean;
+  readonly status: number;
+  readonly pageCount: number;
+  readonly events: readonly Record<string, unknown>[];
+}> {
+  let cursor: string | undefined;
+  let ok = true;
+  let status = 200;
+  const events: Record<string, unknown>[] = [];
+  const maxPages = 20;
+  for (let page = 1; page <= maxPages; page += 1) {
+    const response = await fetchImpl(
+      `${options.url}${usageLedgerPagePath(workspaceId, cursor)}`,
+      { headers: ownerAuthHeaders },
+    );
+    status = response.status;
+    ok &&= response.status === 200;
+    const body = await readJson(response);
+    events.push(...usageEvents(body));
+    if (response.status !== 200) {
+      return { ok: false, status, pageCount: page, events };
+    }
+    cursor = stringValue(record(body).nextCursor);
+    if (!cursor) return { ok, status, pageCount: page, events };
+  }
+  return { ok: false, status, pageCount: maxPages, events };
+}
+
+function usageLedgerPagePath(
+  workspaceId: string,
+  cursor: string | undefined,
+): string {
+  const params = new URLSearchParams({ limit: "500" });
+  if (cursor) params.set("cursor", cursor);
+  return `${aiUsageLedgerPath(workspaceId)}?${params.toString()}`;
 }
 
 function usageEvents(body: unknown): Record<string, unknown>[] {

@@ -62,6 +62,8 @@ import {
 } from "../../components/ui/index.ts";
 import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-contract";
 
+const RESOURCE_PREVIEW_LIMIT = 5;
+
 export default function CloudResourcesView() {
   return <Page title={t("cloudResources.title")}>{() => <Inner />}</Page>;
 }
@@ -437,6 +439,14 @@ function ResourcesCard(props: {
   readonly refetch: () => void;
 }): JSX.Element {
   const { confirm } = useConfirmDialog();
+  const [expandedGroups, setExpandedGroups] = createSignal<
+    Readonly<Record<CloudflareResourceKind, boolean>>
+  >({
+    kv: false,
+    r2: false,
+    d1: false,
+    worker: false,
+  });
   const inventory = () => props.snapshot.compatInventory;
   const accountId = () => inventory().selectedAccountId;
   const compatBasePath = () => props.snapshot.compatRoute?.basePath;
@@ -549,91 +559,146 @@ function ResourcesCard(props: {
       </Show>
       <div class="av-cloud-res-groups">
         <For each={groups()}>
-          {(group) => (
-            <section class="av-cloud-res-group">
-              <div class="av-cloud-res-group-head">
-                <span class="av-cloud-title-icon" aria-hidden="true">
-                  {group.icon}
-                </span>
-                <span>{group.label}</span>
-                <Badge tone={group.result.ok ? "neutral" : "warn"}>
-                  {group.result.ok ? group.result.data.length : "!"}
-                </Badge>
-              </div>
-              <Switch>
-                <Match when={!group.result.ok}>
-                  <span class="muted">
-                    {group.result.ok ? "" : group.result.error}
-                  </span>
-                </Match>
-                <Match when={group.result.ok && group.result.data.length === 0}>
-                  <span class="muted">{t("common.none")}</span>
-                </Match>
-                <Match when={group.result.ok}>
-                  <div class="av-cloud-token-list">
-                    <For
-                      each={group.result.ok ? group.result.data : []}
+          {(group) => {
+            const allItems = createMemo(() =>
+              group.result.ok ? group.result.data : [],
+            );
+            const expanded = createMemo(() => expandedGroups()[group.kind]);
+            const visibleItems = createMemo(() =>
+              expanded()
+                ? allItems()
+                : allItems().slice(0, RESOURCE_PREVIEW_LIMIT),
+            );
+            const hiddenCount = createMemo(() =>
+              Math.max(0, allItems().length - visibleItems().length),
+            );
+            const toggle = () =>
+              setExpandedGroups((current) => ({
+                ...current,
+                [group.kind]: !current[group.kind],
+              }));
+
+            return (
+              <section class="av-cloud-res-group">
+                <div class="av-cloud-res-group-head">
+                  <div class="av-cloud-res-group-title">
+                    <span class="av-cloud-title-icon" aria-hidden="true">
+                      {group.icon}
+                    </span>
+                    <span>{group.label}</span>
+                    <Badge tone={group.result.ok ? "neutral" : "warn"}>
+                      {group.result.ok ? group.result.data.length : "!"}
+                    </Badge>
+                  </div>
+                  <Show
+                    when={
+                      group.result.ok &&
+                      group.result.data.length > RESOURCE_PREVIEW_LIMIT
+                    }
+                  >
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={toggle}
                     >
-                      {(item) => (
-                        <div class="av-cloud-token-row">
-                          <div class="av-cloud-token-main">
-                            <span class="av-cloud-token-name">
-                              {item.name || item.id}
-                            </span>
-                            <Show when={item.id && item.id !== item.name}>
-                              <span class="muted av-cloud-res-id">
-                                {item.id}
+                      {expanded()
+                        ? t("cloudResources.inventory.showLess")
+                        : t("cloudResources.inventory.showAll", {
+                            count: String(
+                              group.result.ok ? group.result.data.length : 0,
+                            ),
+                          })}
+                    </Button>
+                  </Show>
+                </div>
+                <Switch>
+                  <Match when={!group.result.ok}>
+                    <span class="muted">
+                      {group.result.ok ? "" : group.result.error}
+                    </span>
+                  </Match>
+                  <Match
+                    when={group.result.ok && group.result.data.length === 0}
+                  >
+                    <span class="muted">{t("common.none")}</span>
+                  </Match>
+                  <Match when={group.result.ok}>
+                    <div class="av-cloud-token-list">
+                      <For each={visibleItems()}>
+                        {(item) => (
+                          <div class="av-cloud-token-row">
+                            <div class="av-cloud-token-main">
+                              <span class="av-cloud-token-name">
+                                {item.name || item.id}
                               </span>
-                            </Show>
-                          </div>
-                          <div class="av-actions">
-                            <Show when={item.id}>
+                              <Show when={item.id && item.id !== item.name}>
+                                <span class="muted av-cloud-res-id">
+                                  {item.id}
+                                </span>
+                              </Show>
+                            </div>
+                            <div class="av-actions">
+                              <Show when={item.id}>
+                                <Button
+                                  variant={
+                                    props.copied ===
+                                    `res:${group.kind}:${item.id}`
+                                      ? "primary"
+                                      : "secondary"
+                                  }
+                                  size="sm"
+                                  type="button"
+                                  icon={
+                                    props.copied ===
+                                    `res:${group.kind}:${item.id}` ? (
+                                      <CheckCircle2 size={14} />
+                                    ) : (
+                                      <Copy size={14} />
+                                    )
+                                  }
+                                  onClick={() =>
+                                    void props.copyText(
+                                      `res:${group.kind}:${item.id}`,
+                                      item.id,
+                                    )
+                                  }
+                                >
+                                  {t("common.copy")}
+                                </Button>
+                              </Show>
                               <Button
-                                variant={
-                                  props.copied === `res:${group.kind}:${item.id}`
-                                    ? "primary"
-                                    : "secondary"
-                                }
+                                variant="danger"
                                 size="sm"
                                 type="button"
-                                icon={
-                                  props.copied ===
-                                  `res:${group.kind}:${item.id}` ? (
-                                    <CheckCircle2 size={14} />
-                                  ) : (
-                                    <Copy size={14} />
-                                  )
-                                }
-                                onClick={() =>
-                                  void props.copyText(
-                                    `res:${group.kind}:${item.id}`,
-                                    item.id,
-                                  )
-                                }
+                                icon={<Trash2 size={14} />}
+                                busy={busy() === `${group.kind}:${item.id}`}
+                                disabled={!canManage() || !item.id}
+                                onClick={() => void removeResource(group, item)}
                               >
-                                {t("common.copy")}
+                                {t("common.delete")}
                               </Button>
-                            </Show>
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              type="button"
-                              icon={<Trash2 size={14} />}
-                              busy={busy() === `${group.kind}:${item.id}`}
-                              disabled={!canManage() || !item.id}
-                              onClick={() => void removeResource(group, item)}
-                            >
-                              {t("common.delete")}
-                            </Button>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </Match>
-              </Switch>
-            </section>
-          )}
+                        )}
+                      </For>
+                      <Show when={hiddenCount() > 0}>
+                        <button
+                          class="av-cloud-res-more"
+                          type="button"
+                          onClick={toggle}
+                        >
+                          {t("cloudResources.inventory.remaining", {
+                            count: String(hiddenCount()),
+                          })}
+                        </button>
+                      </Show>
+                    </div>
+                  </Match>
+                </Switch>
+              </section>
+            );
+          }}
         </For>
       </div>
     </Card>
