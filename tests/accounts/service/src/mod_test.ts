@@ -4458,7 +4458,6 @@ test("accounts handler syncs unexported billing usage to Stripe invoice items", 
     periodStart: 1_800_000_000,
     periodEnd: 1_800_086_400,
     requestDigest: "sha256:workers-a",
-    metadata: { backend: "cloudflare.workers_for_platforms" },
     reportedAt: 1_800_000_100,
   });
   store.saveBillingUsageRecord({
@@ -4471,7 +4470,6 @@ test("accounts handler syncs unexported billing usage to Stripe invoice items", 
     periodStart: 1_800_000_000,
     periodEnd: 1_800_086_400,
     requestDigest: "sha256:workers-b",
-    metadata: { backend: "cloudflare.workers_for_platforms" },
     reportedAt: 1_800_000_200,
   });
 
@@ -4651,9 +4649,6 @@ test("accounts handler imports Cloud extension usage events before Stripe invoic
               resourceFamily: "cloudflare.workers_script",
               resourceId: "script:api",
               operation: "request",
-              resourceMetadata: {
-                backend: "cloudflare.workers_for_platforms",
-              },
               kind: "gateway_compute",
               quantity: 12,
               credits: 3,

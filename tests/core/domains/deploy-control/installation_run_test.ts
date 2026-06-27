@@ -3064,9 +3064,6 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
         resourceFamily: "cloudflare.workers_script",
         resourceId: "script:inst_fixture",
         operation: "deploy",
-        resourceMetadata: {
-          backend: "cloudflare.workers_for_platforms",
-        },
       },
       {
         installationId: "inst_fixture",
@@ -3077,9 +3074,6 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
         resourceFamily: "cloudflare.workers_script",
         resourceId: "script:inst_fixture",
         operation: "request",
-        resourceMetadata: {
-          backend: "cloudflare.workers_for_platforms",
-        },
       },
       {
         installationId: "inst_fixture",
@@ -3156,9 +3150,6 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       resourceFamily: "cloudflare.workers_script",
       resourceId: "script:inst_fixture",
       operation: "deploy",
-      resourceMetadata: {
-        backend: "cloudflare.workers_for_platforms",
-      },
       source: "resource_meter",
       idempotencyKey:
         "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:deploy:inst_fixture:cloudflare.workers_script:script:inst_fixture:deploy:gateway_compute",
@@ -3171,9 +3162,6 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       resourceFamily: "cloudflare.workers_script",
       resourceId: "script:inst_fixture",
       operation: "request",
-      resourceMetadata: {
-        backend: "cloudflare.workers_for_platforms",
-      },
       source: "resource_meter",
       idempotencyKey:
         "provider-runtime:space_test:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z:cloudflare:workers_script:request:inst_fixture:cloudflare.workers_script:script:inst_fixture:request:gateway_compute",
@@ -3285,6 +3273,24 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       ],
     }),
   ).rejects.toThrow("customer-facing managed resource");
+  await expect(
+    controller.recordGatewayResourceUsage("space_test", {
+      periodStart: "2026-06-07T00:00:00.000Z",
+      periodEnd: "2026-06-07T01:00:00.000Z",
+      meters: [
+        {
+          kind: "gateway_compute",
+          quantity: 1,
+          credits: 1,
+          meterId: "cloudflare:workers_script:request",
+          resourceFamily: "cloudflare.workers_script",
+          resourceMetadata: {
+            backend: "cloudflare.workers_for_platforms",
+          },
+        },
+      ],
+    }),
+  ).rejects.toThrow("resourceMetadata must not expose");
 });
 
 test("Gateway resource usage idempotency keeps distinct resource ids separate", async () => {

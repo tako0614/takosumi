@@ -437,6 +437,16 @@ async function billingUsageRecordFromUsageEvent(
       "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
     );
   }
+  for (const value of Object.values(event.resourceMetadata ?? {})) {
+    if (
+      typeof value === "string" &&
+      usageMeterNameLeaksInternalWorkersBackend(value)
+    ) {
+      throw new TypeError(
+        "usage event resourceMetadata must not expose the internal Workers for Platforms backend",
+      );
+    }
+  }
   const installation = await store.findAppInstallation(event.installationId);
   if (!installation) {
     throw new TypeError("usage event installation was not found");
@@ -562,6 +572,14 @@ function usageEventResourceMetadata(
     ) {
       throw new TypeError(
         "usageEvent resourceMetadata values must be JSON scalars",
+      );
+    }
+    if (
+      typeof metadataValue === "string" &&
+      usageMeterNameLeaksInternalWorkersBackend(metadataValue)
+    ) {
+      throw new TypeError(
+        "usageEvent resourceMetadata must not expose the internal Workers for Platforms backend",
       );
     }
     output[key] = metadataValue;
