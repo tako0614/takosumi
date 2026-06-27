@@ -91,6 +91,10 @@ COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
 COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
 COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
+# entrypoint.ts is a thin re-export/server shell; the runner implementation
+# lives in runner/lib/*.ts (P3 god-file split). These MUST be copied or the
+# container fails at runtime when entrypoint.ts imports ./lib/*.
+COPY runner/lib/ ./runner/lib/
 COPY runner/start.sh ./runner/start.sh
 RUN chmod 0755 ./runner/start.sh
 
