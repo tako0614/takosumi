@@ -27,7 +27,7 @@ function gatewayEnv() {
             endpoints: ["chat.completions"],
             default: true,
             metadata: { tier: "fast" },
-            billingCreditsPerRequest: 2,
+            billingUsdMicrosPerRequest: 250_000,
           },
         ],
       },
@@ -43,7 +43,7 @@ function gatewayEnv() {
             publicModel: "zai/glm-embedding",
             upstreamModel: "embedding-3",
             endpoints: ["embeddings"],
-            billingCreditsPerRequest: 1,
+            billingUsdMicrosPerRequest: 125_000,
           },
         ],
       },
@@ -310,7 +310,7 @@ test("AI Gateway emits billable usage headers for attributed successful requests
       operation: "chat.completions",
       kind: "ai_request",
       quantity: 1,
-      credits: 2,
+      usdMicros: 250_000,
     },
   ]);
 });
@@ -569,7 +569,7 @@ test("AI Gateway config rejects an empty upstream profile catalog", () => {
   ).toThrow("must define at least one upstream profile");
 });
 
-test("AI Gateway config rejects invalid billing credits", () => {
+test("AI Gateway config rejects invalid billing USD micros", () => {
   expect(() =>
     createTakosumiAiGatewayConfigFromEnv({
       TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
@@ -583,14 +583,14 @@ test("AI Gateway config rejects invalid billing credits", () => {
               publicModel: "deepseek/chat",
               upstreamModel: "deepseek-chat",
               endpoints: ["chat.completions"],
-              billingCreditsPerRequest: -1,
+              billingUsdMicrosPerRequest: -1,
             },
           ],
         },
       ]),
       DEEPSEEK_API_KEY: "deepseek-secret",
     }),
-  ).toThrow("billingCreditsPerRequest must be a non-negative integer");
+  ).toThrow("billingUsdMicrosPerRequest must be a non-negative integer");
 });
 
 test("AI Gateway supports Workers AI binding profiles without upstream keys", async () => {
@@ -798,7 +798,7 @@ test("AI Gateway emits usage headers for Workers AI binding requests", async () 
             upstreamModel: "@cf/meta/llama-3.1-8b-instruct-fast",
             endpoints: ["chat.completions"],
             default: true,
-            billingCreditsPerRequest: 1,
+            billingUsdMicrosPerRequest: 50_000,
           },
         ],
       },
@@ -846,7 +846,7 @@ test("AI Gateway emits usage headers for Workers AI binding requests", async () 
       operation: "chat.completions",
       kind: "ai_request",
       quantity: 1,
-      credits: 1,
+      usdMicros: 50_000,
     },
   ]);
 });

@@ -99,7 +99,7 @@ Example internal report:
 x-takosumi-cloud-usage-space-id: space_xxx
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":"ai_request","quantity":1,"credits":2}]
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":"ai_request","quantity":1,"usdMicros":250000}]
 ```
 
 If these headers are present but the ledger write fails, the platform route
@@ -136,12 +136,13 @@ configured provider credits. The OSS platform worker does not parse this config
 or forward model requests by itself.
 
 Takosumi customer billing is explicit and separate from upstream provider
-billing. A model may set `billingCreditsPerRequest`; successful attributed
+billing. A model may set `billingUsdMicrosPerRequest`; successful attributed
 `chat.completions` and `embeddings` calls then emit an internal Cloud extension
-usage report with `ai_request`. The platform worker records that report in the
-Workspace usage ledger and strips the internal headers before returning the
-client response. If the auth context has no `spaceId`, the AI Gateway does not
-emit a usage report because the request cannot be billed to a Workspace.
+usage report with `ai_request` and a USD-micros amount. The platform worker
+records that report in the Workspace usage ledger and strips the internal
+headers before returning the client response. If the auth context has no
+`spaceId`, the AI Gateway does not emit a usage report because the request
+cannot be billed to a Workspace.
 
 `workers_ai_binding` profiles may set `gateway.id` to route `env.AI.run()`
 through Cloudflare AI Gateway from inside the Worker. Use `default` unless the
@@ -167,13 +168,13 @@ is rejected if it contains secret-shaped keys or values.
         "endpoints": ["chat.completions"],
         "default": true,
         "billingClass": "operator-paid-preview",
-        "billingCreditsPerRequest": 2
+        "billingUsdMicrosPerRequest": 250000
       },
       {
         "publicModel": "anthropic/sonnet",
         "upstreamModel": "anthropic/claude-sonnet-4-5",
         "endpoints": ["chat.completions"],
-        "billingCreditsPerRequest": 4
+        "billingUsdMicrosPerRequest": 500000
       }
     ]
   },
@@ -194,7 +195,7 @@ is rejected if it contains secret-shaped keys or values.
         "upstreamModel": "@cf/meta/llama-3.1-8b-instruct-fast",
         "endpoints": ["chat.completions"],
         "default": true,
-        "billingCreditsPerRequest": 1
+        "billingUsdMicrosPerRequest": 50000
       },
       {
         "publicModel": "workers-ai/bge-base-en-v1.5",

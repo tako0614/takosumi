@@ -611,7 +611,7 @@ export interface TakosumiOperations {
   /**
    * Reads a plan / destroy_plan Run's public, non-secret cost projection (the
    * billing reservation values the controller already computed at plan time, so
-   * a dashboard can explain a credit shortfall before apply). Never computes
+   * a dashboard can explain a USD balance shortfall before apply). Never computes
    * cost and never returns secret material.
    */
   getRunCost(id: string): Promise<RunCostInfo>;

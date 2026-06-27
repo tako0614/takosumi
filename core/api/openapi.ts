@@ -2201,7 +2201,7 @@ function artifactSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /**
- * Space-scoped billing ledger: settings, credit balance/usage/reservation,
+ * Space-scoped billing ledger: settings, USD balance/usage/reservation,
  * account/subscription/plan records, and the billing request+response wrappers.
  */
 function billingSchemas(): Record<string, Record<string, unknown>> {
@@ -3166,6 +3166,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "runId",
         "billingMode",
+        "estimatedUsdMicros",
         "estimatedCredits",
         "blocked",
         "reasons",
@@ -3173,10 +3174,25 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         runId: { type: "string" },
         billingMode: { enum: ["disabled", "showback", "enforce"] },
-        estimatedCredits: { type: "number" },
-        availableCredits: { type: "number" },
+        estimatedUsdMicros: {
+          type: "integer",
+          description:
+            "Estimated USD amount for this run in micros. 1 USD = 1,000,000 micros.",
+        },
+        availableUsdMicros: {
+          type: "integer",
+          description:
+            "Available USD balance observed when a reservation was attempted, in micros.",
+        },
+        shortfallUsdMicros: {
+          type: "integer",
+          description:
+            "Missing USD balance in micros when the run is short of balance.",
+        },
+        estimatedCredits: { type: "number", deprecated: true },
+        availableCredits: { type: "number", deprecated: true },
         reservationStatus: { enum: ["reserved", "insufficient_credits"] },
-        creditShortfall: { type: "number" },
+        creditShortfall: { type: "number", deprecated: true },
         blocked: { type: "boolean" },
         reasons: { type: "array", items: { type: "string" } },
       },

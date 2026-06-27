@@ -20,7 +20,7 @@ counts. The full endpoint contract, scope, and examples live in this document.
 Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
 screen:
 
-- this month's usage, Cloud resource usage, and available credits
+- this month's usage, Cloud resource usage, and available balance
 - usage history (the usage event ledger)
 
 Deleting a resource calls the compat gateway's DELETE. It requires a
@@ -134,12 +134,12 @@ GET /api/v1/workspaces/{workspaceId}/usage
 
 The Usage card uses both endpoints.
 
-| UI value             | Meaning                                              |
-| -------------------- | ---------------------------------------------------- |
-| This month           | Sum of `credits` for usage events in the month       |
-| Cloud resource usage | Sum of `credits` where `kind` starts with `gateway_` |
-| Available credits    | Billing projection `balance.availableCredits`        |
-| Recent usage         | Newest usage events by `createdAt`                   |
+| UI value             | Meaning                                                |
+| -------------------- | ------------------------------------------------------ |
+| This month           | Sum of `usdMicros` for usage events in the month       |
+| Cloud resource usage | Sum of `usdMicros` where `kind` starts with `gateway_` |
+| Available balance    | Billing projection `balance.availableUsdMicros`        |
+| Recent usage         | Newest usage events by `createdAt`                     |
 
 Important usage kinds:
 
@@ -154,7 +154,7 @@ Important usage kinds:
 - `backup_storage_gb_hour`
 - `egress_gb`
 
-Usage events carry quantity, credits, source, and timestamp. They must not
+Usage events carry quantity, usdMicros, source, and timestamp. They must not
 carry provider credentials, API keys, bearer tokens, database URLs, DSNs,
 passwords, or other secret values.
 
@@ -171,7 +171,7 @@ Internal headers:
 x-takosumi-cloud-usage-space-id: space_xxx
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"usdMicros":250000}]
 ```
 
 The Takosumi Cloud managed resource backend presents resources to users as
@@ -187,7 +187,7 @@ smoke coverage for them. Internal backend aliases are rejected in `meterId`,
 `resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"usdMicros":1000,"installationId":"inst_xxx"}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.

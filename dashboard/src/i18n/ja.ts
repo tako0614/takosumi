@@ -328,10 +328,10 @@ export const ja = {
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stop": "やめる",
-  "run.cost.required": "必要クレジット: 約 {n}",
+  "run.cost.required": "見積もり金額: 約 {n}",
   "run.cost.balance": "残高: {n}",
   "run.cost.shortfall":
-    "クレジット残高が約 {n} 不足しているため、このまま実行できません。",
+    "USD残高が約 {n} 不足しているため、このまま実行できません。",
   "run.cost.blocked": "残高または上限の都合により、このまま実行できません。",
   "run.cost.capacityNeeded": "必要な容量: 約 {n}",
   "run.cost.capacity": "利用可能な容量: {n}",
@@ -994,7 +994,7 @@ export const ja = {
   "billing.plans.subscribe": "このプランにする",
   "billing.plans.perMonth": "毎月 {n}",
   "billing.packs.title": "残高パック",
-  "billing.packs.credits": "{n}",
+  "billing.packs.amount": "{n}",
   "billing.packs.buy": "購入する",
   "billing.portal": "支払い方法と請求を管理",
   "billing.portalUnavailable":

@@ -778,6 +778,9 @@ function fakeOperations(
       return {
         runId: id,
         billingMode: "enforce",
+        estimatedUsdMicros: 12_000_000,
+        availableUsdMicros: 5_000_000,
+        shortfallUsdMicros: 7_000_000,
         estimatedCredits: 12,
         availableCredits: 5,
         reservationStatus: "insufficient_credits",
@@ -4216,6 +4219,9 @@ test("Runs: GET cost surfaces the public credit-shortfall projection (space-gate
     cost: {
       runId: string;
       billingMode: string;
+      estimatedUsdMicros: number;
+      availableUsdMicros?: number;
+      shortfallUsdMicros?: number;
       estimatedCredits: number;
       availableCredits?: number;
       reservationStatus?: string;
@@ -4226,6 +4232,9 @@ test("Runs: GET cost surfaces the public credit-shortfall projection (space-gate
   };
   expect(body.cost.runId).toEqual("plan_1");
   expect(body.cost.billingMode).toEqual("enforce");
+  expect(body.cost.estimatedUsdMicros).toEqual(12_000_000);
+  expect(body.cost.availableUsdMicros).toEqual(5_000_000);
+  expect(body.cost.shortfallUsdMicros).toEqual(7_000_000);
   expect(body.cost.estimatedCredits).toEqual(12);
   expect(body.cost.availableCredits).toEqual(5);
   expect(body.cost.reservationStatus).toEqual("insufficient_credits");

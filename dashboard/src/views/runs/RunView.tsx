@@ -69,7 +69,12 @@ import {
   runStatusLabel,
   runTone,
 } from "../../lib/labels.ts";
-import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
+import {
+  formatDateTime,
+  locale,
+  setDocumentTitle,
+  t,
+} from "../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -88,17 +93,45 @@ export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
 }
 
-/** Formats a backend-provided credit count for display (no invented units). */
-function formatCredits(value: number): string {
-  return value.toLocaleString();
+function formatUsdMicros(value: number): string {
+  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: value % 10_000 === 0 ? 2 : 6,
+  }).format(value / 1_000_000);
+}
+
+function costEstimatedUsdMicros(cost: RunCostInfo): number {
+  return (
+    cost.estimatedUsdMicros ?? Math.round(cost.estimatedCredits * 1_000_000)
+  );
+}
+
+function costAvailableUsdMicros(cost: RunCostInfo): number | undefined {
+  return (
+    cost.availableUsdMicros ??
+    (cost.availableCredits === undefined
+      ? undefined
+      : Math.round(cost.availableCredits * 1_000_000))
+  );
+}
+
+function costShortfallUsdMicros(cost: RunCostInfo): number | undefined {
+  return (
+    cost.shortfallUsdMicros ??
+    (cost.creditShortfall === undefined
+      ? undefined
+      : Math.round(cost.creditShortfall * 1_000_000))
+  );
 }
 
 function hasCostToShow(cost: RunCostInfo): boolean {
   return (
     cost.blocked ||
-    cost.estimatedCredits > 0 ||
+    costEstimatedUsdMicros(cost) > 0 ||
     cost.reservationStatus !== undefined ||
-    cost.creditShortfall !== undefined ||
+    costShortfallUsdMicros(cost) !== undefined ||
     cost.reasons.length > 0
   );
 }
@@ -107,22 +140,25 @@ function hasCostToShow(cost: RunCostInfo): boolean {
 function CostNotice(props: { readonly cost: RunCostInfo }) {
   const cost = () => props.cost;
   const cloudBilling = () => isTakosumiCloudRuntime();
+  const estimatedUsdMicros = () => costEstimatedUsdMicros(cost());
+  const availableUsdMicros = () => costAvailableUsdMicros(cost());
+  const shortfallUsdMicros = () => costShortfallUsdMicros(cost());
   return (
     <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
-      <Show when={cost().estimatedCredits > 0}>
+      <Show when={estimatedUsdMicros() > 0}>
         <Show when={cloudBilling()}>
           <p class="wa-cost-line">
             {t("run.cost.required", {
-              n: formatCredits(cost().estimatedCredits),
+              n: formatUsdMicros(estimatedUsdMicros()),
             })}
           </p>
         </Show>
       </Show>
-      <Show when={cost().availableCredits !== undefined}>
+      <Show when={availableUsdMicros() !== undefined}>
         <Show when={cloudBilling()}>
           <p class="wa-cost-line muted">
             {t("run.cost.balance", {
-              n: formatCredits(cost().availableCredits ?? 0),
+              n: formatUsdMicros(availableUsdMicros() ?? 0),
             })}
           </p>
         </Show>
@@ -134,11 +170,11 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
             fallback={<>{t("run.cost.capacityBlocked")}</>}
           >
             {t(
-              cost().creditShortfall !== undefined
+              shortfallUsdMicros() !== undefined
                 ? "run.cost.shortfall"
                 : "run.cost.blocked",
               {
-                n: formatCredits(cost().creditShortfall ?? 0),
+                n: formatUsdMicros(shortfallUsdMicros() ?? 0),
               },
             )}
           </Show>

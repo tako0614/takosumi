@@ -325,6 +325,9 @@ test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", 
   );
   expect(cost.runId).toBe("plan_1");
   expect(cost.billingMode).toBe("enforce");
+  expect(cost.estimatedUsdMicros).toBe(12_000_000);
+  expect(cost.availableUsdMicros).toBe(5_000_000);
+  expect(cost.shortfallUsdMicros).toBe(7_000_000);
   expect(cost.estimatedCredits).toBe(12);
   expect(cost.availableCredits).toBe(5);
   expect(cost.reservationStatus).toBe("insufficient_credits");
@@ -332,6 +335,39 @@ test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", 
   expect(cost.blocked).toBe(true);
   expect(cost.reasons).toEqual([
     "credit reservation failed: 12 credits estimated but only 5 available",
+  ]);
+});
+
+test("projectPlanRunCost prefers USD micros audit values for fractional balances", () => {
+  const cost = projectPlanRunCost(
+    planRun({
+      status: "failed",
+      policy: {
+        status: "blocked",
+        reasons: [
+          "USD balance reservation failed: $0.25 estimated but only $0.10 available",
+        ],
+        checkedAt: 1500,
+      },
+      auditEvents: [
+        billingAuditEvent({
+          mode: "enforce",
+          estimatedUsdMicros: 250_000,
+          availableUsdMicros: 100_000,
+          reservationStatus: "insufficient_credits",
+        }),
+      ],
+    }),
+  );
+  expect(cost.estimatedUsdMicros).toBe(250_000);
+  expect(cost.availableUsdMicros).toBe(100_000);
+  expect(cost.shortfallUsdMicros).toBe(150_000);
+  expect(cost.estimatedCredits).toBe(0.25);
+  expect(cost.availableCredits).toBe(0.1);
+  expect(cost.creditShortfall).toBe(0.15);
+  expect(cost.blocked).toBe(true);
+  expect(cost.reasons).toEqual([
+    "USD balance reservation failed: $0.25 estimated but only $0.10 available",
   ]);
 });
 
@@ -352,6 +388,9 @@ test("projectPlanRunCost surfaces a reserved plan as non-blocked with no shortfa
     }),
   );
   expect(cost.billingMode).toBe("enforce");
+  expect(cost.estimatedUsdMicros).toBe(4_000_000);
+  expect(cost.availableUsdMicros).toBe(40_000_000);
+  expect(cost.shortfallUsdMicros).toBeUndefined();
   expect(cost.estimatedCredits).toBe(4);
   expect(cost.availableCredits).toBe(40);
   expect(cost.reservationStatus).toBe("reserved");
@@ -385,6 +424,8 @@ test("projectPlanRunCost reports a billing-plan limit reason as blocked under en
     "billing plan free limits estimated credits per run to 5; plan estimated 9",
   ]);
   // No reservation was attempted, so available credits / shortfall are absent.
+  expect(cost.availableUsdMicros).toBeUndefined();
+  expect(cost.shortfallUsdMicros).toBeUndefined();
   expect(cost.availableCredits).toBeUndefined();
   expect(cost.creditShortfall).toBeUndefined();
 });
@@ -392,6 +433,7 @@ test("projectPlanRunCost reports a billing-plan limit reason as blocked under en
 test("projectPlanRunCost defaults to disabled/zero when no billing audit exists", () => {
   const cost = projectPlanRunCost(planRun({ status: "queued" }));
   expect(cost.billingMode).toBe("disabled");
+  expect(cost.estimatedUsdMicros).toBe(0);
   expect(cost.estimatedCredits).toBe(0);
   expect(cost.blocked).toBe(false);
   expect(cost.reasons).toEqual([]);
@@ -421,6 +463,7 @@ test("projectPlanRunCost does not block a showback-mode plan even when policy bl
     }),
   );
   expect(cost.billingMode).toBe("showback");
+  expect(cost.shortfallUsdMicros).toBe(6_000_000);
   expect(cost.creditShortfall).toBe(6);
   expect(cost.blocked).toBe(false);
 });
