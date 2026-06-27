@@ -245,10 +245,7 @@ import {
   type ResolvedDependencies,
 } from "./dependency_resolution.ts";
 import { RunVerificationService } from "./run_verification.ts";
-import {
-  validateProjectedServiceExportsFromOutputSnapshot,
-  type ServiceGraphOperations,
-} from "../service-graph/mod.ts";
+import { validateProjectedServiceExportsFromOutputSnapshot } from "../output-projection/mod.ts";
 import {
   installConfigBuildSpec,
   type InstallTypePlanContext,
@@ -962,12 +959,6 @@ export interface OpenTofuDeploymentControllerDependencies {
    */
   readonly activity?: ActivityRecorder;
   /**
-   * Service Graph projection service. When present, a successful apply projects
-   * the validated `service_exports` OutputSnapshot entry into ServiceExport rows
-   * after the apply ledger commit.
-   */
-  readonly serviceGraphService?: ServiceGraphOperations;
-  /**
    * Host-injected sensitive output resolver. Required only when a cross-Space
    * published_output edge consumes an OutputShare entry marked sensitive. The
    * resolver reads/decrypts the raw output artifact and returns the value for
@@ -1189,7 +1180,6 @@ export class OpenTofuDeploymentController {
   readonly #installationCoordination?: InstallationCoordination;
   readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
-  readonly #serviceGraphService?: ServiceGraphOperations;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
@@ -1234,7 +1224,6 @@ export class OpenTofuDeploymentController {
         ? dependencies.runRenewalIntervalMs
         : RUN_RENEWAL_INTERVAL_MS;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
-    this.#serviceGraphService = dependencies.serviceGraphService;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
     this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#releaseActivator = dependencies.releaseActivator;
@@ -5630,11 +5619,6 @@ export class OpenTofuDeploymentController {
         return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
       }
       if (patched) {
-        await this.#projectServiceExportsFromApply({
-          installation: patched,
-          deployment,
-          outputSnapshot: projected.outputSnapshot,
-        });
         await this.#activateReleaseAfterApply({
           planRun,
           applyRun: completed,
@@ -6084,33 +6068,6 @@ export class OpenTofuDeploymentController {
     });
     if (committed.applyRunLeaseLost) return "lease_lost";
     return committed.installation;
-  }
-
-  async #projectServiceExportsFromApply(input: {
-    readonly installation: Installation;
-    readonly deployment: Deployment;
-    readonly outputSnapshot: OutputSnapshot;
-  }): Promise<void> {
-    if (!this.#serviceGraphService) return;
-    try {
-      await this.#serviceGraphService.projectFromOutputSnapshot({
-        workspaceId: input.installation.spaceId,
-        producerCapsuleId: input.installation.id,
-        applyRunId: input.deployment.applyRunId,
-        outputId: input.outputSnapshot.id,
-        outputGeneration: input.outputSnapshot.stateGeneration,
-        outputs: input.outputSnapshot.spaceOutputs as Readonly<
-          Record<string, JsonValue>
-        >,
-      });
-    } catch (error) {
-      log.warn("service.deploy_control.service_graph_projection_failed", {
-        installationId: input.installation.id,
-        deploymentId: input.deployment.id,
-        outputSnapshotId: input.outputSnapshot.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   async #activateReleaseAfterApply(input: {

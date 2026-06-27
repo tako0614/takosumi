@@ -15,11 +15,6 @@ import {
 } from "./installation-helpers.ts";
 import { errorJson, json } from "./http-helpers.ts";
 import { requireAccountsBearer } from "./account-session.ts";
-import {
-  requireSameSpaceServiceGraphControlForInstallation,
-  requireSameSpaceServiceGraphControlToken,
-  serviceGraphServiceTokenScopeIncludes,
-} from "./service-graph-service-tokens.ts";
 
 /**
  * Pagination guard constants for the list endpoints in this file and the
@@ -141,20 +136,7 @@ export async function handleListAppInstallations(input: {
     if (!bearer.ok) return bearer.response;
     return errorJson("invalid_request", "space_id is required", 400);
   }
-  if (!bearer.ok) {
-    const serviceGraphControl = await requireSameSpaceServiceGraphControlToken({
-      request: input.request,
-      store: input.store,
-      targetSpaceId: spaceId,
-      requiredPermissions: ["installations.list.same-space"],
-    });
-    if (!serviceGraphControl.ok) {
-      return preferredCompositeAuthResponse(
-        bearer.response,
-        serviceGraphControl.response,
-      );
-    }
-  }
+  if (!bearer.ok) return bearer.response;
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
     return errorJson(
@@ -170,7 +152,6 @@ export async function handleListAppInstallations(input: {
   const space = await input.store.findSpace(spaceId);
   if (!space) return errorJson("space_not_found", "space not found", 404);
   if (
-    bearer.ok &&
     !(await subjectCanAccessAccount(
       input.store,
       bearer.auth.subject,
@@ -201,43 +182,20 @@ export async function handleGetAppInstallation(input: {
     store: input.store,
     scope: "read",
   });
-  let serviceGraphControl:
-    | Awaited<
-        ReturnType<typeof requireSameSpaceServiceGraphControlForInstallation>
-      >
-    | undefined;
-  let bearerFailure: Response | undefined;
-  if (!bearer.ok) {
-    bearerFailure = bearer.response;
-    serviceGraphControl =
-      await requireSameSpaceServiceGraphControlForInstallation({
-        request: input.request,
-        store: input.store,
-        targetInstallationId: input.installationId,
-        requiredPermissions: ["installations.read.same-space"],
-      });
-    if (!serviceGraphControl.ok) {
-      return preferredCompositeAuthResponse(
-        bearerFailure,
-        serviceGraphControl.response,
-      );
-    }
-  }
-  const installation = serviceGraphControl?.ok
-    ? serviceGraphControl.installation
-    : await input.store.findAppInstallation(input.installationId);
+  if (!bearer.ok) return bearer.response;
+  const installation = await input.store.findAppInstallation(
+    input.installationId,
+  );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
-  if (bearer.ok) {
-    if (
-      !(await subjectCanAccessInstallation(
-        input.store,
-        bearer.auth.subject,
-        installation,
-      ))
-    ) {
-      return errorJson("installation_not_found", "installation not found", 404);
-    }
+  if (
+    !(await subjectCanAccessInstallation(
+      input.store,
+      bearer.auth.subject,
+      installation,
+    ))
+  ) {
+    return errorJson("installation_not_found", "installation not found", 404);
   }
   // Wave 6 removed `ServiceBindingMaterial` / `ServiceGrantMaterial` / `RuntimeBinding` from the
   // public API surface, so we do not surface them in this account-facing
@@ -250,22 +208,14 @@ export async function handleGetAppInstallation(input: {
   const oidcClient = await input.store.findOidcClientForInstallation(
     input.installationId,
   );
-  const includeOutputProjection =
-    !serviceGraphControl?.ok ||
-    serviceGraphServiceTokenScopeIncludes(
-      serviceGraphControl.record.scope,
-      "installations.outputs.read.same-space",
-    );
-  const events = includeOutputProjection
-    ? await input.store.listInstallationEvents(input.installationId)
-    : [];
+  const events = await input.store.listInstallationEvents(
+    input.installationId,
+  );
   return json(
     installationEnvelope({
       installation,
       oidcClient,
-      activatedHttpDomain: includeOutputProjection
-        ? activatedHttpDomainProjectionFromEvents(events)
-        : undefined,
+      activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
       eventsUrl: takosumiAccountsInstallationEventsPath(input.installationId),
     }),
   );
@@ -331,28 +281,7 @@ export async function handleListInstallationEvents(input: {
     store: input.store,
     scope: "read",
   });
-  let serviceGraphControl:
-    | Awaited<
-        ReturnType<typeof requireSameSpaceServiceGraphControlForInstallation>
-      >
-    | undefined;
-  let bearerFailure: Response | undefined;
-  if (!bearer.ok) {
-    bearerFailure = bearer.response;
-    serviceGraphControl =
-      await requireSameSpaceServiceGraphControlForInstallation({
-        request: input.request,
-        store: input.store,
-        targetInstallationId: input.installationId,
-        requiredPermissions: ["installations.events.read.same-space"],
-      });
-    if (!serviceGraphControl.ok) {
-      return preferredCompositeAuthResponse(
-        bearerFailure,
-        serviceGraphControl.response,
-      );
-    }
-  }
+  if (!bearer.ok) return bearer.response;
   const limit = parsePageLimit(input.url.searchParams.get("limit"));
   if (limit === "invalid") {
     return errorJson(
@@ -365,21 +294,19 @@ export async function handleListInstallationEvents(input: {
   if (afterId === "invalid") {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
-  const installation = serviceGraphControl?.ok
-    ? serviceGraphControl.installation
-    : await input.store.findAppInstallation(input.installationId);
+  const installation = await input.store.findAppInstallation(
+    input.installationId,
+  );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
-  if (bearer.ok) {
-    if (
-      !(await subjectCanAccessAccount(
-        input.store,
-        bearer.auth.subject,
-        installation.accountId,
-      ))
-    ) {
-      return errorJson("installation_not_found", "installation not found", 404);
-    }
+  if (
+    !(await subjectCanAccessAccount(
+      input.store,
+      bearer.auth.subject,
+      installation.accountId,
+    ))
+  ) {
+    return errorJson("installation_not_found", "installation not found", 404);
   }
   const allEvents = await input.store.listInstallationEvents(
     input.installationId,
@@ -411,14 +338,4 @@ export function installationEventTypeFilter(
     .map((entry) => entry.trim())
     .filter(Boolean);
   return types.length > 0 ? new Set(types) : undefined;
-}
-
-function preferredCompositeAuthResponse(
-  accountResponse: Response,
-  serviceGraphResponse: Response,
-): Response {
-  if (accountResponse.status === 401 && serviceGraphResponse.status !== 401) {
-    return serviceGraphResponse;
-  }
-  return accountResponse;
 }

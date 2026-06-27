@@ -413,71 +413,6 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["trust_record_id"], ["subject"]],
     },
     {
-      name: "service_graph_exports",
-      domain: "service-graph",
-      columns: [
-        "id",
-        "space_id",
-        "producer_installation_id",
-        "name",
-        "capabilities_json",
-        "visibility",
-        "status",
-        "deployment_id",
-        "output_snapshot_id",
-        "record_json",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [
-        ["space_id"],
-        ["producer_installation_id"],
-        ["space_id", "status"],
-      ],
-    },
-    {
-      name: "service_graph_bindings",
-      domain: "service-graph",
-      columns: [
-        "id",
-        "space_id",
-        "consumer_installation_id",
-        "selected_service_export_id",
-        "selector_json",
-        "status",
-        "dependency_snapshot_id",
-        "record_json",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [
-        ["space_id"],
-        ["consumer_installation_id"],
-        ["selected_service_export_id"],
-      ],
-    },
-    {
-      name: "service_graph_grants",
-      domain: "service-graph",
-      columns: [
-        "id",
-        "space_id",
-        "binding_id",
-        "service_export_id",
-        "consumer_installation_id",
-        "status",
-        "expires_at",
-        "record_json",
-        "created_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [
-        ["binding_id"],
-        ["service_export_id"],
-        ["consumer_installation_id", "status"],
-      ],
-    },
-    {
       name: "custom_domain_reservations",
       domain: "custom-domain",
       columns: [
@@ -3089,5 +3024,18 @@ create index if not exists takosumi_billing_auto_recharge_attempts_run_idx
 drop index if exists takosumi_billing_auto_recharge_attempts_space_period_status_idx;
 drop index if exists takosumi_billing_auto_recharge_attempts_idempotency_unique;
 drop table if exists takosumi_billing_auto_recharge_attempts;`,
+    },
+    {
+      id: "service_graph.records.rename_aside",
+      version: 55,
+      domain: "service-graph",
+      description:
+        "Retire the OSS Service Graph ledger (deploy decision D3): the ServiceExport / ServiceBinding / ServiceGrant records are no longer part of the OSS noun model and are projected from Capsule Outputs instead. The tables are renamed aside to `*_retired` (recoverable) rather than dropped, and are no longer created or read. `down` restores the original names.",
+      sql: `alter table if exists service_graph_exports rename to service_graph_exports_retired;
+alter table if exists service_graph_bindings rename to service_graph_bindings_retired;
+alter table if exists service_graph_grants rename to service_graph_grants_retired;`,
+      down: `alter table if exists service_graph_grants_retired rename to service_graph_grants;
+alter table if exists service_graph_bindings_retired rename to service_graph_bindings;
+alter table if exists service_graph_exports_retired rename to service_graph_exports;`,
     },
   ]);

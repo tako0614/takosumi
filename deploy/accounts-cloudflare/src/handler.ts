@@ -29,7 +29,6 @@ import {
   type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
   type ServiceGraphMaterialResolverHttpOptions,
-  type ServiceGraphRuntimeAvailability,
   type LoginEmailAllowlist,
   sharedCellRuntimeBinding,
   type SharedCellRuntimeAllocator,
@@ -169,12 +168,6 @@ export interface CreateCloudflareWorkerOptions {
   readonly controlPlaneOperations?: (
     env: CloudflareWorkerEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
-  readonly serviceGraphRuntimeAvailability?: (
-    env: CloudflareWorkerEnv,
-  ) =>
-    | ServiceGraphRuntimeAvailability
-    | Promise<ServiceGraphRuntimeAvailability | undefined>
-    | undefined;
 }
 
 export interface R2Bucket {
@@ -425,8 +418,6 @@ async function buildAccountsHandler(
   const clients = parseClients(env);
   const deployControlOperations = await options.deployControlOperations?.(env);
   const controlPlaneOperations = await options.controlPlaneOperations?.(env);
-  const hostRuntimeAvailability =
-    await options.serviceGraphRuntimeAvailability?.(env);
   const commonOptions = {
     issuer,
     clients,
@@ -438,12 +429,6 @@ async function buildAccountsHandler(
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
-    serviceGraphRuntimeAvailability: {
-      ...hostRuntimeAvailability,
-      aiGatewayConfigured:
-        isAiGatewayConfigured(env) ||
-        hostRuntimeAvailability?.aiGatewayConfigured === true,
-    },
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
@@ -769,22 +754,12 @@ function parseClients(
   const tokenEndpointAuthMethod = parseClientAuthMethod(
     env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
   );
-  const serviceGraphTokenIntrospection =
-    env.TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION ===
-    "enabled";
-  validateServiceGraphIntrospectionClient({
-    clientSecret,
-    tokenEndpointAuthMethod,
-    serviceGraphTokenIntrospection,
-    label: "TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION",
-  });
   return [
     {
       clientId,
       redirectUris,
       clientSecret,
       tokenEndpointAuthMethod,
-      serviceGraphTokenIntrospection,
     },
   ];
 }
@@ -806,35 +781,12 @@ function parseClientRecord(value: unknown): OidcClientRegistration {
   const tokenEndpointAuthMethod = parseClientAuthMethod(
     optionalString(value.tokenEndpointAuthMethod),
   );
-  const serviceGraphTokenIntrospection =
-    value.serviceGraphTokenIntrospection === true;
-  validateServiceGraphIntrospectionClient({
-    clientSecret,
-    tokenEndpointAuthMethod,
-    serviceGraphTokenIntrospection,
-    label: "TAKOSUMI_ACCOUNTS_CLIENTS serviceGraphTokenIntrospection",
-  });
   return {
     clientId,
     redirectUris,
     clientSecret,
     tokenEndpointAuthMethod,
-    serviceGraphTokenIntrospection,
   };
-}
-
-function validateServiceGraphIntrospectionClient(input: {
-  readonly clientSecret: string | undefined;
-  readonly tokenEndpointAuthMethod: OidcClientAuthMethod | undefined;
-  readonly serviceGraphTokenIntrospection: boolean;
-  readonly label: string;
-}): void {
-  if (!input.serviceGraphTokenIntrospection) return;
-  if (!input.clientSecret || input.tokenEndpointAuthMethod === "none") {
-    throw new TypeError(
-      `${input.label} requires a confidential client with a client secret`,
-    );
-  }
 }
 
 function parseClientAuthMethod(
@@ -1062,14 +1014,6 @@ function parseServiceGraphMaterials(
   };
 }
 
-function isAiGatewayConfigured(env: CloudflareWorkerEnv): boolean {
-  const binding = (env as Record<string, unknown>).TAKOSUMI_CLOUD_AI_GATEWAY;
-  return (
-    Boolean(binding) &&
-    typeof binding === "object" &&
-    typeof (binding as { fetch?: unknown }).fetch === "function"
-  );
-}
 
 function parseR2ExportWorker(
   env: CloudflareWorkerEnv,

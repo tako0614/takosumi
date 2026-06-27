@@ -343,10 +343,9 @@ function hasConfiguredCloudExtensionClient({
 }: {
   readonly configText: string | undefined;
 }): boolean {
-  return [
-    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-    "TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION",
-  ].some((name) => configuredStringValue(name, configText) !== undefined);
+  return ["TAKOSUMI_ACCOUNTS_CLIENT_ID"].some(
+    (name) => configuredStringValue(name, configText) !== undefined,
+  );
 }
 
 function hasConfiguredUpstreamOAuthProvider({

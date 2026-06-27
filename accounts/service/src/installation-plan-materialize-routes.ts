@@ -4,7 +4,6 @@
  * Pure-move decomposition of the former installation-lifecycle-routes
  * god-file; behavior is identical to the prior single-file handlers.
  */
-import type { InstallationRecord } from "./ledger.ts";
 import type {
   AccountsStore,
   BillingUsageRecord,
@@ -47,7 +46,6 @@ import type {
 } from "./mod.ts";
 import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
-import { requireSameSpaceServiceGraphControlForInstallation } from "./service-graph-service-tokens.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
 import {
   serviceBindingMaterialRecordsFromValue,
@@ -492,28 +490,11 @@ export async function handleReportInstallationBillingUsage(input: {
     installationId: input.installationId,
     capability: "billing.usage.report",
   });
-  let authRecord: TokenRecord;
-  let installation: InstallationRecord | undefined;
-  if (billingAuth.ok) {
-    authRecord = billingAuth.record;
-    installation = await input.store.findAppInstallation(input.installationId);
-  } else {
-    const serviceGraphControl =
-      await requireSameSpaceServiceGraphControlForInstallation({
-        request: input.request,
-        store: input.store,
-        targetInstallationId: input.installationId,
-        requiredPermissions: ["billing.usage.report.same-space"],
-      });
-    if (!serviceGraphControl.ok) {
-      return preferredCompositeAuthResponse(
-        billingAuth.response,
-        serviceGraphControl.response,
-      );
-    }
-    authRecord = serviceGraphControl.record;
-    installation = serviceGraphControl.installation;
-  }
+  if (!billingAuth.ok) return billingAuth.response;
+  const authRecord: TokenRecord = billingAuth.record;
+  const installation = await input.store.findAppInstallation(
+    input.installationId,
+  );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
@@ -710,16 +691,6 @@ export async function handleReportInstallationBillingUsage(input: {
   });
 
   return json({ usage_report: serializeBillingUsageRecord(record) }, 202);
-}
-
-function preferredCompositeAuthResponse(
-  primaryResponse: Response,
-  serviceGraphResponse: Response,
-): Response {
-  if (primaryResponse.status === 401 && serviceGraphResponse.status !== 401) {
-    return serviceGraphResponse;
-  }
-  return primaryResponse;
 }
 
 function positiveNumberValue(value: unknown): number | undefined {

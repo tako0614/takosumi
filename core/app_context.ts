@@ -28,11 +28,6 @@ import type {
   EndpointServiceGrantStore,
   ServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
-import type {
-  ServiceBindingStore,
-  ServiceExportStore,
-  ServiceGraphGrantStore,
-} from "./domains/service-graph/mod.ts";
 import {
   type ActorAdapter,
   type AuthPort,
@@ -140,7 +135,6 @@ export interface AppStores {
   readonly registry: RegistryStores;
   readonly audit: AuditStores;
   readonly serviceEndpoints: ServiceEndpointStores;
-  readonly serviceGraph: ServiceGraphStores;
 }
 
 export interface RuntimeStores {
@@ -173,11 +167,6 @@ export interface ServiceEndpointStores {
   readonly grants: EndpointServiceGrantStore;
 }
 
-export interface ServiceGraphStores {
-  readonly exports: ServiceExportStore;
-  readonly bindings: ServiceBindingStore;
-  readonly grants: ServiceGraphGrantStore;
-}
 
 export interface AppAdapters {
   readonly actor: ActorAdapter;

@@ -34,10 +34,6 @@ import { base64UrlEncodeBytes, sha256Text } from "./encoding.ts";
 import { appendLedgerEvent } from "./installation-helpers.ts";
 import { includesScope } from "./oidc-routes.ts";
 import {
-  isCurrentServiceGraphServiceAccessToken,
-  isServiceGraphServiceAccessTokenRecord,
-} from "./service-graph-service-tokens.ts";
-import {
   errorJson,
   bearerChallenge,
   bearerToken,
@@ -304,20 +300,6 @@ export async function requireInstallationAccessTokenCapability(input: {
         },
       ),
     };
-  }
-  if (
-    await isCurrentServiceGraphServiceAccessToken({
-      store: input.store,
-      token: accessToken,
-      record,
-      capability: input.capability,
-    })
-  ) {
-    return { ok: true, record };
-  }
-  if (isServiceGraphServiceAccessTokenRecord(record)) {
-    await input.store.deleteToken(accessToken);
-    return { ok: false, response: bearerChallenge("invalid_token") };
   }
   return { ok: true, record };
 }

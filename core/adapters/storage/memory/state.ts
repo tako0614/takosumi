@@ -42,11 +42,6 @@ import type {
   ServiceTrustRecordId,
 } from "../../../domains/service-endpoints/types.ts";
 import type {
-  ServiceBinding,
-  ServiceExport,
-  ServiceGrant as GraphServiceGrant,
-} from "takosumi-contract/service-graph";
-import type {
   RuntimeAgentId,
   RuntimeAgentRecord,
   RuntimeAgentWorkId,
@@ -72,9 +67,6 @@ export interface MemoryStorageSnapshot {
   readonly serviceEndpoints: readonly ServiceEndpoint[];
   readonly serviceTrustRecords: readonly ServiceTrustRecord[];
   readonly serviceGrants: readonly EndpointServiceGrant[];
-  readonly serviceGraphExports?: readonly ServiceExport[];
-  readonly serviceGraphBindings?: readonly ServiceBinding[];
-  readonly serviceGraphGrants?: readonly GraphServiceGrant[];
   readonly runtimeAgents: readonly RuntimeAgentRecord[];
   readonly runtimeAgentWorkItems: readonly RuntimeAgentWorkItem[];
 }
@@ -113,11 +105,6 @@ export interface MemoryStorageState {
     readonly endpoints: Map<ServiceEndpointId, ServiceEndpoint>;
     readonly trustRecords: Map<ServiceTrustRecordId, ServiceTrustRecord>;
     readonly grants: Map<EndpointServiceGrantId, EndpointServiceGrant>;
-  };
-  readonly serviceGraph: {
-    readonly exports: Map<string, ServiceExport>;
-    readonly bindings: Map<string, ServiceBinding>;
-    readonly grants: Map<string, GraphServiceGrant>;
   };
   readonly runtimeAgent: {
     readonly agents: Map<RuntimeAgentId, RuntimeAgentRecord>;
@@ -158,11 +145,6 @@ export function createEmptyState(
     serviceEndpoints: {
       endpoints: new Map(),
       trustRecords: new Map(),
-      grants: new Map(),
-    },
-    serviceGraph: {
-      exports: new Map(),
-      bindings: new Map(),
       grants: new Map(),
     },
     runtimeAgent: {
@@ -228,14 +210,6 @@ export function stateFromSnapshot(
       trustRecords: mapBy(snapshot.serviceTrustRecords, (record) => record.id),
       grants: mapBy(snapshot.serviceGrants, (grant) => grant.id),
     },
-    serviceGraph: {
-      exports: mapBy(snapshot.serviceGraphExports ?? [], (record) => record.id),
-      bindings: mapBy(
-        snapshot.serviceGraphBindings ?? [],
-        (record) => record.id,
-      ),
-      grants: mapBy(snapshot.serviceGraphGrants ?? [], (record) => record.id),
-    },
     runtimeAgent: {
       agents: mapBy(snapshot.runtimeAgents, (agent) => agent.id),
       works: mapBy(snapshot.runtimeAgentWorkItems, (work) => work.id),
@@ -275,11 +249,6 @@ export function cloneState(state: MemoryStorageState): MemoryStorageState {
       endpoints: cloneMap(state.serviceEndpoints.endpoints),
       trustRecords: cloneMap(state.serviceEndpoints.trustRecords),
       grants: cloneMap(state.serviceEndpoints.grants),
-    },
-    serviceGraph: {
-      exports: cloneMap(state.serviceGraph.exports),
-      bindings: cloneMap(state.serviceGraph.bindings),
-      grants: cloneMap(state.serviceGraph.grants),
     },
     runtimeAgent: {
       agents: cloneMap(state.runtimeAgent.agents),
@@ -323,9 +292,6 @@ export function snapshotState(
     serviceEndpoints: [...state.serviceEndpoints.endpoints.values()],
     serviceTrustRecords: [...state.serviceEndpoints.trustRecords.values()],
     serviceGrants: [...state.serviceEndpoints.grants.values()],
-    serviceGraphExports: [...state.serviceGraph.exports.values()],
-    serviceGraphBindings: [...state.serviceGraph.bindings.values()],
-    serviceGraphGrants: [...state.serviceGraph.grants.values()],
     runtimeAgents: [...state.runtimeAgent.agents.values()],
     runtimeAgentWorkItems: [...state.runtimeAgent.works.values()],
   });

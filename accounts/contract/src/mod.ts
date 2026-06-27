@@ -50,8 +50,6 @@ const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH =
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH =
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH;
-export const TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH =
-  "/v1/service-graph/services";
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =
   "takosumi.accounts.installation-export-bundle@v1";
 
@@ -103,71 +101,6 @@ export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME =
 export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER =
   "automation.tool_provider";
 
-export const TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS = [
-  "installations.list.same-space",
-  "installations.read.same-space",
-  "installations.events.read.same-space",
-  "installations.outputs.read.same-space",
-  "billing.usage.report.same-space",
-] as const;
-
-export type TakosumiAccountsControlApiPermission =
-  (typeof TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS)[number];
-
-export const TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICE_IDS = [
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_DEPLOYMENT_OUTPUTS_HTTP,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_EVENTS_WEBHOOK_DEFAULT,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME,
-] as const;
-
-export type TakosumiAccountsServiceGraphServiceId =
-  (typeof TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICE_IDS)[number];
-
-export type TakosumiAccountsServiceGraphServiceStatus =
-  | "ready"
-  | "not_configured"
-  | "unavailable";
-
-export interface TakosumiAccountsServiceGraphServiceDescriptor {
-  readonly id: TakosumiAccountsServiceGraphServiceId;
-  readonly capability: string;
-  readonly title: string;
-  readonly description: string;
-  readonly secret_backed: boolean;
-}
-
-export interface TakosumiAccountsServiceGraphServiceProjection {
-  readonly id: TakosumiAccountsServiceGraphServiceId;
-  readonly capability: string;
-  readonly status: TakosumiAccountsServiceGraphServiceStatus;
-  readonly endpoint?: string;
-  readonly material?: Record<string, unknown>;
-  readonly token_expires_at?: string;
-  readonly rotate_token_url?: string;
-}
-
-export interface TakosumiAccountsListServiceGraphServicesResponse {
-  readonly services: readonly TakosumiAccountsServiceGraphServiceDescriptor[];
-}
-
-export interface TakosumiAccountsListInstallationServicesResponse {
-  readonly installation_id: string;
-  readonly services: readonly TakosumiAccountsServiceGraphServiceProjection[];
-}
-
-export interface TakosumiAccountsRotateInstallationServiceTokenResponse {
-  readonly token: string;
-  readonly token_type: "Bearer";
-  readonly expires_at: string;
-  readonly service: TakosumiAccountsServiceGraphServiceProjection;
-}
 
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 
@@ -287,10 +220,6 @@ export function takosumiAccountsInstallationPath(
   )}`;
 }
 
-export function takosumiAccountsServiceGraphServicesPath(): string {
-  return TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH;
-}
-
 export function takosumiAccountsInstallationStatusPath(
   installationId: string,
 ): string {
@@ -355,27 +284,6 @@ export function takosumiAccountsInstallationEventsPath(
   return `${takosumiAccountsInstallationPath(installationId)}/events`;
 }
 
-export function takosumiAccountsInstallationEventsIngestPath(
-  installationId: string,
-): string {
-  return `${takosumiAccountsInstallationEventsPath(installationId)}/ingest`;
-}
-
-export function takosumiAccountsInstallationServicesPath(
-  installationId: string,
-): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/services`;
-}
-
-export function takosumiAccountsInstallationServiceRotateTokenPath(
-  installationId: string,
-  serviceId: string,
-): string {
-  return `${takosumiAccountsInstallationServicesPath(installationId)}/${pathSegment(
-    serviceId,
-    "serviceId",
-  )}/rotate-token`;
-}
 
 export function takosumiAccountsInstallationBillingUsageReportsPath(
   installationId: string,

@@ -26,11 +26,6 @@ import type {
   EndpointServiceGrantStore,
   ServiceTrustRecordStore,
 } from "../../domains/service-endpoints/stores.ts";
-import type {
-  ServiceBindingStore,
-  ServiceExportStore,
-  ServiceGraphGrantStore,
-} from "../../domains/service-graph/stores.ts";
 import type { WorkLedger } from "../../agents/work_ledger.ts";
 
 export interface StorageDriver {
@@ -46,7 +41,6 @@ export interface StorageTransaction {
   readonly registry: RegistryStorageStores;
   readonly audit: AuditStorageStores;
   readonly serviceEndpoints: ServiceEndpointStorageStores;
-  readonly serviceGraph: ServiceGraphStorageStores;
   readonly runtimeAgent: WorkLedger;
 }
 
@@ -86,8 +80,3 @@ export interface ServiceEndpointStorageStores {
   readonly grants: EndpointServiceGrantStore;
 }
 
-export interface ServiceGraphStorageStores {
-  readonly exports: ServiceExportStore;
-  readonly bindings: ServiceBindingStore;
-  readonly grants: ServiceGraphGrantStore;
-}

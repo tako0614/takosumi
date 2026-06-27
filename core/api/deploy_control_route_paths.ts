@@ -135,14 +135,6 @@ export const TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE =
   `${INTERNAL_V1_PREFIX}/installations/:installationId/dependencies` as const;
 export const TAKOSUMI_DEPENDENCY_ROUTE =
   `${INTERNAL_V1_PREFIX}/dependencies/:dependencyId` as const;
-export const TAKOSUMI_SPACE_SERVICE_EXPORTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/service-exports` as const;
-export const TAKOSUMI_INSTALLATION_SERVICE_BINDINGS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/installations/:installationId/service-bindings` as const;
-export const TAKOSUMI_SERVICE_BINDING_RESOLVE_ROUTE =
-  `${INTERNAL_V1_PREFIX}/service-bindings/:serviceBindingId/resolve` as const;
-export const TAKOSUMI_SERVICE_BINDING_GRANTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/service-bindings/:serviceBindingId/grants` as const;
 export const TAKOSUMI_OUTPUT_SHARES_ROUTE =
   `${INTERNAL_V1_PREFIX}/output-shares` as const;
 export const TAKOSUMI_OUTPUT_SHARE_APPROVE_ROUTE =

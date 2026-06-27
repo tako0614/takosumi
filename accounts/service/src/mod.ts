@@ -21,7 +21,6 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   TAKOSUMI_ACCOUNTS_USERINFO_PATH,
-  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
 export type {
@@ -145,20 +144,12 @@ import {
   TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH,
 } from "./service-graph-material-resolver.ts";
 import {
-  handleIngestInstallationServiceEvent,
-  handleListInstallationServiceGraphServices,
-  handleListServiceGraphServices,
-  handleRotateInstallationServiceGraphServiceToken,
-  type ServiceGraphRuntimeAvailability,
-} from "./service-graph-service-routes.ts";
-import {
   platformAccessBlocked,
   type PlatformAccessPolicy,
   platformGuardedInstallationMutation,
 } from "./platform-access-policy.ts";
 import {
   requireAppInstallationAccountAccess,
-  requireAppInstallationAccountOrServiceGraphControlAccess,
   requireAppInstallationCreateWriteAccess,
   requireInstallationPlanRunWriteAccess,
 } from "./installation-auth.ts";
@@ -179,8 +170,6 @@ export type {
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
 export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
-export type { ServiceGraphRuntimeAvailability } from "./service-graph-service-routes.ts";
-export { requireCurrentServiceGraphServiceAccessToken } from "./service-graph-service-tokens.ts";
 export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
 export type {
   PlatformAccessPolicy,
@@ -269,7 +258,6 @@ export interface AccountsHandlerOptions {
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
-  serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   /**
    * Operator-only token that lets the dedicated-materialize readiness drill
    * request materialization while hosted platform access is still closed. This
@@ -313,7 +301,6 @@ export interface EphemeralAccountsHandlerOptions {
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
-  serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
   privacyOperationsToken?: string;
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
@@ -359,13 +346,6 @@ export interface OidcClientRegistration {
   redirectUris: readonly string[];
   clientSecret?: string;
   tokenEndpointAuthMethod?: OidcClientAuthMethod;
-  /**
-   * Allows a confidential operator extension client to introspect
-   * Service Graph service access tokens (`service-graph-service:*`).
-   * Normal OIDC clients must leave this false so client-isolated
-   * introspection remains the default.
-   */
-  serviceGraphTokenIntrospection?: boolean;
 }
 
 export interface ServiceBindingMaterializerInput {
@@ -845,11 +825,6 @@ export function createAccountsHandler(
       );
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await handleListServiceGraphServices({ request, store });
-    }
-
     const accountTokenRevokeRoute = matchAccountTokenRevokeRoute(url.pathname);
     if (accountTokenRevokeRoute) {
       if (request.method !== "POST") return methodNotAllowed("POST");
@@ -1005,14 +980,7 @@ export function createAccountsHandler(
         request.method,
       );
       if (accountAccess) {
-        const authBlocked = await (
-          installationRouteAllowsServiceGraphControl(
-            installationRoute,
-            request.method,
-          )
-            ? requireAppInstallationAccountOrServiceGraphControlAccess
-            : requireAppInstallationAccountAccess
-        )({
+        const authBlocked = await requireAppInstallationAccountAccess({
           request,
           store,
           installationId: installationRoute.installationId,
@@ -1132,38 +1100,6 @@ export function createAccountsHandler(
           request,
           url,
           store,
-        });
-      }
-      if (
-        installationRoute.kind === "events-ingest" &&
-        request.method === "POST"
-      ) {
-        return await handleIngestInstallationServiceEvent({
-          installationId: installationRoute.installationId,
-          request,
-          store,
-        });
-      }
-      if (installationRoute.kind === "services" && request.method === "GET") {
-        return await handleListInstallationServiceGraphServices({
-          installationId: installationRoute.installationId,
-          request,
-          store,
-          issuer,
-          runtimeAvailability: options.serviceGraphRuntimeAvailability,
-        });
-      }
-      if (
-        installationRoute.kind === "service-rotate-token" &&
-        request.method === "POST"
-      ) {
-        return await handleRotateInstallationServiceGraphServiceToken({
-          installationId: installationRoute.installationId,
-          serviceId: installationRoute.serviceId,
-          request,
-          store,
-          issuer,
-          runtimeAvailability: options.serviceGraphRuntimeAvailability,
         });
       }
       if (
@@ -1522,14 +1458,4 @@ function installationRouteAccountAccess(
     return "read";
   }
   return undefined;
-}
-
-function installationRouteAllowsServiceGraphControl(
-  route: InstallationRoute,
-  method: string,
-): boolean {
-  if (route.kind === "events" && method === "GET") {
-    return true;
-  }
-  return false;
 }

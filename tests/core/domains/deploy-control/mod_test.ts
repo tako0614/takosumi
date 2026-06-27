@@ -12,12 +12,8 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
-import {
-  InMemoryServiceBindingStore,
-  InMemoryServiceExportStore,
-  InMemoryServiceGraphGrantStore,
-  ServiceGraphService,
-} from "../../../../core/domains/service-graph/mod.ts";
+import { projectServicesFromOutputs } from "../../../../core/domains/output-projection/mod.ts";
+import type { JsonValue } from "../../../../contract/types.ts";
 import {
   fakeProviderVault,
   seedInstallationModel,
@@ -326,7 +322,7 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
   ]);
 });
 
-test("apply projects allowlisted service_exports and service_bindings into the Service Graph", async () => {
+test("apply allowlists service_exports and service_bindings outputs that project to transient services", async () => {
   const { store, request } = await seedUpdatableInstallation();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
@@ -335,13 +331,6 @@ test("apply projects allowlisted service_exports and service_bindings into the S
       ...installConfig!.outputAllowlist,
       service_exports: { from: "service_exports", type: "json" },
       service_bindings: { from: "service_bindings", type: "json" },
-    },
-  });
-  const serviceGraphService = new ServiceGraphService({
-    stores: {
-      exports: new InMemoryServiceExportStore(),
-      bindings: new InMemoryServiceBindingStore(),
-      grants: new InMemoryServiceGraphGrantStore(),
     },
   });
   const controller = new OpenTofuDeploymentController({
@@ -384,7 +373,6 @@ test("apply projects allowlisted service_exports and service_bindings into the S
         ],
       },
     }),
-    serviceGraphService,
   });
 
   const { planRun } = await controller.createPlanRun(request);
@@ -392,23 +380,18 @@ test("apply projects allowlisted service_exports and service_bindings into the S
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  const serviceExports = await serviceGraphService.listExportsByWorkspace(
-    applied.installation!.spaceId,
+  // Deploy decision D3: there is no persisted Service Graph ledger. The
+  // allowlisted outputs are projected to TRANSIENT services from the
+  // Deployment's public outputs.
+  const { serviceExports, serviceBindings } = projectServicesFromOutputs(
+    applied.deployment!.outputsPublic as Readonly<Record<string, JsonValue>>,
+    { producerCapsuleId: applied.installation!.id },
   );
 
   expect(serviceExports).toHaveLength(1);
   expect(serviceExports[0]?.name).toBe("tools");
   expect(serviceExports[0]?.capabilities).toEqual(["protocol.mcp.server"]);
-  expect(serviceExports[0]?.producerCapsuleId).toBe(applied.installation!.id);
-  expect(serviceExports[0]?.applyRunId).toBe(applied.deployment!.applyRunId);
-  expect(serviceExports[0]?.outputId).toBe(
-    applied.deployment!.outputSnapshotId,
-  );
 
-  const serviceBindings =
-    await serviceGraphService.listBindingsByConsumerCapsule(
-      applied.installation!.id,
-    );
   expect(serviceBindings).toHaveLength(1);
   expect(serviceBindings[0]?.selector).toEqual({
     capabilities: ["protocol.mcp.server"],
@@ -420,7 +403,7 @@ test("apply projects allowlisted service_exports and service_bindings into the S
   ]);
 });
 
-test("apply projects allowlisted takos_app output into Service Graph exports and bindings", async () => {
+test("apply allowlists takos_app output that projects to transient exports and bindings", async () => {
   const { store, request } = await seedUpdatableInstallation();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
@@ -428,13 +411,6 @@ test("apply projects allowlisted takos_app output into Service Graph exports and
     outputAllowlist: {
       ...installConfig!.outputAllowlist,
       takos_app: { from: "takos_app", type: "json" },
-    },
-  });
-  const serviceGraphService = new ServiceGraphService({
-    stores: {
-      exports: new InMemoryServiceExportStore(),
-      bindings: new InMemoryServiceBindingStore(),
-      grants: new InMemoryServiceGraphGrantStore(),
     },
   });
   const controller = new OpenTofuDeploymentController({
@@ -481,7 +457,6 @@ test("apply projects allowlisted takos_app output into Service Graph exports and
         },
       },
     }),
-    serviceGraphService,
   });
 
   const { planRun } = await controller.createPlanRun(request);
@@ -489,22 +464,15 @@ test("apply projects allowlisted takos_app output into Service Graph exports and
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  const serviceExports = await serviceGraphService.listExportsByWorkspace(
-    applied.installation!.spaceId,
+  const { serviceExports, serviceBindings } = projectServicesFromOutputs(
+    applied.deployment!.outputsPublic as Readonly<Record<string, JsonValue>>,
+    { producerCapsuleId: applied.installation!.id },
   );
-  const serviceBindings =
-    await serviceGraphService.listBindingsByConsumerCapsule(
-      applied.installation!.id,
-    );
 
   expect(serviceExports.map((serviceExport) => serviceExport.name)).toEqual([
     "launcher",
   ]);
   expect(serviceExports[0]?.capabilities).toEqual(["interface.ui.surface"]);
-  expect(serviceExports[0]?.producerCapsuleId).toBe(applied.installation!.id);
-  expect(serviceExports[0]?.outputId).toBe(
-    applied.deployment!.outputSnapshotId,
-  );
   expect(serviceBindings).toHaveLength(1);
   expect(serviceBindings[0]?.selector).toEqual({
     capabilities: ["identity.oidc"],
