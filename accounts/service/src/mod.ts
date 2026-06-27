@@ -334,7 +334,7 @@ export interface AccountsHandlerOptions {
    */
   privacyOperationsToken?: string;
   /**
-   * Operator billing plan catalog (spec §32): the subscription plans / credit
+   * Operator billing plan catalog (spec §32): subscription plans / USD balance
    * packs the dashboard offers, each bound server-side to a Stripe price.
    * When omitted the handler falls back to the `TAKOSUMI_BILLING_PLANS` env
    * var (a JSON array); with neither, the catalog is empty and the dashboard

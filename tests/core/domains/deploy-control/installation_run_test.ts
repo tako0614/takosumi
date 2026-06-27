@@ -3590,6 +3590,48 @@ test("Gateway resource usage fails closed without enough USD balance", async () 
   });
 });
 
+test("Gateway resource usage spendRequired fails closed even when workspace billing is disabled", async () => {
+  const { store, controller } = await seededController();
+  await store.putCreditBalance({
+    spaceId: "space_test",
+    availableUsdMicros: 100_000,
+    reservedUsdMicros: 0,
+    monthlyIncludedUsdMicros: 0,
+    purchasedUsdMicros: 100_000,
+    availableCredits: 0.1,
+    reservedCredits: 0,
+    monthlyIncludedCredits: 0,
+    purchasedCredits: 0.1,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.recordGatewayResourceUsage("space_test", {
+      periodStart: "2026-06-07T00:00:00.000Z",
+      periodEnd: "2026-06-07T01:00:00.000Z",
+      spendRequired: true,
+      meters: [
+        {
+          installationId: "inst_fixture",
+          kind: "ai_request",
+          quantity: 1,
+          usdMicros: 250_000,
+          meterId: "ai:openai_compatible:chat",
+          resourceFamily: "cloudflare.ai_gateway",
+          resourceId: "gateway:default",
+          operation: "chat.completions",
+        },
+      ],
+    }),
+  ).rejects.toThrow("USD balance exhausted");
+
+  expect(await store.listUsageEvents("space_test")).toEqual([]);
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 100_000,
+    availableCredits: 0.1,
+  });
+});
+
 test("invoice usage reconciliation records billing adjustment idempotently", async () => {
   const { store, controller } = await seededController();
   await store.putUsageEvent({

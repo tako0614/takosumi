@@ -60,6 +60,16 @@ export interface TakosumiAiGatewayModelAlias {
    * provider billing is still handled by the operator account.
    */
   readonly billingUsdMicrosPerRequest?: number;
+  /**
+   * Operator-defined Takosumi USD amount charged per 1,000,000 input tokens,
+   * in micros. Used when an OpenAI-compatible upstream response reports usage.
+   */
+  readonly billingUsdMicrosPerMillionInputTokens?: number;
+  /**
+   * Operator-defined Takosumi USD amount charged per 1,000,000 output tokens,
+   * in micros. Used when an OpenAI-compatible upstream response reports usage.
+   */
+  readonly billingUsdMicrosPerMillionOutputTokens?: number;
   /** @deprecated Use billingUsdMicrosPerRequest. */
   readonly billingCreditsPerRequest?: number;
   /**
@@ -157,6 +167,8 @@ export interface TakosumiAiGatewayStatusResponse {
       readonly maxOutputTokens?: number;
       readonly billingClass?: string;
       readonly billingUsdMicrosPerRequest?: number;
+      readonly billingUsdMicrosPerMillionInputTokens?: number;
+      readonly billingUsdMicrosPerMillionOutputTokens?: number;
       /** @deprecated Use billingUsdMicrosPerRequest. */
       readonly billingCreditsPerRequest?: number;
       readonly metadata?: JsonObject;

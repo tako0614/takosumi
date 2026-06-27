@@ -162,13 +162,22 @@ client response から削除し、`recordGatewayResourceUsage` で Workspace usa
 ledger に記録します。usage report があるのに ledger へ記録できない場合は、
 未課金の成功を返さないため fail closed します。
 
+価格は Cloud extension ではなく Takosumi Cloud platform worker が決めます。
+Cloud extension の usage report は `meterId`、`kind`、`quantity`、resource metadata
+を出すのが正本です。`usdMicros` を extension が出す経路は legacy / fallback
+互換として残せますが、production では operator config の
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` が単価・原価見積もり・最低粗利を検証して
+`usdMicros` を確定します。price book に meter がない、または最低粗利を満たさない
+meter は fail closed し、WfP / AI の未課金成功を返しません。価格表と無料枠の
+運用正本は [`../operations/cloud-pricing.md`](../operations/cloud-pricing.md) です。
+
 内部 header:
 
 ```http
 x-takosumi-cloud-usage-space-id: space_xxx
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"usdMicros":250000}]
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1}]
 ```
 
 Takosumi Cloud の managed resource backend は、ユーザー向けには Cloudflare
@@ -184,7 +193,7 @@ Containers / Durable Objects などの追加 family は、closed Gateway backend
 public usage metadata では拒否します。例:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"usdMicros":1000,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
 ```
 
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
