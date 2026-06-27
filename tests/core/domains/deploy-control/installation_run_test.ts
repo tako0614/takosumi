@@ -2773,9 +2773,85 @@ test("enforced billing blocks plan when credits are insufficient", async () => {
   expect(runner.planJobs).toHaveLength(1);
   expect(planRun.status).toBe("failed");
   expect(planRun.policy.reasons.join("\n")).toContain(
-    "credit reservation failed",
+    "USD balance reservation failed",
   );
   expect(await store.getCreditReservationForRun(planRun.id)).toBeUndefined();
+});
+
+test("enforced Stripe billing auto-recharges before reserving USD balance", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const recharges: Array<{
+    readonly spaceId: string;
+    readonly runId: string;
+    readonly rechargeUsdMicros: number;
+    readonly shortfallUsdMicros: number;
+  }> = [];
+  const controller = controllerWith(store, runner, {
+    billingAutoRecharge: async (input) => {
+      recharges.push({
+        spaceId: input.spaceId,
+        runId: input.runId,
+        rechargeUsdMicros: input.rechargeUsdMicros,
+        shortfallUsdMicros: input.shortfallUsdMicros,
+      });
+      return {
+        balance: await store.addCredits(input.spaceId, {
+          usdMicros: input.rechargeUsdMicros,
+          updatedAt: new Date(input.now).toISOString(),
+        }),
+        chargedUsdMicros: input.rechargeUsdMicros,
+      };
+    },
+  });
+  const space = await store.getSpace("space_test");
+  await store.putSpace({
+    ...space!,
+    billingSettings: {
+      mode: "enforce",
+      provider: "stripe",
+      reservationRequired: true,
+      autoRecharge: {
+        enabled: true,
+        thresholdUsdMicros: 500_000,
+        rechargeUsdMicros: 2_000_000,
+      },
+    },
+  });
+  await store.putCreditBalance({
+    spaceId: "space_test",
+    availableUsdMicros: 0,
+    reservedUsdMicros: 0,
+    monthlyIncludedUsdMicros: 0,
+    purchasedUsdMicros: 0,
+    availableCredits: 0,
+    reservedCredits: 0,
+    monthlyIncludedCredits: 0,
+    purchasedCredits: 0,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("succeeded");
+  expect(recharges).toHaveLength(1);
+  expect(recharges[0]).toMatchObject({
+    spaceId: "space_test",
+    runId: planRun.id,
+    rechargeUsdMicros: 2_000_000,
+    shortfallUsdMicros: 1_000_000,
+  });
+  expect(await store.getCreditReservationForRun(planRun.id)).toMatchObject({
+    status: "reserved",
+    mode: "enforce",
+    estimatedUsdMicros: 1_000_000,
+  });
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 1_000_000,
+    reservedUsdMicros: 1_000_000,
+    purchasedUsdMicros: 2_000_000,
+  });
 });
 
 test("enforced billing plan limits block oversized plans before reservation", async () => {
@@ -3437,6 +3513,7 @@ test("Stripe subscription reconciliation updates billing ledger and Space settin
       stripeCustomerId: "cus_space",
       stripeSubscriptionId: "sub_space",
       stripePriceId: "price_pro",
+      stripeDefaultPaymentMethodId: "pm_space",
       planCode: "pro",
       status: "active",
       currentPeriodStartUnix: 1_780_000_000,
@@ -3450,6 +3527,7 @@ test("Stripe subscription reconciliation updates billing ledger and Space settin
     ownerId: "space_test",
     provider: "stripe",
     stripeCustomerId: "cus_space",
+    stripeDefaultPaymentMethodId: "pm_space",
     status: "active",
   });
   expect(result.subscription).toMatchObject({
@@ -3468,6 +3546,7 @@ test("Stripe subscription reconciliation updates billing ledger and Space settin
     await store.getBillingAccountForOwner("space", "space_test"),
   ).toMatchObject({
     id: "bill_space_space_test",
+    stripeDefaultPaymentMethodId: "pm_space",
     status: "active",
   });
   expect(await store.getSpaceSubscription("space_test")).toMatchObject({

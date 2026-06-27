@@ -236,6 +236,7 @@ export interface BillingAccountRecord {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   stripePriceId?: string;
+  stripeDefaultPaymentMethodId?: string;
   planCode?: string;
   currentPeriodEndUnix?: number;
   lastInvoiceId?: string;

@@ -135,6 +135,7 @@ export interface BillingAccountRow {
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
   stripe_price_id: string | null;
+  stripe_default_payment_method_id: string | null;
   plan_code: string | null;
   current_period_end_unix: number | string | null;
   last_invoice_id: string | null;
@@ -408,6 +409,9 @@ export function billingAccountFromRow(
     stripeCustomerId: optional(row.stripe_customer_id),
     stripeSubscriptionId: optional(row.stripe_subscription_id),
     stripePriceId: optional(row.stripe_price_id),
+    stripeDefaultPaymentMethodId: optional(
+      row.stripe_default_payment_method_id,
+    ),
     planCode: optional(row.plan_code),
     currentPeriodEndUnix:
       row.current_period_end_unix === null

@@ -43,6 +43,7 @@ import {
   releaseActivatorFromEnv,
 } from "./release_activator.ts";
 import { CloudflareD1MetricObservabilitySink } from "./d1_observability.ts";
+import { createStripeBillingAutoRechargePort } from "./billing_auto_recharge.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -55,6 +56,9 @@ export async function createWorkerServiceApp(
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
   const storage = new CloudflareD1SnapshotStorageDriver(
+    env.TAKOSUMI_CONTROL_DB,
+  );
+  const opentofuDeploymentStore = createCloudflareD1OpenTofuDeploymentStore(
     env.TAKOSUMI_CONTROL_DB,
   );
   const deployStores = createCloudflareD1DeployStores(env.TAKOSUMI_CONTROL_DB);
@@ -103,6 +107,10 @@ export async function createWorkerServiceApp(
       operator: envReleaseActivator,
       runner: runnerReleaseActivator,
     });
+  const billingAutoRecharge = createStripeBillingAutoRechargePort({
+    env,
+    store: opentofuDeploymentStore,
+  });
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
   return await createTakosumiService({
     role,
@@ -111,9 +119,7 @@ export async function createWorkerServiceApp(
     startWorkerDaemon: false,
     takosumiDeploymentRecordStore: deployStores.deploymentRecordStore,
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
-    opentofuDeploymentStore: createCloudflareD1OpenTofuDeploymentStore(
-      env.TAKOSUMI_CONTROL_DB,
-    ),
+    opentofuDeploymentStore,
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     providerEnvRunner: opentofuRunner,
@@ -148,6 +154,7 @@ export async function createWorkerServiceApp(
     ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
+    ...(billingAutoRecharge ? { billingAutoRecharge } : {}),
   });
 }
 

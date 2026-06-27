@@ -437,7 +437,7 @@ async function billingUsageRecordFromUsageEvent(
     usageMeterNameLeaksInternalWorkersBackend(event.meterId)
   ) {
     throw new TypeError(
-      "usage event meterId must describe the customer-facing managed resource",
+      "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
     );
   }
   for (const value of Object.values(event.resourceMetadata ?? {})) {
@@ -789,6 +789,8 @@ export async function handleStripeWebhookRequest(input: {
           stripeCustomerId: reconciliation.stripeCustomerId,
           stripeSubscriptionId: reconciliation.stripeSubscriptionId,
           stripePriceId: reconciliation.stripePriceId,
+          stripeDefaultPaymentMethodId:
+            reconciliation.stripeDefaultPaymentMethodId,
           planCode: reconciliation.planCode,
           status: reconciliation.status,
           currentPeriodEndUnix: reconciliation.currentPeriodEndUnix,
@@ -841,6 +843,7 @@ export type StripeSpaceBillingReconciler = (
     readonly stripeCustomerId: string;
     readonly stripeSubscriptionId: string;
     readonly stripePriceId?: string;
+    readonly stripeDefaultPaymentMethodId?: string;
     readonly planCode: string;
     readonly status: string;
     readonly currentPeriodEndUnix?: number;
@@ -863,6 +866,7 @@ function stripeSpaceBillingReconciliationInput(
     readonly stripeCustomerId?: string;
     readonly stripeSubscriptionId?: string;
     readonly stripePriceId?: string;
+    readonly stripeDefaultPaymentMethodId?: string;
     readonly planCode?: string;
     readonly status: string;
     readonly currentPeriodEndUnix?: number;
@@ -873,6 +877,7 @@ function stripeSpaceBillingReconciliationInput(
       readonly stripeCustomerId: string;
       readonly stripeSubscriptionId: string;
       readonly stripePriceId?: string;
+      readonly stripeDefaultPaymentMethodId?: string;
       readonly planCode: string;
       readonly status: string;
       readonly currentPeriodEndUnix?: number;
@@ -897,6 +902,9 @@ function stripeSpaceBillingReconciliationInput(
     stripeCustomerId,
     stripeSubscriptionId,
     ...(account.stripePriceId ? { stripePriceId: account.stripePriceId } : {}),
+    ...(account.stripeDefaultPaymentMethodId
+      ? { stripeDefaultPaymentMethodId: account.stripeDefaultPaymentMethodId }
+      : {}),
     planCode,
     status: account.status,
     ...(account.currentPeriodEndUnix !== undefined

@@ -244,6 +244,18 @@ test("G15 billing version migration adds optimistic concurrency column", async (
   );
 });
 
+test("billing default payment method migration supports auto recharge", async () => {
+  const migration = await readMigration(
+    "028_billing_default_payment_method.sql",
+  );
+
+  expect(migration).toContain("ALTER TABLE accounts_v1.billing_accounts");
+  expect(migration).toContain(
+    "ADD COLUMN IF NOT EXISTS stripe_default_payment_method_id text",
+  );
+  expect(migration).toContain("automatic USD balance recharge");
+});
+
 test("auth_code_token_links sentinel migration replaces the NULL-in-PK columns", async () => {
   const migration = await readMigration(
     "021_auth_code_token_links_sentinel.sql",

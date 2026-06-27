@@ -5432,6 +5432,7 @@ test("accounts handler captures Stripe Space credit purchase webhooks once", asy
     {
       spaceId: "space_credit",
       input: {
+        usdMicros: 42_000_000,
         credits: 42,
         stripeEventId: "evt_credit_space",
         stripeCheckoutSessionId: "cs_credit_space",
