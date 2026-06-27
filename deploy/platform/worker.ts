@@ -113,7 +113,7 @@ async function controlPlaneOperationsFor(
 }
 
 async function platformCloudExtensionUsageOperationsFor(
-  env: PlatformEnv,
+  env: CloudflareWorkerEnv,
   requestUrl: string,
 ): Promise<PlatformCloudExtensionUsageOperations> {
   const operations = (await deployControlSeam(
@@ -152,7 +152,9 @@ async function platformCloudExtensionUsageOperationsFor(
   };
 }
 
-function platformBillingUsageSyncToken(env: PlatformEnv): string | undefined {
+function platformBillingUsageSyncToken(
+  env: CloudflareWorkerEnv,
+): string | undefined {
   return (
     optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN) ??
     optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
