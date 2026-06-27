@@ -1017,19 +1017,20 @@ export async function handlePlatformCloudExtensionRouteRequest(
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
-  const authenticatedRequest =
-    await requestWithPlatformCloudExtensionAuthContext(
-      request,
-      env,
-      route,
-      sessionVerifier,
-    );
+  const authContext = await platformCloudExtensionAuthContext(
+    request,
+    env,
+    route,
+    sessionVerifier,
+  );
+  if (!authContext.ok) return authContext.response;
   const upstreamResponse = await binding.fetch(
-    requestForPlatformCloudExtensionBinding(authenticatedRequest, route),
+    requestForPlatformCloudExtensionBinding(authContext.request, route),
   );
   const usageResult = await recordPlatformCloudExtensionUsage(
     upstreamResponse,
     usageOperations,
+    { request, route, session: authContext.session },
   );
   if (!usageResult.ok) return usageResult.response;
   return responseForPlatformCloudExtensionClient(
@@ -1080,6 +1081,10 @@ export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER;
 export const PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER =
   TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER;
+export const PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER =
+  "x-takosumi-cloud-billing-workspace-id";
+export const PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER =
+  "x-takosumi-cloud-billing-installation-id";
 
 const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
@@ -1104,6 +1109,8 @@ const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "x-auth-key",
   "x-auth-user-service-key",
   "x-takosumi-account-session",
+  PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+  PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
 ] as const;
 const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER,
@@ -1120,7 +1127,13 @@ export async function requestWithPlatformCloudExtensionAuthContext(
   route?: PlatformCloudExtensionRoute,
   sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
 ): Promise<Request> {
-  const session = await sessionVerifier(request, env, route);
+  const result = await platformCloudExtensionAuthContext(
+    request,
+    env,
+    route,
+    sessionVerifier,
+  );
+  if (result.ok) return result.request;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
@@ -1128,41 +1141,92 @@ export async function requestWithPlatformCloudExtensionAuthContext(
   for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
     headers.delete(header);
   }
-  if (!session.authenticated) {
-    return clonePlatformCloudExtensionRequest(request, headers);
+  return clonePlatformCloudExtensionRequest(request, headers);
+}
+
+async function platformCloudExtensionAuthContext(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute | undefined,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly request: Request;
+      readonly session: PlatformCloudExtensionSessionContext;
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const session = await sessionVerifier(request, env, route);
+  const billingContext =
+    await platformCloudExtensionBillingContextFromRequest(
+      request,
+      env,
+      session,
+    );
+  if (!billingContext.ok) return billingContext;
+  const effectiveSession: PlatformCloudExtensionSessionContext =
+    session.authenticated
+      ? {
+          ...session,
+          ...(session.installationId || !billingContext.installationId
+            ? {}
+            : { installationId: billingContext.installationId }),
+          ...(session.spaceId || !billingContext.spaceId
+            ? {}
+            : { spaceId: billingContext.spaceId }),
+        }
+      : session;
+  const headers = new Headers(request.headers);
+  for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
+    headers.delete(header);
+  }
+  for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
+    headers.delete(header);
+  }
+  if (!effectiveSession.authenticated) {
+    return {
+      ok: true,
+      request: clonePlatformCloudExtensionRequest(request, headers),
+      session: effectiveSession,
+    };
   }
   headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
-  if (session.authKind) {
+  if (effectiveSession.authKind) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
-      safeCloudExtensionHeaderValue(session.authKind),
+      safeCloudExtensionHeaderValue(effectiveSession.authKind),
     );
   }
-  if (session.scopes && session.scopes.length > 0) {
+  if (effectiveSession.scopes && effectiveSession.scopes.length > 0) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
-      session.scopes.map(safeCloudExtensionHeaderValue).join(" "),
+      effectiveSession.scopes.map(safeCloudExtensionHeaderValue).join(" "),
     );
   }
-  if (session.subject) {
+  if (effectiveSession.subject) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
-      safeCloudExtensionHeaderValue(session.subject),
+      safeCloudExtensionHeaderValue(effectiveSession.subject),
     );
   }
-  if (session.installationId) {
+  if (effectiveSession.installationId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
-      safeCloudExtensionHeaderValue(session.installationId),
+      safeCloudExtensionHeaderValue(effectiveSession.installationId),
     );
   }
-  if (session.spaceId) {
+  if (effectiveSession.spaceId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
-      safeCloudExtensionHeaderValue(session.spaceId),
+      safeCloudExtensionHeaderValue(effectiveSession.spaceId),
     );
   }
-  return clonePlatformCloudExtensionRequest(request, headers);
+  return {
+    ok: true,
+    request: clonePlatformCloudExtensionRequest(request, headers),
+    session: effectiveSession,
+  };
 }
 
 function clonePlatformCloudExtensionRequest(
@@ -1180,9 +1244,140 @@ function clonePlatformCloudExtensionRequest(
   });
 }
 
+async function platformCloudExtensionBillingContextFromRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformCloudExtensionSessionContext,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly spaceId?: string;
+      readonly installationId?: string;
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
+  if (!session.authenticated || session.spaceId) return { ok: true };
+  const spaceId = optionalCloudExtensionContextHeader(
+    request.headers,
+    PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+  );
+  if (!spaceId) return { ok: true };
+  if (!isSafePlatformCloudExtensionContextId(spaceId)) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid billing context",
+          error_description:
+            "Cloud extension billing workspace id is malformed.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  if (
+    session.authKind !== "session" &&
+    session.authKind !== "personal-access-token"
+  ) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid billing context",
+          error_description:
+            "Cloud extension service tokens must carry their billing workspace in token metadata.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  const authorized = await platformCloudExtensionCanAccessWorkspace(
+    request,
+    env,
+    spaceId,
+  );
+  if (!authorized) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "forbidden",
+          error_description:
+            "The authenticated Cloud extension caller cannot access the billing workspace.",
+        },
+        { status: 403 },
+      ),
+    };
+  }
+  const installationId = optionalCloudExtensionContextHeader(
+    request.headers,
+    PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
+  );
+  if (
+    installationId !== undefined &&
+    !isSafePlatformCloudExtensionContextId(installationId)
+  ) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "invalid billing context",
+          error_description:
+            "Cloud extension billing installation id is malformed.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  return {
+    ok: true,
+    spaceId,
+    ...(installationId ? { installationId } : {}),
+  };
+}
+
+async function platformCloudExtensionCanAccessWorkspace(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  spaceId: string,
+): Promise<boolean> {
+  const headers = sessionMirrorHeaders(request);
+  if (!headers) return false;
+  const url = new URL(
+    `/api/v1/workspaces/${encodeURIComponent(spaceId)}/usage?limit=1`,
+    request.url,
+  );
+  try {
+    const response = await accountsWorker.fetch(
+      new Request(url, { method: "GET", headers }),
+      env,
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function optionalCloudExtensionContextHeader(
+  headers: Headers,
+  name: string,
+): string | undefined {
+  const value = headers.get(name)?.trim();
+  return value || undefined;
+}
+
+function isSafePlatformCloudExtensionContextId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(value);
+}
+
 async function recordPlatformCloudExtensionUsage(
   response: Response,
   operationsInput?: PlatformCloudExtensionUsageOperationsInput,
+  context?: {
+    readonly request: Request;
+    readonly route: PlatformCloudExtensionRoute;
+    readonly session: PlatformCloudExtensionSessionContext;
+  },
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly response: Response }
 > {
@@ -1209,6 +1404,7 @@ async function recordPlatformCloudExtensionUsage(
       ),
     };
   }
+  usage ??= platformCloudExtensionFallbackUsageReport(context, response);
   if (!usage) return { ok: true };
   if (!response.ok) return { ok: true };
   if (!operationsInput) {
@@ -1253,6 +1449,248 @@ async function recordPlatformCloudExtensionUsage(
       ),
     };
   }
+}
+
+function platformCloudExtensionFallbackUsageReport(
+  context:
+    | {
+        readonly request: Request;
+        readonly route: PlatformCloudExtensionRoute;
+        readonly session: PlatformCloudExtensionSessionContext;
+      }
+    | undefined,
+  response: Response,
+):
+  | {
+      readonly spaceId: string;
+      readonly periodStart: string;
+      readonly periodEnd: string;
+      readonly meters: readonly GatewayResourceUsageMeter[];
+    }
+  | undefined {
+  if (!context || !response.ok || !context.session.spaceId) return undefined;
+  const meter = platformCloudExtensionFallbackUsageMeter(context);
+  if (!meter) return undefined;
+  const periodEndMs = Date.now();
+  return {
+    spaceId: context.session.spaceId,
+    periodStart: new Date(periodEndMs - 1).toISOString(),
+    periodEnd: new Date(periodEndMs).toISOString(),
+    meters: [meter],
+  };
+}
+
+function platformCloudExtensionFallbackUsageMeter(input: {
+  readonly request: Request;
+  readonly route: PlatformCloudExtensionRoute;
+  readonly session: PlatformCloudExtensionSessionContext;
+}): GatewayResourceUsageMeter | undefined {
+  const url = new URL(input.request.url);
+  if (input.route.kind === "ai_gateway") {
+    return platformAiGatewayFallbackUsageMeter(url, input);
+  }
+  if (input.route.id === "provider.cloudflare.client_v4") {
+    return platformCloudflareCompatFallbackUsageMeter(url, input);
+  }
+  return undefined;
+}
+
+function platformAiGatewayFallbackUsageMeter(
+  url: URL,
+  input: {
+    readonly request: Request;
+    readonly session: PlatformCloudExtensionSessionContext;
+  },
+): GatewayResourceUsageMeter | undefined {
+  if (input.request.method.toUpperCase() !== "POST") return undefined;
+  const operation = aiGatewayOperation(url.pathname);
+  if (!operation) return undefined;
+  return {
+    ...(input.session.installationId
+      ? { installationId: input.session.installationId }
+      : {}),
+    meterId: `ai:openai_compatible:${operation}`,
+    resourceFamily: "cloudflare.ai_gateway",
+    resourceId: operation,
+    operation,
+    kind: "ai_request",
+    quantity: 1,
+    credits: 1,
+  };
+}
+
+function aiGatewayOperation(pathname: string): string | undefined {
+  if (pathname.endsWith("/chat/completions")) return "chat.completions";
+  if (pathname.endsWith("/embeddings")) return "embeddings";
+  return undefined;
+}
+
+function platformCloudflareCompatFallbackUsageMeter(
+  url: URL,
+  input: {
+    readonly request: Request;
+    readonly session: PlatformCloudExtensionSessionContext;
+  },
+): GatewayResourceUsageMeter | undefined {
+  const method = input.request.method.toUpperCase();
+  if (method === "HEAD" || method === "OPTIONS") return undefined;
+  const resource = cloudflareCompatFallbackResource(url.pathname, method);
+  if (!resource) return undefined;
+  return {
+    ...(input.session.installationId
+      ? { installationId: input.session.installationId }
+      : {}),
+    meterId: resource.meterId,
+    resourceFamily: resource.resourceFamily,
+    resourceId: resource.resourceId,
+    operation: resource.operation,
+    ...(resource.resourceMetadata
+      ? { resourceMetadata: resource.resourceMetadata }
+      : {}),
+    kind: "gateway_compute",
+    quantity: 1,
+    credits: 1,
+  };
+}
+
+function cloudflareCompatFallbackResource(
+  pathname: string,
+  method: string,
+):
+  | {
+      readonly meterId: string;
+      readonly resourceFamily: string;
+      readonly resourceId: string;
+      readonly operation: string;
+      readonly resourceMetadata?: NonNullable<
+        GatewayResourceUsageMeter["resourceMetadata"]
+      >;
+    }
+  | undefined {
+  const suffix = pathname.slice(CLOUDFLARE_COMPAT_BASE_PATH.length);
+  const segments = suffix
+    .split("/")
+    .map((segment) => decodeURIComponent(segment))
+    .filter(Boolean);
+  const accountIndex = segments.indexOf("accounts");
+  const accountTail =
+    accountIndex >= 0 ? segments.slice(accountIndex + 2) : segments;
+  const operation = cloudflareCompatOperation(method, accountTail);
+  if (accountTail[0] === "workers" && accountTail[1] === "scripts") {
+    const scriptName = accountTail[2] ?? "collection";
+    return {
+      meterId: `cloudflare:workers_script:${operation}`,
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: `script:${scriptName}`,
+      operation,
+      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
+    };
+  }
+  if (accountTail[0] === "workers" && accountTail[1] === "routes") {
+    const routeId = accountTail[2] ?? "collection";
+    return {
+      meterId: `cloudflare:workers_script:route_${operation}`,
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: `route:${routeId}`,
+      operation: `route.${operation}`,
+      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
+    };
+  }
+  if (
+    accountTail[0] === "storage" &&
+    accountTail[1] === "kv" &&
+    accountTail[2] === "namespaces"
+  ) {
+    return cloudflareCompatManagedResourceMeter(
+      "kv",
+      "cloudflare.kv",
+      accountTail[3] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "r2" && accountTail[1] === "buckets") {
+    return cloudflareCompatManagedResourceMeter(
+      "r2",
+      "cloudflare.r2",
+      accountTail[2] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "d1" && accountTail[1] === "database") {
+    return cloudflareCompatManagedResourceMeter(
+      "d1",
+      "cloudflare.d1",
+      accountTail[2] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "workflows") {
+    return cloudflareCompatManagedResourceMeter(
+      "workflows",
+      "cloudflare.workflows",
+      accountTail[1] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "containers") {
+    return cloudflareCompatManagedResourceMeter(
+      "containers",
+      "cloudflare.containers",
+      accountTail[1] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "queues") {
+    return cloudflareCompatManagedResourceMeter(
+      "queues",
+      "cloudflare.queues",
+      accountTail[1] ?? "collection",
+      operation,
+    );
+  }
+  if (accountTail[0] === "durable_objects") {
+    return cloudflareCompatManagedResourceMeter(
+      "durable_objects",
+      "cloudflare.durable_objects",
+      accountTail[1] ?? "collection",
+      operation,
+    );
+  }
+  return undefined;
+}
+
+function cloudflareCompatManagedResourceMeter(
+  meterPrefix: string,
+  resourceFamily: string,
+  resourceId: string,
+  operation: string,
+): {
+  readonly meterId: string;
+  readonly resourceFamily: string;
+  readonly resourceId: string;
+  readonly operation: string;
+} {
+  return {
+    meterId: `cloudflare:${meterPrefix}:${operation}`,
+    resourceFamily,
+    resourceId: `${meterPrefix}:${resourceId}`,
+    operation,
+  };
+}
+
+function cloudflareCompatOperation(
+  method: string,
+  segments: readonly string[],
+): string {
+  if (method === "POST") return "create";
+  if (method === "PUT" || method === "PATCH") {
+    if (segments[0] === "workers" && segments[1] === "scripts") {
+      return "deploy";
+    }
+    return segments.length > 2 ? "update" : "deploy";
+  }
+  if (method === "DELETE") return "delete";
+  return segments.length > 2 ? "read" : "list";
 }
 
 function platformCloudExtensionUsageReportFromHeaders(headers: Headers):

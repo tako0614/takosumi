@@ -3255,6 +3255,36 @@ test("Gateway resource recurring metering records period-scoped UsageEvents idem
       ],
     }),
   ).rejects.toThrow("Gateway resource usage kind is not supported");
+  await expect(
+    controller.recordGatewayResourceUsage("space_test", {
+      periodStart: "2026-06-07T00:00:00.000Z",
+      periodEnd: "2026-06-07T01:00:00.000Z",
+      meters: [
+        {
+          kind: "gateway_compute",
+          quantity: 1,
+          credits: 1,
+          meterId: "cloudflare:workers.for.platforms:request",
+          resourceFamily: "cloudflare.workers_script",
+        },
+      ],
+    }),
+  ).rejects.toThrow("customer-facing managed resource");
+  await expect(
+    controller.recordGatewayResourceUsage("space_test", {
+      periodStart: "2026-06-07T00:00:00.000Z",
+      periodEnd: "2026-06-07T01:00:00.000Z",
+      meters: [
+        {
+          kind: "gateway_compute",
+          quantity: 1,
+          credits: 1,
+          meterId: "cloudflare:workers_script:request",
+          resourceFamily: "cloudflare.workers_for_platforms",
+        },
+      ],
+    }),
+  ).rejects.toThrow("customer-facing managed resource");
 });
 
 test("Gateway resource usage idempotency keeps distinct resource ids separate", async () => {

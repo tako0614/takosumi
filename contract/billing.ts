@@ -122,7 +122,7 @@ export function usageMeterNameLeaksInternalWorkersBackend(
   value: string,
 ): boolean {
   const normalized = value.trim().toLowerCase();
-  return /(^|[_.:-])(?:wfp|workers[-_:]?for[-_:]?platforms)($|[_.:-])/u.test(
+  return /(^|[_.:-])(?:wfp|workers[_.:-]?for[_.:-]?platforms)($|[_.:-])/u.test(
     normalized,
   );
 }

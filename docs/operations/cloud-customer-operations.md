@@ -216,6 +216,13 @@ bill users as `cloudflare.workers_script`, with
 Do not configure `wfp` / `workers_for_platforms` as a `meterId`,
 `resourceFamily`, or Stripe usage meter.
 
+Cloud extensions should emit precise usage headers. The platform worker also
+records fallback operation usage for successful Gateway requests that have a
+verified billing Workspace context and no usage headers, so a missing Cloud
+extension usage header does not silently skip billing evidence. Treat this as a
+GA safety net; it does not replace precise token, request, or storage metering
+inside the closed Cloud extension.
+
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
 Stripe checkout/webhook, failed payment, invoice, tax, plan transition, and

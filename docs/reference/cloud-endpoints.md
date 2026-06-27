@@ -191,6 +191,14 @@ Cloudflare account に来ますが、それだけでは Takosumi ユーザーへ
 usage report を出し、Workspace usage ledger に記録され、billing/Stripe 側で
 集計・請求されることです。
 
+Cloud extension が正確な usage header を返すのが正本です。ただし header 未配線の
+成功リクエストを無料成功にしないため、platform worker は検証済みの billing
+Workspace context がある場合に限って最低限の operation usage を fallback 記録します。
+この fallback は精密な token / storage 使用量ではなく、課金漏れ防止用の
+operation metering です。Cloudflare Workers compat の fallback も
+`cloudflare.workers_script` として記録し、Workers for Platforms は
+`resourceMetadata.backend` にだけ残します。
+
 Stripe 連携では、billing account ごとの未 export usage report を meter / unit
 単位で rollup し、Stripe invoice item として作成します。成功した usage report
 には `billingExportProvider: "stripe"`、export id、Stripe invoice item id、

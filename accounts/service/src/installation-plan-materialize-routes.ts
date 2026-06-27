@@ -45,6 +45,7 @@ import type {
   AppInstallationMaterializeRequest,
   AppInstallationMaterializeWorker,
 } from "./mod.ts";
+import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
 import { requireSameSpaceServiceGraphControlForInstallation } from "./service-graph-service-tokens.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
@@ -583,6 +584,7 @@ export async function handleReportInstallationBillingUsage(input: {
   if (
     !meter ||
     !/^[a-z][a-z0-9_.:-]{0,95}$/.test(meter) ||
+    usageMeterNameLeaksInternalWorkersBackend(meter) ||
     quantity === undefined ||
     !unit ||
     unit.length > 32 ||

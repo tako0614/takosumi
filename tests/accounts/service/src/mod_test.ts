@@ -6103,6 +6103,28 @@ test("accounts handler accepts billing usage reports from scoped installation to
     store.listInstallationEvents("inst_usage").map((event) => event.eventType),
   ).toEqual(["billing.usage_reported"]);
 
+  const internalBackendMeter = await handler(
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      {
+        method: "POST",
+        headers: { authorization: "Bearer access-usage" },
+        body: JSON.stringify({
+          reportId: "usage_report_wfp",
+          meter: "cloudflare.workers.for.platforms",
+          quantity: 1,
+          unit: "requests",
+          idempotencyKey: "usage-window-wfp",
+        }),
+      },
+    ),
+  );
+
+  expect(internalBackendMeter.status).toEqual(400);
+  expect(
+    store.listBillingUsageRecordsForInstallation("inst_usage").length,
+  ).toEqual(1);
+
   const conflictingIdempotency = await handler(
     new Request(
       "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
