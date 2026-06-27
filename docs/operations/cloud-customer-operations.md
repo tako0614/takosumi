@@ -62,7 +62,7 @@ The customer-visible sections are:
 - General: Workspace name and policy.
 - Members: owner/admin/member/viewer membership management.
 - Connections: Provider Connections and OAuth helper flows.
-- Billing: current mode, balance, plans, credit reservations, and usage.
+- Billing: current mode, USD balance, plans, reservations, and usage.
 - Backups: control/state backup history.
 - Output shares: explicit output sharing between producer and consumer
   Capsules.
@@ -74,11 +74,11 @@ support docs, and customer communication must use Workspace wording.
 
 Takosumi Cloud billing must remain understandable before enforcement is opened.
 
-- `disabled`: billing UI can be present, but deploys are not blocked by credit
+- `disabled`: billing UI can be present, but deploys are not blocked by USD balance
   state.
 - `showback`: usage is recorded for customer visibility, but no charge is
   collected.
-- `enforce`: deploys require an eligible plan or credit balance.
+- `enforce`: deploys require an eligible plan or USD balance.
 
 Before enabling `enforce` for a customer cohort, the operator must verify Stripe
 checkout, webhook ingestion, entitlement projection, invoice handling, failed

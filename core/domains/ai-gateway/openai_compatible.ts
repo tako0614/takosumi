@@ -18,6 +18,7 @@ import {
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  legacyCreditsToUsdMicros,
   type GatewayResourceUsageMeter,
 } from "takosumi-contract/billing";
 import type { JsonObject, JsonValue } from "takosumi-contract";
@@ -275,6 +276,7 @@ function handleStatus(
         contextWindow: model.contextWindow,
         maxOutputTokens: model.maxOutputTokens,
         billingClass: model.billingClass,
+        billingUsdMicrosPerRequest: model.billingUsdMicrosPerRequest,
         billingCreditsPerRequest: model.billingCreditsPerRequest,
         metadata: model.metadata,
       })),
@@ -704,7 +706,9 @@ function aiGatewayUsageMeters(input: {
   readonly model: TakosumiAiGatewayModelAlias;
   readonly authContext?: TakosumiAiGatewayAuthContext;
 }): GatewayResourceUsageMeter[] {
-  const credits = input.model.billingCreditsPerRequest ?? 0;
+  const usdMicros =
+    input.model.billingUsdMicrosPerRequest ??
+    legacyCreditsToUsdMicros(input.model.billingCreditsPerRequest ?? 0);
   const installationId = input.authContext?.installationId;
   return [
     {
@@ -715,7 +719,7 @@ function aiGatewayUsageMeters(input: {
       resourceId: input.model.publicModel,
       kind: "ai_request",
       quantity: 1,
-      credits,
+      usdMicros,
     },
   ];
 }
@@ -952,6 +956,10 @@ function parseModels(
       maxOutputTokens: optionalPositiveInteger(entry.maxOutputTokens),
       billingClass:
         typeof entry.billingClass === "string" ? entry.billingClass : undefined,
+      billingUsdMicrosPerRequest: parseOptionalNonNegativeInteger(
+        entry.billingUsdMicrosPerRequest,
+        `AI Gateway profile ${profileId}.models[${index}].billingUsdMicrosPerRequest`,
+      ),
       billingCreditsPerRequest: parseOptionalNonNegativeInteger(
         entry.billingCreditsPerRequest,
         `AI Gateway profile ${profileId}.models[${index}].billingCreditsPerRequest`,

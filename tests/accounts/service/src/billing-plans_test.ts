@@ -3,14 +3,17 @@
  * projection, and the invoice → monthly-credit-grant extraction.
  */
 import { describe, expect, test } from "bun:test";
-import { parseBillingPlans, publicBillingPlans } from "../../../../accounts/service/src/billing-plans.ts";
+import {
+  parseBillingPlans,
+  publicBillingPlans,
+} from "../../../../accounts/service/src/billing-plans.ts";
 import { stripeInvoiceCreditReconciliationInput } from "../../../../accounts/service/src/billing-routes.ts";
 
 const VALID_PLAN = {
   id: "starter",
   kind: "subscription",
   stripePriceId: "price_starter",
-  credits: 500,
+  usdMicros: 500_250_000,
   name: { ja: "スターター", en: "Starter" },
   priceDisplay: { ja: "¥1,000 / 月", en: "$8 / mo" },
 };
@@ -20,12 +23,20 @@ describe("parseBillingPlans", () => {
     const plans = parseBillingPlans(
       JSON.stringify([
         VALID_PLAN,
-        { ...VALID_PLAN, id: "pack-s", kind: "pack", credits: 100 },
+        {
+          ...VALID_PLAN,
+          id: "pack-s",
+          kind: "pack",
+          usdMicros: undefined,
+          usd: 100.125,
+        },
       ]),
     );
     expect(plans).toHaveLength(2);
     expect(plans[0]!.id).toEqual("starter");
+    expect(plans[0]!.usdMicros).toEqual(500_250_000);
     expect(plans[1]!.kind).toEqual("pack");
+    expect(plans[1]!.usdMicros).toEqual(100_125_000);
   });
 
   test("empty / absent / malformed JSON yields an empty catalog", () => {
@@ -39,7 +50,7 @@ describe("parseBillingPlans", () => {
     const plans = parseBillingPlans(
       JSON.stringify([
         VALID_PLAN,
-        { ...VALID_PLAN, id: "bad-credits", credits: -5 },
+        { ...VALID_PLAN, id: "bad-usd", usdMicros: -5 },
         { ...VALID_PLAN, id: "bad-kind", kind: "donation" },
         { ...VALID_PLAN, id: "bad-name", name: { ja: "のみ" } },
         "garbage",
@@ -50,10 +61,10 @@ describe("parseBillingPlans", () => {
 
   test("skips duplicate ids (first wins)", () => {
     const plans = parseBillingPlans(
-      JSON.stringify([VALID_PLAN, { ...VALID_PLAN, credits: 999 }]),
+      JSON.stringify([VALID_PLAN, { ...VALID_PLAN, usdMicros: 999_000_000 }]),
     );
     expect(plans).toHaveLength(1);
-    expect(plans[0]!.credits).toEqual(500);
+    expect(plans[0]!.usdMicros).toEqual(500_250_000);
   });
 
   test("the public projection drops the Stripe price id", () => {
@@ -62,7 +73,8 @@ describe("parseBillingPlans", () => {
     expect(projected[0]).toEqual({
       id: "starter",
       kind: "subscription",
-      credits: 500,
+      usdMicros: 500_250_000,
+      credits: 500.25,
       name: { ja: "スターター", en: "Starter" },
       priceDisplay: { ja: "¥1,000 / 月", en: "$8 / mo" },
     });
@@ -88,16 +100,20 @@ describe("stripeInvoiceCreditReconciliationInput", () => {
             metadata:
               overrides && "metadata" in overrides
                 ? overrides.metadata
-                : { space_id: "space_a", plan_code: "starter", credits: "500" },
+                : {
+                    space_id: "space_a",
+                    plan_code: "starter",
+                    usd_micros: "500250000",
+                  },
           },
         },
       },
     });
 
-  test("grants the plan credits to the metadata Space for invoice.paid", () => {
+  test("grants the plan USD balance to the metadata Space for invoice.paid", () => {
     expect(stripeInvoiceCreditReconciliationInput(invoiceEvent())).toEqual({
       spaceId: "space_a",
-      credits: 500,
+      usdMicros: 500_250_000,
       stripeEventId: "evt_invoice_1",
     });
   });
@@ -109,7 +125,7 @@ describe("stripeInvoiceCreditReconciliationInput", () => {
       ),
     ).toEqual({
       spaceId: "space_a",
-      credits: 500,
+      usdMicros: 500_250_000,
       stripeEventId: "evt_invoice_1",
     });
   });

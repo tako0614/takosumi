@@ -198,20 +198,20 @@ export interface RunEventsResponse {
  * (`GET /internal/v1/runs/:runId/cost`). It surfaces the billing reservation values the
  * controller ALREADY computed at plan time so a dashboard can explain, before
  * apply, why an apply would be blocked under `enforce` mode (insufficient
- * credits / a billing-plan limit). It carries no credit cost formula and no
+ * USD balance / a billing-plan limit). It carries no cost formula and no
  * secret material — only counts already recorded on the run's billing audit.
  *
  *   - `billingMode`        — the Space's billing mode at plan time
  *                            (`disabled` / `showback` / `enforce`).
- *   - `estimatedCredits`   — the credits the controller estimated this plan
- *                            would consume on apply.
- *   - `availableCredits`   — the Space's available credit balance observed when
- *                            a reservation was attempted, when known.
+ *   - `estimatedUsdMicros` — the USD amount the controller estimated this plan
+ *                            would consume on apply, in micros.
+ *   - `availableUsdMicros` — the Space's available USD balance observed when
+ *                            a reservation was attempted, in micros, when known.
  *   - `reservationStatus`  — `reserved` when credits were held, or
  *                            `insufficient_credits` when the reservation could
  *                            not be made (the apply would be blocked under
  *                            `enforce`). Absent when no reservation was needed.
- *   - `creditShortfall`    — `estimatedCredits - availableCredits` when that is
+ *   - `shortfallUsdMicros` — `estimatedUsdMicros - availableUsdMicros` when that is
  *                            positive (the missing amount), else absent.
  *   - `blocked`            — true when billing blocks this plan from applying
  *                            under `enforce` mode.
@@ -223,9 +223,15 @@ export interface RunEventsResponse {
 export interface RunCostInfo {
   readonly runId: string;
   readonly billingMode: "disabled" | "showback" | "enforce";
+  readonly estimatedUsdMicros: number;
+  readonly availableUsdMicros?: number;
+  readonly shortfallUsdMicros?: number;
+  /** @deprecated Use estimatedUsdMicros. */
   readonly estimatedCredits: number;
+  /** @deprecated Use availableUsdMicros. */
   readonly availableCredits?: number;
   readonly reservationStatus?: "reserved" | "insufficient_credits";
+  /** @deprecated Use shortfallUsdMicros. */
   readonly creditShortfall?: number;
   readonly blocked: boolean;
   readonly reasons: readonly string[];

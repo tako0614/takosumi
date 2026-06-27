@@ -29,6 +29,10 @@ import type {
   RunType,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import {
+  legacyCreditsToUsdMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 
 type RunEnvironmentEvidenceProjection = Pick<
   Run,
@@ -373,16 +377,16 @@ function numberOrUndefined(value: JsonValue | undefined): number | undefined {
  *
  * This is a PURE re-projection of values the controller ALREADY computed and
  * recorded on the run at plan time: the billing audit attached to the
- * `plan.policy_evaluated` event (mode / estimated credits / available credits /
+ * `plan.policy_evaluated` event (mode / estimated USD / available USD /
  * reservation status) and the billing-shortfall reasons recorded on the run's
  * policy decision. It computes no cost (it never calls the credit estimator) and
  * surfaces no secret material — only the counts and reasons already persisted —
  * so a dashboard can explain, before apply, why an apply would be blocked under
- * `enforce` mode (insufficient credits / a billing-plan limit).
+ * `enforce` mode (insufficient USD balance / a billing-plan limit).
  *
  * A plan that never reached billing evaluation (no `plan.policy_evaluated`
  * event, e.g. a still-queued or pre-policy-failure run) projects a
- * `disabled`-mode, zero-credit, non-blocked cost so the field is always present.
+ * `disabled`-mode, zero-USD, non-blocked cost so the field is always present.
  */
 export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   const billing = planBillingAudit(planRun);
@@ -391,17 +395,30 @@ export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
     modeValue === "enforce" || modeValue === "showback"
       ? modeValue
       : "disabled";
-  const estimatedCredits = numberOrUndefined(billing?.estimatedCredits) ?? 0;
-  const availableCredits = numberOrUndefined(billing?.availableCredits);
+  const legacyEstimatedCredits = numberOrUndefined(billing?.estimatedCredits);
+  const legacyAvailableCredits = numberOrUndefined(billing?.availableCredits);
+  const estimatedUsdMicros =
+    numberOrUndefined(billing?.estimatedUsdMicros) ??
+    legacyCreditsToUsdMicros(legacyEstimatedCredits ?? 0);
+  const availableUsdMicros =
+    numberOrUndefined(billing?.availableUsdMicros) ??
+    (legacyAvailableCredits === undefined
+      ? undefined
+      : legacyCreditsToUsdMicros(legacyAvailableCredits));
+  const estimatedCredits = usdMicrosToLegacyCredits(estimatedUsdMicros);
+  const availableCredits =
+    availableUsdMicros === undefined
+      ? undefined
+      : usdMicrosToLegacyCredits(availableUsdMicros);
   const reservationValue = billing?.reservationStatus;
   const reservationStatus: RunCostInfo["reservationStatus"] | undefined =
     reservationValue === "reserved" ||
     reservationValue === "insufficient_credits"
       ? reservationValue
       : undefined;
-  const shortfall =
-    availableCredits !== undefined && estimatedCredits > availableCredits
-      ? estimatedCredits - availableCredits
+  const shortfallUsdMicros =
+    availableUsdMicros !== undefined && estimatedUsdMicros > availableUsdMicros
+      ? estimatedUsdMicros - availableUsdMicros
       : undefined;
   // Billing blocks the plan only when the run is policy-`blocked`: a passed
   // plan never blocks on billing even in `enforce`. The credit-shortfall and
@@ -417,23 +434,30 @@ export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   return {
     runId: planRun.id,
     billingMode,
+    estimatedUsdMicros,
+    ...(availableUsdMicros !== undefined ? { availableUsdMicros } : {}),
+    ...(shortfallUsdMicros !== undefined ? { shortfallUsdMicros } : {}),
     estimatedCredits,
     ...(availableCredits !== undefined ? { availableCredits } : {}),
     ...(reservationStatus ? { reservationStatus } : {}),
-    ...(shortfall !== undefined ? { creditShortfall: shortfall } : {}),
+    ...(shortfallUsdMicros !== undefined
+      ? { creditShortfall: usdMicrosToLegacyCredits(shortfallUsdMicros) }
+      : {}),
     blocked,
     reasons,
   };
 }
 
 /**
- * True for a policy reason string that describes a billing/credit block. The
- * controller emits credit-shortfall reasons starting `credit reservation
- * failed:` and billing-plan limit reasons starting `billing plan `; both carry
- * only credit counts / a billing plan id, never secrets.
+ * True for a policy reason string that describes a billing/USD-balance block.
+ * The controller emits USD balance reasons starting `USD balance reservation
+ * failed:` and billing-plan limit reasons starting `billing plan `; legacy
+ * credit reasons are accepted only for old persisted runs. These strings carry
+ * only amounts / a billing plan id, never secrets.
  */
 function isBillingReason(reason: string): boolean {
   return (
+    reason.startsWith("USD balance reservation failed:") ||
     reason.startsWith("credit reservation failed:") ||
     reason.startsWith("billing plan ")
   );

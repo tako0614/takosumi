@@ -55,10 +55,12 @@ export interface TakosumiAiGatewayModelAlias {
   readonly maxOutputTokens?: number;
   readonly billingClass?: string;
   /**
-   * Operator-defined Takosumi credits charged for each successful model request
-   * emitted into the Cloud extension usage ledger. Upstream provider billing is
-   * still handled by the operator account.
+   * Operator-defined Takosumi USD amount charged for each successful model
+   * request, in micros. Emitted into the Cloud extension usage ledger. Upstream
+   * provider billing is still handled by the operator account.
    */
+  readonly billingUsdMicrosPerRequest?: number;
+  /** @deprecated Use billingUsdMicrosPerRequest. */
   readonly billingCreditsPerRequest?: number;
   /**
    * Public model metadata returned from /gateway/ai/v1/models.
@@ -154,6 +156,8 @@ export interface TakosumiAiGatewayStatusResponse {
       readonly contextWindow?: number;
       readonly maxOutputTokens?: number;
       readonly billingClass?: string;
+      readonly billingUsdMicrosPerRequest?: number;
+      /** @deprecated Use billingUsdMicrosPerRequest. */
       readonly billingCreditsPerRequest?: number;
       readonly metadata?: JsonObject;
     }[];

@@ -326,10 +326,10 @@ export const en: Record<keyof typeof ja, string> = {
     "This change replaces or deletes existing resources. Running it may lose data.",
   "run.destructiveConfirm": "Proceed, accepting the destructive changes",
   "run.stop": "Cancel",
-  "run.cost.required": "Credits needed: ~{n}",
+  "run.cost.required": "Estimated cost: ~{n}",
   "run.cost.balance": "Balance: {n}",
   "run.cost.shortfall":
-    "Your credit balance is short by about {n}, so this cannot run.",
+    "Your USD balance is short by about {n}, so this cannot run.",
   "run.cost.blocked": "This cannot run due to balance or limits.",
   "run.cost.capacityNeeded": "Capacity needed: ~{n}",
   "run.cost.capacity": "Available capacity: {n}",
@@ -981,7 +981,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.plans.subscribe": "Choose this plan",
   "billing.plans.perMonth": "{n} per month",
   "billing.packs.title": "Balance packs",
-  "billing.packs.credits": "{n}",
+  "billing.packs.amount": "{n}",
   "billing.packs.buy": "Buy",
   "billing.portal": "Manage payment and invoices",
   "billing.portalUnavailable":

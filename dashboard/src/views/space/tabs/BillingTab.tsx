@@ -226,7 +226,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
         <span class="av-plan-credits">
           {plan.kind === "subscription"
             ? t("billing.plans.perMonth", { n: formatPlanUsd(plan) })
-            : t("billing.packs.credits", { n: formatPlanUsd(plan) })}
+            : t("billing.packs.amount", { n: formatPlanUsd(plan) })}
         </span>
       </div>
       <Button

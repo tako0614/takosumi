@@ -2,7 +2,7 @@
  * §28 billing public routes.
  *
  * These handlers expose the control-plane billing ledger already used by
- * plan/apply: settings + credit balance, usage events, manual credit top-up, and
+ * plan/apply: settings + USD balance, usage events, manual USD top-up, and
  * billing settings change. Stripe checkout/subscription orchestration remains an
  * operator/account-plane integration layered behind these records.
  */
@@ -32,7 +32,7 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     {
       method: "GET",
       path: TAKOSUMI_SPACE_BILLING_ROUTE,
-      summary: "Reads Space billing settings and credit balance.",
+      summary: "Reads Space billing settings and USD balance.",
       auth: "deploy-control-token",
       operationId: "getSpaceBilling",
       openapi: { pathParams: ["spaceId"], okSchema: "SpaceBillingResponse" },
