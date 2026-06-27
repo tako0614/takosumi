@@ -1025,14 +1025,24 @@ export async function handlePlatformCloudExtensionRouteRequest(
     sessionVerifier,
   );
   if (!authContext.ok) return authContext.response;
+  const priceBook = platformCloudUsagePriceBookFromEnv(env);
+  const prechargeResult = await prechargePlatformCloudExtensionUsage(
+    request,
+    route,
+    authContext.session,
+    usageOperations,
+    priceBook,
+  );
+  if (!prechargeResult.ok) return prechargeResult.response;
   const upstreamResponse = await binding.fetch(
     requestForPlatformCloudExtensionBinding(authContext.request, route),
   );
   const usageResult = await recordPlatformCloudExtensionUsage(
     upstreamResponse,
-    usageOperations,
+    prechargeResult.operations ?? usageOperations,
     { request, route, session: authContext.session },
-    platformCloudUsagePriceBookFromEnv(env),
+    priceBook,
+    prechargeResult.chargedMeters,
   );
   if (!usageResult.ok) return usageResult.response;
   return responseForPlatformCloudExtensionClient(
@@ -1075,6 +1085,14 @@ export interface PlatformCloudExtensionUsageOperations {
 type PlatformCloudExtensionUsageOperationsInput =
   | PlatformCloudExtensionUsageOperations
   | (() => Promise<PlatformCloudExtensionUsageOperations>);
+
+type PlatformCloudExtensionPrechargeResult =
+  | {
+      readonly ok: true;
+      readonly operations?: PlatformCloudExtensionUsageOperations;
+      readonly chargedMeters: readonly GatewayResourceUsageMeter[];
+    }
+  | { readonly ok: false; readonly response: Response };
 
 export const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
   TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER;
@@ -1269,21 +1287,30 @@ function platformCloudUsagePriceBookEntryFromJson(
 function platformCloudPricedUsageInput(
   input: PlatformCloudExtensionUsageInput,
   priceBook: PlatformCloudUsagePriceBook | undefined,
+  prechargedMeters: readonly GatewayResourceUsageMeter[] = [],
 ): PlatformCloudExtensionUsageInput {
-  return {
+  if (!priceBook) {
+    throw new TypeError(
+      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK is required for Cloud extension usage",
+    );
+  }
+  const priced = {
     ...input,
     spendRequired: true,
     meters: input.meters.map((meter) =>
       platformCloudPricedUsageMeter(meter, priceBook),
     ),
   };
+  return {
+    ...priced,
+    meters: subtractPrechargedUsageMeters(priced.meters, prechargedMeters),
+  };
 }
 
 function platformCloudPricedUsageMeter(
   meter: GatewayResourceUsageMeter,
-  priceBook: PlatformCloudUsagePriceBook | undefined,
+  priceBook: PlatformCloudUsagePriceBook,
 ): GatewayResourceUsageMeter {
-  if (!priceBook) return meter;
   const entry = platformCloudPriceBookEntryForMeter(meter, priceBook);
   if (!entry) {
     throw new TypeError(
@@ -1297,6 +1324,79 @@ function platformCloudPricedUsageMeter(
   );
   const { credits: _credits, usdMicros: _usdMicros, ...rest } = meter;
   return { ...rest, usdMicros };
+}
+
+function subtractPrechargedUsageMeters(
+  meters: readonly GatewayResourceUsageMeter[],
+  prechargedMeters: readonly GatewayResourceUsageMeter[],
+): readonly GatewayResourceUsageMeter[] {
+  if (prechargedMeters.length === 0) return meters;
+  const precharged = new Map<string, number>();
+  for (const meter of prechargedMeters) {
+    const usdMicros = gatewayUsageMeterUsdMicros(meter);
+    if (usdMicros <= 0) continue;
+    for (const key of gatewayUsageMeterDeductionKeys(meter)) {
+      precharged.set(key, (precharged.get(key) ?? 0) + usdMicros);
+    }
+  }
+  const adjusted: GatewayResourceUsageMeter[] = [];
+  for (const meter of meters) {
+    const usdMicros = gatewayUsageMeterUsdMicros(meter);
+    const key = gatewayUsageMeterDeductionKeys(meter).find((candidate) =>
+      precharged.has(candidate),
+    );
+    if (!key || usdMicros <= 0) {
+      adjusted.push(meter);
+      continue;
+    }
+    const alreadyCharged = precharged.get(key) ?? 0;
+    if (alreadyCharged >= usdMicros) {
+      precharged.set(key, alreadyCharged - usdMicros);
+      continue;
+    }
+    precharged.set(key, 0);
+    const { credits: _credits, usdMicros: _usdMicros, ...rest } = meter;
+    adjusted.push({ ...rest, usdMicros: usdMicros - alreadyCharged });
+  }
+  return adjusted;
+}
+
+function gatewayUsageMeterDeductionKeys(
+  meter: GatewayResourceUsageMeter,
+): readonly string[] {
+  const exact = [
+    "exact",
+    meter.installationId ?? "",
+    meter.meterId,
+    meter.resourceFamily ?? "",
+    meter.resourceId ?? "",
+    meter.operation ?? "",
+    meter.kind,
+  ].join("\u0000");
+  if (
+    meter.kind === "ai_request" &&
+    meter.resourceFamily === "cloudflare.ai_gateway" &&
+    meter.operation
+  ) {
+    return [
+      exact,
+      ["ai-request", meter.installationId ?? "", meter.operation].join(
+        "\u0000",
+      ),
+    ];
+  }
+  return [exact];
+}
+
+function gatewayUsageMeterUsdMicros(meter: GatewayResourceUsageMeter): number {
+  if (
+    typeof meter.usdMicros === "number" &&
+    Number.isSafeInteger(meter.usdMicros) &&
+    meter.usdMicros > 0
+  ) {
+    return meter.usdMicros;
+  }
+  return legacyCreditsToUsdMicros(meter.credits ?? 0);
 }
 
 function platformCloudPriceBookEntryForMeter(
@@ -1746,6 +1846,7 @@ async function recordPlatformCloudExtensionUsage(
     readonly session: PlatformCloudExtensionSessionContext;
   },
   priceBook?: PlatformCloudUsagePriceBook,
+  prechargedMeters: readonly GatewayResourceUsageMeter[] = [],
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly response: Response }
 > {
@@ -1800,7 +1901,9 @@ async function recordPlatformCloudExtensionUsage(
         meters: usage.meters,
       },
       priceBook,
+      prechargedMeters,
     );
+    if (pricedInput.meters.length === 0) return { ok: true };
     const result = await operations.recordGatewayResourceUsage(
       usage.spaceId,
       pricedInput,
@@ -1825,6 +1928,107 @@ async function recordPlatformCloudExtensionUsage(
             "Cloud extension usage could not be recorded, so the request was not returned as a billable success.",
         },
         { status: 502 },
+      ),
+    };
+  }
+}
+
+async function prechargePlatformCloudExtensionUsage(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+  operationsInput: PlatformCloudExtensionUsageOperationsInput | undefined,
+  priceBook: PlatformCloudUsagePriceBook | undefined,
+): Promise<PlatformCloudExtensionPrechargeResult> {
+  const meter = platformCloudExtensionFallbackUsageMeter({
+    request,
+    route,
+    session,
+  });
+  if (!meter) return { ok: true, chargedMeters: [] };
+  if (!session.spaceId) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "billing workspace required",
+          error_description:
+            "Cloud resource requests require a billing workspace before upstream usage is attempted.",
+        },
+        { status: 400 },
+      ),
+    };
+  }
+  if (!operationsInput) {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "usage metering unavailable",
+          error_description:
+            "Cloud resource requests require the platform usage ledger before upstream usage is attempted.",
+        },
+        { status: 502 },
+      ),
+    };
+  }
+  let pricedInput: PlatformCloudExtensionUsageInput;
+  try {
+    const now = Date.now();
+    pricedInput = platformCloudPricedUsageInput(
+      {
+        periodStart: new Date(now - 1).toISOString(),
+        periodEnd: new Date(now).toISOString(),
+        meters: [meter],
+      },
+      priceBook,
+    );
+  } catch {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "usage pricing unavailable",
+          error_description:
+            "Cloud resource requests require an operator price book before upstream usage is attempted.",
+        },
+        { status: 502 },
+      ),
+    };
+  }
+  try {
+    const operations =
+      typeof operationsInput === "function"
+        ? await operationsInput()
+        : operationsInput;
+    const result = await operations.recordGatewayResourceUsage(
+      session.spaceId,
+      pricedInput,
+    );
+    if (operations.recordBillingUsageReports) {
+      try {
+        await operations.recordBillingUsageReports({
+          usageEvents: result.usageEvents,
+        });
+      } catch (error) {
+        reportPlatformCloudExtensionBillingSyncFailure(error);
+      }
+    }
+    return {
+      ok: true,
+      operations,
+      chargedMeters: pricedInput.meters,
+    };
+  } catch {
+    return {
+      ok: false,
+      response: Response.json(
+        {
+          error: "insufficient cloud balance",
+          error_description:
+            "Cloud resource usage could not be precharged, so upstream usage was not attempted.",
+        },
+        { status: 402 },
       ),
     };
   }
