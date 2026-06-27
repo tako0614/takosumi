@@ -278,10 +278,11 @@ test("control bundle includes PUBLIC connection records, never blobs", async () 
     id: "conn_1",
     spaceId: "space_1",
     provider: "cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     kind: "cloudflare_api_token",
     scope: "space",
-    authMethod: "static_secret",
-    status: "active",
+    materialization: "secret",
+    status: "verified",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: TS,
     updatedAt: TS,
@@ -356,30 +357,20 @@ test("control bundle carries state-snapshot metadata + output projection only", 
     outputDigest: "sha256:" + "d".repeat(64),
     createdAt: "2026-06-06T00:01:00.000Z",
   });
-  await store.putProviderCatalogEntry({
-    id: "cloudflare",
-    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-    displayName: "Cloudflare",
-    recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-    ownershipOptions: ["env"],
-    allowedResources: [],
-    allowedDataSources: [],
-    policyPackId: "policy_cloudflare",
-    createdAt: TS,
-    updatedAt: TS,
-  });
-  await store.putProviderEnv({
-    id: "penv_backup_secret_cloudflare",
+  await store.putConnection({
+    id: "conn_backup_cloudflare",
     spaceId: "space_1",
+    scope: "space",
+    provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    kind: "cloudflare_api_token",
     displayName: "Cloudflare",
     materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: "conn_backup_cloudflare",
+    status: "verified",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: TS,
     updatedAt: TS,
+    verifiedAt: TS,
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "dp_1",
@@ -390,7 +381,7 @@ test("control bundle carries state-snapshot metadata + output projection only", 
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "penv_backup_secret_cloudflare",
+        connectionId: "conn_backup_cloudflare",
       },
     ],
     createdAt: TS,
@@ -521,8 +512,10 @@ test("control bundle carries state-snapshot metadata + output projection only", 
   expect(bundle.outputSnapshots[0]!.rawOutputArtifactKey).toContain(
     "raw-output.json.enc",
   );
-  expect(bundle.providerCatalog.map((entry: any) => entry.id)).toEqual([
-    "cloudflare",
+  // The standalone Provider Catalog is removed after the credential-model
+  // collapse; the unified Provider Connection records are captured instead.
+  expect(bundle.connections.map((connection: any) => connection.id)).toEqual([
+    "conn_backup_cloudflare",
   ]);
   expect(
     bundle.providerEnvBindingSets.map((profile: any) => profile.id),

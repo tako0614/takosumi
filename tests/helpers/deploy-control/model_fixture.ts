@@ -49,7 +49,7 @@ export interface SeedModelOptions {
 
 export interface SeedProviderConnectionOptions {
   readonly requiredProviders?: readonly string[];
-  readonly materialization?: "secret" | "gateway";
+  readonly materialization?: "secret" | "oauth";
 }
 
 export const FIXTURE_ARCHIVE_DIGEST =
@@ -232,55 +232,33 @@ export async function seedProviderConnections(
   ];
   if (requiredProviders.length === 0) return;
   const materialization = options.materialization ?? "secret";
-  const connections = requiredProviders.map((provider) => {
+  const now = "2026-06-06T00:00:00.000Z";
+  const bindings = requiredProviders.map((provider) => {
     const shortName = providerShortName(provider);
-    const connectionId = `conn_fixture_${sanitizeId(installation.spaceId)}_${shortName}`;
-    const gatewayEnvId = `penv_fixture_gateway_${shortName}`;
     return {
       provider: shortName,
       alias: "main",
-      envId: materialization === "secret" ? connectionId : gatewayEnvId,
+      connectionId: `conn_fixture_${sanitizeId(installation.spaceId)}_${shortName}`,
     } as const;
   });
   for (const provider of requiredProviders) {
     const shortName = providerShortName(provider);
     const connectionId = `conn_fixture_${sanitizeId(installation.spaceId)}_${shortName}`;
-    const now = "2026-06-06T00:00:00.000Z";
-    if (materialization === "secret") {
-      const connection: Connection = {
-        id: connectionId,
-        spaceId: installation.spaceId,
-        scope: "space",
-        provider: shortName,
-        kind: providerConnectionKind(shortName),
-        authMethod: "static_secret",
-        status: "verified",
-        envNames: providerEnvNames(provider),
-        createdAt: now,
-        updatedAt: now,
-        verifiedAt: now,
-      };
-      await store.putConnection(connection);
-    }
-    await store.putProviderEnv({
-      id:
-        materialization === "secret"
-          ? connectionId
-          : `penv_fixture_gateway_${shortName}`,
-      ...(materialization === "secret"
-        ? { spaceId: installation.spaceId }
-        : {}),
+    const connection: Connection = {
+      id: connectionId,
+      spaceId: installation.spaceId,
+      scope: "space",
+      provider: shortName,
       providerSource: provider,
-      displayName: shortName,
+      kind: providerConnectionKind(shortName),
+      status: "verified",
       materialization,
-      status: "ready",
-      requiredEnvNames: providerEnvNames(provider),
-      ...(materialization === "secret"
-        ? { secretRef: connectionId }
-        : { gatewayProfileId: "cloudflare-default" }),
+      envNames: providerEnvNames(provider),
       createdAt: now,
       updatedAt: now,
-    });
+      verifiedAt: now,
+    };
+    await store.putConnection(connection);
   }
   await store.putInstallationProviderEnvBindingSet({
     id: `ipcset_fixture_${sanitizeId(installation.id)}_${sanitizeId(
@@ -289,7 +267,7 @@ export async function seedProviderConnections(
     spaceId: installation.spaceId,
     installationId: installation.id,
     environment: installation.environment,
-    bindings: connections,
+    bindings,
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });

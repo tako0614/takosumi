@@ -28,7 +28,6 @@ import type {
 import type { PolicyConfig } from "takosumi-contract/installations";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import { normalizeProviderCredentialOwnershipOptions } from "takosumi-contract/connections";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
   OpenTofuControllerError,
@@ -444,10 +443,7 @@ export class SourcesService {
       sourceSnapshotId: snapshot.id,
       level: analysis.level,
       findings: analysis.findings,
-      providers: await this.#enrichProviderOwnershipOptions(
-        spaceId,
-        analysis.providers,
-      ),
+      providers: analysis.providers,
       resources: analysis.resources,
       dataSources: analysis.dataSources,
       provisioners: analysis.provisioners,
@@ -665,27 +661,6 @@ export class SourcesService {
     }
     const space = await this.#store.getSpace(spaceId);
     return mergePolicyConfigs(space?.policy, config.policy);
-  }
-
-  async #enrichProviderOwnershipOptions(
-    spaceId: string,
-    providers: readonly CapsuleProviderRequirement[],
-  ): Promise<readonly CapsuleProviderRequirement[]> {
-    void spaceId;
-    const catalogEntries = await this.#store.listProviderCatalogEntries();
-    const catalogBySource = new Map(
-      catalogEntries.map((entry) => [
-        canonicalProviderAddress(entry.providerSource),
-        normalizeProviderCredentialOwnershipOptions(entry.ownershipOptions),
-      ]),
-    );
-    return providers.map((provider) => {
-      const source = canonicalProviderAddress(provider.source);
-      const ownershipOptions = catalogBySource.get(source);
-      return ownershipOptions && ownershipOptions.length > 0
-        ? { ...provider, ownershipOptions }
-        : provider;
-    });
   }
 
   async #persistNormalizedArtifact(

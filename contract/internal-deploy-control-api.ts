@@ -13,12 +13,12 @@ import type { PublicInstallation } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
 import type { DeployRequest } from "./deploy.ts";
-import type { InstallationProviderEnvBindings } from "./provider-envs.ts";
+import type { InstallationProviderEnvBindings } from "./connections.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
-  ListProviderCatalogEntriesResponse,
-  ProviderCatalogEntryResponse,
-  ProviderCatalogEntry,
+  ListProvidersResponse,
+  ProviderListingResponse,
+  ProviderListing,
 } from "./providers.ts";
 
 // ---------------------------------------------------------------------------
@@ -811,5 +811,4 @@ export interface ListDeploymentOutputsResponse {
 
 export * from "./connections.ts";
 export * from "./deploy-control-errors.ts";
-export * from "./provider-envs.ts";
 export { PROVIDER_PATH, PROVIDERS_PATH } from "./providers.ts";

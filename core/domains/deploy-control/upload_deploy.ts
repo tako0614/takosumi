@@ -22,7 +22,7 @@ import type {
   Installation,
   PublicInstallation,
 } from "takosumi-contract/installations";
-import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
 import type { JsonValue } from "takosumi-contract";
 import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";

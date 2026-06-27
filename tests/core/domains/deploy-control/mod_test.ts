@@ -96,9 +96,10 @@ async function seedProviderConnections(
       id: connectionId,
       spaceId: installation.spaceId,
       provider: shortName,
+      providerSource: provider,
       scope: "space",
-      authMethod: "static_secret",
       status: "verified",
+      materialization: "secret",
       envNames: providerEnvNames(shortName),
       verifiedAt: now,
       createdAt: now,
@@ -110,24 +111,12 @@ async function seedProviderConnections(
       binding: {
         provider: shortName,
         alias: "main",
-        envId: connectionId,
+        connectionId,
       },
     };
   });
-  for (const { connection, providerSource } of bindings) {
+  for (const { connection } of bindings) {
     await store.putConnection(connection);
-    await store.putProviderEnv({
-      id: connection.id,
-      spaceId: installation.spaceId,
-      providerSource,
-      displayName: connection.provider,
-      materialization: "secret",
-      status: "ready",
-      requiredEnvNames: connection.envNames ?? [],
-      secretRef: connection.id,
-      createdAt: now,
-      updatedAt: now,
-    });
   }
   await store.putInstallationProviderEnvBindingSet({
     id: `ipcset_seed_${installation.id}`,
@@ -1480,27 +1469,16 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     id: "conn_vercel",
     spaceId: "space_test",
     provider,
+    providerSource: provider,
     kind: "generic_env_provider",
     scope: "space",
-    authMethod: "generic_env",
+    materialization: "secret",
     displayName: "Vercel generic env",
     status: "verified",
     envNames: ["VERCEL_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
-  });
-  await store.putProviderEnv({
-    id: "penv_vercel",
-    spaceId: "space_test",
-    providerSource: provider,
-    displayName: "Vercel generic env",
-    materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["VERCEL_API_TOKEN"],
-    secretRef: "conn_vercel",
-    createdAt: "2026-06-06T00:00:00.000Z",
-    updatedAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_vercel",
@@ -1511,7 +1489,7 @@ test("generic-env providers run on an ordinary runner profile when the provider 
       {
         provider,
         alias: "main",
-        envId: "penv_vercel",
+        connectionId: "conn_vercel",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -1581,27 +1559,16 @@ test("generic-env provider policy also passes with a Space generic-env connectio
     id: "conn_vercel",
     spaceId: "space_test",
     provider,
+    providerSource: provider,
     kind: "generic_env_provider",
     scope: "space",
-    authMethod: "generic_env",
+    materialization: "secret",
     displayName: "Vercel generic env",
     status: "verified",
     envNames: ["VERCEL_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
-  });
-  await store.putProviderEnv({
-    id: "penv_vercel",
-    spaceId: "space_test",
-    providerSource: provider,
-    displayName: "Vercel generic env",
-    materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["VERCEL_API_TOKEN"],
-    secretRef: "conn_vercel",
-    createdAt: "2026-06-06T00:00:00.000Z",
-    updatedAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_vercel",
@@ -1612,7 +1579,7 @@ test("generic-env provider policy also passes with a Space generic-env connectio
       {
         provider,
         alias: "main",
-        envId: "penv_vercel",
+        connectionId: "conn_vercel",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",

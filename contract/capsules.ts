@@ -7,7 +7,6 @@
  */
 
 import type { PublicRun, Run } from "./runs.ts";
-import type { ProviderCredentialOwnership } from "./connections.ts";
 import type {
   ProviderRequirement,
   ProviderResolution,
@@ -37,7 +36,6 @@ export interface CapsuleProviderRequirement {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
-  readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
 }
 
 export interface CapsuleResourceSummary {

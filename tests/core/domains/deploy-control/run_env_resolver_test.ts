@@ -4,7 +4,6 @@ import type {
   Connection,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
-import type { ProviderEnv } from "takosumi-contract/provider-envs";
 import type { ResolvedInstallationProviderEnvBinding } from "../../../../core/domains/connections/mod.ts";
 import type { RunCredentials } from "../../../../core/domains/deploy-control/mod.ts";
 import {
@@ -51,28 +50,12 @@ function connection(over: Partial<Connection> = {}): Connection {
     id: "conn_1",
     spaceId: "space_1",
     provider: "cloudflare",
+    providerSource: CLOUDFLARE_PROVIDER,
     kind: "cloudflare_api_token",
     materialization: "secret",
-    credentialDriver: "cloudflare_api_token",
     scope: "space",
-    authMethod: "api_token",
     status: "verified",
     envNames: ["CLOUDFLARE_API_TOKEN"],
-    createdAt: "2026-06-15T00:00:00.000Z",
-    updatedAt: "2026-06-15T00:00:00.000Z",
-    ...over,
-  };
-}
-
-function providerEnv(over: Partial<ProviderEnv> = {}): ProviderEnv {
-  return {
-    id: "penv_1",
-    spaceId: "space_1",
-    providerSource: CLOUDFLARE_PROVIDER,
-    displayName: "Cloudflare",
-    materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-15T00:00:00.000Z",
     updatedAt: "2026-06-15T00:00:00.000Z",
     ...over,
@@ -97,18 +80,17 @@ function resolver(input: {
   });
 }
 
-test("RunEnvResolver resolves secret Provider Envs without hashing secret values", async () => {
+test("RunEnvResolver resolves secret Provider Connections without hashing secret values", async () => {
   let secret = "first-secret";
   const calls: Array<{ phase: string; auditRunId: string }> = [];
-  const env = providerEnv();
+  const conn = connection();
   const subject = resolver({
     calls,
     resolved: [
       {
         provider: "cloudflare",
-        env,
         materialization: "secret",
-        connection: connection(),
+        connection: conn,
       },
     ],
     credentials: () => ({ CLOUDFLARE_API_TOKEN: secret }),
@@ -137,11 +119,11 @@ test("RunEnvResolver resolves secret Provider Envs without hashing secret values
   );
   expect(first.providerResolutions[0]).toMatchObject({
     status: "resolved_provider_env",
-    envId: env.id,
+    envId: conn.id,
     materialization: "secret",
     evidence: {
       kind: "provider_env",
-      envId: env.id,
+      envId: conn.id,
       materialization: "secret",
       requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
     },
@@ -156,17 +138,12 @@ test("RunEnvResolver resolves secret Provider Envs without hashing secret values
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
-test("RunEnvResolver blocks Cloud-only gateway Provider Envs in OSS", async () => {
-  const env = providerEnv({
-    id: "penv_gateway",
-    materialization: "gateway" as never,
-    requiredEnvNames: [],
-  });
+test("RunEnvResolver blocks Cloud-only gateway materialization in OSS", async () => {
   const subject = resolver({
     resolved: [
       {
         provider: "cloudflare",
-        env,
+        connection: connection({ id: "conn_gateway" }),
         materialization: "gateway" as never,
       },
     ],
@@ -209,7 +186,7 @@ test("RunEnvResolver fails closed with blocked provider resolution evidence", as
   expect(error.runEnvironment.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
-test("RunEnvResolver does not require Provider Envs for credential-free providers", async () => {
+test("RunEnvResolver does not require Provider Connections for credential-free providers", async () => {
   const calls: Array<{ phase: string; auditRunId: string }> = [];
   const subject = resolver({
     calls,

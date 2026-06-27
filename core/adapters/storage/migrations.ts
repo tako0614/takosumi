@@ -565,45 +565,6 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["run_id"]],
     },
     {
-      // Provider Catalog (read-only provider source / credential source
-      // metadata; the live table, distinct from the v43 `_entries` dead table).
-      name: "takosumi_provider_catalog",
-      domain: "deploy",
-      columns: [
-        "id",
-        "provider_source",
-        "primary_materialization",
-        "gateway_eligible",
-        "entry_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["provider_source"]],
-      indexes: [["primary_materialization"], ["gateway_eligible"]],
-    },
-    {
-      name: "takosumi_provider_envs",
-      domain: "deploy",
-      columns: [
-        "id",
-        "space_id",
-        "provider_source",
-        "materialization",
-        "status",
-        "env_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      indexes: [
-        ["space_id"],
-        ["provider_source"],
-        ["materialization"],
-        ["status"],
-      ],
-    },
-    {
       name: "takosumi_spaces",
       domain: "deploy",
       columns: ["id", "handle", "space_json", "created_at", "updated_at"],
@@ -3037,5 +2998,51 @@ alter table if exists service_graph_grants rename to service_graph_grants_retire
       down: `alter table if exists service_graph_grants_retired rename to service_graph_grants;
 alter table if exists service_graph_bindings_retired rename to service_graph_bindings;
 alter table if exists service_graph_exports_retired rename to service_graph_exports;`,
+    },
+    {
+      id: "deploy.provider_credential_collapse.rename_aside",
+      version: 56,
+      domain: "deploy",
+      description:
+        "Collapse the provider-credential model: fold the retired ProviderEnv resolver projection (materialization + providerSource) onto the unified Connection row (id-equal join), then retire the live Provider Catalog and Provider Env tables by renaming them aside to `*_retired` (non-destructive, recoverable). They are no longer created or read; the public Provider listing is computed read-only from the provider registry. `down` restores the original names (the additive connection_json fields are left in place).",
+      sql: `update takosumi_connections c
+  set connection_json = jsonb_set(
+    jsonb_set(
+      c.connection_json,
+      '{materialization}',
+      to_jsonb(coalesce(
+        c.connection_json->>'materialization',
+        case
+          when c.connection_json->>'credentialDriver' in ('cloudflare_oauth', 'gcp_oauth_bootstrap')
+          then 'oauth'
+        end,
+        'secret'
+      )),
+      true
+    ),
+    '{providerSource}',
+    to_jsonb(coalesce(c.connection_json->>'providerSource', c.connection_json->>'provider')),
+    true
+  )
+  where not (c.connection_json ? 'materialization')
+     or not (c.connection_json ? 'providerSource');
+update takosumi_connections c
+  set connection_json = jsonb_set(
+    jsonb_set(
+      c.connection_json,
+      '{materialization}',
+      to_jsonb(pe.materialization),
+      true
+    ),
+    '{providerSource}',
+    to_jsonb(pe.provider_source),
+    true
+  )
+  from takosumi_provider_envs pe
+  where pe.id = c.id;
+alter table if exists takosumi_provider_catalog rename to takosumi_provider_catalog_retired;
+alter table if exists takosumi_provider_envs rename to takosumi_provider_envs_retired;`,
+      down: `alter table if exists takosumi_provider_envs_retired rename to takosumi_provider_envs;
+alter table if exists takosumi_provider_catalog_retired rename to takosumi_provider_catalog;`,
     },
   ]);

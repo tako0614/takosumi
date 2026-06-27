@@ -182,24 +182,15 @@ async function seededTemplateController(
     scope: "space",
     spaceId: "space_test",
     provider: "cloudflare",
+    providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
     kind: "cloudflare_api_token",
     displayName: "Template Cloudflare",
     status: "verified",
-    scopeJson: {},
-    secretRef: "sec_template",
-    createdAt: "2026-06-06T00:00:00.000Z",
-  });
-  await store.putProviderEnv({
-    id: "penv_template",
-    spaceId: "space_test",
-    providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
-    displayName: "Template Cloudflare",
     materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: "conn_template",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
   });
   // Attach a prior current Deployment so the apply guard has a concrete cursor.
   const installation = await store.getInstallation(INSTALLATION_ID);
@@ -216,12 +207,12 @@ async function seededTemplateController(
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "penv_template",
+        connectionId: "conn_template",
       },
       {
         provider: "cloudflare",
         alias: "zone",
-        envId: "penv_template",
+        connectionId: "conn_template",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",

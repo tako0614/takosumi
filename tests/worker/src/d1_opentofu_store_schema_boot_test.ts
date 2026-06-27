@@ -25,9 +25,22 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const tables = await tableNames(db);
-  for (const expected of ["spaces", "sources", "installations", "provider_envs"]) {
+  for (const expected of ["spaces", "sources", "installations", "connections"]) {
     expect(tables.has(expected)).toBe(true);
   }
+});
+
+test("retired provider_envs/provider_catalog tables are renamed aside, not live", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const tables = await tableNames(db);
+  // The live Provider Catalog / Provider Env tables are retired (migration 16
+  // renames them aside). The historical chain still materializes them on a fresh
+  // DB, so the rename-aside leaves the `_retired` names present and recoverable.
+  expect(tables.has("provider_envs")).toBe(false);
+  expect(tables.has("provider_catalog")).toBe(false);
+  expect(tables.has("provider_envs_retired")).toBe(true);
+  expect(tables.has("provider_catalog_retired")).toBe(true);
 });
 
 test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
@@ -40,14 +53,14 @@ test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
   expect(tables.has("installations")).toBe(true);
 });
 
-test("provider_envs is created exactly once (no duplicate ensure-DDL)", async () => {
+test("connections is created exactly once (no duplicate ensure-DDL)", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   // bun:sqlite would have thrown on a duplicate `create table` without
   // `if not exists`; assert the table is present and single in sqlite_master.
   const result = await db
     .prepare(
-      `select count(*) as n from sqlite_master where type = 'table' and name = 'provider_envs'`,
+      `select count(*) as n from sqlite_master where type = 'table' and name = 'connections'`,
     )
     .first<{ n: number }>();
   expect(result?.n).toBe(1);

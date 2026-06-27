@@ -323,7 +323,7 @@ function Inner() {
                   <Match when={tab() === "settings"}>
                     <SettingsTab
                       source={source()}
-                      providerConnections={profile()?.connections}
+                      providerConnections={profile()?.bindings}
                       availableProviderConnections={providerConnections() ?? []}
                       installationId={installationId()}
                       dangerHref={`/services/${encodeURIComponent(installationId())}/danger`}
@@ -831,7 +831,7 @@ function readyProviderConnectionsForProvider(
 ): readonly ProviderConnection[] {
   return providerConnections.filter(
     (connection) =>
-      connection.status === "ready" &&
+      connection.status === "verified" &&
       sameProviderFamily(provider, connection.providerSource),
   );
 }

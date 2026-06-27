@@ -1,5 +1,11 @@
 /**
- * §29 Provider routes: read-only ProviderConnection recipe endpoints.
+ * §29 Provider routes: read-only Provider listing + Provider Connection reads.
+ *
+ * `GET /providers` is computed read-only from the provider registry + built-in
+ * Credential Recipes (there is no stored Provider Catalog). The
+ * `/provider-envs` read paths list/get the unified Provider Connection rows the
+ * runner/vault resolve (the former `ProviderEnv` resolver projection folded onto
+ * the Connection row).
  */
 
 import {
@@ -9,7 +15,6 @@ import {
   type DeployControlRouteContext,
   PROVIDER_ENV_ID_PATTERN,
   PROVIDER_ID_PATTERN,
-  readJsonBody,
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_PROVIDER_ENV_ROUTE,
@@ -17,11 +22,6 @@ import {
   TAKOSUMI_PROVIDER_ROUTE,
   TAKOSUMI_PROVIDERS_ROUTE,
 } from "./deploy_control_route_paths.ts";
-import type {
-  ProviderEnv,
-  PublicProviderEnv,
-  PutProviderEnvRequest,
-} from "takosumi-contract/provider-envs";
 
 export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
@@ -29,29 +29,28 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "GET",
       path: TAKOSUMI_PROVIDERS_ROUTE,
       summary:
-        "Lists provider connection recipes with helper flows and policy metadata.",
+        "Lists providers with recommended env names, recipes, and policy metadata (computed read-only).",
       auth: "deploy-control-token",
       operationId: "listProviders",
-      openapi: { okSchema: "ListProviderCatalogEntriesResponse" },
+      openapi: { okSchema: "ListProvidersResponse" },
       notImplementedMessage: "providers not wired",
     },
     {
       method: "GET",
       path: TAKOSUMI_PROVIDER_ROUTE,
-      summary: "Reads a provider connection recipe.",
+      summary: "Reads a single provider listing (computed read-only).",
       auth: "deploy-control-token",
       operationId: "getProvider",
       openapi: {
         pathParams: ["providerId"],
-        okSchema: "ProviderCatalogEntryResponse",
+        okSchema: "ProviderListingResponse",
       },
       notImplementedMessage: "providers not wired",
     },
     {
       method: "GET",
       path: TAKOSUMI_PROVIDER_ENVS_ROUTE,
-      summary:
-        "Lists internal provider resolver records visible to a Workspace.",
+      summary: "Lists the Provider Connections visible to a Workspace.",
       auth: "deploy-control-token",
       operationId: "listProviderEnvs",
       discoverable: false,
@@ -59,23 +58,9 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
       notImplementedMessage: "connections not wired",
     },
     {
-      method: "PUT",
-      path: TAKOSUMI_PROVIDER_ENV_ROUTE,
-      summary: "Creates or replaces an internal provider resolver record.",
-      auth: "deploy-control-token",
-      operationId: "putProviderEnv",
-      discoverable: false,
-      openapi: {
-        pathParams: ["providerEnvId"],
-        requestSchema: "PutProviderEnvRequest",
-        okSchema: "ProviderEnvResponse",
-      },
-      notImplementedMessage: "connections not wired",
-    },
-    {
       method: "GET",
       path: TAKOSUMI_PROVIDER_ENV_ROUTE,
-      summary: "Reads an internal provider resolver record.",
+      summary: "Reads a single Provider Connection.",
       auth: "deploy-control-token",
       operationId: "getProviderEnv",
       discoverable: false,
@@ -90,7 +75,7 @@ export const DEPLOY_CONTROL_PROVIDER_ENDPOINTS: readonly DeployControlEndpoint[]
 export function mountDeployControlProviderRoutes(
   ctx: DeployControlRouteContext,
 ): void {
-  const { app, controller, dependencies, deployControlBodyLimit } = ctx;
+  const { app, controller, dependencies } = ctx;
 
   app.get(
     TAKOSUMI_PROVIDERS_ROUTE,
@@ -122,44 +107,10 @@ export function mountDeployControlProviderRoutes(
         ensureConnectionPermission(principal, spaceId);
         return c.json(
           {
-            providerEnvs: (
-              await dependencies.connectionsService!.listProviderEnvs(spaceId)
-            ).map(publicProviderEnv),
-          },
-          200,
-        );
-      },
-    }),
-  );
-
-  app.put(
-    TAKOSUMI_PROVIDER_ENV_ROUTE,
-    deployControlBodyLimit,
-    defineRoute({
-      ctx,
-      requireService: (deps) =>
-        deps.connectionsService ? undefined : "connections not wired",
-      param: { param: "providerEnvId", pattern: PROVIDER_ENV_ID_PATTERN },
-      enforceBody: true,
-      handler: async ({ c, principal, id }) => {
-        const body = await readJsonBody<PutProviderEnvRequest>(
-          c,
-          "providerEnvPut",
-        );
-        ensureConnectionPermission(principal, body.spaceId);
-        if (body.secretRef && body.spaceId) {
-          const backingConnection = await controller.getConnection(
-            body.secretRef,
-          );
-          if (backingConnection.scope === "operator") {
-            ensureConnectionPermission(principal, undefined, "operator");
-          }
-        }
-        return c.json(
-          {
-            providerEnv: publicProviderEnv(
-              await dependencies.connectionsService!.putProviderEnv(id, body),
-            ),
+            providerEnvs:
+              await dependencies.connectionsService!.listProviderConnections(
+                spaceId,
+              ),
           },
           200,
         );
@@ -176,16 +127,10 @@ export function mountDeployControlProviderRoutes(
       param: { param: "providerEnvId", pattern: PROVIDER_ENV_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         const providerEnv =
-          await dependencies.connectionsService!.getProviderEnv(id);
+          await dependencies.connectionsService!.getProviderConnection(id);
         ensureConnectionPermission(principal, providerEnv.spaceId);
-        return c.json({ providerEnv: publicProviderEnv(providerEnv) }, 200);
+        return c.json({ providerEnv }, 200);
       },
     }),
   );
-}
-
-function publicProviderEnv(providerEnv: ProviderEnv): PublicProviderEnv {
-  const { secretRef: _secretRef, ...publicEnv } = providerEnv;
-  void _secretRef;
-  return publicEnv;
 }

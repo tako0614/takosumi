@@ -304,7 +304,9 @@ function requiredProvidersFromResolved(
   resolved: readonly ResolvedInstallationProviderEnvBinding[],
 ): readonly string[] {
   return normalizeProviders(
-    resolved.map((entry) => canonicalProviderAddress(entry.env.providerSource)),
+    resolved.map((entry) =>
+      canonicalProviderAddress(entry.connection.providerSource),
+    ),
   );
 }
 

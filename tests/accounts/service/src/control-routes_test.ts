@@ -17,21 +17,6 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 const ORIGIN = "https://app.takosumi.test";
 
-async function publicProviderConnectionIdForTest(
-  providerEnvId: string,
-): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(
-      `takosumi-provider-connection:v1:${providerEnvId}`,
-    ),
-  );
-  const bytes = new Uint8Array(digest);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `pcn_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "").slice(0, 32)}`;
-}
-
 /** A live account + session in a fresh store. Returns the cookie header value. */
 function seedSession(
   store: InMemoryAccountsStore,
@@ -240,7 +225,11 @@ function fakeOperations(
           installationId,
           environment,
           bindings: [
-            { provider: "cloudflare", alias: "main", envId: "penv_cf_gateway" },
+            {
+              provider: "cloudflare",
+              alias: "main",
+              connectionId: "conn_cf_gateway",
+            },
           ],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
@@ -549,13 +538,9 @@ function fakeOperations(
       return { billing: { settings: input.billingSettings } };
     },
     connections: {
-      listProviderEnvs: async () => {
-        record("listProviderEnvs");
+      listProviderConnections: async () => {
+        record("listProviderConnections");
         return [];
-      },
-      getGatewayCoverageStatus: async () => {
-        record("getGatewayCoverageStatus");
-        return { available: false, resources: [] };
       },
     },
     outputShares: {
@@ -1462,23 +1447,22 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     connections: {
-      listProviderEnvs: async () => [
+      listProviderConnections: async () => [
         {
-          id: "penv_cf",
+          id: "conn_cf",
           spaceId: "space_a",
+          provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "space",
           displayName: "Cloudflare",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
       ],
-      getGatewayCoverageStatus: async () => ({
-        available: false,
-        resources: [],
-      }),
     },
   });
   const { request: req, url } = request("POST", "/api/v1/deploy", {
@@ -1498,7 +1482,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
         {
           provider: "cloudflare",
           alias: "main",
-          connectionId: await publicProviderConnectionIdForTest("penv_cf"),
+          connectionId: "conn_cf",
         },
       ],
       autoApprove: true,
@@ -1529,7 +1513,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
         {
           provider: "cloudflare",
           alias: "main",
-          envId: "penv_cf",
+          connectionId: "conn_cf",
         },
       ],
       autoApprove: true,
@@ -2395,70 +2379,63 @@ test("GET /api/v1/provider-connections rejects an inaccessible Space before disp
     operations,
   });
   expect(response?.status).toEqual(403);
-  expect(operations.calls.listProviderEnvs).toBeUndefined();
+  expect(operations.calls.listProviderConnections).toBeUndefined();
 });
 
-test("GET /api/v1/provider-connections returns ownership projection and never echoes secrets", async () => {
+test("GET /api/v1/provider-connections returns the Space's provider connections and never echoes secrets", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  // The session surface exposes provider connection ownership, not resolver
-  // materialization internals or raw secret material.
+  // After the credential-model collapse a Provider Connection IS the unified
+  // credential record; the session surface lists the Space-scoped rows directly
+  // (raw connection ids, no `pcn_` hashing) and never the sealed secret material
+  // nor operator-scoped credentials.
   const operations = fakeOperations({
     connections: {
-      listProviderEnvs: async () => [
+      listProviderConnections: async () => [
         {
-          id: "penv_global_secret",
+          // Operator-scoped credential (no spaceId): must stay internal and is
+          // filtered out of the Space listing.
+          id: "conn_operator_secret",
+          provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-          displayName: "Global secret that must stay internal",
+          kind: "cloudflare_api_token",
+          scope: "operator",
+          displayName: "Operator credential that must stay internal",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-          secretRef: "conn_operator_secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
         {
-          id: "penv_space_secret",
+          id: "conn_space_secret",
           spaceId: "space_a",
+          provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "space",
           displayName: "Space secret",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-          secretRef: "conn_space_secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
         {
-          id: "penv_operator_backed",
+          id: "conn_space_secret_2",
           spaceId: "space_a",
+          provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-          displayName: "Takosumi provided Cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "space",
+          displayName: "Second space secret",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-          secretRef: "conn_operator_secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
       ],
-    },
-    getConnection: async (connectionId) => {
-      if (connectionId === "conn_operator_secret") {
-        return {
-          id: connectionId,
-          provider: "cloudflare",
-          kind: "cloudflare_api_token",
-          authMethod: "static_secret",
-          scope: "operator",
-          status: "verified",
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        } as unknown as Awaited<
-          ReturnType<ControlPlaneOperations["getConnection"]>
-        >;
-      }
-      return fakeOperations().getConnection(connectionId);
     },
   });
   const { request: req, url } = request(
@@ -2474,14 +2451,12 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
   });
   expect(response?.status).toEqual(200);
   const raw = await response!.text();
+  // Operator-scoped credentials never leak into the Space listing.
   expect(raw.includes("conn_operator_secret")).toEqual(false);
-  expect(raw.includes("conn_space_secret")).toEqual(false);
-  expect(raw.includes("penv_global_secret")).toEqual(false);
-  expect(raw.includes("penv_space_secret")).toEqual(false);
+  // No sealed secret material is ever projected onto the public record.
   expect(raw.includes("secretRef")).toEqual(false);
   expect(raw.includes("secretValue")).toEqual(false);
   expect(raw.includes("gatewayProfileId")).toEqual(false);
-  expect(raw.includes("materialization")).toEqual(false);
   const body = JSON.parse(raw) as {
     providerConnections: readonly Record<string, unknown>[];
   };
@@ -2489,21 +2464,24 @@ test("GET /api/v1/provider-connections returns ownership projection and never ec
   expect(Object.keys(body.providerConnections[0]!).sort()).toEqual([
     "createdAt",
     "displayName",
+    "envNames",
     "id",
-    "ownership",
+    "kind",
+    "materialization",
+    "provider",
     "providerSource",
-    "requiredEnvNames",
+    "scope",
     "spaceId",
     "status",
     "updatedAt",
   ]);
-  expect(body.providerConnections.map((item) => item.ownership)).toEqual([
-    "env",
-    "env",
+  // The ready state is the ConnectionStatus "verified" (NOT a "ready" alias).
+  expect(body.providerConnections.map((item) => item.status)).toEqual([
+    "verified",
+    "verified",
   ]);
-  expect(String(body.providerConnections[0]?.id).startsWith("pcn_")).toEqual(
-    true,
-  );
+  // Public ids are the raw connection ids (the `pcn_` hashing is removed).
+  expect(String(body.providerConnections[0]?.id)).toEqual("conn_space_secret");
 });
 
 test("GET /api/v1/spaces/:id/gateway-coverages is not an OSS public route", async () => {
@@ -2914,14 +2892,13 @@ test("GET /api/v1/installations/:id/provider-connections reads provider connecti
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
     providerConnectionSet: {
-      connections: readonly { connectionId: string }[];
+      bindings: readonly { connectionId: string }[];
     };
   };
-  expect(body.providerConnectionSet.connections[0]?.connectionId).toEqual(
-    await publicProviderConnectionIdForTest("penv_cf_gateway"),
-  );
-  expect(body.providerConnectionSet.connections[0]?.connectionId).not.toEqual(
-    "penv_cf_gateway",
+  // The binding-set read projects `bindings` (raw connection ids; the `pcn_`
+  // hashing is removed).
+  expect(body.providerConnectionSet.bindings[0]?.connectionId).toEqual(
+    "conn_cf_gateway",
   );
   expect(
     operations.calls.getInstallationProviderEnvBindingSetByInstallation,
@@ -2933,26 +2910,32 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     connections: {
-      listProviderEnvs: async () => [
+      listProviderConnections: async () => [
         {
-          id: "penv_cf",
+          id: "conn_cf",
           spaceId: "space_a",
+          provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "space",
           displayName: "Cloudflare",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
         {
-          id: "penv_aws",
+          id: "conn_aws",
           spaceId: "space_a",
+          provider: "aws",
           providerSource: "registry.opentofu.org/hashicorp/aws",
+          kind: "generic_env_provider",
+          scope: "space",
           displayName: "AWS",
           materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+          status: "verified",
+          envNames: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
@@ -2964,17 +2947,18 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
     "/api/v1/installations/inst_1/provider-connections",
     {
       cookie,
+      // The PUT request body still uses `connections`.
       body: {
         connections: [
           {
             provider: "registry.opentofu.org/cloudflare/cloudflare",
             alias: "main",
-            connectionId: await publicProviderConnectionIdForTest("penv_cf"),
+            connectionId: "conn_cf",
           },
           {
             provider: "registry.opentofu.org/hashicorp/aws",
             alias: "archive",
-            connectionId: await publicProviderConnectionIdForTest("penv_aws"),
+            connectionId: "conn_aws",
           },
         ],
       },
@@ -2991,18 +2975,18 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
     bindings: readonly {
       provider: string;
       alias?: string;
-      envId: string;
+      connectionId: string;
     }[];
   };
   expect(saved.bindings[0]).toEqual({
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     alias: "main",
-    envId: "penv_cf",
+    connectionId: "conn_cf",
   });
   expect(saved.bindings[1]).toEqual({
     provider: "registry.opentofu.org/hashicorp/aws",
     alias: "archive",
-    envId: "penv_aws",
+    connectionId: "conn_aws",
   });
 });
 
@@ -3106,7 +3090,8 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   });
   expect(response?.status).toEqual(200);
   const raw = await response!.text();
-  expect(raw.includes("penv_cf")).toEqual(false);
+  // The public projection drops the internal `materialization` axis and renames
+  // the `provider_env` vocabulary to `provider_connection`.
   expect(raw.includes("materialization")).toEqual(false);
   expect(raw.includes("provider_env")).toEqual(false);
   const body = JSON.parse(raw) as {
@@ -3121,8 +3106,10 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
   };
   const resolution = body.run.providerResolutions?.[0];
   expect(resolution?.status).toEqual("resolved_provider_connection");
-  expect(resolution?.ownership).toEqual("env");
-  expect(resolution?.connectionId?.startsWith("pcn_")).toEqual(true);
+  // The public connection id is the raw connection id (the `pcn_` hashing and
+  // the `ownership` axis are removed).
+  expect(resolution?.ownership).toBeUndefined();
+  expect(resolution?.connectionId).toEqual("penv_cf");
   expect(resolution?.evidence?.kind).toEqual("provider_connection");
   expect(resolution?.evidence?.connectionId).toEqual(resolution?.connectionId);
 });
@@ -3131,34 +3118,6 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
-    connections: {
-      listProviderEnvs: async () => [],
-      getProviderEnv: async (id) => ({
-        id,
-        spaceId: "space_a",
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Takosumi provided Cloudflare",
-        materialization: "secret",
-        status: "ready",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: "conn_operator_secret",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      }),
-    },
-    getConnection: async (connectionId) =>
-      ({
-        id: connectionId,
-        provider: "cloudflare",
-        kind: "cloudflare_api_token",
-        authMethod: "static_secret",
-        scope: "operator",
-        status: "verified",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      }) as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["getConnection"]>
-      >,
     getRun: async (id) =>
       ({
         id,
@@ -3178,12 +3137,12 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
               requiredForPhases: ["plan", "apply"],
             },
             status: "resolved_provider_env",
-            envId: "penv_operator_backed",
+            envId: "conn_operator_backed",
             materialization: "secret",
             evidence: {
               kind: "provider_env",
               provider: "cloudflare",
-              envId: "penv_operator_backed",
+              envId: "conn_operator_backed",
               materialization: "secret",
               requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
             },
@@ -3201,16 +3160,24 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
     operations,
   });
   expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as {
+  const raw = await response!.text();
+  // The credential-model collapse removed the `ownership` axis entirely, so the
+  // legacy operator-backed ("takos_provided") vocabulary can never be exposed.
+  expect(raw.includes("ownership")).toEqual(false);
+  expect(raw.includes("takos_provided")).toEqual(false);
+  const body = JSON.parse(raw) as {
     run: {
       providerResolutions?: readonly {
+        status?: string;
         ownership?: string;
-        evidence?: { ownership?: string };
+        evidence?: { kind?: string; ownership?: string };
       }[];
     };
   };
-  expect(body.run.providerResolutions?.[0]?.ownership).toEqual("env");
-  expect(body.run.providerResolutions?.[0]?.evidence?.ownership).toEqual("env");
+  const resolution = body.run.providerResolutions?.[0];
+  expect(resolution?.status).toEqual("resolved_provider_connection");
+  expect(resolution?.ownership).toBeUndefined();
+  expect(resolution?.evidence?.ownership).toBeUndefined();
 });
 
 test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", async () => {
@@ -4323,7 +4290,7 @@ test("Connections: requires spaceId; provider-connections is Space-gated", async
     operations,
   });
   expect(defaultsResp?.status).toEqual(200);
-  expect(operations.calls.listProviderEnvs).toBeDefined();
+  expect(operations.calls.listProviderConnections).toBeDefined();
 });
 
 test("Connections create: registers a Space-owned connection; token never echoed", async () => {
@@ -4413,7 +4380,6 @@ test("Connections create: registers a Space-owned source Git HTTPS token; token 
     spaceId?: string;
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     scope?: string;
     scopeHints?: { repoUrl?: string; username?: string };
     values?: Record<string, string>;
@@ -4421,7 +4387,6 @@ test("Connections create: registers a Space-owned source Git HTTPS token; token 
   expect(passed.spaceId).toEqual("space_a");
   expect(passed.provider).toEqual("source_git_https_token");
   expect(passed.kind).toEqual("source_git_https_token");
-  expect(passed.credentialDriver).toEqual("static_secret");
   expect(passed.scope).toEqual("space");
   expect(passed.scopeHints).toEqual({
     repoUrl: "https://github.com/example/private.git",
@@ -4470,7 +4435,6 @@ test("Connections create: normalizes Google Cloud to service-account JSON driver
     spaceId?: string;
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     scope?: string;
     scopeHints?: { gcpProjectId?: string };
     values?: Record<string, string>;
@@ -4478,7 +4442,6 @@ test("Connections create: normalizes Google Cloud to service-account JSON driver
   expect(passed.spaceId).toEqual("space_a");
   expect(passed.provider).toEqual("google");
   expect(passed.kind).toEqual("gcp_service_account_json");
-  expect(passed.credentialDriver).toEqual("gcp_service_account_json");
   expect(passed.scope).toEqual("space");
   expect(passed.scopeHints?.gcpProjectId).toEqual("project-1");
   expect(passed.values?.GOOGLE_CREDENTIALS).toEqual(serviceAccountJson);
@@ -4519,14 +4482,12 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
     spaceId?: string;
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     scope?: string;
     values?: Record<string, string>;
   };
   expect(passed.spaceId).toEqual("space_a");
   expect(passed.provider).toEqual(provider);
   expect(passed.kind).toEqual("generic_env_provider");
-  expect(passed.credentialDriver).toEqual("generic_env");
   expect(passed.scope).toEqual("space");
   expect(passed.values?.SNOWFLAKE_PASSWORD).toEqual("snowflake-secret");
 
@@ -4547,7 +4508,6 @@ test("Connections create: forwards generic env credential files without echoing 
       spaceId: "space_a",
       provider,
       kind: "generic_env_provider",
-      credentialDriver: "generic_env",
       displayName: "Env file provider",
       values: {
         GENERIC_API_TOKEN: "generic-secret",
@@ -4573,7 +4533,6 @@ test("Connections create: forwards generic env credential files without echoing 
   const passed = operations.calls.createConnection?.[0] as {
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     values?: Record<string, string>;
     files?: Array<{
       path: string;
@@ -4584,7 +4543,6 @@ test("Connections create: forwards generic env credential files without echoing 
   };
   expect(passed.provider).toEqual(provider);
   expect(passed.kind).toEqual("generic_env_provider");
-  expect(passed.credentialDriver).toEqual("generic_env");
   expect(passed.values?.GENERIC_API_TOKEN).toEqual("generic-secret");
   expect(passed.files).toEqual([
     {
@@ -4665,13 +4623,11 @@ test("Connections create: known non-Cloudflare providers are explicit generic en
   const passed = operations.calls.createConnection?.[0] as {
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     scope?: string;
     values?: Record<string, string>;
   };
   expect(passed.provider).toEqual("aws");
   expect(passed.kind).toEqual("generic_env_provider");
-  expect(passed.credentialDriver).toEqual("generic_env");
   expect(passed.scope).toEqual("space");
   expect(passed.values?.AWS_REGION).toEqual("ap-northeast-1");
 
@@ -4690,7 +4646,6 @@ test("Connections create: honors explicit generic env for guided providers", asy
       spaceId: "space_a",
       provider: "cloudflare",
       kind: "generic_env_provider",
-      credentialDriver: "generic_env",
       values: {
         CLOUDFLARE_API_TOKEN: "cf-secret-token",
         CLOUDFLARE_ACCOUNT_ID: "acct",
@@ -4709,13 +4664,11 @@ test("Connections create: honors explicit generic env for guided providers", asy
   const passed = operations.calls.createConnection?.[0] as {
     provider?: string;
     kind?: string;
-    credentialDriver?: string;
     scope?: string;
     values?: Record<string, string>;
   };
   expect(passed.provider).toEqual("cloudflare");
   expect(passed.kind).toEqual("generic_env_provider");
-  expect(passed.credentialDriver).toEqual("generic_env");
   expect(passed.scope).toEqual("space");
   expect(passed.values?.CLOUDFLARE_CUSTOM_ENDPOINT).toEqual(
     "https://cloudflare.example.test",
@@ -4904,51 +4857,37 @@ test("POST /api/v1/connections/:id/revoke deletes the connection and answers 204
   expect(operations.calls.revokeConnection).toEqual(["conn_abc"]);
 });
 
-test("POST /api/v1/connections/:id/revoke accepts public ProviderConnection ids", async () => {
+test("POST /api/v1/connections/:id/revoke accepts the raw connection id as the public ProviderConnection id", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const publicConnectionId = await publicProviderConnectionIdForTest("conn_cf");
-  const notFound = Object.assign(new Error("not found"), {
-    code: "not_found",
-  });
+  // After the credential-model collapse the public ProviderConnection id IS the
+  // raw connection id (the `pcn_` hashing + secretRef-backed indirection are
+  // removed), so revoke resolves ownership directly through getConnection.
+  const connectionId = "conn_cf";
   const getConnectionCalls: string[] = [];
   const operations = fakeOperations({
-    getConnection: async (connectionId) => {
-      getConnectionCalls.push(connectionId);
-      if (connectionId === publicConnectionId) throw notFound;
+    getConnection: async (id) => {
+      getConnectionCalls.push(id);
       return {
-        id: connectionId,
+        id,
         spaceId: "space_a",
         provider: "cloudflare",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
         kind: "cloudflare_api_token",
-        authMethod: "static_secret",
         scope: "space",
-        status: "active",
+        status: "verified",
+        materialization: "secret",
+        envNames: ["CLOUDFLARE_API_TOKEN"],
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["getConnection"]>
       >;
     },
-    connections: {
-      listProviderEnvs: async () => [
-        {
-          id: "conn_cf",
-          spaceId: "space_a",
-          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-          displayName: "Cloudflare",
-          materialization: "secret",
-          status: "ready",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
-      ],
-    },
   });
   const { request: req, url } = request(
     "POST",
-    `/api/v1/connections/${publicConnectionId}/revoke`,
+    `/api/v1/connections/${connectionId}/revoke`,
     { cookie },
   );
   const response = await handleControlRoute({
@@ -4959,58 +4898,27 @@ test("POST /api/v1/connections/:id/revoke accepts public ProviderConnection ids"
   });
 
   expect(response?.status).toEqual(204);
-  expect(getConnectionCalls).toEqual([publicConnectionId, "conn_cf"]);
+  expect(getConnectionCalls).toEqual(["conn_cf"]);
   expect(operations.calls.revokeConnection).toEqual(["conn_cf"]);
 });
 
-test("POST /api/v1/connections/:id/revoke resolves public ProviderConnection ids through secretRef-backed ProviderEnv rows", async () => {
+test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for an unknown connection id", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const publicConnectionId = await publicProviderConnectionIdForTest(
-    "dpf_cf_provider_env",
-  );
+  // An unresolvable connection id answers a non-disclosing 404 and never revokes.
   const notFound = Object.assign(new Error("not found"), {
     code: "not_found",
   });
   const getConnectionCalls: string[] = [];
   const operations = fakeOperations({
-    getConnection: async (connectionId) => {
-      getConnectionCalls.push(connectionId);
-      if (connectionId === publicConnectionId) throw notFound;
-      return {
-        id: connectionId,
-        spaceId: "space_a",
-        provider: "cloudflare",
-        kind: "cloudflare_api_token",
-        authMethod: "static_secret",
-        scope: "space",
-        status: "active",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["getConnection"]>
-      >;
-    },
-    connections: {
-      listProviderEnvs: async () => [
-        {
-          id: "dpf_cf_provider_env",
-          spaceId: "space_a",
-          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-          displayName: "Cloudflare",
-          materialization: "secret",
-          status: "ready",
-          secretRef: "conn_cf_secret",
-          requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
-      ],
+    getConnection: async (id) => {
+      getConnectionCalls.push(id);
+      throw notFound;
     },
   });
   const { request: req, url } = request(
     "POST",
-    `/api/v1/connections/${publicConnectionId}/revoke`,
+    `/api/v1/connections/conn_unknown/revoke`,
     { cookie },
   );
   const response = await handleControlRoute({
@@ -5020,9 +4928,9 @@ test("POST /api/v1/connections/:id/revoke resolves public ProviderConnection ids
     operations,
   });
 
-  expect(response?.status).toEqual(204);
-  expect(getConnectionCalls).toEqual([publicConnectionId, "conn_cf_secret"]);
-  expect(operations.calls.revokeConnection).toEqual(["conn_cf_secret"]);
+  expect(response?.status).toEqual(404);
+  expect(getConnectionCalls).toEqual(["conn_unknown"]);
+  expect(operations.calls.revokeConnection).toBeUndefined();
 });
 
 test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the caller does not own", async () => {

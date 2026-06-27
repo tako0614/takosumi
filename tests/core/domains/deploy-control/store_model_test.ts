@@ -17,13 +17,13 @@ import type {
   SqlTransaction,
 } from "../../../../core/adapters/storage/sql.ts";
 import type {
+  Connection,
   Deployment,
   InstallConfig,
   Installation,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
 import type { Space } from "takosumi-contract/spaces";
-import type { ProviderEnv } from "takosumi-contract/provider-envs";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/installations";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type {
@@ -41,7 +41,6 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 
 setDefaultTimeout(20_000);
@@ -575,14 +574,18 @@ function installConfig(over: Partial<InstallConfig> = {}): InstallConfig {
   };
 }
 
-function providerEnv(over: Partial<ProviderEnv> = {}): ProviderEnv {
+function providerConnection(over: Partial<Connection> = {}): Connection {
   return {
-    id: "penv_1",
+    id: "conn_1",
+    spaceId: "space_1",
+    provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    kind: "cloudflare_api_token",
+    scope: "space",
     displayName: "Cloudflare",
+    status: "verified",
     materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: TS,
     updatedAt: TS,
     ...over,
@@ -913,90 +916,34 @@ test("InstallConfig store: put/get/list-by-space + built-in shared configs", asy
   }
 });
 
-test("ProviderEnv store: Space-scoped envs are visible only in their Space", async () => {
+test("Provider Connection store: Space-scoped connections are visible only in their Space", async () => {
   for (const [label, store] of await forEachStore()) {
-    await store.putProviderEnv(
-      providerEnv({
-        id: "penv_space",
+    await store.putConnection(
+      providerConnection({
+        id: "conn_space",
         spaceId: "space_1",
         materialization: "secret",
       }),
     );
-    await store.putProviderEnv(
-      providerEnv({
-        id: "penv_other",
+    await store.putConnection(
+      providerConnection({
+        id: "conn_other",
         spaceId: "space_2",
+        provider: "aws",
         providerSource: "registry.opentofu.org/hashicorp/aws",
         displayName: "AWS",
       }),
     );
 
-    expect(await store.getProviderEnv("missing"), label).toBeUndefined();
+    expect(await store.getConnection("missing"), label).toBeUndefined();
     expect(
-      (await store.listProviderEnvs("space_1")).map((env) => env.id),
+      (await store.listConnections("space_1")).map((c) => c.id),
       label,
-    ).toEqual(["penv_space"]);
+    ).toEqual(["conn_space"]);
     expect(
-      (await store.listProviderEnvs("space_2")).map((env) => env.id),
+      (await store.listConnections("space_2")).map((c) => c.id),
       label,
-    ).toEqual(["penv_other"]);
-  }
-});
-
-test("ProviderEnv store: global secret and oauth envs are rejected", async () => {
-  for (const [label, store] of await forEachStore()) {
-    let secretError: unknown;
-    try {
-      await store.putProviderEnv(
-        providerEnv({
-          id: `penv_global_secret_${label}`,
-          materialization: "secret",
-        }),
-      );
-    } catch (error) {
-      secretError = error;
-    }
-    expect(String(secretError), label).toContain(
-      "global provider resolver records are not supported in OSS Takosumi",
-    );
-
-    let oauthError: unknown;
-    try {
-      await store.putProviderEnv(
-        providerEnv({
-          id: `penv_global_oauth_${label}`,
-          materialization: "oauth",
-        }),
-      );
-    } catch (error) {
-      oauthError = error;
-    }
-    expect(String(oauthError), label).toContain(
-      "global provider resolver records are not supported in OSS Takosumi",
-    );
-  }
-});
-
-test("Provider Catalog store: entries are symmetric", async () => {
-  for (const [label, store] of await forEachStore()) {
-    const entry: ProviderCatalogEntry = {
-      id: "cloudflare",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-      displayName: "Cloudflare",
-      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
-      helpers: ["cloudflare_api_token"],
-      ownershipOptions: ["env"],
-      allowedResources: ["cloudflare_workers_script"],
-      allowedDataSources: [],
-      policyPackId: "cloudflare-default",
-      createdAt: "2026-06-08T00:00:00.000Z",
-      updatedAt: "2026-06-08T00:00:00.000Z",
-    };
-    await store.putProviderCatalogEntry(entry);
-    expect(await store.getProviderCatalogEntry(entry.id), label).toEqual(entry);
-    expect(await store.listProviderCatalogEntries(), label).toContainEqual(
-      entry,
-    );
+    ).toEqual(["conn_other"]);
   }
 });
 

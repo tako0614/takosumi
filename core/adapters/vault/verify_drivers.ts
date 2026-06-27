@@ -32,6 +32,7 @@
  *                    live verifier and mint drivers are wired.
  */
 import type { Connection, ConnectionKind } from "takosumi-contract/connections";
+import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { GIT_HTTPS_TOKEN_ENV } from "takosumi-contract/sources";
 
 /** Injected fetch implementation (mirrors the vault's `VaultFetch`). */
@@ -258,11 +259,18 @@ export function verifyDriverForKind(
 }
 
 function isReservedGcpConnection(connection: Connection): boolean {
-  return (
+  if (
     connection.kind === "gcp_oauth_bootstrap" ||
-    connection.kind === "gcp_service_account_impersonation" ||
-    connection.credentialDriver === "gcp_oauth_bootstrap" ||
-    connection.credentialDriver === "gcp_service_account_impersonation"
+    connection.kind === "gcp_service_account_impersonation"
+  ) {
+    return true;
+  }
+  // Folded from the former `gcp_oauth_bootstrap` credentialDriver: a gcp OAuth
+  // credential is registered with kind generic_env_provider + materialization
+  // oauth; it stays reserved (pending) until the gcp mint driver is wired.
+  return (
+    connection.materialization === "oauth" &&
+    sameProviderFamily(connection.provider, "google")
   );
 }
 

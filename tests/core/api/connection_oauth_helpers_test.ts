@@ -72,8 +72,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
     spaceId: "space_1",
     provider: "cloudflare",
     kind: "generic_env_provider",
-    credentialDriver: "cloudflare_oauth",
-    authMethod: "static_secret",
+    materialization: "oauth",
     displayName: "Cloudflare OAuth",
     scopeHints: { accountId: "acct_cf" },
     values: { CLOUDFLARE_API_TOKEN: "cf-access-token" },
@@ -169,7 +168,7 @@ test("GCP OAuth helper creates authorized_user GOOGLE_CREDENTIALS", async () => 
   const request = completion.request;
   expect(request.provider).toBe("google");
   expect(request.kind).toBe("generic_env_provider");
-  expect(request.credentialDriver).toBe("gcp_oauth_bootstrap");
+  expect(request.materialization).toBe("oauth");
   const credentials = JSON.parse(request.values.GOOGLE_CREDENTIALS);
   expect(credentials).toEqual({
     type: "authorized_user",

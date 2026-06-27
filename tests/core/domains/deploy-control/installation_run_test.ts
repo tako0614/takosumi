@@ -323,22 +323,20 @@ async function putConnectionWithProviderEnv(
 ): Promise<void> {
   if (!conn.spaceId) {
     throw new Error(
-      "putConnectionWithProviderEnv only seeds Space-scoped secret Provider Envs; global operator credentials must not become bindable Provider Envs",
+      "putConnectionWithProviderEnv only seeds Space-scoped secret Provider Connections; global operator credentials must not become bindable Provider Connections",
     );
   }
-  await store.putConnection(conn);
-  await store.putProviderEnv({
-    id: conn.id,
-    spaceId: conn.spaceId,
-    providerSource: canonicalProviderForFixture(conn.provider),
-    displayName: providerShortNameForFixture(conn.provider),
-    materialization: "secret",
-    status: conn.status === "verified" ? "ready" : "needs_setup",
-    requiredEnvNames: conn.envNames ?? [],
-    secretRef: conn.id,
-    createdAt: conn.createdAt,
-    updatedAt: conn.updatedAt,
-  });
+  // After the credential-model collapse the connection IS the resolver record,
+  // so enrich it with the required providerSource/materialization fields and
+  // store the single unified row (no separate ProviderEnv).
+  const connection: Connection = {
+    ...conn,
+    providerSource:
+      conn.providerSource ?? canonicalProviderForFixture(conn.provider),
+    materialization: conn.materialization ?? "secret",
+    envNames: conn.envNames ?? [],
+  };
+  await store.putConnection(connection);
 }
 
 function cloudflareConnection(id: string, spaceId = "space_test"): Connection {
@@ -347,8 +345,9 @@ function cloudflareConnection(id: string, spaceId = "space_test"): Connection {
     spaceId,
     scope: "space",
     provider: "cloudflare",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     kind: "cloudflare_api_token",
-    authMethod: "static_secret",
+    materialization: "secret",
     status: "verified",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -538,7 +537,7 @@ test("installation plan does not invent Cloudflare Capsule inputs from scope hin
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_cloudflare_scope",
+        connectionId: "conn_cloudflare_scope",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -590,7 +589,7 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_cloudflare_scope",
+        connectionId: "conn_cloudflare_scope",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -642,7 +641,7 @@ test("explicit Cloudflare Capsule variables override provider scope hint default
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_cloudflare_scope",
+        connectionId: "conn_cloudflare_scope",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -750,7 +749,7 @@ test("installation queued plan fails before credential mint when generated-root 
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_missing_sidecar",
+        connectionId: "conn_missing_sidecar",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -1343,7 +1342,6 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     provider,
     kind: "generic_env_provider",
     scope: "space",
-    authMethod: "generic_env",
     status: "verified",
     envNames: ["VERCEL_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1359,7 +1357,7 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
       {
         provider,
         alias: "main",
-        envId: "conn_vercel",
+        connectionId: "conn_vercel",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1414,7 +1412,6 @@ test("generic OpenTofu runner profile permits direct provider install by default
     provider,
     kind: "generic_env_provider",
     scope: "space",
-    authMethod: "generic_env",
     status: "verified",
     envNames: ["VERCEL_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1430,7 +1427,7 @@ test("generic OpenTofu runner profile permits direct provider install by default
       {
         provider,
         alias: "main",
-        envId: "conn_vercel_direct_profile",
+        connectionId: "conn_vercel_direct_profile",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1495,7 +1492,6 @@ test("generic env ProviderBinding blocks low-level plan requests that omit requi
     provider,
     kind: "generic_env_provider",
     scope: "space",
-    authMethod: "generic_env",
     status: "verified",
     envNames: ["VERCEL_API_TOKEN"],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1511,7 +1507,7 @@ test("generic env ProviderBinding blocks low-level plan requests that omit requi
       {
         provider,
         alias: "main",
-        envId: "conn_vercel_direct",
+        connectionId: "conn_vercel_direct",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1642,7 +1638,7 @@ test("installation apply revalidates CompatibilityReport before provider credent
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_apply_guard",
+        connectionId: "conn_apply_guard",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1740,7 +1736,7 @@ test("installation apply rejects a CompatibilityReport scoped to another Capsule
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_apply_scope_guard",
+        connectionId: "conn_apply_scope_guard",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",
@@ -1802,7 +1798,7 @@ test("installation apply fails before credential mint when generated-root sideca
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_apply_missing_sidecar",
+        connectionId: "conn_apply_missing_sidecar",
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",
@@ -2592,7 +2588,7 @@ test("Space-owned Provider Connection apply is not capped by Cloud-only managed-
       {
         provider: "cloudflare",
         alias: "main",
-        envId: "conn_self_cf",
+        connectionId: "conn_self_cf",
       },
     ],
     createdAt: "2026-06-07T00:00:00.000Z",

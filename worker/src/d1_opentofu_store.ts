@@ -59,10 +59,7 @@ import type {
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Space } from "takosumi-contract/spaces";
-import type {
-  InstallationProviderEnvBindingSet,
-  ProviderEnv,
-} from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
   DependencySnapshot,
@@ -105,7 +102,6 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type { ProviderCatalogEntry } from "takosumi-contract/providers";
 import type {
   CommitAppliedDeploymentInput,
   CommitAppliedDeploymentResult,
@@ -225,44 +221,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   // -- Provider Catalog ------------------------------------------------------
-
-  async putProviderCatalogEntry(
-    entry: ProviderCatalogEntry,
-  ): Promise<ProviderCatalogEntry> {
-    await this.#drizzleUpsert(schema.providerCatalog, {
-      id: entry.id,
-      providerSource: entry.providerSource,
-      primaryMaterialization: "secret",
-      gatewayEligible: 0,
-      recordJson: entry,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    });
-    return entry;
-  }
-
-  async getProviderCatalogEntry(
-    id: string,
-  ): Promise<ProviderCatalogEntry | undefined> {
-    return await this.#drizzleFirstJson<ProviderCatalogEntry>(
-      schema.providerCatalog,
-      schema.providerCatalog.recordJson,
-      eq(schema.providerCatalog.id, id),
-    );
-  }
-
-  async listProviderCatalogEntries(): Promise<readonly ProviderCatalogEntry[]> {
-    return await this.#drizzleManyJson<ProviderCatalogEntry>(
-      schema.providerCatalog,
-      schema.providerCatalog.recordJson,
-      {
-        orderBy: [
-          asc(schema.providerCatalog.primaryMaterialization),
-          asc(schema.providerCatalog.id),
-        ],
-      },
-    );
-  }
 
   // -- Runs (PlanRun / ApplyRun / SourceSyncRun share the §27 `runs` table) ----
 
@@ -1247,49 +1205,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- ProviderEnv -------------------------------------------------------------
-
-  async putProviderEnv(env: ProviderEnv): Promise<ProviderEnv> {
-    assertProviderEnvGlobalBoundary(env);
-    await this.#ensureSchema();
-    await this.#drizzleUpsert(schema.providerEnvs, {
-      id: env.id,
-      spaceId: env.spaceId ?? null,
-      providerSource: env.providerSource,
-      materialization: env.materialization,
-      status: env.status,
-      recordJson: env,
-      createdAt: env.createdAt,
-      updatedAt: env.updatedAt,
-    });
-    return env;
-  }
-
-  async getProviderEnv(id: string): Promise<ProviderEnv | undefined> {
-    return await this.#drizzleFirstJson<ProviderEnv>(
-      schema.providerEnvs,
-      schema.providerEnvs.recordJson,
-      eq(schema.providerEnvs.id, id),
-    );
-  }
-
-  async listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]> {
-    return await this.#drizzleManyJson<ProviderEnv>(
-      schema.providerEnvs,
-      schema.providerEnvs.recordJson,
-      {
-        where:
-          spaceId === undefined
-            ? isNull(schema.providerEnvs.spaceId)
-            : eq(schema.providerEnvs.spaceId, spaceId),
-        orderBy: [
-          asc(schema.providerEnvs.providerSource),
-          asc(schema.providerEnvs.materialization),
-          asc(schema.providerEnvs.id),
-        ],
-      },
-    );
-  }
 
   // -- Source (+ snapshots) ---------------------------------------------------
 
@@ -3720,24 +3635,6 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create unique index if not exists secret_blobs_connection_idx
       on secret_blobs (connection_id)`,
-    `create table if not exists provider_envs (
-      id text primary key,
-      space_id text not null,
-      provider_source text not null,
-      materialization text not null check (materialization in ('oauth','secret')),
-      status text not null,
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create index if not exists provider_envs_space_idx
-      on provider_envs (space_id)`,
-    `create index if not exists provider_envs_provider_source_idx
-      on provider_envs (provider_source)`,
-    `create index if not exists provider_envs_materialization_idx
-      on provider_envs (materialization)`,
-    `create index if not exists provider_envs_status_idx
-      on provider_envs (status)`,
     `create table if not exists install_configs (
       id text primary key,
       space_id text,
@@ -3797,21 +3694,6 @@ export async function ensureD1OpenTofuLedgerSchema(
       on capsule_compatibility_reports (installation_id)`,
     `create index if not exists capsule_compatibility_reports_level_idx
       on capsule_compatibility_reports (level)`,
-    `create table if not exists provider_catalog (
-      id text primary key,
-      provider_source text not null,
-      primary_materialization text not null check (primary_materialization in ('oauth','secret')),
-      gateway_eligible integer not null check (gateway_eligible in (0,1)),
-      record_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create unique index if not exists provider_catalog_source_unique
-      on provider_catalog (provider_source)`,
-    `create index if not exists provider_catalog_primary_materialization_idx
-      on provider_catalog (primary_materialization)`,
-    `create index if not exists provider_catalog_gateway_eligible_idx
-      on provider_catalog (gateway_eligible)`,
     `create table if not exists provider_env_binding_sets (
       id text primary key,
       space_id text not null,
@@ -4320,6 +4202,25 @@ provider catalog indexes renamed to provider_catalog_*
 ${D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS.join("\n---\n")}
 `,
     async apply(db) {
+      // `provider_envs` is no longer created by the boot ensure-DDL (it is
+      // retired and renamed aside by migration 16). On a FRESH database this
+      // historical canonicalization still needs the table to operate on, so
+      // create it here (apply-body only; the checksumSource is unchanged so
+      // already-migrated databases keep a stable ledger checksum).
+      await db
+        .prepare(
+          `create table if not exists provider_envs (
+            id text primary key,
+            space_id text not null,
+            provider_source text not null,
+            materialization text not null check (materialization in ('oauth','secret')),
+            status text not null,
+            record_json text not null,
+            created_at text not null,
+            updated_at text not null
+          )`,
+        )
+        .run();
       for (const statement of D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS) {
         await db.prepare(statement).run();
       }
@@ -4527,6 +4428,80 @@ monthly cap index over space_id, period_start, status
             on billing_auto_recharge_attempts (run_id)`,
         )
         .run();
+    },
+  },
+  {
+    version: 16,
+    name: "d1_opentofu_provider_credential_collapse",
+    checksumSource: `
+provider_envs.materialization merged onto connections.connection_json (id-equal join)
+connection_json.materialization/providerSource backfilled (default secret / provider)
+provider_catalog renamed aside to provider_catalog_retired (non-destructive)
+provider_envs renamed aside to provider_envs_retired (non-destructive)
+`,
+    async apply(db) {
+      // Fold the retired ProviderEnv resolver projection onto the unified
+      // Connection row. `provider_envs.id == connections.id`, so merge by id.
+      // Connections with no matching provider_envs row (git source connections)
+      // default to materialization 'secret' and providerSource = provider.
+      if (await d1TableExists(db, "provider_envs")) {
+        await db
+          .prepare(
+            `update connections set connection_json = json_set(
+               json_set(
+                 connection_json,
+                 '$.materialization',
+                 coalesce(
+                   (select pe.materialization from provider_envs pe where pe.id = connections.id),
+                   json_extract(connection_json, '$.materialization'),
+                   case
+                     when json_extract(connection_json, '$.credentialDriver') in ('cloudflare_oauth', 'gcp_oauth_bootstrap')
+                     then 'oauth'
+                   end,
+                   'secret'
+                 )
+               ),
+               '$.providerSource',
+               coalesce(
+                 (select pe.provider_source from provider_envs pe where pe.id = connections.id),
+                 json_extract(connection_json, '$.providerSource'),
+                 json_extract(connection_json, '$.provider')
+               )
+             )`,
+          )
+          .run();
+      } else {
+        await db
+          .prepare(
+            `update connections set connection_json = json_set(
+               json_set(
+                 connection_json,
+                 '$.materialization',
+                 coalesce(
+                   json_extract(connection_json, '$.materialization'),
+                   case
+                     when json_extract(connection_json, '$.credentialDriver') in ('cloudflare_oauth', 'gcp_oauth_bootstrap')
+                     then 'oauth'
+                   end,
+                   'secret'
+                 )
+               ),
+               '$.providerSource',
+               coalesce(
+                 json_extract(connection_json, '$.providerSource'),
+                 json_extract(connection_json, '$.provider')
+               )
+             )`,
+          )
+          .run();
+      }
+      // Rename-aside (non-destructive): the live Provider Catalog / Provider Env
+      // tables are retired. Guarded so the pass converges on fresh, existing, and
+      // already-renamed databases.
+      await applyD1GuardedTableRenames(db, [
+        { from: "provider_catalog", to: "provider_catalog_retired" },
+        { from: "provider_envs", to: "provider_envs_retired" },
+      ]);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
@@ -5417,12 +5392,4 @@ async function backfillD1SourceScopedRuns(db: D1Database): Promise<void> {
     )
     .bind(RUN_KIND_SOURCE_SYNC)
     .run();
-}
-
-function assertProviderEnvGlobalBoundary(env: ProviderEnv): void {
-  if (env.spaceId === undefined) {
-    throw new Error(
-      "global provider resolver records are not supported in OSS Takosumi",
-    );
-  }
 }

@@ -35,18 +35,21 @@ export const CONNECTION_TEST_PATH = (id: string): string =>
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/revoke`;
 
-export type ConnectionAuthMethod =
-  | "static_secret"
-  | "aws_assume_role"
-  | "oauth"
-  | "impersonation"
-  | "api_token"
-  | "kubeconfig"
-  | "generic_env"
-  | "manual";
+// Provider resolver (Provider Connection) listing seam. After the credential
+// model collapse a Provider Connection IS the stored credential record (the
+// former `ProviderEnv` resolver projection folded onto the Connection row), so
+// these read paths list/get the same unified rows used by the runner/vault.
+export const PROVIDER_ENVS_PATH =
+  `${INTERNAL_V1_PREFIX}/provider-envs` as const;
+export const PROVIDER_ENV_PATH = (id: string): string =>
+  `${INTERNAL_V1_PREFIX}/provider-envs/${encodeURIComponent(id)}`;
 
 export type ConnectionScopeKind = "operator" | "space";
 
+/**
+ * Operational credential state machine (vault authority). The public read view
+ * projects this through {@link publicProviderConnectionStatus}.
+ */
 export type ConnectionStatus =
   | "pending"
   | "verified"
@@ -54,71 +57,85 @@ export type ConnectionStatus =
   | "expired"
   | "error";
 
-export const PROVIDER_CREDENTIAL_OWNERSHIPS = ["env"] as const;
+/**
+ * Single collapsed Provider Connection kind axis. Replaces the former
+ * `ConnectionAuthMethod` + `ConnectionKind` + `ConnectionCredentialDriver`
+ * triple: the vault routes mint/verify drivers from this one value, and the
+ * `oauth` vs `secret` distinction is carried by the stored
+ * {@link ProviderConnectionMaterialization}.
+ */
+export const PROVIDER_CONNECTION_KINDS = [
+  "source_git_https_token",
+  "source_git_ssh_key",
+  "cloudflare_oauth",
+  "cloudflare_api_token",
+  "aws_assume_role",
+  "gcp_oauth_bootstrap",
+  "gcp_service_account_json",
+  "gcp_service_account_impersonation",
+  "static_secret",
+  "generic_env_provider",
+  "manual",
+] as const;
 
-export type ProviderCredentialOwnership =
-  (typeof PROVIDER_CREDENTIAL_OWNERSHIPS)[number];
+export type ProviderConnectionKind =
+  (typeof PROVIDER_CONNECTION_KINDS)[number];
 
-export function normalizeProviderCredentialOwnership(
+/** @deprecated migration-debt alias for {@link ProviderConnectionKind}. */
+export type ConnectionKind = ProviderConnectionKind;
+
+export const PROVIDER_CONNECTION_MATERIALIZATIONS = [
+  "oauth",
+  "secret",
+] as const;
+
+export type ProviderConnectionMaterialization =
+  (typeof PROVIDER_CONNECTION_MATERIALIZATIONS)[number];
+
+export function isProviderConnectionMaterialization(
   value: unknown,
-): ProviderCredentialOwnership | undefined {
-  if (value === "env" || value === "own_key") return "env";
-  return undefined;
+): value is ProviderConnectionMaterialization {
+  return (
+    typeof value === "string" &&
+    PROVIDER_CONNECTION_MATERIALIZATIONS.includes(
+      value as ProviderConnectionMaterialization,
+    )
+  );
 }
 
-export function normalizeProviderCredentialOwnershipOptions(
-  values: readonly unknown[] | undefined,
-): readonly ProviderCredentialOwnership[] {
-  const normalized: ProviderCredentialOwnership[] = [];
-  for (const value of values ?? []) {
-    const ownership = normalizeProviderCredentialOwnership(value);
-    if (!ownership || normalized.includes(ownership)) continue;
-    normalized.push(ownership);
-  }
-  return normalized;
-}
-
+/** Public read-view status for a Provider Connection. */
 export type ProviderConnectionStatus =
   | "ready"
   | "needs_setup"
   | "expired"
   | "blocked";
 
-export interface ProviderConnection {
-  readonly id: string;
-  readonly spaceId?: string;
-  readonly providerSource: string;
-  readonly displayName: string;
-  readonly ownership: ProviderCredentialOwnership;
-  readonly status: ProviderConnectionStatus;
-  readonly requiredEnvNames: readonly string[];
-  readonly expiresAt?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+export const PROVIDER_CONNECTION_STATUSES = [
+  "ready",
+  "needs_setup",
+  "expired",
+  "blocked",
+] as const;
 
-export interface ListProviderConnectionsResponse {
-  readonly providerConnections: readonly ProviderConnection[];
-}
-
-export interface InstallationProviderConnectionBinding {
-  readonly provider: string;
-  readonly alias?: string;
-  readonly connectionId: string;
-  readonly region?: string;
-}
-
-export type InstallationProviderConnectionBindings =
-  readonly InstallationProviderConnectionBinding[];
-
-export interface InstallationProviderConnectionSet {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
-  readonly environment: string;
-  readonly connections: InstallationProviderConnectionBindings;
-  readonly createdAt: string;
-  readonly updatedAt: string;
+/**
+ * Projects the operational {@link ConnectionStatus} onto the public
+ * {@link ProviderConnectionStatus} read view. Kept byte-stable so the resolved
+ * provider-binding digest (plan→apply TOCTOU pin) is unchanged across the
+ * credential-model collapse.
+ */
+export function publicProviderConnectionStatus(
+  status: ConnectionStatus,
+): ProviderConnectionStatus {
+  switch (status) {
+    case "verified":
+      return "ready";
+    case "expired":
+      return "expired";
+    case "revoked":
+      return "blocked";
+    default:
+      return "needs_setup";
+  }
 }
 
 export interface ConnectionScopeHints {
@@ -156,59 +173,102 @@ export interface CloudflarePermissionGroup {
   readonly name?: string;
 }
 
-export interface Connection {
+/**
+ * Unified stored Provider Connection credential record.
+ *
+ * This single type replaces the former `Connection` (rich internal substrate),
+ * `ProviderConnection` (slim public façade), and `ProviderEnv` (resolver record
+ * with `materialization`). One row per credential is stored in the `connections`
+ * store; the sealed secret material lives in the per-connection secret blob, not
+ * on this row.
+ *
+ *   - `status` is the operational vault state machine; the public read view maps
+ *     it through {@link publicProviderConnectionStatus}.
+ *   - `materialization` (oauth | secret) is stored at register time (folded from
+ *     the former `ProviderEnv.materialization`); it labels OAuth-minted vs
+ *     static-secret credentials and feeds the resolved-binding digest.
+ *   - `envNames` is the credential's declared env-name set (the former
+ *     `ProviderEnv.requiredEnvNames`).
+ */
+export interface ProviderConnection {
   readonly id: string;
   readonly spaceId?: string;
   readonly provider: string;
-  readonly kind?: ConnectionKind;
-  readonly credentialDriver?: ConnectionCredentialDriver;
+  readonly providerSource: string;
+  readonly kind?: ProviderConnectionKind;
   readonly scope: ConnectionScopeKind;
-  readonly authMethod: ConnectionAuthMethod;
   readonly displayName?: string;
   readonly status: ConnectionStatus;
-  readonly scopeHints?: ConnectionScopeHints;
+  readonly materialization: ProviderConnectionMaterialization;
   readonly envNames: readonly string[];
   readonly fileEnvNames?: readonly string[];
+  readonly scopeHints?: ConnectionScopeHints;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
   readonly expiresAt?: string;
 }
 
-export type ConnectionKind =
-  | "source_git_https_token"
-  | "source_git_ssh_key"
-  | "cloudflare_oauth"
-  | "cloudflare_api_token"
-  | "aws_assume_role"
-  | "gcp_oauth_bootstrap"
-  | "gcp_service_account_json"
-  | "gcp_service_account_impersonation"
-  | "static_secret"
-  | "generic_env_provider"
-  | "manual";
+/** @deprecated migration-debt alias for the unified {@link ProviderConnection}. */
+export type Connection = ProviderConnection;
 
-export type ConnectionCredentialDriver =
-  | "cloudflare_oauth"
-  | "cloudflare_api_token"
-  | "aws_assume_role"
-  | "gcp_oauth_bootstrap"
-  | "gcp_service_account_json"
-  | "gcp_service_account_impersonation"
-  | "generic_env"
-  | "static_secret"
-  | "manual";
+export interface ListProviderConnectionsResponse {
+  readonly providerConnections: readonly ProviderConnection[];
+}
+
+/**
+ * Provider-address (or alias) -> Provider Connection mapping for one
+ * Installation/Capsule. The single binding shape; replaces the former
+ * `InstallationProviderConnectionBinding` (connectionId) and
+ * `InstallationProviderEnvBinding` (envId) pair (they always pointed at the same
+ * row, since `ProviderEnv.id == Connection.id`).
+ */
+export interface ProviderBinding {
+  readonly provider: string;
+  readonly alias?: string;
+  readonly connectionId: string;
+  readonly region?: string;
+}
+
+export type ProviderBindings = readonly ProviderBinding[];
+
+/** One binding set per (installation, environment). */
+export interface ProviderBindingSet {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly installationId: string;
+  readonly environment: string;
+  readonly bindings: ProviderBindings;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** @deprecated migration-debt alias for {@link ProviderBinding}. */
+export type InstallationProviderConnectionBinding = ProviderBinding;
+/** @deprecated migration-debt alias for {@link ProviderBindings}. */
+export type InstallationProviderConnectionBindings = ProviderBindings;
+/** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
+export type InstallationProviderConnectionSet = ProviderBindingSet;
+/** @deprecated migration-debt alias for {@link ProviderBinding}. */
+export type InstallationProviderEnvBinding = ProviderBinding;
+/** @deprecated migration-debt alias for {@link ProviderBindings}. */
+export type InstallationProviderEnvBindings = ProviderBindings;
+/** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
+export type InstallationProviderEnvBindingSet = ProviderBindingSet;
 
 export interface CreateConnectionRequest {
   readonly spaceId?: string;
   readonly provider: string;
-  readonly kind?: ConnectionKind;
-  readonly credentialDriver?: ConnectionCredentialDriver;
-  readonly authMethod: ConnectionAuthMethod;
+  readonly kind?: ProviderConnectionKind;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
+  /**
+   * Credential materialization label stored on the connection. Defaults to
+   * `secret`; the OAuth callback path supplies `oauth`.
+   */
+  readonly materialization?: ProviderConnectionMaterialization;
   readonly values: Readonly<Record<string, string>>;
   readonly files?: readonly CreateConnectionFile[];
 }
@@ -249,11 +309,11 @@ export interface GcpImpersonationConnectionRequest {
 }
 
 export interface ConnectionResponse {
-  readonly connection: Connection;
+  readonly connection: ProviderConnection;
 }
 
 export interface ListConnectionsResponse {
-  readonly connections: readonly Connection[];
+  readonly connections: readonly ProviderConnection[];
   /**
    * Opaque keyset cursor for the next page when the listing was capped (spec §30
    * pagination). Absent on the last page or on an unpaginated listing (e.g. the

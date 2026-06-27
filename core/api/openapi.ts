@@ -1,10 +1,10 @@
 import { CORE_CONDITION_REASONS } from "takosumi-contract/reference/compat";
 import { PUBLIC_PROVIDER_RESOLUTION_STATUSES } from "takosumi-contract/provider-resolution";
-import { PROVIDER_CREDENTIAL_OWNERSHIPS } from "takosumi-contract/connections";
 import {
-  PROVIDER_ENV_MATERIALIZATIONS,
-  PROVIDER_ENV_STATUSES,
-} from "takosumi-contract/provider-envs";
+  PROVIDER_CONNECTION_KINDS,
+  PROVIDER_CONNECTION_MATERIALIZATIONS,
+  PROVIDER_CONNECTION_STATUSES,
+} from "takosumi-contract/connections";
 import {
   type ApiEndpoint,
   endpointTag,
@@ -1050,10 +1050,6 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
         versionConstraint: { type: "string" },
         aliases: { type: "array", items: { type: "string" } },
         allowed: { type: "boolean" },
-        ownershipOptions: {
-          type: "array",
-          items: ref("ProviderCredentialOwnership"),
-        },
       },
       additionalProperties: false,
     },
@@ -1145,8 +1141,9 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
 
 function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
   return {
-    ProviderEnvMaterialization: { enum: [...PROVIDER_ENV_MATERIALIZATIONS] },
-    ProviderCredentialOwnership: { enum: [...PROVIDER_CREDENTIAL_OWNERSHIPS] },
+    ProviderConnectionMaterialization: {
+      enum: [...PROVIDER_CONNECTION_MATERIALIZATIONS],
+    },
     ProviderResolutionStatus: {
       enum: [...PUBLIC_PROVIDER_RESOLUTION_STATUSES],
     },
@@ -1184,7 +1181,6 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
         requirement: ref("ProviderRequirement"),
         status: ref("ProviderResolutionStatus"),
         connectionId: { type: "string" },
-        ownership: ref("ProviderCredentialOwnership"),
         blockedReason: { type: "string" },
         evidence: ref("ProviderResolutionEvidence"),
       },
@@ -1198,18 +1194,11 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
     },
     ProviderConnectionResolutionEvidence: {
       type: "object",
-      required: [
-        "kind",
-        "provider",
-        "connectionId",
-        "ownership",
-        "requiredEnvNames",
-      ],
+      required: ["kind", "provider", "connectionId", "requiredEnvNames"],
       properties: {
         kind: { const: "provider_connection" },
         provider: { type: "string" },
         connectionId: { type: "string" },
-        ownership: { enum: [...PROVIDER_CREDENTIAL_OWNERSHIPS] },
         requiredEnvNames: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,
@@ -1248,130 +1237,106 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /**
- * Provider catalog (ownership options / helpers / catalog records)
- * plus the compatibility-check request/response wrappers that bind to it.
+ * Read-only Provider listing (computed) + the unified Provider Connection read
+ * shapes, plus the compatibility-check request/response wrappers that bind to
+ * the listing.
  */
 function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
   return {
-    ProviderCredentialHelper: {
-      enum: [
-        "cloudflare_api_token",
-        "cloudflare_oauth",
-        "aws_assume_role",
-        "gcp_oauth_bootstrap",
-        "gcp_service_account_json",
-        "gcp_service_account_impersonation",
-        "generic_env",
-      ],
-    },
-    ProviderCatalogEntry: {
+    ProviderConnectionKind: { enum: [...PROVIDER_CONNECTION_KINDS] },
+    ProviderListing: {
       type: "object",
       required: [
         "id",
         "providerSource",
         "displayName",
         "recommendedEnvNames",
-        "helpers",
-        "ownershipOptions",
+        "requiredEnvGroups",
+        "genericEnvSupported",
+        "connectionKinds",
+        "credentialRecipeIds",
         "allowedResources",
         "allowedDataSources",
-        "policyPackId",
-        "createdAt",
-        "updatedAt",
       ],
       properties: {
         id: { type: "string" },
         providerSource: { type: "string" },
         displayName: { type: "string" },
         recommendedEnvNames: { type: "array", items: { type: "string" } },
-        credentialRecipeIds: { type: "array", items: { type: "string" } },
         requiredEnvGroups: {
           type: "array",
           items: { type: "array", items: { type: "string" } },
         },
         genericEnvSupported: { type: "boolean" },
-        helpers: { type: "array", items: ref("ProviderCredentialHelper") },
-        ownershipOptions: {
+        connectionKinds: {
           type: "array",
-          items: ref("ProviderCredentialOwnership"),
+          items: ref("ProviderConnectionKind"),
         },
+        credentialRecipeIds: { type: "array", items: { type: "string" } },
         allowedResources: { type: "array", items: { type: "string" } },
         allowedDataSources: { type: "array", items: { type: "string" } },
-        policyPackId: { type: "string" },
-        costEstimatorId: { type: "string" },
         docsUrl: { type: "string" },
-        createdAt: { type: "string" },
-        updatedAt: { type: "string" },
       },
       additionalProperties: false,
     },
-    ProviderEnvStatus: { enum: [...PROVIDER_ENV_STATUSES] },
-    ProviderEnv: {
+    ProviderConnectionStatus: { enum: [...PROVIDER_CONNECTION_STATUSES] },
+    ProviderConnection: {
       type: "object",
       required: [
         "id",
+        "provider",
         "providerSource",
-        "displayName",
-        "materialization",
+        "scope",
         "status",
-        "requiredEnvNames",
+        "materialization",
+        "envNames",
         "createdAt",
         "updatedAt",
       ],
       properties: {
         id: { type: "string" },
         spaceId: { type: "string" },
+        provider: { type: "string" },
         providerSource: { type: "string" },
+        kind: ref("ProviderConnectionKind"),
+        scope: { enum: ["operator", "space"] },
         displayName: { type: "string" },
-        materialization: ref("ProviderEnvMaterialization"),
-        status: ref("ProviderEnvStatus"),
-        requiredEnvNames: { type: "array", items: { type: "string" } },
+        status: { enum: ["pending", "verified", "revoked", "expired", "error"] },
+        materialization: ref("ProviderConnectionMaterialization"),
+        envNames: { type: "array", items: { type: "string" } },
+        fileEnvNames: { type: "array", items: { type: "string" } },
         expiresAt: { type: "string", format: "date-time" },
+        verifiedAt: { type: "string", format: "date-time" },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    PutProviderEnvRequest: {
-      type: "object",
-      required: ["providerSource", "displayName", "materialization"],
-      properties: {
-        spaceId: { type: "string" },
-        providerSource: { type: "string" },
-        displayName: { type: "string" },
-        materialization: ref("ProviderEnvMaterialization"),
-        status: ref("ProviderEnvStatus"),
-        requiredEnvNames: { type: "array", items: { type: "string" } },
-        secretRef: { type: "string" },
-        expiresAt: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
     },
     ProviderEnvResponse: {
       type: "object",
       required: ["providerEnv"],
-      properties: { providerEnv: ref("ProviderEnv") },
+      properties: { providerEnv: ref("ProviderConnection") },
       additionalProperties: false,
     },
     ListProviderEnvsResponse: {
       type: "object",
       required: ["providerEnvs"],
       properties: {
-        providerEnvs: { type: "array", items: ref("ProviderEnv") },
+        providerEnvs: { type: "array", items: ref("ProviderConnection") },
       },
       additionalProperties: false,
     },
-    ProviderCatalogEntryResponse: {
+    ProviderListingResponse: {
       type: "object",
       required: ["provider"],
-      properties: { provider: ref("ProviderCatalogEntry") },
+      properties: { provider: ref("ProviderListing") },
       additionalProperties: false,
     },
-    ListProviderCatalogEntriesResponse: {
+    ListProvidersResponse: {
       type: "object",
       required: ["providers"],
       properties: {
-        providers: { type: "array", items: ref("ProviderCatalogEntry") },
+        providers: { type: "array", items: ref("ProviderListing") },
       },
       additionalProperties: false,
     },
@@ -1548,9 +1513,10 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       required: [
         "id",
         "provider",
+        "providerSource",
         "scope",
-        "authMethod",
         "status",
+        "materialization",
         "envNames",
         "createdAt",
         "updatedAt",
@@ -1559,39 +1525,14 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         spaceId: { type: "string" },
         provider: { type: "string" },
-        kind: {
-          enum: [
-            "source_git_https_token",
-            "source_git_ssh_key",
-            "cloudflare_oauth",
-            "cloudflare_api_token",
-            "aws_assume_role",
-            "gcp_oauth_bootstrap",
-            "gcp_service_account_json",
-            "gcp_service_account_impersonation",
-            "static_secret",
-            "generic_env_provider",
-            "manual",
-          ],
-        },
-        credentialDriver: ref("ConnectionCredentialDriver"),
+        providerSource: { type: "string" },
+        kind: ref("ProviderConnectionKind"),
         scope: { enum: ["operator", "space"] },
-        authMethod: {
-          enum: [
-            "static_secret",
-            "aws_assume_role",
-            "oauth",
-            "impersonation",
-            "api_token",
-            "kubeconfig",
-            "generic_env",
-            "manual",
-          ],
-        },
         displayName: { type: "string" },
         status: {
           enum: ["pending", "verified", "revoked", "expired", "error"],
         },
+        materialization: ref("ProviderConnectionMaterialization"),
         scopeHints: ref("ConnectionScope"),
         envNames: { type: "array", items: { type: "string" } },
         fileEnvNames: { type: "array", items: { type: "string" } },
@@ -1633,38 +1574,12 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
     },
     CreateConnectionRequest: {
       type: "object",
-      required: ["provider", "authMethod", "values"],
+      required: ["provider", "values"],
       properties: {
         spaceId: { type: "string" },
         provider: { type: "string" },
-        kind: {
-          enum: [
-            "source_git_https_token",
-            "source_git_ssh_key",
-            "cloudflare_oauth",
-            "cloudflare_api_token",
-            "aws_assume_role",
-            "gcp_oauth_bootstrap",
-            "gcp_service_account_json",
-            "gcp_service_account_impersonation",
-            "static_secret",
-            "generic_env_provider",
-            "manual",
-          ],
-        },
-        credentialDriver: ref("ConnectionCredentialDriver"),
-        authMethod: {
-          enum: [
-            "static_secret",
-            "aws_assume_role",
-            "oauth",
-            "impersonation",
-            "api_token",
-            "kubeconfig",
-            "generic_env",
-            "manual",
-          ],
-        },
+        kind: ref("ProviderConnectionKind"),
+        materialization: ref("ProviderConnectionMaterialization"),
         displayName: { type: "string" },
         scope: { enum: ["operator", "space"] },
         scopeHints: ref("ConnectionScope"),
@@ -1683,19 +1598,6 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
         },
       },
       additionalProperties: false,
-    },
-    ConnectionCredentialDriver: {
-      enum: [
-        "cloudflare_oauth",
-        "cloudflare_api_token",
-        "aws_assume_role",
-        "gcp_oauth_bootstrap",
-        "gcp_service_account_json",
-        "gcp_service_account_impersonation",
-        "generic_env",
-        "static_secret",
-        "manual",
-      ],
     },
     ConnectionResponse: {
       type: "object",

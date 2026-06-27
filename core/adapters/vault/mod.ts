@@ -365,13 +365,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "operator-scoped connections must not have an owning space (omit spaceId for scope: operator)",
       );
     }
-    if (input.authMethod !== "static_secret") {
-      // Phase 1 implements static_secret only; other methods are reserved.
-      throw new ConnectionVaultError(
-        "not_implemented",
-        `authMethod ${String(input.authMethod)} is not implemented (Phase 1 supports static_secret)`,
-      );
-    }
     if (isSourceGitKind(input.kind)) {
       return await this.#registerGitConnection(input, input.kind);
     }
@@ -489,14 +482,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       id,
       ...(input.spaceId ? { spaceId: input.spaceId } : {}),
       provider: input.provider,
+      providerSource: canonicalProviderSource(input.provider),
       kind: connectionKind,
-      ...(input.credentialDriver
-        ? { credentialDriver: input.credentialDriver }
-        : {}),
       scope: input.scope ?? (input.spaceId ? "space" : "operator"),
-      authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
+      materialization: input.materialization ?? "secret",
       ...(normalizeScope(input.scopeHints)
         ? { scopeHints: normalizeScope(input.scopeHints) }
         : {}),
@@ -510,23 +501,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(expiresAt ? { expiresAt } : {}),
     };
     await this.#store.putConnection(connection);
-    if (connection.spaceId) {
-      await this.#store.putProviderEnv({
-        id: connection.id,
-        spaceId: connection.spaceId,
-        providerSource: canonicalProviderSource(connection.provider),
-        displayName: connection.displayName ?? connection.provider,
-        materialization: isOAuthCredentialDriver(connection.credentialDriver)
-          ? "oauth"
-          : "secret",
-        status: connection.status === "verified" ? "ready" : "needs_setup",
-        requiredEnvNames: connection.envNames,
-        secretRef: connection.id,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        ...(connection.expiresAt ? { expiresAt: connection.expiresAt } : {}),
-      });
-    }
     return connection;
   }
 
@@ -624,11 +598,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       id,
       ...(input.spaceId ? { spaceId: input.spaceId } : {}),
       provider: kind,
+      providerSource: canonicalProviderSource(kind),
       kind,
       scope: input.scope ?? (input.spaceId ? "space" : "operator"),
-      authMethod: "static_secret",
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
+      materialization: "secret",
       ...(scopeHints ? { scopeHints } : {}),
       envNames: [expectedEnv],
       createdAt: nowIso,
@@ -720,7 +695,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: verifiedAtIso,
     };
     await this.#store.putConnection(verifiedConnection);
-    await this.#syncProviderEnvForConnection(verifiedConnection);
     return { status: "verified" };
   }
 
@@ -728,13 +702,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const existed = await this.#store.getConnection(id);
     await this.#store.deleteSecretBlob(id);
     const deleted = await this.#store.deleteConnection(id);
-    if (existed) {
-      await this.#syncProviderEnvForConnection({
-        ...existed,
-        status: "revoked",
-        updatedAt: this.#now().toISOString(),
-      });
-    }
     return deleted || existed !== undefined;
   }
 
@@ -1095,36 +1062,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: nowIso,
     };
     await this.#store.putConnection(expiredConnection);
-    await this.#syncProviderEnvForConnection(expiredConnection);
-  }
-
-  async #syncProviderEnvForConnection(connection: Connection): Promise<void> {
-    if (isSourceGitKind(connection.kind)) return;
-    if (!connection.spaceId) return;
-    const existing = await this.#store.getProviderEnv(connection.id);
-    const nowIso = this.#now().toISOString();
-    await this.#store.putProviderEnv({
-      id: connection.id,
-      spaceId: connection.spaceId,
-      providerSource: canonicalProviderSource(connection.provider),
-      displayName: connection.displayName ?? connection.provider,
-      materialization: isOAuthCredentialDriver(connection.credentialDriver)
-        ? "oauth"
-        : "secret",
-      status:
-        connection.status === "verified"
-          ? "ready"
-          : connection.status === "expired"
-            ? "expired"
-            : connection.status === "revoked"
-              ? "blocked"
-              : "needs_setup",
-      requiredEnvNames: connection.envNames,
-      secretRef: connection.id,
-      createdAt: existing?.createdAt ?? connection.createdAt,
-      updatedAt: nowIso,
-      ...(connection.expiresAt ? { expiresAt: connection.expiresAt } : {}),
-    });
   }
 
   async #openProviderSecretMaterial(
@@ -1294,11 +1231,19 @@ function assertProviderMintDriverAvailable(connection: Connection): void {
 }
 
 function isReservedGcpConnection(connection: Connection): boolean {
-  return (
+  if (
     connection.kind === "gcp_oauth_bootstrap" ||
-    connection.kind === "gcp_service_account_impersonation" ||
-    connection.credentialDriver === "gcp_oauth_bootstrap" ||
-    connection.credentialDriver === "gcp_service_account_impersonation"
+    connection.kind === "gcp_service_account_impersonation"
+  ) {
+    return true;
+  }
+  // Folded from the former `gcp_oauth_bootstrap` credentialDriver: an
+  // OAuth-minted google credential (registered with kind generic_env_provider)
+  // is still a reserved gcp mint until the gcp mint driver is wired. Cloudflare
+  // OAuth (materialization oauth, provider cloudflare) is NOT reserved.
+  return (
+    connection.materialization === "oauth" &&
+    sameProviderFamily(connection.provider, "google")
   );
 }
 
@@ -1600,10 +1545,7 @@ function validateGenericEnvProviderInput(
 function isGcpServiceAccountJsonRegistration(
   input: RegisterConnectionInput,
 ): boolean {
-  return (
-    input.kind === "gcp_service_account_json" ||
-    input.credentialDriver === "gcp_service_account_json"
-  );
+  return input.kind === "gcp_service_account_json";
 }
 
 function normalizeGcpServiceAccountJsonValues(
@@ -1814,12 +1756,6 @@ function providerConnectionKindFor(provider: string): ConnectionKind {
     return "gcp_service_account_json";
   }
   return "static_secret";
-}
-
-function isOAuthCredentialDriver(
-  driver: Connection["credentialDriver"] | undefined,
-): boolean {
-  return driver === "cloudflare_oauth" || driver === "gcp_oauth_bootstrap";
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

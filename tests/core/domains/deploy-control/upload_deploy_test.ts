@@ -35,7 +35,7 @@ import {
 } from "../../../../core/adapters/vault/mod.ts";
 import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { deployUpload } from "../../../../core/domains/deploy-control/upload_deploy.ts";
-import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -51,7 +51,7 @@ const UPLOAD_PROVIDER_CONNECTIONS: InstallationProviderEnvBindings = [
   {
     provider: "cloudflare",
     alias: "main",
-    envId: "penv_upload_cf",
+    connectionId: "conn_upload_cf",
   },
 ];
 const CLOUDFLARE_MIRROR_EVIDENCE = {
@@ -252,25 +252,15 @@ async function setup(
     spaceId: "space_test",
     scope: "space",
     provider: "cloudflare",
+    providerSource: CLOUDFLARE_PROVIDER,
     kind: "cloudflare_api_token",
-    authMethod: "static_secret",
+    materialization: "secret",
+    displayName: "Cloudflare upload env",
     status: "verified",
     envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-09T00:00:00.000Z",
     updatedAt: "2026-06-09T00:00:00.000Z",
     verifiedAt: "2026-06-09T00:00:00.000Z",
-  });
-  await store.putProviderEnv({
-    id: "penv_upload_cf",
-    spaceId: "space_test",
-    providerSource: CLOUDFLARE_PROVIDER,
-    displayName: "Cloudflare upload env",
-    materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: "conn_upload_cf",
-    createdAt: "2026-06-09T00:00:00.000Z",
-    updatedAt: "2026-06-09T00:00:00.000Z",
   });
   return { store, runner, sources, installations, controller };
 }
@@ -881,7 +871,7 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
   });
 });
 
-test("deployUpload rejects provider env bindings without envId before persistence", async () => {
+test("deployUpload rejects provider env bindings without connectionId before persistence", async () => {
   const { store, sources, installations, controller } = await setup();
   const snapshot = await sources.recordUploadSnapshot({
     spaceId: "space_test",
@@ -908,7 +898,7 @@ test("deployUpload rejects provider env bindings without envId before persistenc
     ),
   ).rejects.toMatchObject({
     code: "invalid_argument",
-    message: expect.stringContaining("providerEnvBindings[0].envId"),
+    message: expect.stringContaining("providerBindings[0].connectionId"),
   });
 
   const installationsAfter =

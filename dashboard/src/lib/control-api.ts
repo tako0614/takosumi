@@ -28,7 +28,7 @@ import type {
   InstallationProviderConnectionSet as ContractInstallationProviderConnectionSet,
   JsonValue as ContractJsonValue,
   OutputShare as ContractOutputShare,
-  ProviderCatalogEntry as ContractProviderCatalogEntry,
+  ProviderListing as ContractProviderListing,
   ProviderConnection as ContractProviderConnection,
   ProviderResolution as ContractProviderResolution,
   PublicDeployment as ContractPublicDeployment,
@@ -403,7 +403,7 @@ export interface InstallationProviderConnectionSet {
   readonly spaceId: string;
   readonly installationId: string;
   readonly environment: string;
-  readonly connections: InstallationProviderConnectionBindings;
+  readonly bindings: InstallationProviderConnectionBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -786,78 +786,47 @@ export interface ConnectionScopeHints {
   readonly templateId?: string;
 }
 
+export type ProviderConnectionMaterialization = "oauth" | "secret";
+
+/**
+ * Unified Provider Connection credential record (mirrors the collapsed contract
+ * `ProviderConnection`). The former separate `Connection` / `ProviderConnection`
+ * / `ProviderEnv` shapes are one row now; `Connection` is kept as an alias for
+ * call sites that read the operator/space connection listing.
+ */
 export interface Connection {
   readonly id: string;
   readonly spaceId?: string;
   readonly provider: string;
+  readonly providerSource: string;
   readonly kind?: string;
-  readonly credentialDriver?: string;
   readonly scope: ConnectionScopeKind;
-  readonly authMethod: string;
   readonly displayName?: string;
   readonly status: ConnectionStatus;
+  readonly materialization: ProviderConnectionMaterialization;
   readonly scopeHints?: ConnectionScopeHints;
   readonly envNames: readonly string[];
+  readonly fileEnvNames?: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
   readonly expiresAt?: string;
 }
 
-export type ProviderEnvMaterialization = "oauth" | "secret";
-export type ProviderConnectionStatus =
-  | "ready"
-  | "needs_setup"
-  | "expired"
-  | "blocked";
-export type ProviderCredentialOwnership = "env";
+export type ProviderConnection = Connection;
 
-function normalizeProviderCredentialOwnership(
-  value: unknown,
-): ProviderCredentialOwnership | undefined {
-  if (value === "env" || value === "own_key") return "env";
-  return undefined;
-}
-
-function normalizeProviderCredentialOwnershipOptions(
-  values: readonly unknown[] | undefined,
-): readonly ProviderCredentialOwnership[] {
-  const normalized: ProviderCredentialOwnership[] = [];
-  for (const value of values ?? []) {
-    const ownership = normalizeProviderCredentialOwnership(value);
-    if (!ownership || normalized.includes(ownership)) continue;
-    normalized.push(ownership);
-  }
-  return normalized;
-}
-
-export interface ProviderConnection {
-  readonly id: string;
-  readonly spaceId?: string;
-  readonly providerSource: string;
-  readonly displayName: string;
-  readonly ownership: ProviderCredentialOwnership;
-  readonly status: ProviderConnectionStatus;
-  readonly requiredEnvNames: readonly string[];
-  readonly expiresAt?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface ProviderCatalogEntry {
+export interface ProviderListing {
   readonly id: string;
   readonly providerSource: string;
   readonly displayName: string;
   readonly recommendedEnvNames: readonly string[];
-  readonly helpers: readonly string[];
-  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
+  readonly requiredEnvGroups: readonly (readonly string[])[];
+  readonly genericEnvSupported: boolean;
+  readonly connectionKinds: readonly string[];
+  readonly credentialRecipeIds: readonly string[];
   readonly allowedResources: readonly string[];
   readonly allowedDataSources: readonly string[];
-  readonly policyPackId?: string;
-  readonly costEstimatorId?: string;
   readonly docsUrl?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
 }
 
 export type CapsuleCompatibilityLevel =
@@ -879,7 +848,6 @@ export interface CapsuleCompatibilityProvider {
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
-  readonly ownershipOptions: readonly ProviderCredentialOwnership[];
 }
 
 export interface CapsuleCompatibilityResource {
@@ -917,7 +885,7 @@ type _ContractResponseAssignableToDashboardMirrors = [
   AssertAssignable<ActivityEvent, ContractActivityEvent>,
   AssertAssignable<Connection, ContractConnection>,
   AssertAssignable<ProviderConnection, ContractProviderConnection>,
-  AssertAssignable<ProviderCatalogEntry, ContractProviderCatalogEntry>,
+  AssertAssignable<ProviderListing, ContractProviderListing>,
   AssertAssignable<CreditReservation, ContractCreditReservation>,
   AssertAssignable<UsageEvent, ContractUsageEvent>,
   AssertAssignable<RunCostInfo, ContractRunCostInfo>,
@@ -1290,7 +1258,6 @@ export async function checkCapsuleCompatibility(input: {
         readonly versionConstraint?: string;
         readonly aliases?: readonly string[];
         readonly allowed?: boolean;
-        readonly ownershipOptions?: readonly ProviderCredentialOwnership[];
       }[];
       readonly resources?: readonly {
         readonly type?: string;
@@ -1326,13 +1293,6 @@ export async function checkCapsuleCompatibility(input: {
         : {}),
       aliases: provider.aliases ?? [],
       allowed: provider.allowed ?? true,
-      ownershipOptions: (() => {
-        const ownershipOptions = normalizeProviderCredentialOwnershipOptions(
-          provider.ownershipOptions,
-        );
-        const fallback: readonly ProviderCredentialOwnership[] = ["env"];
-        return ownershipOptions.length > 0 ? ownershipOptions : fallback;
-      })(),
     }));
   const resources = (body.report.resources ?? [])
     .filter((resource) => resource.type !== undefined)
@@ -1805,7 +1765,6 @@ export async function createConnection(input: {
   readonly spaceId: string;
   readonly provider: string;
   readonly kind?: string;
-  readonly credentialDriver?: string;
   readonly displayName?: string;
   readonly scopeHints?: ConnectionScopeHints;
   readonly values: Readonly<Record<string, string>>;
@@ -1818,9 +1777,6 @@ export async function createConnection(input: {
         spaceId: input.spaceId,
         provider: input.provider,
         ...(input.kind ? { kind: input.kind } : {}),
-        ...(input.credentialDriver
-          ? { credentialDriver: input.credentialDriver }
-          : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
         ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         values: input.values,
@@ -1922,10 +1878,10 @@ export function isOAuthUnavailable(error: unknown): boolean {
 // --- Providers -------------------------------------------------------------
 
 export async function listProviderCatalogEntries(): Promise<
-  readonly ProviderCatalogEntry[]
+  readonly ProviderListing[]
 > {
   const body = await controlFetch<{
-    providers?: readonly ProviderCatalogEntry[];
+    providers?: readonly ProviderListing[];
   }>(`${BASE}/providers`);
   return body.providers ?? [];
 }

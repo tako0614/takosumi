@@ -214,7 +214,6 @@ test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and 
   expect(payload.connection.status).toBe("pending");
   expect(payload.connection.provider).toBe("cloudflare");
   expect(payload.connection.kind).toBe("cloudflare_api_token");
-  expect(payload.connection.credentialDriver).toBe("cloudflare_api_token");
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
   expect(payload.connection.values).toBeUndefined();
 
@@ -337,8 +336,6 @@ test("POST /internal/v1/connections/aws/assume-role returns 201 and never echoes
   const payload = JSON.parse(text);
   expect(payload.connection.provider).toBe("aws");
   expect(payload.connection.kind).toBe("aws_assume_role");
-  expect(payload.connection.credentialDriver).toBe("aws_assume_role");
-  expect(payload.connection.authMethod).toBe("static_secret");
   expect(payload.connection.scopeHints.awsRoleArn).toBe(
     "arn:aws:iam::123456789012:role/takosumi-prod",
   );
@@ -374,7 +371,6 @@ test("POST /internal/v1/connections/generic-env-provider registers a secret-back
     "registry.opentofu.org/integrations/github",
   );
   expect(payload.connection.kind).toBe("generic_env_provider");
-  expect(payload.connection.credentialDriver).toBe("generic_env");
   expect(payload.connection.scope).toBe("space");
   expect(payload.connection.envNames).toEqual([
     "GITHUB_CUSTOM_ENDPOINT",
@@ -413,7 +409,6 @@ test("POST /internal/v1/connections/generic-env-provider registers env and file 
     "registry.opentofu.org/example/envfile",
   );
   expect(payload.connection.kind).toBe("generic_env_provider");
-  expect(payload.connection.credentialDriver).toBe("generic_env");
   expect(payload.connection.scope).toBe("space");
   expect(payload.connection.envNames).toEqual([
     "GENERIC_API_TOKEN",
@@ -506,7 +501,7 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
             spaceId: SPACE_ID,
             provider: "cloudflare",
             kind: "generic_env_provider",
-            authMethod: "static_secret",
+            materialization: "oauth",
             displayName: "cf oauth",
             values: {
               CLOUDFLARE_API_TOKEN: `oauth-token-${code}-${state}`,
@@ -548,7 +543,7 @@ test("Cloudflare OAuth helper starts and completes as a write-only Provider Conn
   const payload = JSON.parse(text);
   expect(payload.connection.provider).toBe("cloudflare");
   expect(payload.connection.kind).toBe("generic_env_provider");
-  expect(payload.connection.credentialDriver).toBe("cloudflare_oauth");
+  expect(payload.connection.materialization).toBe("oauth");
   expect(payload.connection.envNames).toEqual(["CLOUDFLARE_API_TOKEN"]);
 });
 
@@ -565,7 +560,7 @@ test("OAuth callback requires code and state once helper is configured", async (
             spaceId: SPACE_ID,
             provider: "google",
             kind: "generic_env_provider",
-            authMethod: "static_secret",
+            materialization: "oauth",
             values: { GOOGLE_CREDENTIALS: "{}" },
           },
         }),
@@ -610,9 +605,6 @@ test("POST /internal/v1/connections/gcp/impersonation registers a Google Provide
   const payload = JSON.parse(text);
   expect(payload.connection.provider).toBe("google");
   expect(payload.connection.kind).toBe("gcp_service_account_impersonation");
-  expect(payload.connection.credentialDriver).toBe(
-    "gcp_service_account_impersonation",
-  );
   expect(payload.connection.envNames).toEqual(["GOOGLE_CREDENTIALS"]);
   expect(payload.connection.scopeHints).toEqual({
     gcpServiceAccountEmail: "takosumi-runner@project-1.iam.gserviceaccount.com",
@@ -648,7 +640,6 @@ test("POST /internal/v1/connections/gcp/service-account-json registers a runnabl
   const payload = JSON.parse(text);
   expect(payload.connection.provider).toBe("google");
   expect(payload.connection.kind).toBe("gcp_service_account_json");
-  expect(payload.connection.credentialDriver).toBe("gcp_service_account_json");
   expect(payload.connection.envNames).toEqual([
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CREDENTIALS",
@@ -731,58 +722,22 @@ test("GET /internal/v1/connections with no spaceId is denied for a scoped bearer
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("internal provider resolver records reject global OSS records and allow scoped Space records", async () => {
+test("internal provider resolver records are the Space's Provider Connections and never leak secrets", async () => {
+  // After the credential-model collapse there is no separate ProviderEnv write
+  // path: the Connection row IS the resolver record (`PUT /provider-envs/:id`
+  // was removed). The `/provider-envs` read paths list/get the unified Provider
+  // Connection rows, scoped to a Workspace, never echoing sealed material.
   const app = await makeApp();
-  const globalGatewayBody = {
-    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-    displayName: "Cloud-only gateway materialization",
-    materialization: "gateway",
-    gatewayProfileId: "cloudflare-default",
-    requiredEnvNames: [],
-  };
 
-  const globalGatewayDenied = await app.request(
-    "/internal/v1/provider-envs/penv_globalcf0001",
-    {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer operator-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(globalGatewayBody),
-    },
+  // There is no global OSS resolver record: a scoped listing starts empty.
+  const empty = await app.request(
+    `/internal/v1/provider-envs?spaceId=${SPACE_ID}`,
+    { headers: HEADERS },
   );
-  expect(globalGatewayDenied.status).toBe(400);
-  expect((await globalGatewayDenied.json()).error.code).toBe(
-    "invalid_argument",
-  );
+  expect(empty.status).toBe(200);
+  expect((await empty.json()).providerEnvs).toHaveLength(0);
 
-  const globalSecretDenied = await app.request(
-    "/internal/v1/provider-envs/penv_globalsecret1",
-    {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer operator-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Global secret",
-        materialization: "secret",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: "conn_operator_secret",
-      }),
-    },
-  );
-  expect(globalSecretDenied.status).toBe(400);
-  expect((await globalSecretDenied.json()).error.code).toBe("invalid_argument");
-
-  const listed = await app.request("/internal/v1/provider-envs", {
-    headers: { authorization: "Bearer operator-token" },
-  });
-  expect(listed.status).toBe(200);
-  expect((await listed.json()).providerEnvs).toHaveLength(0);
-
+  // Registering a Space connection creates the resolver record directly.
   const spaceCreated = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
@@ -793,53 +748,51 @@ test("internal provider resolver records reject global OSS records and allow sco
   });
   expect(spaceCreated.status).toBe(201);
   const spaceConnection = (await spaceCreated.json()).connection;
-  const storedSpaceEnv = await app.request(
-    "/internal/v1/provider-envs/penv_spacecf0001",
-    {
-      method: "PUT",
-      headers: HEADERS,
-      body: JSON.stringify({
-        spaceId: SPACE_ID,
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Cloudflare Space secret",
-        materialization: "secret",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: spaceConnection.id,
-      }),
-    },
-  );
-  expect(storedSpaceEnv.status).toBe(200);
-  const storedSpaceEnvPayload = await storedSpaceEnv.json();
-  expect(storedSpaceEnvPayload.providerEnv).toMatchObject({
-    id: "penv_spacecf0001",
-    spaceId: SPACE_ID,
-    materialization: "secret",
-    status: "needs_setup",
-  });
-  expect(JSON.stringify(storedSpaceEnvPayload)).not.toContain("secretRef");
 
-  const readSpaceEnv = await app.request(
-    "/internal/v1/provider-envs/penv_spacecf0001",
-    {
-      headers: HEADERS,
-    },
-  );
-  expect(readSpaceEnv.status).toBe(200);
-  expect(JSON.stringify(await readSpaceEnv.json())).not.toContain("secretRef");
-
+  // The scoped Provider Connection is now listed as the resolver record.
   const listedSpaceEnv = await app.request(
     `/internal/v1/provider-envs?spaceId=${SPACE_ID}`,
-    {
-      headers: HEADERS,
-    },
+    { headers: HEADERS },
   );
   expect(listedSpaceEnv.status).toBe(200);
-  expect(JSON.stringify(await listedSpaceEnv.json())).not.toContain(
-    "secretRef",
+  const listedSpaceEnvPayload = await listedSpaceEnv.json();
+  expect(listedSpaceEnvPayload.providerEnvs).toHaveLength(1);
+  expect(listedSpaceEnvPayload.providerEnvs[0]).toMatchObject({
+    id: spaceConnection.id,
+    spaceId: SPACE_ID,
+    provider: "cloudflare",
+    materialization: "secret",
+  });
+  expect(JSON.stringify(listedSpaceEnvPayload)).not.toContain("secretRef");
+  expect(JSON.stringify(listedSpaceEnvPayload)).not.toContain(
+    "space-secret-token",
+  );
+
+  // And readable by id, still never echoing sealed material.
+  const readSpaceEnv = await app.request(
+    `/internal/v1/provider-envs/${spaceConnection.id}`,
+    { headers: HEADERS },
+  );
+  expect(readSpaceEnv.status).toBe(200);
+  const readSpaceEnvPayload = await readSpaceEnv.json();
+  expect(readSpaceEnvPayload.providerEnv).toMatchObject({
+    id: spaceConnection.id,
+    spaceId: SPACE_ID,
+    materialization: "secret",
+  });
+  expect(JSON.stringify(readSpaceEnvPayload)).not.toContain("secretRef");
+  expect(JSON.stringify(readSpaceEnvPayload)).not.toContain(
+    "space-secret-token",
   );
 });
 
-test("operator-backed provider resolver records are Cloud-only and operator-gated", async () => {
+test("operator-scoped provider resolver records are operator-gated", async () => {
+  // After the credential-model collapse "operator-backed" is no longer a
+  // separate secretRef-backed ProviderEnv (`PUT /provider-envs/:id` is removed);
+  // an operator-scoped CONNECTION is the operator credential. Its read access is
+  // operator-gated, and the Cloud-only bindability of operator-scoped credentials
+  // is gated by `allowOperatorBackedProviderEnvs` at run-time resolution (covered
+  // by the connections-domain resolver tests), not by a write route here.
   const app = await makeApp();
   const operatorConnectionResponse = await app.request(CF_PATH, {
     method: "POST",
@@ -855,88 +808,31 @@ test("operator-backed provider resolver records are Cloud-only and operator-gate
   expect(operatorConnectionResponse.status).toBe(201);
   const operatorConnection = (await operatorConnectionResponse.json())
     .connection;
+  expect(operatorConnection.scope).toBe("operator");
 
+  // A scoped (Space) bearer cannot read an operator-scoped resolver record.
   const scopedDenied = await app.request(
-    "/internal/v1/provider-envs/penv_operatorbacked1",
-    {
-      method: "PUT",
-      headers: HEADERS,
-      body: JSON.stringify({
-        spaceId: SPACE_ID,
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Takosumi provided Cloudflare",
-        materialization: "secret",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: operatorConnection.id,
-      }),
-    },
+    `/internal/v1/provider-envs/${operatorConnection.id}`,
+    { headers: HEADERS },
   );
   expect(scopedDenied.status).toBe(403);
   expect((await scopedDenied.json()).error.code).toBe("permission_denied");
 
-  const ossDenied = await app.request(
-    "/internal/v1/provider-envs/penv_operatorbacked1",
-    {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer operator-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: SPACE_ID,
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Takosumi provided Cloudflare",
-        materialization: "secret",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: operatorConnection.id,
-      }),
-    },
+  // The unrestricted operator bearer can read it, still never echoing secrets.
+  const operatorRead = await app.request(
+    `/internal/v1/provider-envs/${operatorConnection.id}`,
+    { headers: { authorization: "Bearer operator-token" } },
   );
-  expect(ossDenied.status).toBe(403);
-  expect((await ossDenied.json()).error.message).toContain("operator-scoped");
-
-  const cloudApp = await makeApp({ allowOperatorBackedProviderEnvs: true });
-  const cloudOperatorConnectionResponse = await cloudApp.request(CF_PATH, {
-    method: "POST",
-    headers: {
-      authorization: "Bearer operator-token",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      scope: "operator",
-      values: { CLOUDFLARE_API_TOKEN: "operator-secret-token" },
-    }),
+  expect(operatorRead.status).toBe(200);
+  const operatorReadPayload = await operatorRead.json();
+  expect(operatorReadPayload.providerEnv).toMatchObject({
+    id: operatorConnection.id,
+    scope: "operator",
+    materialization: "secret",
   });
-  expect(cloudOperatorConnectionResponse.status).toBe(201);
-  const cloudOperatorConnection = (await cloudOperatorConnectionResponse.json())
-    .connection;
-  const cloudCreated = await cloudApp.request(
-    "/internal/v1/provider-envs/penv_operatorbacked1",
-    {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer operator-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: SPACE_ID,
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        displayName: "Takosumi provided Cloudflare",
-        materialization: "secret",
-        requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-        secretRef: cloudOperatorConnection.id,
-      }),
-    },
+  expect(JSON.stringify(operatorReadPayload)).not.toContain(
+    "operator-secret-token",
   );
-  expect(cloudCreated.status).toBe(200);
-  expect(await cloudCreated.json()).toMatchObject({
-    providerEnv: {
-      id: "penv_operatorbacked1",
-      spaceId: SPACE_ID,
-      materialization: "secret",
-      status: "needs_setup",
-    },
-  });
 });
 
 test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 verified)", async () => {

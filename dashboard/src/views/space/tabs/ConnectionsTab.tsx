@@ -327,7 +327,6 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       spaceId: spaceId(),
       provider: name,
       kind: "generic_env_provider",
-      credentialDriver: "generic_env",
       displayName: displayName().trim() || undefined,
       values: submitValues,
     });
@@ -382,7 +381,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
   const lastCreatedProviderConnection = () =>
     providerConnectionForConnectionId(lastCreatedConnectionId());
   const lastCreatedReady = () =>
-    lastCreatedProviderConnection()?.status === "ready" ||
+    lastCreatedProviderConnection()?.status === "verified" ||
     lastCreatedVerifiedHint();
   const shouldOfferInstallReturn = () =>
     !lastCreatedConnectionId() || lastCreatedReady();

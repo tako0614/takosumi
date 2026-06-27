@@ -65,24 +65,15 @@ async function seedUpdatable(
     scope: "space",
     spaceId: installation.spaceId,
     provider: "cloudflare",
+    providerSource: CLOUDFLARE,
     kind: "cloudflare_api_token",
     displayName: "Lifecycle Cloudflare",
     status: "verified",
-    scopeJson: {},
-    secretRef: `sec_${options.installationId}`,
-    createdAt: "2026-06-06T00:00:00.000Z",
-  });
-  await store.putProviderEnv({
-    id: `penv_${options.installationId}`,
-    spaceId: installation.spaceId,
-    providerSource: CLOUDFLARE,
-    displayName: "Lifecycle Cloudflare",
     materialization: "secret",
-    status: "ready",
-    requiredEnvNames: ["CLOUDFLARE_API_TOKEN"],
-    secretRef: `conn_${options.installationId}`,
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putInstallationProviderEnvBindingSet({
     id: `profile_${options.installationId}`,
@@ -93,7 +84,7 @@ async function seedUpdatable(
       {
         provider: "cloudflare",
         alias: "main",
-        envId: `penv_${options.installationId}`,
+        connectionId: `conn_${options.installationId}`,
       },
     ],
     createdAt: "2026-06-06T00:00:00.000Z",

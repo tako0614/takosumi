@@ -61,10 +61,10 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  ListProviderCatalogEntriesResponse,
-  ProviderCatalogEntry,
-  ProviderCatalogEntryResponse,
+  ListProvidersResponse,
+  ProviderListingResponse,
 } from "takosumi-contract/providers";
+import { computeProviderListings } from "./provider_listing.ts";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type {
   OutputAllowlistEntry,
@@ -657,7 +657,6 @@ const RUN_RENEWAL_INTERVAL_MS = Math.floor(
  * loses and the existing row stands).
  */
 const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["queued", "running"];
-const PROVIDER_CATALOG_SEED_TIMESTAMP = "2026-06-08T00:00:00.000Z";
 
 function providersRequiringProviderEnvBindings(
   providers: readonly string[],
@@ -665,208 +664,6 @@ function providersRequiringProviderEnvBindings(
   return normalizeProviders(
     providers.filter((provider) => providerEnvRule(provider) !== undefined),
   );
-}
-
-function initialProviderCatalogEntries(): readonly ProviderCatalogEntry[] {
-  return [
-    {
-      id: "cloudflare",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-      displayName: "Cloudflare",
-      recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
-      credentialRecipeIds: ["cloudflare", "generic-env"],
-      requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
-      genericEnvSupported: true,
-      helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "cloudflare-default",
-      costEstimatorId: "cloudflare-basic",
-      docsUrl: "https://developers.cloudflare.com/",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "aws",
-      providerSource: "registry.opentofu.org/hashicorp/aws",
-      displayName: "AWS",
-      recommendedEnvNames: [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION",
-      ],
-      credentialRecipeIds: ["aws", "s3-compatible", "generic-env"],
-      requiredEnvGroups: [
-        ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
-        ["AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"],
-      ],
-      genericEnvSupported: true,
-      helpers: ["aws_assume_role", "generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: ["aws_s3_bucket", "aws_s3_bucket_public_access_block"],
-      allowedDataSources: [],
-      policyPackId: "aws-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "gcp",
-      providerSource: "registry.opentofu.org/hashicorp/google",
-      displayName: "Google Cloud",
-      recommendedEnvNames: [
-        "GOOGLE_CREDENTIALS",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-      ],
-      credentialRecipeIds: ["google", "generic-env"],
-      requiredEnvGroups: [
-        ["GOOGLE_CREDENTIALS"],
-        ["GOOGLE_APPLICATION_CREDENTIALS"],
-      ],
-      genericEnvSupported: true,
-      helpers: [
-        "gcp_service_account_json",
-        "gcp_oauth_bootstrap",
-        "gcp_service_account_impersonation",
-        "generic_env",
-      ],
-      ownershipOptions: ["env"],
-      allowedResources: [
-        "google_storage_bucket",
-        "google_cloud_run_v2_service",
-      ],
-      allowedDataSources: [],
-      policyPackId: "gcp-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "github",
-      providerSource: "registry.opentofu.org/integrations/github",
-      displayName: "GitHub",
-      recommendedEnvNames: ["GITHUB_TOKEN"],
-      credentialRecipeIds: ["github", "generic-env"],
-      requiredEnvGroups: [["GITHUB_TOKEN"]],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "github-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "kubernetes",
-      providerSource: "registry.opentofu.org/hashicorp/kubernetes",
-      displayName: "Kubernetes",
-      recommendedEnvNames: ["KUBE_CONFIG_PATH", "KUBE_HOST", "KUBE_TOKEN"],
-      credentialRecipeIds: ["kubernetes", "helm", "generic-env"],
-      requiredEnvGroups: [["KUBE_CONFIG_PATH"], ["KUBE_HOST", "KUBE_TOKEN"]],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "kubernetes-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "digitalocean",
-      providerSource: "registry.opentofu.org/digitalocean/digitalocean",
-      displayName: "DigitalOcean",
-      recommendedEnvNames: ["DIGITALOCEAN_TOKEN"],
-      credentialRecipeIds: ["digitalocean", "generic-env"],
-      requiredEnvGroups: [["DIGITALOCEAN_TOKEN"]],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "digitalocean-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "hcloud",
-      providerSource: "registry.opentofu.org/hetznercloud/hcloud",
-      displayName: "Hetzner Cloud",
-      recommendedEnvNames: ["HCLOUD_TOKEN"],
-      credentialRecipeIds: ["hcloud", "generic-env"],
-      requiredEnvGroups: [["HCLOUD_TOKEN"]],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "hcloud-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "vultr",
-      providerSource: "registry.opentofu.org/vultr/vultr",
-      displayName: "Vultr",
-      recommendedEnvNames: ["VULTR_API_KEY"],
-      credentialRecipeIds: ["vultr", "generic-env"],
-      requiredEnvGroups: [["VULTR_API_KEY"]],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "vultr-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "scaleway",
-      providerSource: "registry.opentofu.org/scaleway/scaleway",
-      displayName: "Scaleway",
-      recommendedEnvNames: ["SCW_ACCESS_KEY", "SCW_SECRET_KEY"],
-      credentialRecipeIds: ["scaleway", "generic-env"],
-      requiredEnvGroups: [
-        ["SCW_ACCESS_KEY", "SCW_SECRET_KEY"],
-        ["SCW_PROFILE"],
-      ],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "scaleway-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-    {
-      id: "openstack",
-      providerSource:
-        "registry.opentofu.org/terraform-provider-openstack/openstack",
-      displayName: "OpenStack",
-      recommendedEnvNames: ["OS_CLOUD"],
-      credentialRecipeIds: ["openstack", "generic-env"],
-      requiredEnvGroups: [
-        ["OS_CLOUD"],
-        ["OS_AUTH_URL", "OS_USERNAME", "OS_PASSWORD", "OS_PROJECT_NAME"],
-        [
-          "OS_AUTH_URL",
-          "OS_APPLICATION_CREDENTIAL_ID",
-          "OS_APPLICATION_CREDENTIAL_SECRET",
-        ],
-      ],
-      genericEnvSupported: true,
-      helpers: ["generic_env"],
-      ownershipOptions: ["env"],
-      allowedResources: [],
-      allowedDataSources: [],
-      policyPackId: "openstack-basic",
-      createdAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-      updatedAt: PROVIDER_CATALOG_SEED_TIMESTAMP,
-    },
-  ];
 }
 
 /**
@@ -1188,7 +985,6 @@ export class OpenTofuDeploymentController {
   readonly #defaultBillingSettings: BillingSettings;
   readonly #allowOperatorBackedProviderEnvs: boolean;
   readonly #seededProfiles: Promise<void>;
-  readonly #seededProviderCatalogEntries: Promise<void>;
   readonly #mutationChains = new Map<string, Promise<void>>();
   readonly #sources: SourceManagement;
   readonly #sourceLifecycle: SourceLifecycleService;
@@ -1334,9 +1130,6 @@ export class OpenTofuDeploymentController {
     this.#seededProfiles = this.#seedRunnerProfiles(
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
     );
-    this.#seededProviderCatalogEntries = this.#seedProviderCatalogEntries(
-      initialProviderCatalogEntries(),
-    );
   }
 
   usesExternalRunQueue(): boolean {
@@ -1348,32 +1141,24 @@ export class OpenTofuDeploymentController {
     return { runnerProfiles: await this.#store.listRunnerProfiles() };
   }
 
-  async listProviderCatalogEntries(): Promise<ListProviderCatalogEntriesResponse> {
-    await this.#seededProviderCatalogEntries;
-    return { providers: await this.#store.listProviderCatalogEntries() };
+  listProviderCatalogEntries(): Promise<ListProvidersResponse> {
+    return Promise.resolve({ providers: computeProviderListings() });
   }
 
-  async #seedProviderCatalogEntries(
-    entries: readonly ProviderCatalogEntry[],
-  ): Promise<void> {
-    for (const entry of entries) {
-      await this.#store.putProviderCatalogEntry(entry);
-    }
-  }
-
-  async getProviderCatalogEntry(
+  getProviderCatalogEntry(
     providerId: string,
-  ): Promise<ProviderCatalogEntryResponse> {
+  ): Promise<ProviderListingResponse> {
     requireNonEmptyString(providerId, "providerId");
-    await this.#seededProviderCatalogEntries;
-    const provider = await this.#store.getProviderCatalogEntry(providerId);
+    const provider = computeProviderListings().find(
+      (entry) => entry.id === providerId,
+    );
     if (!provider) {
       throw new OpenTofuControllerError(
         "not_found",
         `provider ${providerId} not found`,
       );
     }
-    return { provider };
+    return Promise.resolve({ provider });
   }
 
   async getSpaceBilling(spaceId: string): Promise<{

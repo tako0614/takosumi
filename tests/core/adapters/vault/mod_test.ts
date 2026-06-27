@@ -83,10 +83,13 @@ test("register seals values and returns a public Connection with no secret mater
   expect(blob).toBeDefined();
   expect(JSON.stringify(blob)).not.toContain("cf-secret-token");
 
-  const providerEnv = await store.getProviderEnv(connection.id);
-  expect(providerEnv?.providerSource).toBe(
+  // The connection row IS the resolver record now (the former ProviderEnv
+  // projection folded onto it): it carries the canonical providerSource +
+  // materialization.
+  expect(connection.providerSource).toBe(
     "registry.opentofu.org/cloudflare/cloudflare",
   );
+  expect(connection.materialization).toBe("secret");
 });
 
 test("register rejects unknown env names and unsatisfied required groups", async () => {
@@ -116,13 +119,12 @@ test("register rejects unknown env names and unsatisfied required groups", async
   ]);
 });
 
-test("register rejects unknown providers without a declared generic-env recipe and non-static authMethod", async () => {
+test("register rejects unknown providers without a declared generic-env recipe", async () => {
   const { vault } = makeVault();
   await expect(
     vault.register({
       spaceId: "space_1",
       provider: "does-not-exist",
-      authMethod: "static_secret",
       values: { X: "y" },
     }),
   ).rejects.toThrow(/has no built-in Credential Recipe/);
@@ -131,8 +133,6 @@ test("register rejects unknown providers without a declared generic-env recipe a
     spaceId: "space_1",
     provider: "registry.opentofu.org/snowflake-labs/snowflake",
     kind: "generic_env_provider",
-    credentialDriver: "generic_env",
-    authMethod: "static_secret",
     values: {
       SNOWFLAKE_ACCOUNT: "test-account",
       SNOWFLAKE_USER: "test-user",
@@ -147,16 +147,6 @@ test("register rejects unknown providers without a declared generic-env recipe a
     "SNOWFLAKE_PASSWORD",
     "SNOWFLAKE_USER",
   ]);
-
-  await expect(
-    vault.register({
-      spaceId: "space_1",
-      provider: "aws",
-      // deliberately wrong authMethod for Phase 1.
-      authMethod: "aws_assume_role" as never,
-      values: { AWS_ACCESS_KEY_ID: "a", AWS_SECRET_ACCESS_KEY: "b" },
-    }),
-  ).rejects.toThrow(/not implemented/);
 });
 
 test("register rejects a hybrid { spaceId, scope: operator } privilege escalation", async () => {
@@ -449,18 +439,17 @@ test("test() structurally verifies generic-env even for guided providers", async
   expect(persisted?.verifiedAt).toBeDefined();
 });
 
-test("operator-scoped provider connections do not create global secret Provider Envs", async () => {
-  const { store, vault } = makeVault();
+test("operator-scoped provider connections have no owning Space", async () => {
+  const { vault } = makeVault();
   const connection = await vault.register({
     scope: "operator",
     provider: "cloudflare",
-    authMethod: "static_secret",
     values: { CLOUDFLARE_API_TOKEN: "operator-secret" },
   });
 
   expect(connection.spaceId).toBeUndefined();
   expect(connection.scope).toBe("operator");
-  expect(await store.getProviderEnv(connection.id)).toBeUndefined();
+  expect(connection.materialization).toBe("secret");
 });
 
 test("register rejects operator-scoped generic-env provider connections", async () => {

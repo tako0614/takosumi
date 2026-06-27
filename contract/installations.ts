@@ -18,7 +18,7 @@ export type {
   InstallationProviderEnvBinding,
   InstallationProviderEnvBindings,
   InstallationProviderEnvBindingSet,
-} from "./provider-envs.ts";
+} from "./connections.ts";
 
 /**
  * Internal compatibility discriminator. `core` is the Space base Capsule
