@@ -953,6 +953,7 @@ export const ja = {
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
+  "cloudResources.inventory.queues": "Queues",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "名前",
   "cloudResources.inventory.showAll": "{count} 件すべて表示",

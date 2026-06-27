@@ -172,12 +172,13 @@ x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_reque
 ```
 
 Cloudflare Compatibility Gateway / managed resource backend は、ユーザー向けには
-Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1
+Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1 / Queues
 として見せます。Workers for Platforms は Workers Script を実現する内部
 backend であり、請求・画面・usage ledger の user-facing family には出しません。
 Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
-`gateway_compute` または `gateway_storage_gb_hour` を報告します。Workflows /
-Containers / Queues / Durable Objects などの追加 family は、closed Gateway backend
+`gateway_compute` または `gateway_storage_gb_hour` を報告します。Queues は
+`cloudflare.queues` として報告します。Workflows / Containers / Durable Objects などの
+追加 family は、closed Gateway backend
 が lifecycle endpoint と usage smoke を通した後に catalog / 画面 / billing price
 へ追加します。`wfp` / `workers_for_platforms` は `meterId`、`resourceFamily`、
 Stripe meter、public usage metadata では拒否します。例:

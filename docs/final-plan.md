@@ -820,6 +820,7 @@ cloudflare_workers_route
 cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
 cloudflare_d1_database
+cloudflare_queue
 worker vars
 worker secrets
 worker bindings

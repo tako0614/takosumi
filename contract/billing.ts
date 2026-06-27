@@ -110,7 +110,8 @@ export type UsageEventSource =
  *
  * Takosumi Cloud extensions should use stable user-facing dotted names such as
  * `cloudflare.workers_script`, `cloudflare.kv`, `cloudflare.r2`,
- * `cloudflare.d1`, `cloudflare.workflows`, or `cloudflare.containers`.
+ * `cloudflare.d1`, `cloudflare.queues`, `cloudflare.workflows`, or
+ * `cloudflare.containers`.
  * Internal implementation backends such as Workers for Platforms/WfP must not
  * appear in public usage events, billing payloads, or Stripe meters.
  * The contract intentionally keeps this open so new managed resources can be

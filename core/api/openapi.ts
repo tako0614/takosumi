@@ -2285,7 +2285,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         resourceFamily: {
           type: "string",
           description:
-            "Stable customer-facing resource family such as cloudflare.workers_script, cloudflare.kv, cloudflare.r2, cloudflare.d1, cloudflare.workflows, or cloudflare.containers. Internal backends must not appear in public usage payloads.",
+            "Stable customer-facing resource family such as cloudflare.workers_script, cloudflare.kv, cloudflare.r2, cloudflare.d1, cloudflare.queues, cloudflare.workflows, or cloudflare.containers. Internal backends must not appear in public usage payloads.",
         },
         resourceId: { type: "string" },
         operation: { type: "string" },
