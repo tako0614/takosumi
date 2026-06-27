@@ -112,7 +112,7 @@ takosumi secrets status \
   --secrets-dir "$TAKOSUMI_SECRETS"
 ```
 
-`status:takosumi-completion -- --scope sign-in` は最終 completion audit も集約するため、
+`ga:status -- --scope sign-in` は最終 completion audit も集約するため、
 readiness summary の next action も同時に表示される。OAuth secret / config だけの
 確認には上記の `check:takosumi-live-evidence-prereqs -- --scope sign-in` を使う。
 
