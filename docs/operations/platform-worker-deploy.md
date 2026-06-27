@@ -67,6 +67,19 @@ bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangle
 bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.toml
 ```
 
+Worker-only deploy で `takosumi/runner/Dockerfile` と runner inputs を変更していない
+場合に限り、既存の local runner image tag を再利用して Wrangler の container
+rebuild/load を避けられる:
+
+```bash
+export TAKOSUMI_REUSE_EXISTING_CONTAINER_IMAGE=1
+```
+
+この env は operator の明示 opt-in。runner image を変更した deploy では設定せず、
+通常の buildx build を走らせる。Wrangler が immutable tag
+(`takosumi-opentofurunnerobject:<version>`) を要求した場合、wrapper は同じ
+repository の既存 `:worker` image からその tag を作って build を skip する。
+
 `check:cloudflare-deploy-host` は Docker/buildx が Wrangler の Cloudflare
 Containers build path に耐えるかを確認する operator preflight。デフォルトの
 `docker run --rm hello-world` が AppArmor で落ち、`--security-opt

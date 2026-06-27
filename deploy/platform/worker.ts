@@ -1431,9 +1431,13 @@ async function recordPlatformCloudExtensionUsage(
       meters: usage.meters,
     });
     if (operations.recordBillingUsageReports) {
-      await operations.recordBillingUsageReports({
-        usageEvents: result.usageEvents,
-      });
+      try {
+        await operations.recordBillingUsageReports({
+          usageEvents: result.usageEvents,
+        });
+      } catch (error) {
+        reportPlatformCloudExtensionBillingSyncFailure(error);
+      }
     }
     return { ok: true };
   } catch {
@@ -1449,6 +1453,25 @@ async function recordPlatformCloudExtensionUsage(
       ),
     };
   }
+}
+
+function reportPlatformCloudExtensionBillingSyncFailure(error: unknown): void {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "unknown_error";
+  console.warn(
+    JSON.stringify({
+      event: "takosumi_cloud_extension_billing_usage_sync_failed",
+      message: safeCloudExtensionLogValue(message),
+    }),
+  );
+}
+
+function safeCloudExtensionLogValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 160);
 }
 
 function platformCloudExtensionFallbackUsageReport(

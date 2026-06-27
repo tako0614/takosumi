@@ -1717,6 +1717,82 @@ test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage 
   ]);
 });
 
+test("Cloud extension returns upstream success when billing export lags after usage ledger recording", async () => {
+  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
+  if (!route) throw new Error("AI Gateway route missing");
+  const usageCalls: {
+    spaceId: string;
+    input: Parameters<
+      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+    >[1];
+  }[] = [];
+  const billingImports: readonly unknown[][] = [];
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
+  try {
+    const response = await handlePlatformCloudExtensionRouteRequest(
+      new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({ model: "takosumi/default", messages: [] }),
+      }),
+      {
+        TAKOSUMI_CLOUD_AI_GATEWAY: {
+          fetch: async () =>
+            Response.json({ id: "chatcmpl_1", choices: [{ index: 0 }] }),
+        },
+      } as never,
+      route,
+      async () => ({
+        authenticated: true,
+        authKind: "service-token",
+        spaceId: "space_ai_usage",
+        installationId: "inst_ai_gateway",
+      }),
+      {
+        recordGatewayResourceUsage: async (spaceId, input) => {
+          usageCalls.push({ spaceId, input });
+          return { usageEvents: [{ id: "usage_ai_1" }] };
+        },
+        recordBillingUsageReports: async (input) => {
+          billingImports.push(input.usageEvents);
+          throw new Error("billing_usage_report_import_failed");
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id: "chatcmpl_1",
+      choices: [{ index: 0 }],
+    });
+  } finally {
+    console.warn = warn;
+  }
+
+  expect(usageCalls).toHaveLength(1);
+  expect(usageCalls[0]?.spaceId).toBe("space_ai_usage");
+  expect(usageCalls[0]?.input.meters).toEqual([
+    {
+      installationId: "inst_ai_gateway",
+      meterId: "ai:openai_compatible:chat.completions",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "chat.completions",
+      operation: "chat.completions",
+      kind: "ai_request",
+      quantity: 1,
+      credits: 1,
+    },
+  ]);
+  expect(billingImports).toEqual([[{ id: "usage_ai_1" }]]);
+  expect(warnings.join("\n")).toContain(
+    "takosumi_cloud_extension_billing_usage_sync_failed",
+  );
+  expect(warnings.join("\n")).toContain("billing_usage_report_import_failed");
+});
+
 test("Cloud extension route fails closed when reported usage cannot be recorded", async () => {
   const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
   if (!route) throw new Error("AI Gateway route missing");
