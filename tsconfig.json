@@ -85,7 +85,6 @@
       "takosumi-contract/security": ["./contract/security.ts"],
       "takosumi-contract/providers": ["./contract/providers.ts"],
       "takosumi-contract/service-graph": ["./contract/service-graph.ts"],
-      "takosumi-contract/ai-gateway": ["./contract/ai-gateway.ts"],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],

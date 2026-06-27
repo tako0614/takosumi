@@ -19,11 +19,7 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import {
-  TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER,
-  type ControlPlaneOperations,
-} from "@takosjp/takosumi-accounts-service";
-import { TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH } from "@takosjp/takosumi-accounts-contract";
+import { type ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -42,42 +38,20 @@ import {
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
-import type {
-  BillingSettings,
-  GatewayResourceUsageMeter,
-} from "takosumi-contract/billing";
+import type { BillingSettings } from "takosumi-contract/billing";
 import {
-  legacyCreditsToUsdMicros,
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER,
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
-  usageMeterNameLeaksInternalWorkersBackend,
-} from "takosumi-contract/billing";
-import {
-  AI_GATEWAY_BASE_PATH,
-  CLOUDFLARE_COMPAT_BASE_PATH,
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
   pathIsUnderBase,
-  platformCloudExtensionRouteById,
-  platformCloudExtensionServiceTokenClientId,
-  platformCloudExtensionServiceTokenRequiredScopes,
-  PLATFORM_CLOUD_EXTENSION_ROUTES,
-  type PlatformCloudExtensionKind,
+  platformCloudExtensionRoutes,
   type PlatformCloudExtensionRoute,
 } from "./cloud_extensions.ts";
 export {
-  AI_GATEWAY_BASE_PATH,
-  CLOUDFLARE_COMPAT_BASE_PATH,
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
   pathIsUnderBase,
+  platformCloudExtensionRoutes,
   PLATFORM_CLOUD_EXTENSION_CATALOG_PATH,
-  PLATFORM_CLOUD_EXTENSION_ROUTES,
-  platformCloudExtensionRouteById,
-  platformCloudExtensionServiceTokenClientId,
-  platformCloudExtensionServiceTokenRequiredScopes,
 } from "./cloud_extensions.ts";
 
 export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
@@ -112,55 +86,6 @@ async function controlPlaneOperationsFor(
   env: PlatformEnv,
 ): Promise<ControlPlaneOperations> {
   return await deployControlSeam(env).operations();
-}
-
-async function platformCloudExtensionUsageOperationsFor(
-  env: CloudflareWorkerEnv,
-  requestUrl: string,
-): Promise<PlatformCloudExtensionUsageOperations> {
-  const operations = (await deployControlSeam(
-    env,
-  ).operations()) as PlatformCloudExtensionUsageOperations;
-  return {
-    recordGatewayResourceUsage: (spaceId, input) =>
-      operations.recordGatewayResourceUsage(spaceId, input),
-    recordBillingUsageReports: async (input) => {
-      if (input.usageEvents.length === 0) return;
-      const token = platformBillingUsageSyncToken(env);
-      if (!token) {
-        throw new Error("billing_usage_sync_token_missing");
-      }
-      const response = await accountsWorker.fetch(
-        new Request(
-          new URL(
-            TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
-            requestUrl,
-          ),
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: token,
-            },
-            body: JSON.stringify({ usageEvents: input.usageEvents }),
-          },
-        ),
-        env,
-      );
-      if (!response.ok) {
-        throw new Error("billing_usage_report_import_failed");
-      }
-    },
-  };
-}
-
-function platformBillingUsageSyncToken(
-  env: CloudflareWorkerEnv,
-): string | undefined {
-  return (
-    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN) ??
-    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
-  );
 }
 
 const accountsWorker = createCloudflareWorker({
@@ -206,14 +131,18 @@ export default {
     if (isPlatformCloudExtensionCatalogPath(url.pathname)) {
       return handlePlatformCloudExtensionCatalogRequest(request, url, env);
     }
-    const cloudExtensionRoute = matchPlatformCloudExtensionRoute(url.pathname);
+    const cloudExtensionRoute = matchPlatformCloudExtensionRoute(
+      url.pathname,
+      platformCloudExtensionRoutes(
+        env as unknown as { readonly [key: string]: unknown },
+      ),
+    );
     if (cloudExtensionRoute) {
       return await handlePlatformCloudExtensionRouteRequest(
         request,
         env,
         cloudExtensionRoute,
         verifyPlatformCloudExtensionSession,
-        async () => platformCloudExtensionUsageOperationsFor(env, request.url),
       );
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
@@ -922,14 +851,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export interface PlatformCloudExtensionCatalogItem {
-  readonly id: string;
-  readonly kind: PlatformCloudExtensionKind;
-  readonly provider?: string;
-  readonly protocol: string;
   readonly basePath: `/${string}`;
   readonly configured: boolean;
-  readonly capabilities: readonly string[];
-  readonly smokeChecks: readonly string[];
+  readonly requiredScopes?: readonly string[];
 }
 
 export interface PlatformCloudExtensionCatalog {
@@ -948,16 +872,13 @@ export function platformCloudExtensionCatalog(
   env: CloudflareWorkerEnv,
   origin: string,
 ): PlatformCloudExtensionCatalog {
-  const extensions = PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => ({
-    id: route.id,
-    kind: route.kind,
-    ...(route.provider ? { provider: route.provider } : {}),
-    protocol: route.protocol,
+  const extensions = platformCloudExtensionRoutes(
+    env as unknown as { readonly [key: string]: unknown },
+  ).map((route) => ({
     basePath: route.basePath,
     configured:
       platformCloudExtensionBinding(env, route.bindingName) !== undefined,
-    capabilities: route.capabilities,
-    smokeChecks: route.smokeChecks,
+    ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
   }));
   const configured = extensions.filter(
     (extension) => extension.configured,
@@ -996,16 +917,19 @@ export function handlePlatformCloudExtensionCatalogRequest(
 export async function handlePlatformCloudExtensionRequest(
   request: Request,
   env: CloudflareWorkerEnv,
-  usageOperations?: PlatformCloudExtensionUsageOperations,
 ): Promise<Response | undefined> {
-  const route = matchPlatformCloudExtensionRoute(new URL(request.url).pathname);
+  const route = matchPlatformCloudExtensionRoute(
+    new URL(request.url).pathname,
+    platformCloudExtensionRoutes(
+      env as unknown as { readonly [key: string]: unknown },
+    ),
+  );
   if (!route) return undefined;
   return await handlePlatformCloudExtensionRouteRequest(
     request,
     env,
     route,
     verifyPlatformCloudExtensionSession,
-    usageOperations,
   );
 }
 
@@ -1014,7 +938,6 @@ export async function handlePlatformCloudExtensionRouteRequest(
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
   sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
-  usageOperations?: PlatformCloudExtensionUsageOperationsInput,
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
@@ -1025,31 +948,8 @@ export async function handlePlatformCloudExtensionRouteRequest(
     sessionVerifier,
   );
   if (!authContext.ok) return authContext.response;
-  const priceBook = platformCloudUsagePriceBookFromEnv(env);
-  const prechargeResult = await prechargePlatformCloudExtensionUsage(
-    request,
-    route,
-    authContext.session,
-    usageOperations,
-    priceBook,
-  );
-  if (!prechargeResult.ok) return prechargeResult.response;
-  const upstreamResponse = await binding.fetch(
-    requestForPlatformCloudExtensionBinding(authContext.request, route),
-  );
-  const usageResult = await recordPlatformCloudExtensionUsage(
-    upstreamResponse,
-    prechargeResult.operations ?? usageOperations,
-    { request, route, session: authContext.session },
-    priceBook,
-    prechargeResult.chargedMeters,
-  );
-  if (!usageResult.ok) return usageResult.response;
-  return responseForPlatformCloudExtensionClient(
-    request,
-    route,
-    upstreamResponse,
-  );
+  const upstreamResponse = await binding.fetch(authContext.request);
+  return responseForPlatformCloudExtensionClient(upstreamResponse);
 }
 
 export interface PlatformCloudExtensionSessionContext {
@@ -1067,56 +967,6 @@ export type PlatformCloudExtensionSessionVerifier = (
   route?: PlatformCloudExtensionRoute,
 ) => Promise<PlatformCloudExtensionSessionContext>;
 
-export interface PlatformCloudExtensionUsageOperations {
-  recordGatewayResourceUsage(
-    spaceId: string,
-    input: {
-      readonly periodStart: string;
-      readonly periodEnd: string;
-      readonly spendRequired?: boolean;
-      readonly meters: readonly GatewayResourceUsageMeter[];
-    },
-  ): Promise<{ readonly usageEvents: readonly unknown[] }>;
-  recordBillingUsageReports?(input: {
-    readonly usageEvents: readonly unknown[];
-  }): Promise<void>;
-}
-
-type PlatformCloudExtensionUsageOperationsInput =
-  | PlatformCloudExtensionUsageOperations
-  | (() => Promise<PlatformCloudExtensionUsageOperations>);
-
-type PlatformCloudExtensionPrechargeResult =
-  | {
-      readonly ok: true;
-      readonly operations?: PlatformCloudExtensionUsageOperations;
-      readonly chargedMeters: readonly GatewayResourceUsageMeter[];
-    }
-  | { readonly ok: false; readonly response: Response };
-
-export const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER;
-export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER;
-export const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER;
-export const PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER =
-  TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER;
-export const PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER =
-  "x-takosumi-cloud-billing-workspace-id";
-export const PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER =
-  "x-takosumi-cloud-billing-installation-id";
-
-const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
-  PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
-] as const;
-
-const PLATFORM_FALLBACK_USAGE_USD_MICROS = 1_000;
-const DEFAULT_PLATFORM_PRICE_BOOK_MIN_MARGIN_BPS = 3_000;
-
 const PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER =
   "x-takosumi-cloud-authenticated";
 const PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER = "x-takosumi-cloud-subject";
@@ -1125,6 +975,7 @@ const PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER = "x-takosumi-cloud-scopes";
 const PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER =
   "x-takosumi-cloud-installation-id";
 const PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER = "x-takosumi-cloud-space-id";
+
 const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "authorization",
   "cookie",
@@ -1133,452 +984,7 @@ const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "x-auth-key",
   "x-auth-user-service-key",
   "x-takosumi-account-session",
-  PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
-  PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
 ] as const;
-
-interface PlatformCloudUsagePriceBookEntry {
-  readonly meterId?: string;
-  readonly meterIdPrefix?: string;
-  readonly kind?: GatewayResourceUsageMeter["kind"];
-  readonly resourceFamily?: string;
-  readonly operation?: string;
-  readonly unit: string;
-  readonly chargeUsdMicrosPerUnit?: number;
-  readonly chargeUsdMicrosPerMillionUnits?: number;
-  readonly estimatedCostUsdMicrosPerUnit?: number;
-  readonly estimatedCostUsdMicrosPerMillionUnits?: number;
-  readonly minimumChargeUsdMicros?: number;
-}
-
-interface PlatformCloudUsagePriceBook {
-  readonly minimumGrossMarginBps: number;
-  readonly meters: readonly PlatformCloudUsagePriceBookEntry[];
-}
-
-type PlatformCloudExtensionUsageInput = Parameters<
-  PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
->[1];
-
-function platformCloudUsagePriceBookFromEnv(
-  env: CloudflareWorkerEnv,
-): PlatformCloudUsagePriceBook | undefined {
-  const raw = optionalString(env.TAKOSUMI_CLOUD_USAGE_PRICE_BOOK);
-  if (!raw) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw new TypeError("TAKOSUMI_CLOUD_USAGE_PRICE_BOOK must be valid JSON", {
-      cause: error,
-    });
-  }
-  if (!isRecord(parsed)) {
-    throw new TypeError("TAKOSUMI_CLOUD_USAGE_PRICE_BOOK must be an object");
-  }
-  const minimumGrossMarginBps =
-    parsed.minimumGrossMarginBps === undefined
-      ? DEFAULT_PLATFORM_PRICE_BOOK_MIN_MARGIN_BPS
-      : platformPriceBookNonNegativeInteger(
-          parsed.minimumGrossMarginBps,
-          "minimumGrossMarginBps",
-        );
-  if (minimumGrossMarginBps >= 10_000) {
-    throw new TypeError(
-      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK minimumGrossMarginBps must be below 10000",
-    );
-  }
-  if (!Array.isArray(parsed.meters) || parsed.meters.length === 0) {
-    throw new TypeError(
-      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters must be a non-empty array",
-    );
-  }
-  return {
-    minimumGrossMarginBps,
-    meters: parsed.meters.map(platformCloudUsagePriceBookEntryFromJson),
-  };
-}
-
-function platformCloudUsagePriceBookEntryFromJson(
-  value: unknown,
-  index: number,
-): PlatformCloudUsagePriceBookEntry {
-  if (!isRecord(value)) {
-    throw new TypeError(
-      `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters[${index}] must be an object`,
-    );
-  }
-  const label = `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK meters[${index}]`;
-  const meterId = platformPriceBookOptionalString(value.meterId, "meterId");
-  const meterIdPrefix = platformPriceBookOptionalString(
-    value.meterIdPrefix,
-    "meterIdPrefix",
-  );
-  if ((meterId ? 1 : 0) + (meterIdPrefix ? 1 : 0) !== 1) {
-    throw new TypeError(
-      `${label} must set exactly one of meterId or meterIdPrefix`,
-    );
-  }
-  if (
-    (meterId && usageMeterNameLeaksInternalWorkersBackend(meterId)) ||
-    (meterIdPrefix && usageMeterNameLeaksInternalWorkersBackend(meterIdPrefix))
-  ) {
-    throw new TypeError(
-      `${label} must describe the customer-facing managed resource, not the internal Workers for Platforms backend`,
-    );
-  }
-  const kind =
-    value.kind === undefined
-      ? undefined
-      : isPlatformCloudExtensionUsageKind(value.kind)
-        ? value.kind
-        : undefined;
-  if (value.kind !== undefined && !kind) {
-    throw new TypeError(`${label}.kind is not supported`);
-  }
-  const resourceFamily = platformPriceBookOptionalString(
-    value.resourceFamily,
-    "resourceFamily",
-  );
-  if (
-    resourceFamily &&
-    usageMeterNameLeaksInternalWorkersBackend(resourceFamily)
-  ) {
-    throw new TypeError(
-      `${label}.resourceFamily must describe the customer-facing managed resource`,
-    );
-  }
-  return {
-    ...(meterId ? { meterId } : {}),
-    ...(meterIdPrefix ? { meterIdPrefix } : {}),
-    ...(kind ? { kind } : {}),
-    ...(resourceFamily ? { resourceFamily } : {}),
-    ...optionalProperty(
-      "operation",
-      platformPriceBookOptionalString(value.operation, "operation"),
-    ),
-    unit: platformPriceBookString(value.unit, "unit"),
-    ...singleRateProperty(
-      label,
-      "chargeUsdMicrosPerUnit",
-      value.chargeUsdMicrosPerUnit,
-      "chargeUsdMicrosPerMillionUnits",
-      value.chargeUsdMicrosPerMillionUnits,
-    ),
-    ...singleRateProperty(
-      label,
-      "estimatedCostUsdMicrosPerUnit",
-      value.estimatedCostUsdMicrosPerUnit,
-      "estimatedCostUsdMicrosPerMillionUnits",
-      value.estimatedCostUsdMicrosPerMillionUnits,
-    ),
-    ...optionalProperty(
-      "minimumChargeUsdMicros",
-      value.minimumChargeUsdMicros === undefined
-        ? undefined
-        : platformPriceBookNonNegativeInteger(
-            value.minimumChargeUsdMicros,
-            `${label}.minimumChargeUsdMicros`,
-          ),
-    ),
-  };
-}
-
-function platformCloudPricedUsageInput(
-  input: PlatformCloudExtensionUsageInput,
-  priceBook: PlatformCloudUsagePriceBook | undefined,
-  prechargedMeters: readonly GatewayResourceUsageMeter[] = [],
-): PlatformCloudExtensionUsageInput {
-  if (!priceBook) {
-    throw new TypeError(
-      "TAKOSUMI_CLOUD_USAGE_PRICE_BOOK is required for Cloud extension usage",
-    );
-  }
-  const priced = {
-    ...input,
-    spendRequired: true,
-    meters: input.meters.map((meter) =>
-      platformCloudPricedUsageMeter(meter, priceBook),
-    ),
-  };
-  return {
-    ...priced,
-    meters: subtractPrechargedUsageMeters(priced.meters, prechargedMeters),
-  };
-}
-
-function platformCloudPricedUsageMeter(
-  meter: GatewayResourceUsageMeter,
-  priceBook: PlatformCloudUsagePriceBook,
-): GatewayResourceUsageMeter {
-  const entry = platformCloudPriceBookEntryForMeter(meter, priceBook);
-  if (!entry) {
-    throw new TypeError(
-      `Cloud usage price book has no entry for meter ${meter.meterId}`,
-    );
-  }
-  const usdMicros = platformCloudUsageMeterChargeUsdMicros(
-    meter,
-    entry,
-    priceBook.minimumGrossMarginBps,
-  );
-  const { credits: _credits, usdMicros: _usdMicros, ...rest } = meter;
-  return { ...rest, usdMicros };
-}
-
-function subtractPrechargedUsageMeters(
-  meters: readonly GatewayResourceUsageMeter[],
-  prechargedMeters: readonly GatewayResourceUsageMeter[],
-): readonly GatewayResourceUsageMeter[] {
-  if (prechargedMeters.length === 0) return meters;
-  const precharged = new Map<string, number>();
-  for (const meter of prechargedMeters) {
-    const usdMicros = gatewayUsageMeterUsdMicros(meter);
-    if (usdMicros <= 0) continue;
-    for (const key of gatewayUsageMeterDeductionKeys(meter)) {
-      precharged.set(key, (precharged.get(key) ?? 0) + usdMicros);
-    }
-  }
-  const adjusted: GatewayResourceUsageMeter[] = [];
-  for (const meter of meters) {
-    const usdMicros = gatewayUsageMeterUsdMicros(meter);
-    const key = gatewayUsageMeterDeductionKeys(meter).find((candidate) =>
-      precharged.has(candidate),
-    );
-    if (!key || usdMicros <= 0) {
-      adjusted.push(meter);
-      continue;
-    }
-    const alreadyCharged = precharged.get(key) ?? 0;
-    if (alreadyCharged >= usdMicros) {
-      precharged.set(key, alreadyCharged - usdMicros);
-      continue;
-    }
-    precharged.set(key, 0);
-    const { credits: _credits, usdMicros: _usdMicros, ...rest } = meter;
-    adjusted.push({ ...rest, usdMicros: usdMicros - alreadyCharged });
-  }
-  return adjusted;
-}
-
-function gatewayUsageMeterDeductionKeys(
-  meter: GatewayResourceUsageMeter,
-): readonly string[] {
-  const exact = [
-    "exact",
-    meter.installationId ?? "",
-    meter.meterId,
-    meter.resourceFamily ?? "",
-    meter.resourceId ?? "",
-    meter.operation ?? "",
-    meter.kind,
-  ].join("\u0000");
-  if (
-    meter.kind === "ai_request" &&
-    meter.resourceFamily === "cloudflare.ai_gateway" &&
-    meter.operation
-  ) {
-    return [
-      exact,
-      ["ai-request", meter.installationId ?? "", meter.operation].join(
-        "\u0000",
-      ),
-    ];
-  }
-  return [exact];
-}
-
-function gatewayUsageMeterUsdMicros(meter: GatewayResourceUsageMeter): number {
-  if (
-    typeof meter.usdMicros === "number" &&
-    Number.isSafeInteger(meter.usdMicros) &&
-    meter.usdMicros > 0
-  ) {
-    return meter.usdMicros;
-  }
-  return legacyCreditsToUsdMicros(meter.credits ?? 0);
-}
-
-function platformCloudPriceBookEntryForMeter(
-  meter: GatewayResourceUsageMeter,
-  priceBook: PlatformCloudUsagePriceBook,
-): PlatformCloudUsagePriceBookEntry | undefined {
-  const exact = priceBook.meters.find(
-    (entry) =>
-      entry.meterId !== undefined && priceBookEntryMatches(entry, meter),
-  );
-  return (
-    exact ??
-    priceBook.meters.find((entry) => priceBookEntryMatches(entry, meter))
-  );
-}
-
-function priceBookEntryMatches(
-  entry: PlatformCloudUsagePriceBookEntry,
-  meter: GatewayResourceUsageMeter,
-): boolean {
-  const selectorMatches =
-    (entry.meterId !== undefined && entry.meterId === meter.meterId) ||
-    (entry.meterIdPrefix !== undefined &&
-      meter.meterId.startsWith(entry.meterIdPrefix));
-  if (!selectorMatches) return false;
-  if (entry.kind !== undefined && entry.kind !== meter.kind) return false;
-  if (
-    entry.resourceFamily !== undefined &&
-    entry.resourceFamily !== meter.resourceFamily
-  ) {
-    return false;
-  }
-  if (entry.operation !== undefined && entry.operation !== meter.operation) {
-    return false;
-  }
-  return true;
-}
-
-function platformCloudUsageMeterChargeUsdMicros(
-  meter: GatewayResourceUsageMeter,
-  entry: PlatformCloudUsagePriceBookEntry,
-  minimumGrossMarginBps: number,
-): number {
-  const charge = Math.max(
-    platformCloudUsageMeterAmountUsdMicros(
-      meter.quantity,
-      entry.chargeUsdMicrosPerUnit,
-      entry.chargeUsdMicrosPerMillionUnits,
-    ),
-    entry.minimumChargeUsdMicros ?? 0,
-  );
-  const estimatedCost = platformCloudUsageMeterAmountUsdMicros(
-    meter.quantity,
-    entry.estimatedCostUsdMicrosPerUnit,
-    entry.estimatedCostUsdMicrosPerMillionUnits,
-  );
-  const requiredCharge = platformCloudMinimumChargeForGrossMargin(
-    estimatedCost,
-    minimumGrossMarginBps,
-  );
-  if (charge < requiredCharge) {
-    throw new TypeError(
-      `Cloud usage price book entry for ${meter.meterId} does not satisfy minimum gross margin`,
-    );
-  }
-  return charge;
-}
-
-function platformCloudUsageMeterAmountUsdMicros(
-  quantity: number,
-  perUnit: number | undefined,
-  perMillionUnits: number | undefined,
-): number {
-  const rate =
-    perUnit !== undefined
-      ? quantity * perUnit
-      : (quantity * (perMillionUnits ?? 0)) / 1_000_000;
-  const usdMicros = Math.ceil(rate);
-  if (!Number.isSafeInteger(usdMicros) || usdMicros < 0) {
-    throw new TypeError("Cloud usage price calculation overflowed");
-  }
-  return usdMicros;
-}
-
-function platformCloudMinimumChargeForGrossMargin(
-  estimatedCostUsdMicros: number,
-  grossMarginBps: number,
-): number {
-  if (estimatedCostUsdMicros === 0) return 0;
-  const denominator = 10_000 - grossMarginBps;
-  const charge = Math.ceil((estimatedCostUsdMicros * 10_000) / denominator);
-  if (!Number.isSafeInteger(charge) || charge < 0) {
-    throw new TypeError("Cloud usage gross margin calculation overflowed");
-  }
-  return charge;
-}
-
-function singleRateProperty<
-  const UnitKey extends string,
-  const MillionKey extends string,
->(
-  label: string,
-  unitKey: UnitKey,
-  unitValue: unknown,
-  millionKey: MillionKey,
-  millionValue: unknown,
-): { readonly [K in UnitKey | MillionKey]?: number } {
-  const unit = optionalPlatformPriceBookNonNegativeInteger(
-    unitValue,
-    `${label}.${unitKey}`,
-  );
-  const million = optionalPlatformPriceBookNonNegativeInteger(
-    millionValue,
-    `${label}.${millionKey}`,
-  );
-  if ((unit !== undefined ? 1 : 0) + (million !== undefined ? 1 : 0) !== 1) {
-    throw new TypeError(
-      `${label} must set exactly one of ${unitKey} or ${millionKey}`,
-    );
-  }
-  return {
-    ...(unit !== undefined ? { [unitKey]: unit } : {}),
-    ...(million !== undefined ? { [millionKey]: million } : {}),
-  } as { readonly [K in UnitKey | MillionKey]?: number };
-}
-
-function platformPriceBookString(value: unknown, label: string): string {
-  const text = platformPriceBookOptionalString(value, label);
-  if (!text) throw new TypeError(`Price book ${label} must be a string`);
-  return text;
-}
-
-function platformPriceBookOptionalString(
-  value: unknown,
-  label: string,
-): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") {
-    throw new TypeError(`Price book ${label} must be a string`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 256) {
-    throw new TypeError(
-      `Price book ${label} must be non-empty and at most 256 characters`,
-    );
-  }
-  return trimmed;
-}
-
-function optionalPlatformPriceBookNonNegativeInteger(
-  value: unknown,
-  label: string,
-): number | undefined {
-  if (value === undefined) return undefined;
-  return platformPriceBookNonNegativeInteger(value, label);
-}
-
-function platformPriceBookNonNegativeInteger(
-  value: unknown,
-  label: string,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    !Number.isSafeInteger(value) ||
-    value < 0
-  ) {
-    throw new TypeError(
-      `Price book ${label} must be a non-negative safe integer`,
-    );
-  }
-  return value;
-}
-
-function optionalProperty<const Key extends string, Value>(
-  key: Key,
-  value: Value | undefined,
-): { readonly [K in Key]?: Value } {
-  return value === undefined
-    ? {}
-    : ({ [key]: value } as { readonly [K in Key]?: Value });
-}
 
 const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER,
@@ -1588,29 +994,6 @@ const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
   PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
 ] as const;
-
-export async function requestWithPlatformCloudExtensionAuthContext(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  route?: PlatformCloudExtensionRoute,
-  sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
-): Promise<Request> {
-  const result = await platformCloudExtensionAuthContext(
-    request,
-    env,
-    route,
-    sessionVerifier,
-  );
-  if (result.ok) return result.request;
-  const headers = new Headers(request.headers);
-  for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
-    headers.delete(header);
-  }
-  for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
-    headers.delete(header);
-  }
-  return clonePlatformCloudExtensionRequest(request, headers);
-}
 
 async function platformCloudExtensionAuthContext(
   request: Request,
@@ -1626,24 +1009,6 @@ async function platformCloudExtensionAuthContext(
   | { readonly ok: false; readonly response: Response }
 > {
   const session = await sessionVerifier(request, env, route);
-  const billingContext = await platformCloudExtensionBillingContextFromRequest(
-    request,
-    env,
-    session,
-  );
-  if (!billingContext.ok) return billingContext;
-  const effectiveSession: PlatformCloudExtensionSessionContext =
-    session.authenticated
-      ? {
-          ...session,
-          ...(session.installationId || !billingContext.installationId
-            ? {}
-            : { installationId: billingContext.installationId }),
-          ...(session.spaceId || !billingContext.spaceId
-            ? {}
-            : { spaceId: billingContext.spaceId }),
-        }
-      : session;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
@@ -1651,48 +1016,71 @@ async function platformCloudExtensionAuthContext(
   for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
     headers.delete(header);
   }
-  if (!effectiveSession.authenticated) {
+  // Descriptor-level scope enforcement applies only to token-based auth
+  // (service token / personal access token); a full human session is allowed
+  // through and the bound Cloud service performs any finer authorization.
+  const requiredScopes = route?.requiredScopes ?? [];
+  if (
+    requiredScopes.length > 0 &&
+    (session.authKind === "service-token" ||
+      session.authKind === "personal-access-token")
+  ) {
+    const scopes = session.scopes ?? [];
+    const hasAll = requiredScopes.every(
+      (scope) => scopes.includes(scope) || scopes.includes("admin"),
+    );
+    if (!hasAll) {
+      return {
+        ok: false,
+        response: Response.json(
+          { error: "unauthorized" },
+          { status: 401 },
+        ),
+      };
+    }
+  }
+  if (!session.authenticated) {
     return {
       ok: true,
       request: clonePlatformCloudExtensionRequest(request, headers),
-      session: effectiveSession,
+      session,
     };
   }
   headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
-  if (effectiveSession.authKind) {
+  if (session.authKind) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
-      safeCloudExtensionHeaderValue(effectiveSession.authKind),
+      safeCloudExtensionHeaderValue(session.authKind),
     );
   }
-  if (effectiveSession.scopes && effectiveSession.scopes.length > 0) {
+  if (session.scopes && session.scopes.length > 0) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
-      effectiveSession.scopes.map(safeCloudExtensionHeaderValue).join(" "),
+      session.scopes.map(safeCloudExtensionHeaderValue).join(" "),
     );
   }
-  if (effectiveSession.subject) {
+  if (session.subject) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
-      safeCloudExtensionHeaderValue(effectiveSession.subject),
+      safeCloudExtensionHeaderValue(session.subject),
     );
   }
-  if (effectiveSession.installationId) {
+  if (session.installationId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
-      safeCloudExtensionHeaderValue(effectiveSession.installationId),
+      safeCloudExtensionHeaderValue(session.installationId),
     );
   }
-  if (effectiveSession.spaceId) {
+  if (session.spaceId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
-      safeCloudExtensionHeaderValue(effectiveSession.spaceId),
+      safeCloudExtensionHeaderValue(session.spaceId),
     );
   }
   return {
     ok: true,
     request: clonePlatformCloudExtensionRequest(request, headers),
-    session: effectiveSession,
+    session,
   };
 }
 
@@ -1711,850 +1099,11 @@ function clonePlatformCloudExtensionRequest(
   });
 }
 
-async function platformCloudExtensionBillingContextFromRequest(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  session: PlatformCloudExtensionSessionContext,
-): Promise<
-  | {
-      readonly ok: true;
-      readonly spaceId?: string;
-      readonly installationId?: string;
-    }
-  | { readonly ok: false; readonly response: Response }
-> {
-  if (!session.authenticated || session.spaceId) return { ok: true };
-  const spaceId = optionalCloudExtensionContextHeader(
-    request.headers,
-    PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
-  );
-  if (!spaceId) return { ok: true };
-  if (!isSafePlatformCloudExtensionContextId(spaceId)) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid billing context",
-          error_description:
-            "Cloud extension billing workspace id is malformed.",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  if (
-    session.authKind !== "session" &&
-    session.authKind !== "personal-access-token"
-  ) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid billing context",
-          error_description:
-            "Cloud extension service tokens must carry their billing workspace in token metadata.",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  const authorized = await platformCloudExtensionCanAccessWorkspace(
-    request,
-    env,
-    spaceId,
-  );
-  if (!authorized) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "forbidden",
-          error_description:
-            "The authenticated Cloud extension caller cannot access the billing workspace.",
-        },
-        { status: 403 },
-      ),
-    };
-  }
-  const installationId = optionalCloudExtensionContextHeader(
-    request.headers,
-    PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
-  );
-  if (
-    installationId !== undefined &&
-    !isSafePlatformCloudExtensionContextId(installationId)
-  ) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid billing context",
-          error_description:
-            "Cloud extension billing installation id is malformed.",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  return {
-    ok: true,
-    spaceId,
-    ...(installationId ? { installationId } : {}),
-  };
-}
-
-async function platformCloudExtensionCanAccessWorkspace(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  spaceId: string,
-): Promise<boolean> {
-  const headers = sessionMirrorHeaders(request);
-  if (!headers) return false;
-  const url = new URL(
-    `/api/v1/workspaces/${encodeURIComponent(spaceId)}/usage?limit=1`,
-    request.url,
-  );
-  try {
-    const response = await accountsWorker.fetch(
-      new Request(url, { method: "GET", headers }),
-      env,
-    );
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-function optionalCloudExtensionContextHeader(
-  headers: Headers,
-  name: string,
-): string | undefined {
-  const value = headers.get(name)?.trim();
-  return value || undefined;
-}
-
-function isSafePlatformCloudExtensionContextId(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(value);
-}
-
-async function recordPlatformCloudExtensionUsage(
-  response: Response,
-  operationsInput?: PlatformCloudExtensionUsageOperationsInput,
-  context?: {
-    readonly request: Request;
-    readonly route: PlatformCloudExtensionRoute;
-    readonly session: PlatformCloudExtensionSessionContext;
-  },
-  priceBook?: PlatformCloudUsagePriceBook,
-  prechargedMeters: readonly GatewayResourceUsageMeter[] = [],
-): Promise<
-  { readonly ok: true } | { readonly ok: false; readonly response: Response }
-> {
-  let usage:
-    | {
-        readonly spaceId: string;
-        readonly periodStart: string;
-        readonly periodEnd: string;
-        readonly meters: readonly GatewayResourceUsageMeter[];
-      }
-    | undefined;
-  try {
-    usage = platformCloudExtensionUsageReportFromHeaders(response.headers);
-  } catch {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid usage metering report",
-          error_description:
-            "Cloud extension returned a malformed usage report.",
-        },
-        { status: 502 },
-      ),
-    };
-  }
-  usage ??= platformCloudExtensionFallbackUsageReport(context, response);
-  if (!usage) return { ok: true };
-  if (!response.ok) return { ok: true };
-  if (!operationsInput) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "usage metering unavailable",
-          error_description:
-            "Cloud extension reported usage, but the platform usage ledger is not wired.",
-        },
-        { status: 502 },
-      ),
-    };
-  }
-  try {
-    const operations =
-      typeof operationsInput === "function"
-        ? await operationsInput()
-        : operationsInput;
-    const pricedInput = platformCloudPricedUsageInput(
-      {
-        periodStart: usage.periodStart,
-        periodEnd: usage.periodEnd,
-        meters: usage.meters,
-      },
-      priceBook,
-      prechargedMeters,
-    );
-    if (pricedInput.meters.length === 0) return { ok: true };
-    const result = await operations.recordGatewayResourceUsage(
-      usage.spaceId,
-      pricedInput,
-    );
-    if (operations.recordBillingUsageReports) {
-      try {
-        await operations.recordBillingUsageReports({
-          usageEvents: result.usageEvents,
-        });
-      } catch (error) {
-        reportPlatformCloudExtensionBillingSyncFailure(error);
-      }
-    }
-    return { ok: true };
-  } catch {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "usage metering failed",
-          error_description:
-            "Cloud extension usage could not be recorded, so the request was not returned as a billable success.",
-        },
-        { status: 502 },
-      ),
-    };
-  }
-}
-
-async function prechargePlatformCloudExtensionUsage(
-  request: Request,
-  route: PlatformCloudExtensionRoute,
-  session: PlatformCloudExtensionSessionContext,
-  operationsInput: PlatformCloudExtensionUsageOperationsInput | undefined,
-  priceBook: PlatformCloudUsagePriceBook | undefined,
-): Promise<PlatformCloudExtensionPrechargeResult> {
-  const meter = platformCloudExtensionFallbackUsageMeter({
-    request,
-    route,
-    session,
-  });
-  if (!meter) return { ok: true, chargedMeters: [] };
-  if (!session.spaceId) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "billing workspace required",
-          error_description:
-            "Cloud resource requests require a billing workspace before upstream usage is attempted.",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  if (!operationsInput) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "usage metering unavailable",
-          error_description:
-            "Cloud resource requests require the platform usage ledger before upstream usage is attempted.",
-        },
-        { status: 502 },
-      ),
-    };
-  }
-  let pricedInput: PlatformCloudExtensionUsageInput;
-  try {
-    const now = Date.now();
-    pricedInput = platformCloudPricedUsageInput(
-      {
-        periodStart: new Date(now - 1).toISOString(),
-        periodEnd: new Date(now).toISOString(),
-        meters: [meter],
-      },
-      priceBook,
-    );
-  } catch {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "usage pricing unavailable",
-          error_description:
-            "Cloud resource requests require an operator price book before upstream usage is attempted.",
-        },
-        { status: 502 },
-      ),
-    };
-  }
-  try {
-    const operations =
-      typeof operationsInput === "function"
-        ? await operationsInput()
-        : operationsInput;
-    const result = await operations.recordGatewayResourceUsage(
-      session.spaceId,
-      pricedInput,
-    );
-    if (operations.recordBillingUsageReports) {
-      try {
-        await operations.recordBillingUsageReports({
-          usageEvents: result.usageEvents,
-        });
-      } catch (error) {
-        reportPlatformCloudExtensionBillingSyncFailure(error);
-      }
-    }
-    return {
-      ok: true,
-      operations,
-      chargedMeters: pricedInput.meters,
-    };
-  } catch {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "insufficient cloud balance",
-          error_description:
-            "Cloud resource usage could not be precharged, so upstream usage was not attempted.",
-        },
-        { status: 402 },
-      ),
-    };
-  }
-}
-
-function reportPlatformCloudExtensionBillingSyncFailure(error: unknown): void {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : "unknown_error";
-  console.warn(
-    JSON.stringify({
-      event: "takosumi_cloud_extension_billing_usage_sync_failed",
-      message: safeCloudExtensionLogValue(message),
-    }),
-  );
-}
-
-function safeCloudExtensionLogValue(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 160);
-}
-
-function platformCloudExtensionFallbackUsageReport(
-  context:
-    | {
-        readonly request: Request;
-        readonly route: PlatformCloudExtensionRoute;
-        readonly session: PlatformCloudExtensionSessionContext;
-      }
-    | undefined,
-  response: Response,
-):
-  | {
-      readonly spaceId: string;
-      readonly periodStart: string;
-      readonly periodEnd: string;
-      readonly meters: readonly GatewayResourceUsageMeter[];
-    }
-  | undefined {
-  if (!context || !response.ok || !context.session.spaceId) return undefined;
-  const meter = platformCloudExtensionFallbackUsageMeter(context);
-  if (!meter) return undefined;
-  const periodEndMs = Date.now();
-  return {
-    spaceId: context.session.spaceId,
-    periodStart: new Date(periodEndMs - 1).toISOString(),
-    periodEnd: new Date(periodEndMs).toISOString(),
-    meters: [meter],
-  };
-}
-
-function platformCloudExtensionFallbackUsageMeter(input: {
-  readonly request: Request;
-  readonly route: PlatformCloudExtensionRoute;
-  readonly session: PlatformCloudExtensionSessionContext;
-}): GatewayResourceUsageMeter | undefined {
-  const url = new URL(input.request.url);
-  if (input.route.kind === "ai_gateway") {
-    return platformAiGatewayFallbackUsageMeter(url, input);
-  }
-  if (input.route.id === "provider.cloudflare.client_v4") {
-    return platformCloudflareCompatFallbackUsageMeter(url, input);
-  }
-  return undefined;
-}
-
-function platformAiGatewayFallbackUsageMeter(
-  url: URL,
-  input: {
-    readonly request: Request;
-    readonly session: PlatformCloudExtensionSessionContext;
-  },
-): GatewayResourceUsageMeter | undefined {
-  if (input.request.method.toUpperCase() !== "POST") return undefined;
-  const operation = aiGatewayOperation(url.pathname);
-  if (!operation) return undefined;
-  return {
-    ...(input.session.installationId
-      ? { installationId: input.session.installationId }
-      : {}),
-    meterId: `ai:openai_compatible:${operation}`,
-    resourceFamily: "cloudflare.ai_gateway",
-    resourceId: operation,
-    operation,
-    kind: "ai_request",
-    quantity: 1,
-    usdMicros: PLATFORM_FALLBACK_USAGE_USD_MICROS,
-  };
-}
-
-function aiGatewayOperation(pathname: string): string | undefined {
-  if (pathname.endsWith("/chat/completions")) return "chat.completions";
-  if (pathname.endsWith("/embeddings")) return "embeddings";
-  return undefined;
-}
-
-function platformCloudflareCompatFallbackUsageMeter(
-  url: URL,
-  input: {
-    readonly request: Request;
-    readonly session: PlatformCloudExtensionSessionContext;
-  },
-): GatewayResourceUsageMeter | undefined {
-  const method = input.request.method.toUpperCase();
-  if (method === "HEAD" || method === "OPTIONS") return undefined;
-  const resource = cloudflareCompatFallbackResource(url.pathname, method);
-  if (!resource) return undefined;
-  return {
-    ...(input.session.installationId
-      ? { installationId: input.session.installationId }
-      : {}),
-    meterId: resource.meterId,
-    resourceFamily: resource.resourceFamily,
-    resourceId: resource.resourceId,
-    operation: resource.operation,
-    ...(resource.resourceMetadata
-      ? { resourceMetadata: resource.resourceMetadata }
-      : {}),
-    kind: "gateway_compute",
-    quantity: 1,
-    usdMicros: PLATFORM_FALLBACK_USAGE_USD_MICROS,
-  };
-}
-
-function cloudflareCompatFallbackResource(
-  pathname: string,
-  method: string,
-):
-  | {
-      readonly meterId: string;
-      readonly resourceFamily: string;
-      readonly resourceId: string;
-      readonly operation: string;
-      readonly resourceMetadata?: NonNullable<
-        GatewayResourceUsageMeter["resourceMetadata"]
-      >;
-    }
-  | undefined {
-  const suffix = pathname.slice(CLOUDFLARE_COMPAT_BASE_PATH.length);
-  const segments = suffix
-    .split("/")
-    .map((segment) => decodeURIComponent(segment))
-    .filter(Boolean);
-  const accountIndex = segments.indexOf("accounts");
-  const accountTail =
-    accountIndex >= 0 ? segments.slice(accountIndex + 2) : segments;
-  const operation = cloudflareCompatOperation(method, accountTail);
-  if (accountTail[0] === "workers" && accountTail[1] === "scripts") {
-    const scriptName = accountTail[2] ?? "collection";
-    return {
-      meterId: `cloudflare:workers_script:${operation}`,
-      resourceFamily: "cloudflare.workers_script",
-      resourceId: `script:${scriptName}`,
-      operation,
-    };
-  }
-  if (accountTail[0] === "workers" && accountTail[1] === "routes") {
-    const routeId = accountTail[2] ?? "collection";
-    return {
-      meterId: `cloudflare:workers_script:route_${operation}`,
-      resourceFamily: "cloudflare.workers_script",
-      resourceId: `route:${routeId}`,
-      operation: `route.${operation}`,
-    };
-  }
-  if (
-    accountTail[0] === "storage" &&
-    accountTail[1] === "kv" &&
-    accountTail[2] === "namespaces"
-  ) {
-    return cloudflareCompatManagedResourceMeter(
-      "kv",
-      "cloudflare.kv",
-      accountTail[3] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "r2" && accountTail[1] === "buckets") {
-    return cloudflareCompatManagedResourceMeter(
-      "r2",
-      "cloudflare.r2",
-      accountTail[2] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "d1" && accountTail[1] === "database") {
-    return cloudflareCompatManagedResourceMeter(
-      "d1",
-      "cloudflare.d1",
-      accountTail[2] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "workflows") {
-    return cloudflareCompatManagedResourceMeter(
-      "workflows",
-      "cloudflare.workflows",
-      accountTail[1] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "containers") {
-    return cloudflareCompatManagedResourceMeter(
-      "containers",
-      "cloudflare.containers",
-      accountTail[1] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "queues") {
-    return cloudflareCompatManagedResourceMeter(
-      "queues",
-      "cloudflare.queues",
-      accountTail[1] ?? "collection",
-      operation,
-    );
-  }
-  if (accountTail[0] === "durable_objects") {
-    return cloudflareCompatManagedResourceMeter(
-      "durable_objects",
-      "cloudflare.durable_objects",
-      accountTail[1] ?? "collection",
-      operation,
-    );
-  }
-  return undefined;
-}
-
-function cloudflareCompatManagedResourceMeter(
-  meterPrefix: string,
-  resourceFamily: string,
-  resourceId: string,
-  operation: string,
-): {
-  readonly meterId: string;
-  readonly resourceFamily: string;
-  readonly resourceId: string;
-  readonly operation: string;
-} {
-  return {
-    meterId: `cloudflare:${meterPrefix}:${operation}`,
-    resourceFamily,
-    resourceId: `${meterPrefix}:${resourceId}`,
-    operation,
-  };
-}
-
-function cloudflareCompatOperation(
-  method: string,
-  segments: readonly string[],
-): string {
-  if (method === "POST") return "create";
-  if (method === "PUT" || method === "PATCH") {
-    if (segments[0] === "workers" && segments[1] === "scripts") {
-      return "deploy";
-    }
-    return segments.length > 2 ? "update" : "deploy";
-  }
-  if (method === "DELETE") return "delete";
-  return segments.length > 2 ? "read" : "list";
-}
-
-function platformCloudExtensionUsageReportFromHeaders(headers: Headers):
-  | {
-      readonly spaceId: string;
-      readonly periodStart: string;
-      readonly periodEnd: string;
-      readonly meters: readonly GatewayResourceUsageMeter[];
-    }
-  | undefined {
-  const metersHeader = headers.get(
-    PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
-  );
-  if (!metersHeader) return undefined;
-  const spaceId = requiredUsageHeader(
-    headers,
-    PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
-  );
-  const periodStart = requiredUsageHeader(
-    headers,
-    PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
-  );
-  const periodEnd = requiredUsageHeader(
-    headers,
-    PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
-  );
-  const parsed = JSON.parse(metersHeader) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new TypeError("Cloud extension usage meters must be a JSON array");
-  }
-  return {
-    spaceId,
-    periodStart,
-    periodEnd,
-    meters: parsed.map(platformCloudExtensionUsageMeterFromJson),
-  };
-}
-
-function requiredUsageHeader(headers: Headers, name: string): string {
-  const value = headers.get(name)?.trim();
-  if (!value) throw new TypeError(`${name} is required when usage is reported`);
-  return value;
-}
-
-function platformCloudExtensionUsageMeterFromJson(
-  value: unknown,
-): GatewayResourceUsageMeter {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Cloud extension usage meter must be an object");
-  }
-  const record = value as Record<string, unknown>;
-  const kind = record.kind;
-  if (!isPlatformCloudExtensionUsageKind(kind)) {
-    throw new TypeError("Cloud extension usage kind is not supported");
-  }
-  const quantity = record.quantity;
-  if (
-    typeof quantity !== "number" ||
-    !Number.isFinite(quantity) ||
-    quantity < 0
-  ) {
-    throw new TypeError("Cloud extension usage quantity must be non-negative");
-  }
-  const amount = platformCloudExtensionUsageMeterUsdMicros(record);
-  const meterId =
-    typeof record.meterId === "string" ? record.meterId.trim() : "";
-  if (!meterId)
-    throw new TypeError("Cloud extension usage meterId is required");
-  if (usageMeterNameLeaksInternalWorkersBackend(meterId)) {
-    throw new TypeError(
-      "Cloud extension usage meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
-    );
-  }
-  const installationId =
-    typeof record.installationId === "string" && record.installationId.trim()
-      ? record.installationId.trim()
-      : undefined;
-  const resourceFamily = optionalCloudExtensionUsageString(
-    record.resourceFamily,
-    "resourceFamily",
-  );
-  if (resourceFamily && !/^[a-z0-9][a-z0-9_.:-]*$/u.test(resourceFamily)) {
-    throw new TypeError(
-      "Cloud extension usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
-    );
-  }
-  if (
-    resourceFamily &&
-    usageMeterNameLeaksInternalWorkersBackend(resourceFamily)
-  ) {
-    throw new TypeError(
-      "Cloud extension usage resourceFamily must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
-    );
-  }
-  if (
-    resourceFamily &&
-    meterId.startsWith("cloudflare:workers_script:") &&
-    resourceFamily !== "cloudflare.workers_script"
-  ) {
-    throw new TypeError(
-      "Cloud extension Workers Script usage must use resourceFamily cloudflare.workers_script",
-    );
-  }
-  const resourceId = optionalCloudExtensionUsageString(
-    record.resourceId,
-    "resourceId",
-  );
-  const operation = optionalCloudExtensionUsageString(
-    record.operation,
-    "operation",
-  );
-  const resourceMetadata = cloudExtensionUsageResourceMetadata(
-    record.resourceMetadata,
-  );
-  return {
-    ...(installationId ? { installationId } : {}),
-    ...(resourceFamily ? { resourceFamily } : {}),
-    ...(resourceId ? { resourceId } : {}),
-    ...(operation ? { operation } : {}),
-    ...(Object.keys(resourceMetadata).length > 0 ? { resourceMetadata } : {}),
-    kind,
-    quantity,
-    ...(amount.usdMicros !== undefined ? { usdMicros: amount.usdMicros } : {}),
-    ...(amount.credits !== undefined ? { credits: amount.credits } : {}),
-    meterId,
-  };
-}
-
-function platformCloudExtensionUsageMeterUsdMicros(
-  record: Record<string, unknown>,
-): { readonly usdMicros?: number; readonly credits?: number } {
-  if (
-    typeof record.usdMicros === "number" &&
-    Number.isSafeInteger(record.usdMicros) &&
-    Number.isFinite(record.usdMicros) &&
-    record.usdMicros >= 0
-  ) {
-    return { usdMicros: record.usdMicros };
-  }
-  if (record.usdMicros !== undefined) {
-    throw new TypeError(
-      "Cloud extension usage usdMicros must be a non-negative USD micros integer",
-    );
-  }
-  if (
-    typeof record.credits === "number" &&
-    Number.isFinite(record.credits) &&
-    record.credits >= 0
-  ) {
-    return {
-      usdMicros: legacyCreditsToUsdMicros(record.credits),
-      credits: record.credits,
-    };
-  }
-  return {};
-}
-
-function optionalCloudExtensionUsageString(
-  value: unknown,
-  label: string,
-): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") {
-    throw new TypeError(`Cloud extension usage ${label} must be a string`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 256) {
-    throw new TypeError(
-      `Cloud extension usage ${label} must be non-empty and at most 256 characters`,
-    );
-  }
-  return trimmed;
-}
-
-function cloudExtensionUsageResourceMetadata(
-  value: unknown,
-): NonNullable<GatewayResourceUsageMeter["resourceMetadata"]> {
-  if (value === undefined) return {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(
-      "Cloud extension usage resourceMetadata must be an object",
-    );
-  }
-  const normalized: Record<string, string | number | boolean | null> = {};
-  for (const [key, metadataValue] of Object.entries(value)) {
-    const metadataKey = key.trim();
-    if (!metadataKey) {
-      throw new TypeError(
-        "Cloud extension usage resourceMetadata keys must be non-empty strings",
-      );
-    }
-    if (
-      metadataValue !== null &&
-      typeof metadataValue !== "string" &&
-      typeof metadataValue !== "boolean" &&
-      (typeof metadataValue !== "number" || !Number.isFinite(metadataValue))
-    ) {
-      throw new TypeError(
-        "Cloud extension usage resourceMetadata values must be strings, numbers, booleans, or null",
-      );
-    }
-    if (
-      typeof metadataValue === "string" &&
-      usageMeterNameLeaksInternalWorkersBackend(metadataValue)
-    ) {
-      throw new TypeError(
-        "Cloud extension usage resourceMetadata must not expose the internal Workers for Platforms backend",
-      );
-    }
-    normalized[metadataKey] = metadataValue;
-  }
-  return normalized;
-}
-
-function isPlatformCloudExtensionUsageKind(
-  value: unknown,
-): value is GatewayResourceUsageMeter["kind"] {
-  return (
-    value === "gateway_compute" ||
-    value === "gateway_storage_gb_hour" ||
-    value === "ai_request" ||
-    value === "ai_input_token" ||
-    value === "ai_output_token" ||
-    value === "artifact_storage_gb_hour" ||
-    value === "backup_storage_gb_hour" ||
-    value === "egress_gb"
-  );
-}
-
-function requestForPlatformCloudExtensionBinding(
-  request: Request,
-  route: PlatformCloudExtensionRoute,
-): Request {
-  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
-    return request;
-  }
-  return new Request(request.url, {
-    method: "GET",
-    headers: request.headers,
-    redirect: request.redirect,
-  });
-}
-
-function responseForPlatformCloudExtensionClient(
-  request: Request,
-  route: PlatformCloudExtensionRoute,
-  response: Response,
-): Response {
-  const headers = new Headers(response.headers);
-  for (const header of PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS) {
-    headers.delete(header);
-  }
-  if (route.kind !== "ai_gateway" || request.method !== "HEAD") {
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  }
-  headers.delete("content-length");
-  return new Response(null, {
+function responseForPlatformCloudExtensionClient(response: Response): Response {
+  return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers,
+    headers: new Headers(response.headers),
   });
 }
 
@@ -2564,7 +1113,7 @@ export async function verifyPlatformCloudExtensionSession(
   route?: PlatformCloudExtensionRoute,
 ): Promise<PlatformCloudExtensionSessionContext> {
   const serviceToken = platformCloudExtensionServiceAccessToken(request);
-  if (serviceToken && route) {
+  if (serviceToken) {
     const serviceSession = await verifyPlatformCloudExtensionServiceAccessToken(
       request,
       env,
@@ -2609,82 +1158,27 @@ export async function verifyPlatformCloudExtensionSession(
   }
 }
 
-export async function verifyPlatformCloudExtensionServiceAccessToken(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  token: string,
-  route: PlatformCloudExtensionRoute,
-  introspectFetch: PlatformCloudExtensionIntrospectFetch = defaultPlatformCloudExtensionIntrospectFetch,
-): Promise<PlatformCloudExtensionSessionContext> {
-  const requiredScopes = platformCloudExtensionServiceTokenRequiredScopes(
-    request,
-    route,
-  );
-  if (!requiredScopes) return { authenticated: false };
-  const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
-  const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return { authenticated: false };
-  try {
-    const response = await introspectFetch(
-      new Request(new URL("/oauth/introspect", request.url), {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          token,
-          client_id: clientId,
-          client_secret: clientSecret,
-        }),
-      }),
-      env,
-    );
-    if (!response.ok) return { authenticated: false };
-    const body = await response.json().catch(() => undefined);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return { authenticated: false };
-    }
-    const record = body as Record<string, unknown>;
-    if (record.active !== true) return { authenticated: false };
-    const expectedClientId = platformCloudExtensionServiceTokenClientId(route);
-    if (!expectedClientId || record.client_id !== expectedClientId) {
-      return { authenticated: false };
-    }
-    const scope = typeof record.scope === "string" ? record.scope : "";
-    if (
-      !requiredScopes.every((required) =>
-        platformCloudExtensionScopeIncludes(scope, required),
-      )
-    ) {
-      return { authenticated: false };
-    }
-    const subject = record.sub;
-    const scopes = platformCloudExtensionScopes(scope);
-    const takosumi = platformCloudExtensionTakosumiMetadata(record);
-    return typeof subject === "string" && subject.length > 0
-      ? {
-          authenticated: true,
-          authKind: "service-token",
-          subject,
-          ...takosumi,
-          scopes,
-        }
-      : {
-          authenticated: true,
-          authKind: "service-token",
-          ...takosumi,
-          scopes,
-        };
-  } catch {
-    return { authenticated: false };
-  }
-}
-
 export type PlatformCloudExtensionIntrospectFetch = (
   request: Request,
   env: CloudflareWorkerEnv,
 ) => Promise<Response>;
+
+export async function verifyPlatformCloudExtensionServiceAccessToken(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  token: string,
+  route?: PlatformCloudExtensionRoute,
+  introspectFetch: PlatformCloudExtensionIntrospectFetch = defaultPlatformCloudExtensionIntrospectFetch,
+): Promise<PlatformCloudExtensionSessionContext> {
+  return await introspectPlatformCloudExtensionToken(
+    request,
+    env,
+    token,
+    "service-token",
+    route,
+    introspectFetch,
+  );
+}
 
 export async function verifyPlatformCloudExtensionPersonalAccessToken(
   request: Request,
@@ -2703,6 +1197,24 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
     typeof routeOrIntrospectFetch === "function"
       ? routeOrIntrospectFetch
       : (maybeIntrospectFetch ?? defaultPlatformCloudExtensionIntrospectFetch);
+  return await introspectPlatformCloudExtensionToken(
+    request,
+    env,
+    token,
+    "personal-access-token",
+    route,
+    introspectFetch,
+  );
+}
+
+async function introspectPlatformCloudExtensionToken(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  token: string,
+  authKind: "service-token" | "personal-access-token",
+  route: PlatformCloudExtensionRoute | undefined,
+  introspectFetch: PlatformCloudExtensionIntrospectFetch,
+): Promise<PlatformCloudExtensionSessionContext> {
   const clientId = env.TAKOSUMI_ACCOUNTS_CLIENT_ID;
   const clientSecret = env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET;
   if (!clientId || !clientSecret) return { authenticated: false };
@@ -2730,29 +1242,33 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
     const record = body as Record<string, unknown>;
     if (record.active !== true) return { authenticated: false };
     const scope = typeof record.scope === "string" ? record.scope : "";
-    if (!platformCloudExtensionScopesAllowAccess(scope, request, route)) {
+    const scopes = platformCloudExtensionScopes(scope);
+    if (!platformCloudExtensionScopesAllowAccess(scopes, route)) {
       return { authenticated: false };
     }
     const subject = record.sub;
-    const scopes = platformCloudExtensionScopes(scope);
     const takosumi = platformCloudExtensionTakosumiMetadata(record);
     return typeof subject === "string" && subject.length > 0
-      ? {
-          authenticated: true,
-          authKind: "personal-access-token",
-          subject,
-          ...takosumi,
-          scopes,
-        }
-      : {
-          authenticated: true,
-          authKind: "personal-access-token",
-          ...takosumi,
-          scopes,
-        };
+      ? { authenticated: true, authKind, subject, ...takosumi, scopes }
+      : { authenticated: true, authKind, ...takosumi, scopes };
   } catch {
     return { authenticated: false };
   }
+}
+
+function platformCloudExtensionScopesAllowAccess(
+  scopes: readonly string[],
+  route?: PlatformCloudExtensionRoute,
+): boolean {
+  const required = route?.requiredScopes ?? [];
+  if (required.length === 0) return true;
+  return required.every(
+    (scope) => scopes.includes(scope) || scopes.includes("admin"),
+  );
+}
+
+function platformCloudExtensionScopes(scope: string): string[] {
+  return scope.split(/\s+/u).filter(Boolean);
 }
 
 function platformCloudExtensionTakosumiMetadata(
@@ -2804,51 +1320,6 @@ function bearerValue(authorization: string | null): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
-function platformCloudExtensionScopesAllowAccess(
-  scope: string,
-  request: Request,
-  route?: PlatformCloudExtensionRoute,
-): boolean {
-  const requiredScopes = platformCloudExtensionPersonalAccessRequiredScopes(
-    request,
-    route,
-  );
-  return requiredScopes.some((required) =>
-    platformCloudExtensionScopeIncludes(scope, required),
-  );
-}
-
-function platformCloudExtensionScopeIncludes(
-  scope: string,
-  required: string,
-): boolean {
-  if (
-    required !== "admin" &&
-    platformCloudExtensionScopes(scope).includes("admin")
-  ) {
-    return true;
-  }
-  return platformCloudExtensionScopes(scope).includes(required);
-}
-
-function platformCloudExtensionScopes(scope: string): string[] {
-  return scope.split(/\s+/u).filter(Boolean);
-}
-
-function platformCloudExtensionPersonalAccessRequiredScopes(
-  request: Request,
-  route?: PlatformCloudExtensionRoute,
-): readonly string[] {
-  const resolvedRoute =
-    route ?? matchPlatformCloudExtensionRoute(new URL(request.url).pathname);
-  if (!resolvedRoute) return ["read", "write", "admin"];
-  const method = request.method.toUpperCase();
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
-    return ["read", "admin"];
-  }
-  return ["write", "admin"];
-}
-
 function sessionMirrorHeaders(request: Request): Headers | undefined {
   const headers = new Headers({ accept: "application/json" });
   const authorization = request.headers.get("authorization");
@@ -2862,40 +1333,6 @@ function sessionMirrorHeaders(request: Request): Headers | undefined {
 
 function safeCloudExtensionHeaderValue(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f]/gu, "");
-}
-
-export function isCloudOnlyAiGatewayPath(pathname: string): boolean {
-  return pathIsUnderBase(pathname, AI_GATEWAY_BASE_PATH);
-}
-
-export async function handlePlatformAiGatewayRequest(
-  request: Request,
-  env: CloudflareWorkerEnv,
-): Promise<Response> {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) return Response.json({ error: "not found" }, { status: 404 });
-  if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
-    return Response.json({ error: "not found" }, { status: 404 });
-  }
-  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
-}
-
-export function isCloudOnlyCloudflareCompatPath(pathname: string): boolean {
-  return pathIsUnderBase(pathname, CLOUDFLARE_COMPAT_BASE_PATH);
-}
-
-export async function handlePlatformCloudflareCompatRequest(
-  request: Request,
-  env: CloudflareWorkerEnv,
-): Promise<Response> {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) return Response.json({ error: "not found" }, { status: 404 });
-  if (!pathIsUnderBase(new URL(request.url).pathname, route.basePath)) {
-    return Response.json({ error: "not found" }, { status: 404 });
-  }
-  return await handlePlatformCloudExtensionRouteRequest(request, env, route);
 }
 
 interface PlatformCloudExtensionBinding {

@@ -595,13 +595,9 @@ function usageEventResourceMetadata(
 }
 
 function billingUsageUnitFromUsageEvent(event: UsageEvent): string {
-  if (event.kind === "ai_request") return "requests";
   if (event.operation === "request") return "requests";
   if (event.operation === "deploy") return "deploys";
-  if (
-    event.operation === "storage_gb_hour" ||
-    event.kind === "gateway_storage_gb_hour"
-  ) {
+  if (event.operation === "storage_gb_hour") {
     return "gb_hours";
   }
   if (event.operation === "vcpu_second") return "vcpu_seconds";

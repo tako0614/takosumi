@@ -32,7 +32,6 @@ import {
   takosumiAccountsInstallationEventsIngestPath,
   takosumiAccountsInstallationServiceRotateTokenPath,
 } from "@takosjp/takosumi-accounts-contract";
-import { TAKOSUMI_AI_GATEWAY_BASE_PATH } from "takosumi-contract/ai-gateway";
 import { requireAccountsBearer } from "./account-session.ts";
 import type { InstallationRecord } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
@@ -68,11 +67,19 @@ import { redactPublicValue } from "./public-redaction.ts";
 const SERVICE_GRAPH_SERVICE_TOKEN_DEFAULT_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SERVICE_GRAPH_SERVICE_TOKEN_MIN_TTL_SECONDS = 60;
 const SERVICE_GRAPH_SERVICE_TOKEN_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
+// TODO(P1b, service-graph removal): the AI Gateway is a Cloud-only/closed
+// feature (final-plan §12.1). The service-graph AI-token issuance below (the AI
+// Gateway service descriptor + default scopes + base path) is the remaining glue
+// that still names it from OSS. It is intentionally kept inert here (the
+// base-path string is inlined locally, NOT imported from the moved Cloud
+// contract) so OSS stays buildable; the full relocation of AI-token issuance to
+// the Cloud delta is tracked by the separate P1b service-graph-removal unit.
 const AI_GATEWAY_DEFAULT_SCOPES = [
   "ai.models.read",
   "ai.chat",
   "ai.embeddings",
 ] as const;
+const TAKOSUMI_AI_GATEWAY_BASE_PATH = "/gateway/ai/v1" as const;
 
 export interface ServiceGraphRuntimeAvailability {
   readonly aiGatewayConfigured?: boolean;

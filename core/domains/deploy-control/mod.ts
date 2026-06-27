@@ -212,12 +212,10 @@ import { UsageReportingService } from "./usage_service.ts";
 // so the historical `./domains/deploy-control/mod.ts` import path stays stable.
 export type {
   RecordMeteredUsageInput,
-  RecordGatewayResourceUsageInput,
   ReconcileInvoiceUsageInput,
 } from "./usage_service.ts";
 import type {
   RecordMeteredUsageInput,
-  RecordGatewayResourceUsageInput,
   ReconcileInvoiceUsageInput,
 } from "./usage_service.ts";
 import {
@@ -1408,13 +1406,6 @@ export class OpenTofuDeploymentController {
     input: RecordMeteredUsageInput,
   ): Promise<{ readonly usageEvent: UsageEvent }> {
     return await this.#usage.recordMeteredUsage(spaceId, input);
-  }
-
-  async recordGatewayResourceUsage(
-    spaceId: string,
-    input: RecordGatewayResourceUsageInput,
-  ): Promise<{ readonly usageEvents: readonly UsageEvent[] }> {
-    return await this.#usage.recordGatewayResourceUsage(spaceId, input);
   }
 
   async reconcileInvoiceUsage(

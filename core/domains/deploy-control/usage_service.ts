@@ -5,9 +5,9 @@
  * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
  * Space-scoped billing READ projection (`getSpaceBilling` / `listSpaceUsage` /
  * `listSpaceCreditReservations`), the operator/meter usage-event writes
- * (`recordMeteredUsage` / `recordGatewayResourceUsage`), the invoice
- * reconciliation adjustment (`reconcileInvoiceUsage`), and the manual credit
- * top-up (`topUpSpaceCredits`). The controller holds one instance and re-exposes
+ * (`recordMeteredUsage`), the invoice reconciliation adjustment
+ * (`reconcileInvoiceUsage`), and the manual credit top-up
+ * (`topUpSpaceCredits`). The controller holds one instance and re-exposes
  * each method on its public API unchanged, so the `/api` billing route layer and
  * the accounts control-routes keep calling the controller surface.
  *
@@ -33,7 +33,6 @@ import type {
   CreditBalance,
   CreditReservation,
   InvoiceUsageReconciliation,
-  GatewayResourceUsageMeter,
   SpaceSubscription,
   UsageEvent,
   UsageEventKind,
@@ -43,7 +42,6 @@ import type {
   UsageEventSource,
 } from "takosumi-contract/billing";
 import {
-  billingReservationRequired,
   legacyCreditsToUsdMicros,
   usageEventUsdMicros,
   usageMeterNameLeaksInternalWorkersBackend,
@@ -71,18 +69,6 @@ export interface RecordMeteredUsageInput {
   readonly source: Exclude<UsageEventSource, "runner">;
   readonly idempotencyKey: string;
   readonly createdAt?: string;
-}
-
-export interface RecordGatewayResourceUsageInput {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly meters: readonly GatewayResourceUsageMeter[];
-  /**
-   * Cloud-only hosted resources set this to true so successful resource usage
-   * consumes USD balance and fails closed even when the Workspace's OpenTofu run
-   * billing mode is showback/disabled.
-   */
-  readonly spendRequired?: boolean;
 }
 
 export interface ReconcileInvoiceUsageInput {
@@ -230,112 +216,6 @@ export class UsageReportingService {
     return { usageEvent };
   }
 
-  async #recordResourceMeterUsage(
-    spaceId: string,
-    input: Omit<RecordMeteredUsageInput, "source">,
-  ): Promise<{ readonly usageEvent: UsageEvent }> {
-    const usageEvent = await this.#store.putUsageEvent(
-      normalizeMeteredUsageEvent(
-        spaceId,
-        {
-          ...input,
-          source: "resource_meter",
-        },
-        () => this.#newId("usage"),
-        () => new Date(this.#now()).toISOString(),
-      ),
-    );
-    return { usageEvent };
-  }
-
-  async recordGatewayResourceUsage(
-    spaceId: string,
-    input: RecordGatewayResourceUsageInput,
-  ): Promise<{ readonly usageEvents: readonly UsageEvent[] }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
-    const period = normalizeUsagePeriod(input);
-    const settings = await this.#billing.billingSettingsForSpace(spaceId);
-    const spendRequired =
-      input.spendRequired === true || billingReservationRequired(settings);
-    if (spendRequired) {
-      await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
-    }
-    const usageEvents: UsageEvent[] = [];
-    for (const meter of input.meters) {
-      const usageInput = {
-        ...(meter.installationId
-          ? { installationId: meter.installationId }
-          : {}),
-        meterId: meter.meterId,
-        ...(meter.resourceFamily
-          ? { resourceFamily: meter.resourceFamily }
-          : {}),
-        ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
-        ...(meter.operation ? { operation: meter.operation } : {}),
-        ...(meter.resourceMetadata
-          ? { resourceMetadata: meter.resourceMetadata }
-          : {}),
-        kind: meter.kind,
-        quantity: meter.quantity,
-        ...(meter.usdMicros !== undefined
-          ? { usdMicros: meter.usdMicros }
-          : {}),
-        ...(meter.credits !== undefined ? { credits: meter.credits } : {}),
-        idempotencyKey: [
-          "provider-runtime",
-          spaceId,
-          period.periodStart,
-          period.periodEnd,
-          meter.meterId,
-          meter.installationId ?? "space",
-          meter.resourceFamily ?? "resource-family",
-          meter.resourceId ?? "resource",
-          meter.operation ?? "operation",
-          meter.kind,
-        ].join(":"),
-        createdAt: period.periodEnd,
-      } satisfies Omit<RecordMeteredUsageInput, "source">;
-      const usdMicros = usageInputUsdMicros({
-        ...usageInput,
-        source: "resource_meter",
-      });
-      if (spendRequired && usdMicros > 0) {
-        const usageEvent = normalizeMeteredUsageEvent(
-          spaceId,
-          {
-            ...usageInput,
-            source: "resource_meter",
-          },
-          () => this.#newId("usage"),
-          () => new Date(this.#now()).toISOString(),
-        );
-        const recorded = await this.#store.putUsageEventAndSpendCredits(
-          usageEvent,
-          {
-            usdMicros,
-            credits: usdMicrosToLegacyCredits(usdMicros),
-            updatedAt: period.periodEnd,
-          },
-        );
-        if (!recorded) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            "USD balance exhausted for Cloud resource usage",
-          );
-        }
-        usageEvents.push(recorded.usageEvent);
-        continue;
-      }
-      const recorded = await this.#recordResourceMeterUsage(
-        spaceId,
-        usageInput,
-      );
-      usageEvents.push(recorded.usageEvent);
-    }
-    return { usageEvents };
-  }
-
   async reconcileInvoiceUsage(
     spaceId: string,
     input: ReconcileInvoiceUsageInput,
@@ -477,48 +357,6 @@ function normalizeMeteredUsageEvent(
     source: input.source,
     idempotencyKey: input.idempotencyKey,
     createdAt,
-  };
-}
-
-function normalizeUsagePeriod(input: RecordGatewayResourceUsageInput): {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-} {
-  const periodStartMs = Date.parse(input.periodStart);
-  const periodEndMs = Date.parse(input.periodEnd);
-  if (
-    !Number.isFinite(periodStartMs) ||
-    !Number.isFinite(periodEndMs) ||
-    periodEndMs <= periodStartMs
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "Gateway resource usage period must have valid ISO periodStart < periodEnd",
-    );
-  }
-  if (!Array.isArray(input.meters)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "Gateway resource usage meters must be an array",
-    );
-  }
-  for (const meter of input.meters) {
-    if (!isGatewayResourceUsageKind(meter.kind)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "Gateway resource usage kind is not supported",
-      );
-    }
-    requireNonEmptyString(meter.meterId, "meterId");
-    rejectInternalWorkersBackendUsageName(meter.meterId, "meterId");
-    normalizeUsageResourceFamily(meter.resourceFamily);
-    optionalNonEmptyString(meter.resourceId, "resourceId");
-    optionalNonEmptyString(meter.operation, "operation");
-    normalizeUsageResourceMetadata(meter.resourceMetadata);
-  }
-  return {
-    periodStart: new Date(periodStartMs).toISOString(),
-    periodEnd: new Date(periodEndMs).toISOString(),
   };
 }
 
@@ -707,11 +545,6 @@ function normalizeUsageResourceMetadata(
 function isUsageEventKind(value: unknown): value is UsageEventKind {
   return (
     value === "runner_minute" ||
-    value === "gateway_compute" ||
-    value === "gateway_storage_gb_hour" ||
-    value === "ai_request" ||
-    value === "ai_input_token" ||
-    value === "ai_output_token" ||
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb" ||
@@ -727,21 +560,6 @@ function isUsageResourceMetadataValue(
     typeof value === "string" ||
     typeof value === "boolean" ||
     (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-function isGatewayResourceUsageKind(
-  value: unknown,
-): value is GatewayResourceUsageMeter["kind"] {
-  return (
-    value === "gateway_compute" ||
-    value === "gateway_storage_gb_hour" ||
-    value === "ai_request" ||
-    value === "ai_input_token" ||
-    value === "ai_output_token" ||
-    value === "artifact_storage_gb_hour" ||
-    value === "backup_storage_gb_hour" ||
-    value === "egress_gb"
   );
 }
 

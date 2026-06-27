@@ -12,7 +12,6 @@ function fullEnv(): Record<string, unknown> {
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
     ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...REQUIRED_PLATFORM_BINDINGS.assets,
-    ...REQUIRED_PLATFORM_BINDINGS.cloudExtensions,
   ]) {
     env[name] = {}; // presence-only check; any non-null value passes.
   }
@@ -51,19 +50,15 @@ test("requireAssets:false allows an API-only deploy without ASSETS", () => {
   expect(checkPlatformBindings(env).missing).toEqual(["ASSETS"]);
 });
 
-test("Cloud-only extension bindings are optional unless explicitly required", () => {
+test("Cloud extension bindings are not part of OSS/operator readiness", () => {
+  // The OSS readiness check never names a Cloud-feature binding: cloud extension
+  // service bindings are config-driven (TAKOSUMI_CLOUD_EXTENSIONS) and declared
+  // by the closed Takosumi Cloud delta, so a fully-bound OSS env passes without
+  // any TAKOSUMI_CLOUD_* extension binding present.
   const env = fullEnv();
-  delete env.TAKOSUMI_CLOUD_AI_GATEWAY;
-  delete env.TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT;
-
+  expect("TAKOSUMI_CLOUD_AI_GATEWAY" in env).toBe(false);
   expect(checkPlatformBindings(env).ok).toBe(true);
   expect(
-    checkPlatformBindings(env, { requireCloudExtensions: true }),
-  ).toEqual({
-    ok: false,
-    missing: [
-      "TAKOSUMI_CLOUD_AI_GATEWAY",
-      "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
-    ],
-  });
+    (REQUIRED_PLATFORM_BINDINGS as Record<string, unknown>).cloudExtensions,
+  ).toBeUndefined();
 });
