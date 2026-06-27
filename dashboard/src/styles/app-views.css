@@ -75,13 +75,40 @@
 .av-cloud-res-group-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--tg-s-2);
   font-weight: 700;
+}
+.av-cloud-res-group-title {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--tg-s-2);
 }
 .av-cloud-res-id {
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-xs);
   overflow-wrap: anywhere;
+}
+.av-cloud-res-more {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
+  font: inherit;
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+  cursor: pointer;
+}
+.av-cloud-res-more:hover {
+  color: var(--tg-fg);
+  border-color: var(--tg-line-strong);
 }
 .av-cloud-grid {
   display: grid;
@@ -242,6 +269,15 @@
 }
 
 @media (max-width: 640px) {
+  .av-cloud-res-group-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .av-cloud-res-group-head .tg-btn {
+    width: 100%;
+  }
+
   .av-cloud-endpoint {
     grid-template-columns: 1fr;
     align-items: stretch;

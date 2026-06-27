@@ -383,6 +383,24 @@ test("parseStripeUsageInvoiceItemPrices rejects internal Workers for Platforms m
     TypeError,
     "customer-facing managed resource",
   );
+  assertThrows(
+    () =>
+      parseStripeUsageInvoiceItemPrices(
+        JSON.stringify([
+          {
+            meter: "cloudflare.workers_script",
+            unit: "requests",
+            unitAmount: 4,
+            currency: "usd",
+            metadata: {
+              backend: "cloudflare.workers_for_platforms",
+            },
+          },
+        ]),
+      ),
+    TypeError,
+    "must not expose the internal Workers for Platforms backend",
+  );
 });
 
 test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers script usage", async () => {

@@ -955,6 +955,9 @@ export const ja = {
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "名前",
+  "cloudResources.inventory.showAll": "{count} 件すべて表示",
+  "cloudResources.inventory.showLess": "折りたたむ",
+  "cloudResources.inventory.remaining": "ほか {count} 件を表示",
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",
