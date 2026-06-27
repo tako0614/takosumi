@@ -171,6 +171,14 @@ x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
 ```
 
+Cloudflare Compatibility Gateway / managed resource backend は、Workers
+script/route 実行や KV/R2/D1 などの managed resource 使用量を
+`gateway_compute` または `gateway_storage_gb_hour` として報告します。例:
+
+```http
+x-takosumi-cloud-usage-meters: [{"meterId":"workers:script:api:request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+```
+
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
 正本入力にします。Cloudflare AI Gateway / Workers AI の上流請求は operator の
 Cloudflare account に来ますが、それだけでは Takosumi ユーザーへの請求完了を
@@ -258,11 +266,15 @@ GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 - WAF / Rulesets
 - Zero Trust
 - Account IAM
-- billing
+- Cloudflare billing API
 - registrar
 - load balancer
 - email routing
 - Turnstile
+
+Cloudflare billing API は互換対象外です。一方で Takosumi Cloud が提供する
+managed resources の使用量は Cloudflare billing API ではなく、上記の
+Workspace usage ledger へ記録する必要があります。
 
 ## OpenTofu provider usage
 

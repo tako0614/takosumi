@@ -59,6 +59,9 @@ export interface CloudExtensionSmokeOptions {
   readonly requireAiUsageLedger: boolean;
   readonly aiServiceInstallationId?: string;
   readonly aiUsageWorkspaceId?: string;
+  readonly requireCloudflareCompatUsageLedger: boolean;
+  readonly cloudflareCompatUsageWorkspaceId?: string;
+  readonly cloudflareCompatUsageInstallationId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -90,6 +93,9 @@ export interface CloudExtensionSmokeResult {
   readonly requireAiUsageLedger: boolean;
   readonly aiServiceInstallationId?: string;
   readonly aiUsageWorkspaceId?: string;
+  readonly requireCloudflareCompatUsageLedger: boolean;
+  readonly cloudflareCompatUsageWorkspaceId?: string;
+  readonly cloudflareCompatUsageInstallationId?: string;
   readonly platformVersion?: string;
   readonly extensionVersions?: {
     readonly aiGateway?: string;
@@ -115,6 +121,9 @@ interface CliArgs {
   readonly requireAiUsageLedger?: boolean;
   readonly aiServiceInstallationId?: string;
   readonly aiUsageWorkspaceId?: string;
+  readonly requireCloudflareCompatUsageLedger?: boolean;
+  readonly cloudflareCompatUsageWorkspaceId?: string;
+  readonly cloudflareCompatUsageInstallationId?: string;
   readonly platformVersion?: string;
   readonly aiGatewayVersion?: string;
   readonly cloudflareCompatVersion?: string;
@@ -187,6 +196,16 @@ export async function resolveOptions(
       aiUsageWorkspaceId: optionalString(
         args.aiUsageWorkspaceId ?? env.TAKOSUMI_AI_USAGE_WORKSPACE_ID,
       ),
+      requireCloudflareCompatUsageLedger:
+        args.requireCloudflareCompatUsageLedger === true,
+      cloudflareCompatUsageWorkspaceId: optionalString(
+        args.cloudflareCompatUsageWorkspaceId ??
+          env.TAKOSUMI_CLOUDFLARE_COMPAT_USAGE_WORKSPACE_ID,
+      ),
+      cloudflareCompatUsageInstallationId: optionalString(
+        args.cloudflareCompatUsageInstallationId ??
+          env.TAKOSUMI_CLOUDFLARE_COMPAT_USAGE_INSTALLATION_ID,
+      ),
       platformVersion: optionalString(args.platformVersion),
       aiGatewayVersion: optionalString(args.aiGatewayVersion),
       cloudflareCompatVersion: optionalString(args.cloudflareCompatVersion),
@@ -222,6 +241,16 @@ export async function resolveOptions(
     ),
     aiUsageWorkspaceId: optionalString(
       args.aiUsageWorkspaceId ?? env.TAKOSUMI_AI_USAGE_WORKSPACE_ID,
+    ),
+    requireCloudflareCompatUsageLedger:
+      args.requireCloudflareCompatUsageLedger === true,
+    cloudflareCompatUsageWorkspaceId: optionalString(
+      args.cloudflareCompatUsageWorkspaceId ??
+        env.TAKOSUMI_CLOUDFLARE_COMPAT_USAGE_WORKSPACE_ID,
+    ),
+    cloudflareCompatUsageInstallationId: optionalString(
+      args.cloudflareCompatUsageInstallationId ??
+        env.TAKOSUMI_CLOUDFLARE_COMPAT_USAGE_INSTALLATION_ID,
     ),
     platformVersion: optionalString(args.platformVersion),
     aiGatewayVersion: optionalString(args.aiGatewayVersion),
@@ -390,6 +419,18 @@ export async function runCloudExtensionSmoke(
       ),
     );
   }
+  const cloudflareCompatUsageStartedAt = new Date().toISOString();
+  const cloudflareCompatUsageBefore = options.cloudflareCompatUsageWorkspaceId
+    ? await cloudflareCompatUsageLedgerSnapshot(
+        fetchImpl,
+        options,
+        authHeaders,
+        {
+          workspaceId: options.cloudflareCompatUsageWorkspaceId,
+          installationId: options.cloudflareCompatUsageInstallationId,
+        },
+      )
+    : undefined;
   checks.push(
     await requestCheck(fetchImpl, options, {
       name: "cloudflareCompatVerifyAuth",
@@ -500,11 +541,27 @@ export async function runCloudExtensionSmoke(
       await cloudflareCompatProviderE2ECheck(options, providerE2eRunner),
     );
   }
+  if (
+    options.requireCloudflareCompatUsageLedger ||
+    options.cloudflareCompatUsageWorkspaceId
+  ) {
+    checks.push(
+      await cloudflareCompatUsageLedgerCheck(
+        fetchImpl,
+        options,
+        authHeaders,
+        cloudflareCompatUsageStartedAt,
+        cloudflareCompatUsageBefore,
+      ),
+    );
+  }
   const gaps = cloudExtensionGaps(checks, {
     requireAiUpstreamProfile: options.requireAiUpstreamProfile,
     requireAiCloudflareUnifiedBillingProfile:
       options.requireAiCloudflareUnifiedBillingProfile,
     requireAiUsageLedger: options.requireAiUsageLedger,
+    requireCloudflareCompatUsageLedger:
+      options.requireCloudflareCompatUsageLedger,
   });
   const gaReady = checks.every((check) => check.ok) && gaps.length === 0;
   const status =
@@ -529,6 +586,11 @@ export async function runCloudExtensionSmoke(
     requireAiUsageLedger: options.requireAiUsageLedger,
     aiServiceInstallationId: options.aiServiceInstallationId,
     aiUsageWorkspaceId: options.aiUsageWorkspaceId,
+    requireCloudflareCompatUsageLedger:
+      options.requireCloudflareCompatUsageLedger,
+    cloudflareCompatUsageWorkspaceId: options.cloudflareCompatUsageWorkspaceId,
+    cloudflareCompatUsageInstallationId:
+      options.cloudflareCompatUsageInstallationId,
     platformVersion: options.platformVersion,
     extensionVersions:
       options.aiGatewayVersion || options.cloudflareCompatVersion
@@ -870,7 +932,7 @@ async function aiServiceGraphTokenCheck(
   }
 }
 
-interface AiUsageLedgerSnapshot {
+interface UsageLedgerSnapshot {
   readonly ok: boolean;
   readonly status: number;
   readonly eventCount: number;
@@ -879,9 +941,186 @@ interface AiUsageLedgerSnapshot {
   readonly matchingEvents: readonly Record<string, unknown>[];
 }
 
-interface AiUsageLedgerProof extends AiUsageLedgerSnapshot {
+interface AiUsageLedgerProof extends UsageLedgerSnapshot {
   readonly aiUsageRecorded: boolean;
   readonly attempts: number;
+}
+
+interface CloudflareCompatUsageLedgerProof extends UsageLedgerSnapshot {
+  readonly cloudflareCompatUsageRecorded: boolean;
+  readonly attempts: number;
+}
+
+async function cloudflareCompatUsageLedgerCheck(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  startedAt: string,
+  before: UsageLedgerSnapshot | undefined,
+): Promise<CloudExtensionSmokeCheck> {
+  const workspaceId = options.cloudflareCompatUsageWorkspaceId;
+  const expected =
+    "Cloudflare Compatibility Gateway usage records a gateway_* resource_meter event in the target Workspace usage ledger";
+  if (!workspaceId) {
+    return syntheticCheck({
+      name: "cloudflareCompatUsageLedger",
+      method: "GET",
+      path: "/api/v1/workspaces/<workspace-id>/usage",
+      expected,
+      summary: { errorCode: "cloudflare_compat_usage_workspace_id_required" },
+    });
+  }
+  try {
+    const beforeSnapshot =
+      before ??
+      (await cloudflareCompatUsageLedgerSnapshot(
+        fetchImpl,
+        options,
+        ownerAuthHeaders,
+        {
+          workspaceId,
+          installationId: options.cloudflareCompatUsageInstallationId,
+        },
+      ));
+    const proof = await waitForCloudflareCompatUsageLedgerProof(
+      fetchImpl,
+      options,
+      ownerAuthHeaders,
+      {
+        workspaceId,
+        installationId: options.cloudflareCompatUsageInstallationId,
+        startedAt,
+        before: beforeSnapshot,
+      },
+    );
+    const ok =
+      !options.requireCloudflareCompatUsageLedger ||
+      proof.cloudflareCompatUsageRecorded;
+    const errorCode = cloudflareCompatUsageProofErrorCode(proof);
+    return {
+      name: "cloudflareCompatUsageLedger",
+      method: "GET",
+      path: cloudflareCompatUsageLedgerPath(workspaceId),
+      status: ok ? 200 : 500,
+      ok,
+      expected,
+      summary: {
+        cloudflareCompatUsageWorkspaceId: workspaceId,
+        cloudflareCompatUsageInstallationId:
+          options.cloudflareCompatUsageInstallationId ?? null,
+        usageLedgerChecked: true,
+        cloudflareCompatUsageRecorded: proof.cloudflareCompatUsageRecorded,
+        usageBeforeStatus: beforeSnapshot.status,
+        usageAfterStatus: proof.status,
+        usageEventsBefore: beforeSnapshot.eventCount,
+        usageEventsAfter: proof.eventCount,
+        matchingCloudflareCompatUsageEventsAfter: proof.matchingEventCount,
+        attempts: proof.attempts,
+        ...(errorCode ? { errorCode } : {}),
+      },
+    };
+  } catch (error) {
+    return {
+      name: "cloudflareCompatUsageLedger",
+      method: "GET",
+      path: cloudflareCompatUsageLedgerPath(workspaceId),
+      status: 500,
+      ok: false,
+      expected,
+      summary: {
+        cloudflareCompatUsageWorkspaceId: workspaceId,
+        cloudflareCompatUsageInstallationId:
+          options.cloudflareCompatUsageInstallationId ?? null,
+        errorCode: "cloudflare_compat_usage_ledger_unavailable",
+        errorClass:
+          error instanceof Error ? error.name || "Error" : typeof error,
+        message: sanitizeErrorMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      },
+    };
+  }
+}
+
+async function waitForCloudflareCompatUsageLedgerProof(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  input: {
+    readonly workspaceId: string;
+    readonly installationId?: string;
+    readonly startedAt: string;
+    readonly before: UsageLedgerSnapshot;
+  },
+): Promise<CloudflareCompatUsageLedgerProof> {
+  const beforeKeys = new Set(input.before.matchingEventKeys);
+  let last: UsageLedgerSnapshot = input.before;
+  const startedAtMs = Date.parse(input.startedAt);
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const current = await cloudflareCompatUsageLedgerSnapshot(
+      fetchImpl,
+      options,
+      ownerAuthHeaders,
+      input,
+    );
+    last = current;
+    const cloudflareCompatUsageRecorded =
+      current.ok &&
+      current.matchingEvents.some((event) => {
+        if (beforeKeys.has(usageEventKey(event))) return false;
+        const createdAt = usageEventCreatedAtMs(event);
+        return createdAt === undefined || createdAt >= startedAtMs;
+      });
+    if (cloudflareCompatUsageRecorded) {
+      return {
+        ...current,
+        cloudflareCompatUsageRecorded: true,
+        attempts: attempt,
+      };
+    }
+    if (!current.ok) {
+      return {
+        ...current,
+        cloudflareCompatUsageRecorded: false,
+        attempts: attempt,
+      };
+    }
+    if (attempt < 6) await sleep(250);
+  }
+  return {
+    ...last,
+    cloudflareCompatUsageRecorded: false,
+    attempts: 6,
+  };
+}
+
+async function cloudflareCompatUsageLedgerSnapshot(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+  ownerAuthHeaders: Record<string, string>,
+  input: { readonly workspaceId: string; readonly installationId?: string },
+): Promise<UsageLedgerSnapshot> {
+  const response = await fetchImpl(
+    `${options.url}${cloudflareCompatUsageLedgerPath(input.workspaceId)}`,
+    { headers: ownerAuthHeaders },
+  );
+  const body = await readJson(response);
+  const events = usageEvents(body);
+  const matchingEvents = events.filter((event) =>
+    cloudflareCompatUsageEventMatches(event, input.installationId),
+  );
+  return {
+    ok: response.status === 200,
+    status: response.status,
+    eventCount: events.length,
+    matchingEventCount: matchingEvents.length,
+    matchingEventKeys: matchingEvents.map(usageEventKey),
+    matchingEvents,
+  };
+}
+
+function cloudflareCompatUsageLedgerPath(workspaceId: string): string {
+  return `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/usage`;
 }
 
 async function waitForAiUsageLedgerProof(
@@ -892,11 +1131,11 @@ async function waitForAiUsageLedgerProof(
     readonly workspaceId: string;
     readonly installationId: string;
     readonly startedAt: string;
-    readonly before: AiUsageLedgerSnapshot;
+    readonly before: UsageLedgerSnapshot;
   },
 ): Promise<AiUsageLedgerProof> {
   const beforeKeys = new Set(input.before.matchingEventKeys);
-  let last: AiUsageLedgerSnapshot = input.before;
+  let last: UsageLedgerSnapshot = input.before;
   const startedAtMs = Date.parse(input.startedAt);
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     const current = await aiUsageLedgerSnapshot(
@@ -909,7 +1148,7 @@ async function waitForAiUsageLedgerProof(
     const aiUsageRecorded =
       current.ok &&
       current.matchingEvents.some((event) => {
-        if (beforeKeys.has(aiUsageEventKey(event))) return false;
+        if (beforeKeys.has(usageEventKey(event))) return false;
         const createdAt = usageEventCreatedAtMs(event);
         return createdAt === undefined || createdAt >= startedAtMs;
       });
@@ -929,7 +1168,7 @@ async function aiUsageLedgerSnapshot(
   options: CloudExtensionSmokeOptions,
   ownerAuthHeaders: Record<string, string>,
   input: { readonly workspaceId: string; readonly installationId: string },
-): Promise<AiUsageLedgerSnapshot> {
+): Promise<UsageLedgerSnapshot> {
   const response = await fetchImpl(
     `${options.url}${aiUsageLedgerPath(input.workspaceId)}`,
     { headers: ownerAuthHeaders },
@@ -944,7 +1183,7 @@ async function aiUsageLedgerSnapshot(
     status: response.status,
     eventCount: events.length,
     matchingEventCount: matchingEvents.length,
-    matchingEventKeys: matchingEvents.map(aiUsageEventKey),
+    matchingEventKeys: matchingEvents.map(usageEventKey),
     matchingEvents,
   };
 }
@@ -971,7 +1210,21 @@ function aiUsageEventMatches(
   );
 }
 
-function aiUsageEventKey(event: Record<string, unknown>): string {
+function cloudflareCompatUsageEventMatches(
+  event: Record<string, unknown>,
+  installationId: string | undefined,
+): boolean {
+  const kind = stringValue(event.kind);
+  const eventInstallationId =
+    stringValue(event.installationId) ?? stringValue(event.installation_id);
+  return (
+    stringValue(event.source) === "resource_meter" &&
+    (kind === "gateway_compute" || kind === "gateway_storage_gb_hour") &&
+    (!installationId || eventInstallationId === installationId)
+  );
+}
+
+function usageEventKey(event: Record<string, unknown>): string {
   return (
     stringValue(event.id) ??
     stringValue(event.idempotencyKey) ??
@@ -1002,6 +1255,16 @@ function aiUsageProofErrorCode(
   if (!proof) return undefined;
   if (proof.status !== 200) return "ai_usage_ledger_unavailable";
   if (!proof.aiUsageRecorded) return "ai_usage_ledger_not_recorded";
+  return undefined;
+}
+
+function cloudflareCompatUsageProofErrorCode(
+  proof: CloudflareCompatUsageLedgerProof,
+): string | undefined {
+  if (proof.status !== 200) return "cloudflare_compat_usage_ledger_unavailable";
+  if (!proof.cloudflareCompatUsageRecorded) {
+    return "cloudflare_compat_usage_ledger_not_recorded";
+  }
   return undefined;
 }
 
@@ -1070,6 +1333,7 @@ function cloudExtensionGaps(
     readonly requireAiUpstreamProfile?: boolean;
     readonly requireAiCloudflareUnifiedBillingProfile?: boolean;
     readonly requireAiUsageLedger?: boolean;
+    readonly requireCloudflareCompatUsageLedger?: boolean;
   } = {},
 ): string[] {
   const gaps: string[] = [];
@@ -1184,6 +1448,31 @@ function cloudExtensionGaps(
         gaps.push(providerE2EGap(`${resource.resource}_rest`));
       }
     }
+  }
+  const cloudflareCompatUsageLedger = checks.find(
+    (check) => check.name === "cloudflareCompatUsageLedger",
+  );
+  if (
+    options.requireCloudflareCompatUsageLedger === true &&
+    cloudflareCompatUsageLedger?.summary.errorCode ===
+      "cloudflare_compat_usage_workspace_id_required"
+  ) {
+    gaps.push("cloudflare_compat_usage_workspace_id_required");
+  } else if (
+    options.requireCloudflareCompatUsageLedger === true &&
+    cloudflareCompatUsageLedger?.summary.errorCode ===
+      "cloudflare_compat_usage_ledger_unavailable"
+  ) {
+    gaps.push("cloudflare_compat_usage_ledger_unavailable");
+  } else if (
+    options.requireCloudflareCompatUsageLedger === true &&
+    (cloudflareCompatUsageLedger?.summary.errorCode ===
+      "cloudflare_compat_usage_ledger_not_recorded" ||
+      (cloudflareCompatUsageLedger &&
+        cloudflareCompatUsageLedger.summary.cloudflareCompatUsageRecorded !==
+          true))
+  ) {
+    gaps.push("cloudflare_compat_usage_ledger_not_recorded");
   }
   return [...new Set(gaps)];
 }
@@ -2700,6 +2989,7 @@ async function runSelfTest(): Promise<void> {
     requireAiCloudflareUnifiedBillingProfile: false,
     requireAiServiceGraphToken: false,
     requireAiUsageLedger: false,
+    requireCloudflareCompatUsageLedger: false,
   };
   const result = await runCloudExtensionSmoke(options, async (url, init) => {
     const parsed = new URL(url);
@@ -2954,6 +3244,12 @@ Options:
   --ai-service-installation-id <id>    installation projection id used for Service Graph runtime-token rotation
   --require-ai-usage-ledger            fail unless the AI Gateway call records an ai_request usage event
   --ai-usage-workspace-id <id>         workspace id whose usage ledger should record AI Gateway usage
+  --require-cloudflare-compat-usage-ledger
+                                      fail unless Cloudflare Compatibility records gateway_* usage
+  --cloudflare-compat-usage-workspace-id <id>
+                                      workspace id whose usage ledger should record compat usage
+  --cloudflare-compat-usage-installation-id <id>
+                                      optional installation id expected on compat usage events
   --platform-version <id>              include deployed platform version id in evidence
   --ai-gateway-version <id>            include deployed AI gateway worker version id in evidence
   --cloudflare-compat-version <id>     include deployed Cloudflare compat worker version id in evidence

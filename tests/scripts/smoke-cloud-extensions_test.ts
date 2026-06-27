@@ -18,6 +18,7 @@ const BASE_OPTIONS: CloudExtensionSmokeOptions = {
   requireAiCloudflareUnifiedBillingProfile: false,
   requireAiServiceGraphToken: false,
   requireAiUsageLedger: false,
+  requireCloudflareCompatUsageLedger: false,
 };
 
 const PROVIDER_E2E_RESOURCES = [
@@ -106,6 +107,111 @@ test("cloud extension smoke strict mode passes when compat lifecycle works", asy
     )?.status,
   ).toBe(201);
   expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
+});
+
+test("cloud extension smoke can require Cloudflare compat usage ledger evidence", async () => {
+  let usageReads = 0;
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireProviderE2E: true,
+      requireCloudflareCompatUsageLedger: true,
+      cloudflareCompatUsageWorkspaceId: "space_compat_runtime",
+      cloudflareCompatUsageInstallationId: "inst_compat_runtime",
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/workspaces/space_compat_runtime/usage") {
+        usageReads += 1;
+        return json({
+          usageEvents:
+            usageReads === 1
+              ? []
+              : [
+                  {
+                    id: "usage_compat_runtime_1",
+                    spaceId: "space_compat_runtime",
+                    installationId: "inst_compat_runtime",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                    credits: 2,
+                    source: "resource_meter",
+                    idempotencyKey:
+                      "provider-runtime:space_compat_runtime:compat",
+                    createdAt: "2999-01-01T00:00:00.000Z",
+                  },
+                ],
+        });
+      }
+      const parsedMethod = init?.method ?? "GET";
+      return responseForImplementedCompat(
+        parsed.pathname,
+        parsedMethod,
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+    async () => ({
+      status: 200,
+      ok: true,
+      summary: {
+        resources: successfulProviderResources(),
+        completedResources: [...PROVIDER_E2E_RESOURCES],
+        failedResources: [],
+      },
+    }),
+  );
+
+  expect(result.status).toBe("passed");
+  expect(result.gaReady).toBe(true);
+  expect(result.gaps).toEqual([]);
+  expect(usageReads).toBeGreaterThanOrEqual(2);
+  expect(
+    result.checks.find((check) => check.name === "cloudflareCompatUsageLedger")
+      ?.summary,
+  ).toMatchObject({
+    cloudflareCompatUsageWorkspaceId: "space_compat_runtime",
+    cloudflareCompatUsageInstallationId: "inst_compat_runtime",
+    usageLedgerChecked: true,
+    cloudflareCompatUsageRecorded: true,
+    usageEventsBefore: 0,
+    usageEventsAfter: 1,
+    matchingCloudflareCompatUsageEventsAfter: 1,
+  });
+  expect(JSON.stringify(result)).not.toContain(BASE_OPTIONS.sessionToken);
+});
+
+test("cloud extension smoke fails strict Cloudflare compat usage ledger mode without a workspace id", async () => {
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireCloudflareCompatUsageLedger: true,
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain(
+    "cloudflare_compat_usage_workspace_id_required",
+  );
+  expect(result.gaps).not.toContain(
+    "cloudflare_compat_usage_ledger_not_recorded",
+  );
 });
 
 test("cloud extension smoke fails readiness when AI Gateway only has Workers AI fallback", async () => {

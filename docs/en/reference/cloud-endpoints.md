@@ -174,6 +174,14 @@ x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
 ```
 
+The Cloudflare Compatibility Gateway / managed resource backend reports Workers
+script/route execution and KV/R2/D1 managed resource usage as
+`gateway_compute` or `gateway_storage_gb_hour`. Example:
+
+```http
+x-takosumi-cloud-usage-meters: [{"meterId":"workers:script:api:request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+```
+
 This ledger is the source input for billing reconciliation and Stripe invoices.
 Upstream Cloudflare AI Gateway / Workers AI charges still land on the
 operator's Cloudflare account; that alone does not mean the Takosumi customer
@@ -261,11 +269,15 @@ Not in the initial target:
 - WAF / Rulesets
 - Zero Trust
 - account IAM
-- billing
+- Cloudflare billing API
 - registrar
 - load balancer
 - email routing
 - Turnstile
+
+Cloudflare billing API compatibility is out of scope. Takosumi Cloud managed
+resource usage must be recorded through the Workspace usage ledger above, not by
+proxying Cloudflare's billing API.
 
 ## OpenTofu provider usage
 

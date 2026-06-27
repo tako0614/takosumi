@@ -1382,6 +1382,83 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
   ]);
 });
 
+test("Cloudflare Compatibility Gateway route records reported managed resource usage", async () => {
+  const route = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!route) throw new Error("Cloudflare compat route missing");
+  const usageCalls: {
+    spaceId: string;
+    input: Parameters<
+      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
+    >[1];
+  }[] = [];
+  const usageOps: PlatformCloudExtensionUsageOperations = {
+    recordGatewayResourceUsage: async (spaceId, input) => {
+      usageCalls.push({ spaceId, input });
+      return { usageEvents: [{ id: "usage_cf_1" }] };
+    },
+  };
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/storage/kv/namespaces",
+    ),
+    {
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async () =>
+          Response.json(
+            { success: true, result: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
+                  "space_cf_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "cloudflare:kv:list",
+                    installationId: "inst_cf_compat",
+                    kind: "gateway_storage_gb_hour",
+                    quantity: 0.25,
+                    credits: 1,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    usageOps,
+  );
+
+  expect(response.status).toBe(200);
+  expect(
+    response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
+  ).toBe(null);
+  expect(usageCalls).toEqual([
+    {
+      spaceId: "space_cf_usage",
+      input: {
+        periodStart: "2026-06-26T13:00:00.000Z",
+        periodEnd: "2026-06-26T13:01:00.000Z",
+        meters: [
+          {
+            meterId: "cloudflare:kv:list",
+            installationId: "inst_cf_compat",
+            kind: "gateway_storage_gb_hour",
+            quantity: 0.25,
+            credits: 1,
+          },
+        ],
+      },
+    },
+  ]);
+});
+
 test("Cloud extension route fails closed when reported usage cannot be recorded", async () => {
   const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
   if (!route) throw new Error("AI Gateway route missing");
