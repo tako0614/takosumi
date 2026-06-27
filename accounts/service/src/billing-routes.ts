@@ -1,4 +1,8 @@
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  canonicalJson,
+  type TakosumiSubject,
+} from "@takosjp/takosumi-accounts-contract";
+import type { UsageEvent } from "takosumi-contract/billing";
 import {
   createStripeBillingPortalSession,
   createStripeCheckoutSession,
@@ -12,7 +16,7 @@ import {
   findBillingPlan,
   parseBillingPlans,
 } from "./billing-plans.ts";
-import type { AccountsStore } from "./store.ts";
+import type { AccountsStore, BillingUsageRecord } from "./store.ts";
 import {
   canAccessSpace,
   type ControlPlaneOperations,
@@ -29,6 +33,7 @@ import {
 } from "./http-helpers.ts";
 import { readEnvVar } from "./read-env.ts";
 import { consoleErrorRedacted } from "./redacted-log.ts";
+import { sha256HexText } from "./encoding.ts";
 
 export async function handleStripeCheckoutRequest(input: {
   request: Request;
@@ -274,9 +279,6 @@ export async function handleStripeUsageInvoiceItemsSyncRequest(input: {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const billingAccountId = stringValue(body.billingAccountId);
-  if (!billingAccountId) {
-    return errorJson("invalid_request", "billingAccountId is required", 400);
-  }
   const windowStart = optionalTimestampBodyValue(body.windowStart);
   const windowEnd = optionalTimestampBodyValue(body.windowEnd);
   const lateArrivalAcceptedUntil = optionalTimestampBodyValue(
@@ -304,28 +306,63 @@ export async function handleStripeUsageInvoiceItemsSyncRequest(input: {
       400,
     );
   }
-
   try {
-    const result = await createStripeUsageInvoiceItemsForBillingAccount({
-      store: input.store,
-      secretKey: input.stripe.secretKey,
-      billingAccountId,
-      prices: input.prices,
-      policy: {
-        ...(windowStart === undefined ? {} : { windowStart }),
-        ...(windowEnd === undefined ? {} : { windowEnd }),
-        ...(lateArrivalAcceptedUntil === undefined
-          ? {}
-          : { lateArrivalAcceptedUntil }),
-      },
-      ...(metadata === undefined ? {} : { metadata }),
-      fetch: input.stripe.fetch,
-      stripeApiBase: input.stripe.stripeApiBase,
-    });
+    const importedUsageReports =
+      body.usageEvents === undefined
+        ? []
+        : await importBillingUsageRecordsFromUsageEvents({
+            store: input.store,
+            value: body.usageEvents,
+          });
+    const importedBillingAccountIds = [
+      ...new Set(importedUsageReports.map((record) => record.billingAccountId)),
+    ].sort();
+    const billingAccountIds = billingAccountId
+      ? [billingAccountId]
+      : importedBillingAccountIds;
+    if (billingAccountIds.length === 0) {
+      return errorJson(
+        "invalid_request",
+        "billingAccountId or usageEvents is required",
+        400,
+      );
+    }
+    const results = [];
+    for (const targetBillingAccountId of billingAccountIds) {
+      results.push(
+        await createStripeUsageInvoiceItemsForBillingAccount({
+          store: input.store,
+          secretKey: input.stripe.secretKey,
+          billingAccountId: targetBillingAccountId,
+          prices: input.prices,
+          policy: {
+            ...(windowStart === undefined ? {} : { windowStart }),
+            ...(windowEnd === undefined ? {} : { windowEnd }),
+            ...(lateArrivalAcceptedUntil === undefined
+              ? {}
+              : { lateArrivalAcceptedUntil }),
+          },
+          ...(metadata === undefined ? {} : { metadata }),
+          fetch: input.stripe.fetch,
+          stripeApiBase: input.stripe.stripeApiBase,
+        }),
+      );
+    }
+    if (body.usageEvents === undefined && results.length === 1) {
+      const [result] = results;
+      return json({
+        billing_account_id: result.billingAccountId,
+        stripe_customer_id: result.stripeCustomerId,
+        exported: result.exported.map(serializeStripeUsageInvoiceItemExport),
+      });
+    }
     return json({
-      billing_account_id: result.billingAccountId,
-      stripe_customer_id: result.stripeCustomerId,
-      exported: result.exported.map(serializeStripeUsageInvoiceItemExport),
+      imported_usage_report_count: importedUsageReports.length,
+      billing_accounts: results.map((result) => ({
+        billing_account_id: result.billingAccountId,
+        stripe_customer_id: result.stripeCustomerId,
+        exported: result.exported.map(serializeStripeUsageInvoiceItemExport),
+      })),
     });
   } catch (error) {
     consoleErrorRedacted("stripe_usage_invoice_item_sync_failed", error);
@@ -340,6 +377,206 @@ export async function handleStripeUsageInvoiceItemsSyncRequest(input: {
   }
 }
 
+async function importBillingUsageRecordsFromUsageEvents(input: {
+  store: AccountsStore;
+  value: unknown;
+}): Promise<readonly BillingUsageRecord[]> {
+  if (!Array.isArray(input.value)) {
+    throw new TypeError("usageEvents must be an array");
+  }
+  const imported: BillingUsageRecord[] = [];
+  for (const value of input.value) {
+    const event = usageEventFromValue(value);
+    const record = await billingUsageRecordFromUsageEvent(input.store, event);
+    const existing = await input.store.findBillingUsageRecord(
+      record.usageReportId,
+    );
+    if (existing) {
+      if (
+        existing.installationId !== record.installationId ||
+        existing.billingAccountId !== record.billingAccountId ||
+        existing.requestDigest !== record.requestDigest
+      ) {
+        throw new TypeError("usage event was already imported differently");
+      }
+      imported.push(existing);
+      continue;
+    }
+    await input.store.saveBillingUsageRecord(record);
+    imported.push(record);
+  }
+  return imported;
+}
+
+async function billingUsageRecordFromUsageEvent(
+  store: AccountsStore,
+  event: UsageEvent,
+): Promise<BillingUsageRecord> {
+  if (event.source !== "resource_meter") {
+    throw new TypeError("usage event source is not billable");
+  }
+  if (!event.installationId) {
+    throw new TypeError("usage event installationId is required for billing");
+  }
+  if (!event.resourceFamily) {
+    throw new TypeError("usage event resourceFamily is required for billing");
+  }
+  const installation = await store.findAppInstallation(event.installationId);
+  if (!installation) {
+    throw new TypeError("usage event installation was not found");
+  }
+  if (installation.status !== "ready") {
+    throw new TypeError("usage event installation is not ready");
+  }
+  if (!installation.billingAccountId) {
+    throw new TypeError("usage event installation has no billing account");
+  }
+  const unit = billingUsageUnitFromUsageEvent(event);
+  const usageReportId = await billingUsageReportIdFromUsageEvent(event);
+  const metadata = {
+    usageEventId: event.id,
+    meterId: event.meterId ?? null,
+    resourceFamily: event.resourceFamily,
+    resourceId: event.resourceId ?? null,
+    operation: event.operation ?? null,
+    kind: event.kind,
+    source: event.source,
+    ...(event.resourceMetadata
+      ? { resourceMetadata: event.resourceMetadata }
+      : {}),
+  };
+  const reportedAt = Date.parse(event.createdAt);
+  if (!Number.isFinite(reportedAt)) {
+    throw new TypeError("usage event createdAt is invalid");
+  }
+  return {
+    usageReportId,
+    installationId: event.installationId,
+    billingAccountId: installation.billingAccountId,
+    meter: event.resourceFamily,
+    quantity: event.quantity,
+    unit,
+    idempotencyKey: event.idempotencyKey,
+    requestDigest: await sha256HexText(
+      canonicalJson({
+        usageReportId,
+        billingAccountId: installation.billingAccountId,
+        meter: event.resourceFamily,
+        quantity: event.quantity,
+        unit,
+        idempotencyKey: event.idempotencyKey,
+        metadata,
+      }),
+    ),
+    metadata,
+    reportedAt,
+  };
+}
+
+function usageEventFromValue(value: unknown): UsageEvent {
+  if (!isRecord(value)) throw new TypeError("usageEvent must be an object");
+  const id = stringValue(value.id);
+  const spaceId = stringValue(value.spaceId) ?? stringValue(value.space_id);
+  const installationId =
+    stringValue(value.installationId) ?? stringValue(value.installation_id);
+  const meterId = stringValue(value.meterId) ?? stringValue(value.meter_id);
+  const resourceFamily =
+    stringValue(value.resourceFamily) ?? stringValue(value.resource_family);
+  const resourceId =
+    stringValue(value.resourceId) ?? stringValue(value.resource_id);
+  const operation = stringValue(value.operation);
+  const kind = stringValue(value.kind);
+  const source = stringValue(value.source);
+  const idempotencyKey =
+    stringValue(value.idempotencyKey) ?? stringValue(value.idempotency_key);
+  const createdAt =
+    stringValue(value.createdAt) ?? stringValue(value.created_at);
+  const quantity = positiveNumberBodyValue(value.quantity);
+  const credits = nonNegativeNumberBodyValue(value.credits);
+  const resourceMetadata =
+    value.resourceMetadata === undefined &&
+    value.resource_metadata === undefined
+      ? undefined
+      : usageEventResourceMetadata(
+          value.resourceMetadata ?? value.resource_metadata,
+        );
+  if (
+    !id ||
+    !spaceId ||
+    !kind ||
+    !source ||
+    !idempotencyKey ||
+    !createdAt ||
+    quantity === undefined ||
+    credits === undefined
+  ) {
+    throw new TypeError("usageEvent is missing required fields");
+  }
+  return {
+    id,
+    spaceId,
+    ...(installationId ? { installationId } : {}),
+    ...(meterId ? { meterId } : {}),
+    ...(resourceFamily ? { resourceFamily } : {}),
+    ...(resourceId ? { resourceId } : {}),
+    ...(operation ? { operation } : {}),
+    ...(resourceMetadata ? { resourceMetadata } : {}),
+    kind: kind as UsageEvent["kind"],
+    quantity,
+    credits,
+    source: source as UsageEvent["source"],
+    idempotencyKey,
+    createdAt,
+  };
+}
+
+function usageEventResourceMetadata(
+  value: unknown,
+): UsageEvent["resourceMetadata"] {
+  if (!isRecord(value)) {
+    throw new TypeError("usageEvent resourceMetadata must be an object");
+  }
+  const output: Record<string, string | number | boolean | null> = {};
+  for (const [key, metadataValue] of Object.entries(value)) {
+    if (
+      typeof metadataValue !== "string" &&
+      typeof metadataValue !== "number" &&
+      typeof metadataValue !== "boolean" &&
+      metadataValue !== null
+    ) {
+      throw new TypeError(
+        "usageEvent resourceMetadata values must be JSON scalars",
+      );
+    }
+    output[key] = metadataValue;
+  }
+  return output;
+}
+
+function billingUsageUnitFromUsageEvent(event: UsageEvent): string {
+  if (event.kind === "ai_request") return "requests";
+  if (event.operation === "request") return "requests";
+  if (event.operation === "deploy") return "deploys";
+  if (
+    event.operation === "storage_gb_hour" ||
+    event.kind === "gateway_storage_gb_hour"
+  ) {
+    return "gb_hours";
+  }
+  if (event.operation === "vcpu_second") return "vcpu_seconds";
+  if (event.operation && /^[a-z][a-z0-9_:-]{0,30}$/.test(event.operation)) {
+    return `${event.operation}s`;
+  }
+  throw new TypeError("usage event operation cannot be mapped to billing unit");
+}
+
+async function billingUsageReportIdFromUsageEvent(
+  event: UsageEvent,
+): Promise<string> {
+  const digest = await sha256HexText(`usage-event:${event.id}`);
+  return `usage_${digest.slice("sha256:".length)}`;
+}
+
 function resolveBillingPlans(
   configured: readonly BillingPlan[] | undefined,
 ): readonly BillingPlan[] {
@@ -352,6 +589,18 @@ function optionalTimestampBodyValue(
 ): number | undefined | "invalid" {
   if (value === undefined) return undefined;
   return numberValue(value) ?? "invalid";
+}
+
+function positiveNumberBodyValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonNegativeNumberBodyValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function optionalStringMetadata(

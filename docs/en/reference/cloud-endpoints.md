@@ -205,7 +205,11 @@ again. For Cloudflare Workers compatibility, the billing name remains
 Operators trigger Stripe usage invoice item sync through the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only
 route, not a customer API, and requires the
-`x-takosumi-billing-usage-sync-token` header. Configure
+`x-takosumi-billing-usage-sync-token` header. When the body includes
+`usageEvents`, the route imports them as `BillingUsageRecord` rows through the
+ready Installation projection's `billingAccountId` before creating Stripe
+invoice items, so the Cloud extension usage ledger stays connected to customer
+billing. Configure
 `TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` as a JSON array of meter / unit /
 unitAmount / currency mappings, for example:
 

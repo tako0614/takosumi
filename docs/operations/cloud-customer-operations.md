@@ -183,7 +183,10 @@ Usage-based Cloud resources need a separate Stripe invoice item price map. The
 Cloud extension records customer-facing usage into the Workspace usage ledger;
 then an operator job calls the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route with
-`x-takosumi-billing-usage-sync-token`. Configure
+`x-takosumi-billing-usage-sync-token`. The route can receive the recorded
+`usageEvents`, import them into Installation billing usage reports by
+`billingAccountId`, and then create Stripe invoice items from the unexported
+reports. Configure
 `TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` in the realized Worker config as a
 non-secret JSON array, for example:
 
