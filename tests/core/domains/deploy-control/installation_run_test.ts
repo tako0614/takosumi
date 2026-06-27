@@ -3482,6 +3482,114 @@ test("Gateway resource usage idempotency keeps distinct resource ids separate", 
   ]);
 });
 
+test("Gateway resource usage spends USD micros once when billing is enforced", async () => {
+  const { store, controller } = await seededController();
+  const space = await store.getSpace("space_test");
+  await store.putSpace({
+    ...space!,
+    billingSettings: {
+      mode: "enforce",
+      provider: "manual",
+      reservationRequired: true,
+    },
+  });
+  await store.putCreditBalance({
+    spaceId: "space_test",
+    availableUsdMicros: 1_500_000,
+    reservedUsdMicros: 0,
+    monthlyIncludedUsdMicros: 0,
+    purchasedUsdMicros: 1_500_000,
+    availableCredits: 1.5,
+    reservedCredits: 0,
+    monthlyIncludedCredits: 0,
+    purchasedCredits: 1.5,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const input = {
+    periodStart: "2026-06-07T00:00:00.000Z",
+    periodEnd: "2026-06-07T01:00:00.000Z",
+    meters: [
+      {
+        installationId: "inst_fixture",
+        kind: "ai_request" as const,
+        quantity: 1,
+        usdMicros: 250_000,
+        meterId: "ai:openai_compatible:chat",
+        resourceFamily: "cloudflare.ai_gateway",
+        resourceId: "gateway:default",
+        operation: "chat.completions",
+      },
+    ],
+  };
+
+  const first = await controller.recordGatewayResourceUsage(
+    "space_test",
+    input,
+  );
+  const second = await controller.recordGatewayResourceUsage(
+    "space_test",
+    input,
+  );
+
+  expect(second.usageEvents).toEqual(first.usageEvents);
+  expect(await store.listUsageEvents("space_test")).toHaveLength(1);
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 1_250_000,
+    availableCredits: 1.25,
+  });
+});
+
+test("Gateway resource usage fails closed without enough USD balance", async () => {
+  const { store, controller } = await seededController();
+  const space = await store.getSpace("space_test");
+  await store.putSpace({
+    ...space!,
+    billingSettings: {
+      mode: "enforce",
+      provider: "manual",
+      reservationRequired: true,
+    },
+  });
+  await store.putCreditBalance({
+    spaceId: "space_test",
+    availableUsdMicros: 100_000,
+    reservedUsdMicros: 0,
+    monthlyIncludedUsdMicros: 0,
+    purchasedUsdMicros: 100_000,
+    availableCredits: 0.1,
+    reservedCredits: 0,
+    monthlyIncludedCredits: 0,
+    purchasedCredits: 0.1,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.recordGatewayResourceUsage("space_test", {
+      periodStart: "2026-06-07T00:00:00.000Z",
+      periodEnd: "2026-06-07T01:00:00.000Z",
+      meters: [
+        {
+          installationId: "inst_fixture",
+          kind: "gateway_compute",
+          quantity: 1,
+          usdMicros: 250_000,
+          meterId: "cloudflare:workers_script:request",
+          resourceFamily: "cloudflare.workers_script",
+          resourceId: "script:api",
+          operation: "request",
+        },
+      ],
+    }),
+  ).rejects.toThrow("USD balance exhausted");
+
+  expect(await store.listUsageEvents("space_test")).toEqual([]);
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 100_000,
+    availableCredits: 0.1,
+  });
+});
+
 test("invoice usage reconciliation records billing adjustment idempotently", async () => {
   const { store, controller } = await seededController();
   await store.putUsageEvent({

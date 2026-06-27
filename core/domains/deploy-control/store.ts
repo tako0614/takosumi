@@ -461,6 +461,12 @@ export type SettleBillingAutoRechargeAttemptResult =
       readonly skippedReason: "already_succeeded" | "attempt_not_found";
     };
 
+export interface PutUsageEventAndSpendCreditsResult {
+  readonly usageEvent: UsageEvent;
+  readonly balance?: CreditBalance;
+  readonly inserted: boolean;
+}
+
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
   getRunnerProfile(id: string): Promise<RunnerProfile | undefined>;
@@ -874,6 +880,16 @@ export interface OpenTofuDeploymentStore {
     options?: { readonly limit?: number },
   ): Promise<readonly BillingAutoRechargeAttempt[]>;
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
+  /**
+   * Idempotently records a new billable usage event and atomically spends USD
+   * balance for it. Existing `idempotencyKey` returns the existing usage event
+   * without spending again. Insufficient balance returns `undefined` and must
+   * not insert the usage event.
+   */
+  putUsageEventAndSpendCredits(
+    event: UsageEvent,
+    input: CreditAmountInput & { readonly updatedAt: string },
+  ): Promise<PutUsageEventAndSpendCreditsResult | undefined>;
   listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]>;
   /** Keyset-paged usage-event listing for a Space (spec §30 pagination). */
   listUsageEventsPage(
@@ -2300,6 +2316,47 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const normalized = normalizeUsageEvent(event);
     this.#usageEvents.set(event.id, normalized);
     return Promise.resolve(normalized);
+  }
+
+  putUsageEventAndSpendCredits(
+    event: UsageEvent,
+    input: CreditAmountInput & { readonly updatedAt: string },
+  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
+    const existing = Array.from(this.#usageEvents.values()).find(
+      (row) => row.idempotencyKey === event.idempotencyKey,
+    );
+    if (existing) {
+      return Promise.resolve({
+        usageEvent: existing,
+        balance: normalizeCreditBalance(
+          this.#creditBalances.get(event.spaceId),
+        ),
+        inserted: false,
+      });
+    }
+    const balance = normalizeCreditBalance(
+      this.#creditBalances.get(event.spaceId),
+    );
+    const usdMicros = creditAmountUsdMicros(input);
+    if (!balance || creditBalanceAvailableUsdMicros(balance) < usdMicros) {
+      return Promise.resolve(undefined);
+    }
+    const availableUsdMicros =
+      creditBalanceAvailableUsdMicros(balance) - usdMicros;
+    const nextBalance = normalizeCreditBalance({
+      ...balance,
+      availableUsdMicros,
+      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+      updatedAt: input.updatedAt,
+    });
+    const normalized = normalizeUsageEvent(event);
+    this.#creditBalances.set(event.spaceId, nextBalance);
+    this.#usageEvents.set(event.id, normalized);
+    return Promise.resolve({
+      usageEvent: normalized,
+      balance: nextBalance,
+      inserted: true,
+    });
   }
 
   listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {

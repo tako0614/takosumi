@@ -115,12 +115,13 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  PutUsageEventAndSpendCreditsResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
   ClaimBillingAutoRechargeAttemptInput,
   ClaimBillingAutoRechargeAttemptResult,
-  type CreditAmountInput,
+  CreditAmountInput,
   SettleBillingAutoRechargeAttemptInput,
   SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
@@ -2683,6 +2684,110 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return normalized;
   }
 
+  async putUsageEventAndSpendCredits(
+    event: UsageEvent,
+    input: CreditAmountInput & { readonly updatedAt: string },
+  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
+    const existing = await this.#usageEventByIdempotencyKey(
+      event.idempotencyKey,
+    );
+    if (existing) {
+      return {
+        usageEvent: existing,
+        balance: await this.getCreditBalance(existing.spaceId),
+        inserted: false,
+      };
+    }
+    await this.#ensureSchema();
+    if (typeof this.db.batch !== "function") {
+      throw new Error(
+        "D1 batch support is required to spend credits for usage events",
+      );
+    }
+    const normalized = normalizeUsageEvent(event);
+    const usdMicros = creditAmountUsdMicros(input);
+    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
+    const spendBalance = this.db
+      .prepare(
+        `update credit_balances
+         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) - ?,
+             available_credits = available_credits - ?,
+             updated_at = ?
+         where space_id = ?
+           and coalesce(available_usd_micros, available_credits * 1000000) >= ?
+           and not exists (
+             select 1 from usage_events where idempotency_key = ?
+           )`,
+      )
+      .bind(
+        usdMicros,
+        legacyCredits,
+        input.updatedAt,
+        normalized.spaceId,
+        usdMicros,
+        normalized.idempotencyKey,
+      );
+    const insertUsageEvent = this.db
+      .prepare(
+        `insert into usage_events (
+           id, space_id, installation_id, run_id, meter_id,
+           resource_family, resource_id, operation, resource_metadata_json,
+           kind, quantity, usd_micros, credits, source,
+           idempotency_key, created_at
+         )
+         select
+           ?, ?, ?, ?, ?,
+           ?, ?, ?, ?,
+           ?, ?, ?, ?, ?,
+           ?, ?
+         where changes() > 0`,
+      )
+      .bind(
+        normalized.id,
+        normalized.spaceId,
+        normalized.installationId ?? null,
+        normalized.runId ?? null,
+        normalized.meterId ?? null,
+        normalized.resourceFamily ?? null,
+        normalized.resourceId ?? null,
+        normalized.operation ?? null,
+        normalized.resourceMetadata
+          ? JSON.stringify(normalized.resourceMetadata)
+          : null,
+        normalized.kind,
+        normalized.quantity,
+        normalized.usdMicros ?? null,
+        legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+        normalized.source,
+        normalized.idempotencyKey,
+        normalized.createdAt,
+      );
+    try {
+      await this.db.batch([spendBalance, insertUsageEvent]);
+    } catch (error) {
+      const raced = await this.#usageEventByIdempotencyKey(
+        normalized.idempotencyKey,
+      );
+      if (raced && isD1UsageEventIdempotencyError(error)) {
+        return {
+          usageEvent: raced,
+          balance: await this.getCreditBalance(raced.spaceId),
+          inserted: false,
+        };
+      }
+      throw error;
+    }
+    const recorded = await this.#usageEventByIdempotencyKey(
+      normalized.idempotencyKey,
+    );
+    if (!recorded) return undefined;
+    return {
+      usageEvent: recorded,
+      balance: await this.getCreditBalance(recorded.spaceId),
+      inserted: recorded.id === normalized.id,
+    };
+  }
+
   async listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
@@ -3169,6 +3274,17 @@ function isD1BillingAutoRechargeAlreadySettledError(error: unknown): boolean {
       ) ||
         error.message.includes(
           "constraint failed: billing_auto_recharge_attempts.id",
+        )
+    : false;
+}
+
+function isD1UsageEventIdempotencyError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes(
+        "UNIQUE constraint failed: usage_events.idempotency_key",
+      ) ||
+        error.message.includes(
+          "constraint failed: usage_events.idempotency_key",
         )
     : false;
 }

@@ -104,6 +104,7 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  PutUsageEventAndSpendCreditsResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -2790,6 +2791,156 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return normalized;
   }
 
+  async putUsageEventAndSpendCredits(
+    event: UsageEvent,
+    input: CreditAmountInput & { readonly updatedAt: string },
+  ): Promise<PutUsageEventAndSpendCreditsResult | undefined> {
+    const existing = await this.#usageEventByIdempotencyKey(
+      event.idempotencyKey,
+    );
+    if (existing) {
+      return {
+        usageEvent: existing,
+        balance: await this.getCreditBalance(existing.spaceId),
+        inserted: false,
+      };
+    }
+    const normalized = normalizeUsageEvent(event);
+    const usdMicros = creditAmountUsdMicros(input);
+    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
+    try {
+      return await this.#client.transaction(
+        async (
+          transaction: SqlTransaction,
+        ): Promise<PutUsageEventAndSpendCreditsResult | undefined> => {
+          const spendRows = await transaction.query<{ spaceId: string }>(
+            `update takosumi_credit_balances
+             set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) - $2,
+                 available_credits = available_credits - $3,
+                 updated_at = $4
+             where space_id = $1
+               and coalesce(available_usd_micros, available_credits * 1000000) >= $2
+               and not exists (
+                 select 1 from takosumi_usage_events where idempotency_key = $5
+               )
+             returning space_id as "spaceId"`,
+            [
+              normalized.spaceId,
+              usdMicros,
+              legacyCredits,
+              input.updatedAt,
+              normalized.idempotencyKey,
+            ],
+          );
+          if (spendRows.rows.length === 0) {
+            const racedRows = await transaction.query<{
+              id: string;
+              spaceId: string;
+              installationId: string | null;
+              runId: string | null;
+              meterId: string | null;
+              resourceFamily: string | null;
+              resourceId: string | null;
+              operation: string | null;
+              resourceMetadataJson: unknown;
+              kind: string;
+              quantity: number;
+              usdMicros: number | null;
+              credits: number;
+              source: string;
+              idempotencyKey: string;
+              createdAt: string;
+            }>(
+              `select
+                 id,
+                 space_id as "spaceId",
+                 installation_id as "installationId",
+                 run_id as "runId",
+                 meter_id as "meterId",
+                 resource_family as "resourceFamily",
+                 resource_id as "resourceId",
+                 operation,
+                 resource_metadata_json as "resourceMetadataJson",
+                 kind,
+                 quantity,
+                 usd_micros as "usdMicros",
+                 credits,
+                 source,
+                 idempotency_key as "idempotencyKey",
+                 created_at as "createdAt"
+               from takosumi_usage_events
+               where idempotency_key = $1
+               limit 1`,
+              [normalized.idempotencyKey],
+            );
+            const raced = racedRows.rows[0];
+            if (!raced) return undefined;
+            return {
+              usageEvent: usageEventFromRow(raced),
+              balance: await billingCreditBalanceForSpace(
+                transaction,
+                normalized.spaceId,
+              ),
+              inserted: false,
+            };
+          }
+          await transaction.query(
+            `insert into takosumi_usage_events (
+               id, space_id, installation_id, run_id, meter_id,
+               resource_family, resource_id, operation, resource_metadata_json,
+               kind, quantity, usd_micros, credits, source,
+               idempotency_key, created_at
+             )
+             values (
+               $1, $2, $3, $4, $5,
+               $6, $7, $8, $9::jsonb,
+               $10, $11, $12, $13, $14,
+               $15, $16
+             )`,
+            [
+              normalized.id,
+              normalized.spaceId,
+              normalized.installationId ?? null,
+              normalized.runId ?? null,
+              normalized.meterId ?? null,
+              normalized.resourceFamily ?? null,
+              normalized.resourceId ?? null,
+              normalized.operation ?? null,
+              normalized.resourceMetadata ?? null,
+              normalized.kind,
+              normalized.quantity,
+              normalized.usdMicros,
+              legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+              normalized.source,
+              normalized.idempotencyKey,
+              normalized.createdAt,
+            ],
+          );
+          return {
+            usageEvent: normalized,
+            balance: await billingCreditBalanceForSpace(
+              transaction,
+              normalized.spaceId,
+            ),
+            inserted: true,
+          };
+        },
+      );
+    } catch (error) {
+      const raced = await this.#usageEventByIdempotencyKey(
+        normalized.idempotencyKey,
+      );
+      if (raced && isSqlUsageEventIdempotencyConflict(error)) {
+        return {
+          usageEvent: raced,
+          balance: await this.getCreditBalance(raced.spaceId),
+          inserted: false,
+        };
+      }
+      throw error;
+    }
+  }
+
   async #usageEventByIdempotencyKey(
     idempotencyKey: string,
   ): Promise<UsageEvent | undefined> {
@@ -3226,6 +3377,15 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
     usdMicros,
     credits: usdMicrosToLegacyCredits(usdMicros),
   };
+}
+
+function isSqlUsageEventIdempotencyConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("takosumi_usage_events_idempotency") ||
+    error.message.includes("usage_events_idempotency") ||
+    error.message.includes("idempotency_key")
+  );
 }
 
 function legacyStorageCreditsFromUsdMicros(usdMicros: number): number {
