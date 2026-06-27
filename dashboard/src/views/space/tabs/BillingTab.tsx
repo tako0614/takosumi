@@ -27,6 +27,7 @@ import {
   getSpaceBilling,
   listBillingPlans,
   listSpaceUsage,
+  type CreditBalance,
   type PublicBillingPlan,
   type UsageEvent,
 } from "../../../lib/control-api.ts";
@@ -69,15 +70,15 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   // This-month usage rollup, surfaced next to the balance so billing is the
   // single home for usage (the detailed ledger stays folded below). Folded in
   // from the retired standalone Cloud screen.
-  const monthCredits = createMemo(() =>
-    sumBy((usage() ?? []).filter(isThisMonthUsage), (e) => e.credits),
+  const monthUsdMicros = createMemo(() =>
+    sumBy((usage() ?? []).filter(isThisMonthUsage), usageUsdMicros),
   );
-  const gatewayCredits = createMemo(() =>
+  const gatewayUsdMicros = createMemo(() =>
     sumBy(
       (usage() ?? []).filter(
         (e) => isThisMonthUsage(e) && e.kind.startsWith("gateway_"),
       ),
-      (e) => e.credits,
+      usageUsdMicros,
     ),
   );
   const subscriptions = createMemo(() =>
@@ -207,7 +208,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
     if (cloudBilling()) {
       columns.push({
         header: t("billing.usage.credits"),
-        cell: (e) => formatBillingNumber(e.credits),
+        cell: (e) => formatUsdMicros(usageUsdMicros(e)),
       });
     }
     columns.push({
@@ -224,8 +225,8 @@ export default function BillingTab(props: { readonly spaceId: string }) {
         <span class="av-plan-price">{plan.priceDisplay[locale()]}</span>
         <span class="av-plan-credits">
           {plan.kind === "subscription"
-            ? t("billing.plans.perMonth", { n: plan.credits })
-            : t("billing.packs.credits", { n: plan.credits })}
+            ? t("billing.plans.perMonth", { n: formatPlanUsd(plan) })
+            : t("billing.packs.credits", { n: formatPlanUsd(plan) })}
         </span>
       </div>
       <Button
@@ -282,31 +283,31 @@ export default function BillingTab(props: { readonly spaceId: string }) {
               items={[
                 {
                   label: availableLabel(),
-                  value: formatBillingNumber(balance()?.availableCredits ?? 0),
+                  value: formatUsdMicros(balanceAvailableUsdMicros(balance())),
                 },
                 ...(cloudBilling()
                   ? [
                       {
                         label: t("billing.usage.thisMonth"),
-                        value: formatBillingNumber(monthCredits()),
+                        value: formatUsdMicros(monthUsdMicros()),
                       },
                       {
                         label: t("billing.usage.gateway"),
-                        value: formatBillingNumber(gatewayCredits()),
+                        value: formatUsdMicros(gatewayUsdMicros()),
                       },
                     ]
                   : []),
               ]}
             />
-            <Show when={(balance()?.reservedCredits ?? 0) > 0}>
+            <Show when={balanceReservedUsdMicros(balance()) > 0}>
               <details class="wb-disclosure av-billing-ledger">
                 <summary>{t("billing.pendingUse.title")}</summary>
                 <KVList
                   items={[
                     {
                       label: reservedLabel(),
-                      value: formatBillingNumber(
-                        balance()?.reservedCredits ?? 0,
+                      value: formatUsdMicros(
+                        balanceReservedUsdMicros(balance()),
                       ),
                     },
                   ]}
@@ -454,6 +455,39 @@ function formatBillingNumber(value: number): string {
   return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
     maximumFractionDigits: 3,
   }).format(value);
+}
+
+function formatUsdMicros(value: number): string {
+  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: value % 10_000 === 0 ? 2 : 6,
+  }).format(value / 1_000_000);
+}
+
+function usageUsdMicros(event: UsageEvent): number {
+  return event.usdMicros ?? Math.round(event.credits * 1_000_000);
+}
+
+function balanceAvailableUsdMicros(balance: CreditBalance | undefined): number {
+  return (
+    balance?.availableUsdMicros ??
+    Math.round((balance?.availableCredits ?? 0) * 1_000_000)
+  );
+}
+
+function balanceReservedUsdMicros(balance: CreditBalance | undefined): number {
+  return (
+    balance?.reservedUsdMicros ??
+    Math.round((balance?.reservedCredits ?? 0) * 1_000_000)
+  );
+}
+
+function formatPlanUsd(plan: PublicBillingPlan): string {
+  return formatUsdMicros(
+    plan.usdMicros ?? Math.round(plan.credits * 1_000_000),
+  );
 }
 
 function isThisMonthUsage(event: UsageEvent): boolean {

@@ -20,7 +20,7 @@ counts. The full endpoint contract, scope, and examples live in this document.
 Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
 screen:
 
-- this month's usage, Gateway usage, and available credits
+- this month's usage, Cloud resource usage, and available credits
 - usage history (the usage event ledger)
 
 Deleting a resource calls the compat gateway's DELETE. It requires a
@@ -134,12 +134,12 @@ GET /api/v1/workspaces/{workspaceId}/usage
 
 The Usage card uses both endpoints.
 
-| UI value          | Meaning                                              |
-| ----------------- | ---------------------------------------------------- |
-| This month        | Sum of `credits` for usage events in the month       |
-| Gateway usage     | Sum of `credits` where `kind` starts with `gateway_` |
-| Available credits | Billing projection `balance.availableCredits`        |
-| Recent usage      | Newest usage events by `createdAt`                   |
+| UI value             | Meaning                                              |
+| -------------------- | ---------------------------------------------------- |
+| This month           | Sum of `credits` for usage events in the month       |
+| Cloud resource usage | Sum of `credits` where `kind` starts with `gateway_` |
+| Available credits    | Billing projection `balance.availableCredits`        |
+| Recent usage         | Newest usage events by `createdAt`                   |
 
 Important usage kinds:
 
@@ -174,19 +174,17 @@ x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
 ```
 
-The Cloudflare Compatibility Gateway / managed resource backend presents
-resources to users as Cloudflare provider `cloudflare_workers_script`, routes,
-KV, R2, D1, Queues, and Workflows. Workers for Platforms is the internal backend that realizes
-Workers Script and must not become the user-facing billing or usage-ledger
-family. Worker script usage is reported with
+The Takosumi Cloud managed resource backend presents resources to users as
+Cloudflare provider `cloudflare_workers_script`, routes, KV, R2, D1, Queues,
+and Workflows. Internal backend names must not become the user-facing billing
+or usage-ledger family. Worker script usage is reported with
 `resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
 `gateway_storage_gb_hour`. Queues are reported as `cloudflare.queues`, and
 Workflows are reported as `cloudflare.workflows`. Additional families such as
 Containers and Durable Objects are added to the catalog, UI, and billing prices
 only after the closed Gateway backend proves lifecycle endpoints and usage
-smoke coverage for them. `wfp` /
-`workers_for_platforms` is rejected in
-`meterId`, `resourceFamily`, Stripe meters, and public usage metadata. Example:
+smoke coverage for them. Internal backend aliases are rejected in `meterId`,
+`resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
@@ -205,7 +203,7 @@ Workspace context but no usage headers, the platform worker records minimal
 operation usage instead of letting the request succeed for free. This fallback
 is operation metering, not precise token or storage accounting. Cloudflare
 Workers compatibility fallback usage is still recorded as
-`cloudflare.workers_script`; Workers for Platforms is not copied into usage
+`cloudflare.workers_script`; internal backend names are not copied into usage
 events.
 
 The Stripe integration rolls up unexported usage reports by billing account,
@@ -214,10 +212,9 @@ successful invoice item creation, the source usage reports are marked with
 `billingExportProvider: "stripe"`, the export id, the Stripe invoice item id,
 and the exported timestamp so the next sync does not charge the same reports
 again. For Cloudflare Workers compatibility, the billing name remains
-`cloudflare.workers_script`; `wfp` / `workers_for_platforms` must not be used as
-the billing name. Internal implementation names such as
-`resourceMetadata.backend: "cloudflare.workers_for_platforms"` must not appear
-in public usage or billing payloads.
+`cloudflare.workers_script`; internal backend aliases must not be used as the
+billing name. Internal implementation hints such as `resourceMetadata.backend`
+must not appear in public usage or billing payloads.
 
 Operators trigger Stripe usage invoice item sync through the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only

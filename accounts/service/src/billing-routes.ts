@@ -3,8 +3,10 @@ import {
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
+  legacyCreditsToUsdMicros,
   type UsageEvent,
   usageMeterNameLeaksInternalWorkersBackend,
+  usdMicrosToLegacyCredits,
 } from "takosumi-contract/billing";
 import {
   createStripeBillingPortalSession,
@@ -154,12 +156,13 @@ export async function handleStripeCheckoutRequest(input: {
     await input.store.findBillingAccountForSubject(subject);
 
   // Server-resolved metadata. `space_id` routes the webhook's grant to the
-  // right Space; `credits` is the grant amount the PLAN defines (a pack grants
-  // once on payment, a subscription grants per paid invoice via the
-  // subscription metadata mirror below).
+  // right Space; `usd_micros` is the USD grant amount the PLAN defines (a pack
+  // grants once on payment, a subscription grants per paid invoice via the
+  // subscription metadata mirror below). `credits` stays as a legacy alias.
   const planMetadata: Record<string, string> = {
     space_id: spaceId,
     plan_code: plan.id,
+    usd_micros: String(plan.usdMicros),
     credits: String(plan.credits),
   };
 
@@ -426,7 +429,7 @@ async function billingUsageRecordFromUsageEvent(
   }
   if (usageMeterNameLeaksInternalWorkersBackend(event.resourceFamily)) {
     throw new TypeError(
-      "usage event resourceFamily must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+      "usage event resourceFamily must describe the customer-facing managed resource",
     );
   }
   if (
@@ -434,7 +437,7 @@ async function billingUsageRecordFromUsageEvent(
     usageMeterNameLeaksInternalWorkersBackend(event.meterId)
   ) {
     throw new TypeError(
-      "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+      "usage event meterId must describe the customer-facing managed resource",
     );
   }
   for (const value of Object.values(event.resourceMetadata ?? {})) {
@@ -443,7 +446,7 @@ async function billingUsageRecordFromUsageEvent(
       usageMeterNameLeaksInternalWorkersBackend(value)
     ) {
       throw new TypeError(
-        "usage event resourceMetadata must not expose the internal Workers for Platforms backend",
+        "usage event resourceMetadata must not expose an internal resource backend",
       );
     }
   }
@@ -518,7 +521,10 @@ function usageEventFromValue(value: unknown): UsageEvent {
   const createdAt =
     stringValue(value.createdAt) ?? stringValue(value.created_at);
   const quantity = positiveNumberBodyValue(value.quantity);
-  const credits = nonNegativeNumberBodyValue(value.credits);
+  const usdMicros = bodyUsdMicrosValue(
+    value.usdMicros ?? value.usd_micros,
+    value.credits,
+  );
   const resourceMetadata =
     value.resourceMetadata === undefined &&
     value.resource_metadata === undefined
@@ -534,7 +540,7 @@ function usageEventFromValue(value: unknown): UsageEvent {
     !idempotencyKey ||
     !createdAt ||
     quantity === undefined ||
-    credits === undefined
+    usdMicros === undefined
   ) {
     throw new TypeError("usageEvent is missing required fields");
   }
@@ -549,7 +555,8 @@ function usageEventFromValue(value: unknown): UsageEvent {
     ...(resourceMetadata ? { resourceMetadata } : {}),
     kind: kind as UsageEvent["kind"],
     quantity,
-    credits,
+    usdMicros,
+    credits: usdMicrosToLegacyCredits(usdMicros),
     source: source as UsageEvent["source"],
     idempotencyKey,
     createdAt,
@@ -579,7 +586,7 @@ function usageEventResourceMetadata(
       usageMeterNameLeaksInternalWorkersBackend(metadataValue)
     ) {
       throw new TypeError(
-        "usageEvent resourceMetadata must not expose the internal Workers for Platforms backend",
+        "usageEvent resourceMetadata must not expose an internal resource backend",
       );
     }
     output[key] = metadataValue;
@@ -631,10 +638,29 @@ function positiveNumberBodyValue(value: unknown): number | undefined {
     : undefined;
 }
 
-function nonNegativeNumberBodyValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : undefined;
+function bodyUsdMicrosValue(
+  usdMicrosValue: unknown,
+  legacyCreditsValue: unknown,
+): number | undefined {
+  if (
+    typeof usdMicrosValue === "number" &&
+    Number.isSafeInteger(usdMicrosValue) &&
+    usdMicrosValue >= 0
+  ) {
+    return usdMicrosValue;
+  }
+  if (
+    typeof legacyCreditsValue === "number" &&
+    Number.isFinite(legacyCreditsValue) &&
+    legacyCreditsValue >= 0
+  ) {
+    try {
+      return legacyCreditsToUsdMicros(legacyCreditsValue);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function optionalStringMetadata(
@@ -772,7 +798,8 @@ export async function handleStripeWebhookRequest(input: {
         stripeSpaceCreditReconciliationInput(payload);
       if (creditReconciliation) {
         await input.billingCreditReconciler?.(creditReconciliation.spaceId, {
-          credits: creditReconciliation.credits,
+          usdMicros: creditReconciliation.usdMicros,
+          credits: usdMicrosToLegacyCredits(creditReconciliation.usdMicros),
           stripeEventId: creditReconciliation.stripeEventId,
           ...(creditReconciliation.stripeCheckoutSessionId
             ? {
@@ -790,7 +817,8 @@ export async function handleStripeWebhookRequest(input: {
       const invoiceCredit = stripeInvoiceCreditReconciliationInput(payload);
       if (invoiceCredit) {
         await input.billingCreditReconciler?.(invoiceCredit.spaceId, {
-          credits: invoiceCredit.credits,
+          usdMicros: invoiceCredit.usdMicros,
+          credits: usdMicrosToLegacyCredits(invoiceCredit.usdMicros),
           stripeEventId: invoiceCredit.stripeEventId,
         });
       }
@@ -822,6 +850,7 @@ export type StripeSpaceBillingReconciler = (
 export type StripeSpaceCreditReconciler = (
   spaceId: string,
   input: {
+    readonly usdMicros?: number;
     readonly credits: number;
     readonly stripeEventId: string;
     readonly stripeCheckoutSessionId?: string;
@@ -879,7 +908,7 @@ function stripeSpaceBillingReconciliationInput(
 function stripeSpaceCreditReconciliationInput(payload: string):
   | {
       readonly spaceId: string;
-      readonly credits: number;
+      readonly usdMicros: number;
       readonly stripeEventId: string;
       readonly stripeCheckoutSessionId?: string;
     }
@@ -891,7 +920,8 @@ function stripeSpaceCreditReconciliationInput(payload: string):
       : undefined;
   const metadata = isRecord(object?.metadata) ? object.metadata : undefined;
   const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
-  const credits = positiveIntegerValue(
+  const usdMicros = positiveUsdMicrosMetadataValue(
+    metadata?.usd_micros ?? metadata?.usdMicros,
     metadata?.credits ?? metadata?.takosumi_credits,
   );
   const stripeEventId = stringValue(event?.id);
@@ -900,7 +930,7 @@ function stripeSpaceCreditReconciliationInput(payload: string):
   const paymentStatus = stringValue(object?.payment_status);
   if (
     !spaceId ||
-    !credits ||
+    !usdMicros ||
     !stripeEventId ||
     mode !== "payment" ||
     paymentStatus !== "paid"
@@ -909,7 +939,7 @@ function stripeSpaceCreditReconciliationInput(payload: string):
   }
   return {
     spaceId,
-    credits,
+    usdMicros,
     stripeEventId,
     ...(stripeCheckoutSessionId ? { stripeCheckoutSessionId } : {}),
   };
@@ -917,13 +947,13 @@ function stripeSpaceCreditReconciliationInput(payload: string):
 
 /**
  * Monthly subscription credit grant: a paid invoice whose parent subscription
- * carries the plan metadata (`space_id` + `credits`, stamped at checkout via
+ * carries the plan metadata (`space_id` + `usd_micros`, stamped at checkout via
  * `subscription_data[metadata]`). Exported for tests.
  */
 export function stripeInvoiceCreditReconciliationInput(payload: string):
   | {
       readonly spaceId: string;
-      readonly credits: number;
+      readonly usdMicros: number;
       readonly stripeEventId: string;
     }
   | undefined {
@@ -938,12 +968,13 @@ export function stripeInvoiceCreditReconciliationInput(payload: string):
       : undefined;
   const metadata = invoiceSubscriptionMetadata(object);
   const spaceId = stringValue(metadata?.space_id ?? metadata?.spaceId);
-  const credits = positiveIntegerValue(
+  const usdMicros = positiveUsdMicrosMetadataValue(
+    metadata?.usd_micros ?? metadata?.usdMicros,
     metadata?.credits ?? metadata?.takosumi_credits,
   );
   const stripeEventId = stringValue(event?.id);
-  if (!spaceId || !credits || !stripeEventId) return undefined;
-  return { spaceId, credits, stripeEventId };
+  if (!spaceId || !usdMicros || !stripeEventId) return undefined;
+  return { spaceId, usdMicros, stripeEventId };
 }
 
 function invoiceSubscriptionMetadata(
@@ -964,8 +995,23 @@ function invoiceSubscriptionMetadata(
     : undefined;
 }
 
-function positiveIntegerValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+function positiveUsdMicrosMetadataValue(
+  usdMicrosValue: unknown,
+  legacyCreditsValue: unknown,
+): number | undefined {
+  const parsedUsdMicros = positiveIntegerMetadataValue(usdMicrosValue);
+  if (parsedUsdMicros !== undefined) return parsedUsdMicros;
+  const credits = positiveNumberMetadataValue(legacyCreditsValue);
+  if (credits === undefined) return undefined;
+  try {
+    return legacyCreditsToUsdMicros(credits);
+  } catch {
+    return undefined;
+  }
+}
+
+function positiveIntegerMetadataValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return value;
   }
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
@@ -973,6 +1019,17 @@ function positiveIntegerValue(value: unknown): number | undefined {
   }
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function positiveNumberMetadataValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== "string" || !/^[0-9]+(?:\.[0-9]+)?$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function safeJsonRecord(payload: string): Record<string, unknown> | undefined {

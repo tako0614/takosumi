@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
+import { PGlite } from "@electric-sql/pglite";
 import { getTableColumns, getTableName } from "drizzle-orm";
 import { getTableConfig as getPgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as getSqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../../../helpers/deploy-control/sqlite_fake_d1.ts";
-import { PGliteSqlClient } from "../../../../../helpers/deploy-control/pglite_sql_client.ts";
+import {
+  PGliteSqlClient,
+  splitSqlStatements,
+} from "../../../../../helpers/deploy-control/pglite_sql_client.ts";
+import { postgresStorageMigrationStatements } from "../../../../../../core/adapters/storage/migrations.ts";
 import * as d1Schema from "../../../../../../core/adapters/storage/drizzle/schema/d1.ts";
 import { deployControlLogicalTables } from "../../../../../../core/adapters/storage/drizzle/schema/logical.ts";
 import * as postgresSchema from "../../../../../../core/adapters/storage/drizzle/schema/postgres.ts";
@@ -362,6 +367,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     pk("id"),
     nn("name"),
     nn("monthly_base_price"),
+    nullable("included_usd_micros"),
     nn("included_credits"),
     nn("limits_json"),
     nn("record_json"),
@@ -384,6 +390,10 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   expect(getTableName(d1Schema.creditBalances)).toBe("credit_balances");
   expect(columnsOf(d1Schema.creditBalances)).toEqual([
     pk("space_id"),
+    nullable("available_usd_micros"),
+    nullable("reserved_usd_micros"),
+    nullable("monthly_included_usd_micros"),
+    nullable("purchased_usd_micros"),
     nn("available_credits"),
     nn("reserved_credits"),
     nn("monthly_included_credits"),
@@ -404,6 +414,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nullable("resource_metadata_json"),
     nn("kind"),
     nn("quantity"),
+    nullable("usd_micros"),
     nn("credits"),
     nn("source"),
     nn("idempotency_key"),
@@ -415,6 +426,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     pk("id"),
     nn("space_id"),
     nn("run_id"),
+    nullable("estimated_usd_micros"),
     nn("estimated_credits"),
     nn("status"),
     nn("mode"),
@@ -528,7 +540,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -544,6 +556,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_provider_catalog_ownership_repair",
     "d1_opentofu_upload_origin_nullable_source_repair",
     "d1_opentofu_usage_event_meter_metadata",
+    "d1_opentofu_billing_usd_micros",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1171,6 +1184,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     pk("id"),
     nn("name"),
     nn("monthly_base_price"),
+    nullable("included_usd_micros"),
     nn("included_credits"),
     nn("limits_json"),
     nn("plan_json"),
@@ -1197,6 +1211,10 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   );
   expect(columnsOf(postgresSchema.creditBalances)).toEqual([
     pk("space_id"),
+    nullable("available_usd_micros"),
+    nullable("reserved_usd_micros"),
+    nullable("monthly_included_usd_micros"),
+    nullable("purchased_usd_micros"),
     nn("available_credits"),
     nn("reserved_credits"),
     nn("monthly_included_credits"),
@@ -1219,6 +1237,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nullable("resource_metadata_json"),
     nn("kind"),
     nn("quantity"),
+    nullable("usd_micros"),
     nn("credits"),
     nn("source"),
     nn("idempotency_key"),
@@ -1232,6 +1251,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     pk("id"),
     nn("space_id"),
     nn("run_id"),
+    nullable("estimated_usd_micros"),
     nn("estimated_credits"),
     nn("status"),
     nn("mode"),
@@ -1392,6 +1412,140 @@ test("Postgres migration end-state mirrors Drizzle indexes for every deploy tabl
     }
   } finally {
     await client.close();
+  }
+});
+
+test("billing USD micros migration backfills legacy credit rows", async () => {
+  const migration = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.billing_usd_micros_columns.add",
+  );
+  expect(migration).toBeDefined();
+
+  const db = new PGlite();
+  try {
+    await db.exec(`create table takosumi_plans (
+      id text primary key,
+      name text not null,
+      monthly_base_price integer not null,
+      included_credits integer not null,
+      limits_json jsonb not null,
+      plan_json jsonb not null,
+      created_at text not null,
+      updated_at text not null
+    )`);
+    await db.exec(`create table takosumi_credit_balances (
+      space_id text primary key,
+      available_credits integer not null,
+      reserved_credits integer not null,
+      monthly_included_credits integer not null,
+      purchased_credits integer not null,
+      updated_at text not null
+    )`);
+    await db.exec(`create table takosumi_usage_events (
+      id text primary key,
+      credits integer not null,
+      source text not null
+    )`);
+    await db.exec(`create table takosumi_credit_reservations (
+      id text primary key,
+      estimated_credits integer not null
+    )`);
+    await db.exec(
+      `insert into takosumi_plans values ('pro', 'Pro', 20, 12, '{}', '{}', '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')`,
+    );
+    await db.exec(
+      `insert into takosumi_credit_balances values ('space_1', 42, 3, 10, 35, '2026-06-01T00:00:00.000Z')`,
+    );
+    await db.exec(
+      `insert into takosumi_usage_events values ('usage_invoice', 4, 'billing_reconciliation')`,
+    );
+    await db.exec(
+      `insert into takosumi_credit_reservations values ('creditres_1', 5)`,
+    );
+
+    for (const statement of splitSqlStatements(migration!.sql)) {
+      await db.exec(statement);
+    }
+
+    const plan = await db.query<{ included_usd_micros: number }>(
+      `select included_usd_micros from takosumi_plans where id = 'pro'`,
+    );
+    expect(plan.rows[0]?.included_usd_micros).toBe(12_000_000);
+    const balance = await db.query<{
+      available_usd_micros: number;
+      reserved_usd_micros: number;
+      monthly_included_usd_micros: number;
+      purchased_usd_micros: number;
+    }>(
+      `select available_usd_micros, reserved_usd_micros,
+              monthly_included_usd_micros, purchased_usd_micros
+       from takosumi_credit_balances where space_id = 'space_1'`,
+    );
+    expect(balance.rows[0]).toEqual({
+      available_usd_micros: 42_000_000,
+      reserved_usd_micros: 3_000_000,
+      monthly_included_usd_micros: 10_000_000,
+      purchased_usd_micros: 35_000_000,
+    });
+    const usage = await db.query<{ usd_micros: number }>(
+      `select usd_micros from takosumi_usage_events where id = 'usage_invoice'`,
+    );
+    expect(usage.rows[0]?.usd_micros).toBe(4_000_000);
+    const reservation = await db.query<{ estimated_usd_micros: number }>(
+      `select estimated_usd_micros from takosumi_credit_reservations where id = 'creditres_1'`,
+    );
+    expect(reservation.rows[0]?.estimated_usd_micros).toBe(5_000_000);
+
+    await db.exec(
+      `insert into takosumi_plans (
+        id, name, monthly_base_price, included_credits,
+        limits_json, plan_json, created_at, updated_at
+      ) values (
+        'starter', 'Starter', 0, 2, '{}', '{}',
+        '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'
+      )`,
+    );
+    const insertedPlan = await db.query<{ included_usd_micros: number }>(
+      `select included_usd_micros from takosumi_plans where id = 'starter'`,
+    );
+    expect(insertedPlan.rows[0]?.included_usd_micros).toBe(2_000_000);
+    await db.exec(
+      `update takosumi_credit_balances
+       set available_credits = 7, reserved_credits = 4
+       where space_id = 'space_1'`,
+    );
+    const updatedBalance = await db.query<{
+      available_usd_micros: number;
+      reserved_usd_micros: number;
+    }>(
+      `select available_usd_micros, reserved_usd_micros
+       from takosumi_credit_balances where space_id = 'space_1'`,
+    );
+    expect(updatedBalance.rows[0]).toEqual({
+      available_usd_micros: 7_000_000,
+      reserved_usd_micros: 4_000_000,
+    });
+    await db.exec(
+      `insert into takosumi_usage_events (id, credits, source)
+       values ('usage_after_migration', 9, 'manual')`,
+    );
+    const insertedUsage = await db.query<{ usd_micros: number }>(
+      `select usd_micros from takosumi_usage_events where id = 'usage_after_migration'`,
+    );
+    expect(insertedUsage.rows[0]?.usd_micros).toBe(9_000_000);
+    await db.exec(
+      `update takosumi_credit_reservations
+       set estimated_credits = 6
+       where id = 'creditres_1'`,
+    );
+    const updatedReservation = await db.query<{
+      estimated_usd_micros: number;
+    }>(
+      `select estimated_usd_micros from takosumi_credit_reservations where id = 'creditres_1'`,
+    );
+    expect(updatedReservation.rows[0]?.estimated_usd_micros).toBe(6_000_000);
+  } finally {
+    await db.close();
   }
 });
 

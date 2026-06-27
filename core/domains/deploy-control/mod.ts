@@ -202,6 +202,7 @@ import { RunQueryService } from "./run_query.ts";
 import {
   BillingService,
   DISABLED_BILLING_SETTINGS,
+  type BillingAutoRechargePort,
   type ReconcileStripeSpaceSubscriptionInput,
 } from "./billing_service.ts";
 import { redactString } from "takosumi-contract/redaction";
@@ -997,6 +998,7 @@ export interface OpenTofuDeploymentControllerDependencies {
    * this. Omitted means self-host style `disabled`.
    */
   readonly defaultBillingSettings?: BillingSettings;
+  readonly billingAutoRecharge?: BillingAutoRechargePort;
 }
 
 export interface DeployControlActorContext {
@@ -1260,6 +1262,9 @@ export class OpenTofuDeploymentController {
       now: this.#now,
       defaultBillingSettings: this.#defaultBillingSettings,
       requireSpace: (spaceId) => this.#requireSpace(spaceId),
+      ...(dependencies.billingAutoRecharge
+        ? { autoRecharge: dependencies.billingAutoRecharge }
+        : {}),
     });
     this.#usage = new UsageReportingService({
       store: this.#store,
@@ -1427,7 +1432,7 @@ export class OpenTofuDeploymentController {
 
   async topUpSpaceCredits(
     spaceId: string,
-    input: { readonly credits: number },
+    input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }> {
     return await this.#usage.topUpSpaceCredits(spaceId, input);
   }

@@ -76,6 +76,16 @@ import type {
   SpaceSubscription,
   UsageEvent,
 } from "takosumi-contract/billing";
+import {
+  creditBalanceAvailableUsdMicros,
+  creditBalanceMonthlyIncludedUsdMicros,
+  creditBalancePurchasedUsdMicros,
+  creditBalanceReservedUsdMicros,
+  billingPlanIncludedUsdMicros,
+  legacyCreditsToUsdMicros,
+  usageEventUsdMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 import type {
   CredentialMintEvent,
   SecurityFinding,
@@ -398,6 +408,14 @@ export interface TransitionRunResult {
 }
 
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
+
+export interface CreditAmountInput {
+  readonly usdMicros?: number;
+  /**
+   * @deprecated Use `usdMicros`. Legacy credits are interpreted as USD amounts.
+   */
+  readonly credits?: number;
+}
 
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
@@ -731,8 +749,9 @@ export interface OpenTofuDeploymentStore {
     options?: { readonly runId?: string; readonly limit?: number },
   ): Promise<readonly SecurityFinding[]>;
 
-  // Billing credit ledger (§28). Plan creates reservations in showback/enforce;
-  // apply confirms/captures them before provider credential mint.
+  // Billing USD ledger (§28). Plan creates reservations in showback/enforce;
+  // apply confirms/captures them before provider credential mint. Legacy
+  // `credits` inputs are interpreted as whole-dollar compatibility aliases.
   putBillingPlan(plan: BillingPlan): Promise<BillingPlan>;
   getBillingPlan(id: string): Promise<BillingPlan | undefined>;
   putBillingAccount(account: BillingAccount): Promise<BillingAccount>;
@@ -749,24 +768,26 @@ export interface OpenTofuDeploymentStore {
   getCreditBalance(spaceId: string): Promise<CreditBalance | undefined>;
   reserveCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance | undefined>;
   /**
    * Atomically adds a credit GRANT (top-up / pack purchase / subscription
    * invoice grant) to a Space's available + purchased columns in a single
    * UPDATE — no read-modify-write — so concurrent webhook deliveries cannot
    * lose updates. Creates a zero balance row first when the Space has none, so
-   * the first grant lands. `credits` must be positive. Returns the new balance.
+   * the first grant lands. `usdMicros` must be positive. Legacy `credits`
+   * remains accepted as a whole-dollar compatibility alias. Returns the new
+   * balance.
    */
   addCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance>;
   /**
    * Atomically applies the monthly subscription RESET: carries over purchased
-   * credits and resets the monthly allotment to full, in one conditional
+   * USD grant and resets the monthly allotment to full, in one conditional
    * UPDATE — `available = max(0, available - oldMonthly) + newMonthly`,
-   * `monthlyIncludedCredits = newMonthly` (all column-relative, no read). The
+   * `monthlyIncludedUsdMicros = newMonthly` (all column-relative, no read). The
    * WHERE guard (`monthlyIncludedCredits != newMonthly OR updatedAt <
    * periodStartIso`) makes it idempotent per billing period so concurrent
    * reconciles cannot double-grant. Returns the balance when applied,
@@ -1886,17 +1907,20 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
-    this.#creditBalances.set(balance.spaceId, balance);
-    return Promise.resolve(balance);
+    const normalized = normalizeCreditBalance(balance);
+    this.#creditBalances.set(balance.spaceId, normalized);
+    return Promise.resolve(normalized);
   }
 
   putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
-    this.#billingPlans.set(plan.id, plan);
-    return Promise.resolve(plan);
+    const normalized = normalizeBillingPlan(plan);
+    this.#billingPlans.set(plan.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   getBillingPlan(id: string): Promise<BillingPlan | undefined> {
-    return Promise.resolve(this.#billingPlans.get(id));
+    const plan = this.#billingPlans.get(id);
+    return Promise.resolve(plan ? normalizeBillingPlan(plan) : undefined);
   }
 
   putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
@@ -1938,42 +1962,68 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
-    return Promise.resolve(this.#creditBalances.get(spaceId));
+    const balance = this.#creditBalances.get(spaceId);
+    return Promise.resolve(
+      balance ? normalizeCreditBalance(balance) : undefined,
+    );
   }
 
   reserveCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance | undefined> {
-    const balance = this.#creditBalances.get(spaceId);
-    if (!balance || balance.availableCredits < input.credits) {
+    const balance = normalizeCreditBalance(this.#creditBalances.get(spaceId));
+    const usdMicros = creditAmountUsdMicros(input);
+    if (!balance || creditBalanceAvailableUsdMicros(balance) < usdMicros) {
       return Promise.resolve(undefined);
     }
+    const availableUsdMicros =
+      creditBalanceAvailableUsdMicros(balance) - usdMicros;
+    const reservedUsdMicros =
+      creditBalanceReservedUsdMicros(balance) + usdMicros;
     const next = {
       ...balance,
-      availableCredits: balance.availableCredits - input.credits,
-      reservedCredits: balance.reservedCredits + input.credits,
+      availableUsdMicros,
+      reservedUsdMicros,
+      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
       updatedAt: input.updatedAt,
     };
-    this.#creditBalances.set(spaceId, next);
-    return Promise.resolve(next);
+    const normalized = normalizeCreditBalance(next);
+    this.#creditBalances.set(spaceId, normalized);
+    return Promise.resolve(normalized);
   }
 
   addCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance> {
-    const existing = this.#creditBalances.get(spaceId);
+    const existing = normalizeCreditBalance(this.#creditBalances.get(spaceId));
+    const usdMicros = creditAmountUsdMicros(input);
+    const availableUsdMicros =
+      creditBalanceAvailableUsdMicros(existing) + usdMicros;
+    const purchasedUsdMicros =
+      creditBalancePurchasedUsdMicros(existing) + usdMicros;
+    const reservedUsdMicros = creditBalanceReservedUsdMicros(existing);
+    const monthlyIncludedUsdMicros =
+      creditBalanceMonthlyIncludedUsdMicros(existing);
     const next: CreditBalance = {
       spaceId,
-      availableCredits: (existing?.availableCredits ?? 0) + input.credits,
-      reservedCredits: existing?.reservedCredits ?? 0,
-      monthlyIncludedCredits: existing?.monthlyIncludedCredits ?? 0,
-      purchasedCredits: (existing?.purchasedCredits ?? 0) + input.credits,
+      availableUsdMicros,
+      reservedUsdMicros,
+      monthlyIncludedUsdMicros,
+      purchasedUsdMicros,
+      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
+      monthlyIncludedCredits: usdMicrosToLegacyCredits(
+        monthlyIncludedUsdMicros,
+      ),
+      purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
       updatedAt: input.updatedAt,
     };
-    this.#creditBalances.set(spaceId, next);
-    return Promise.resolve(next);
+    const normalized = normalizeCreditBalance(next);
+    this.#creditBalances.set(spaceId, normalized);
+    return Promise.resolve(normalized);
   }
 
   reconcileMonthlyCredits(
@@ -1984,33 +2034,43 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       readonly updatedAt: string;
     },
   ): Promise<CreditBalance | undefined> {
-    const balance = this.#creditBalances.get(spaceId);
+    const balance = normalizeCreditBalance(this.#creditBalances.get(spaceId));
     if (!balance) return Promise.resolve(undefined);
     const balanceUpdatedAtMs = Date.parse(balance.updatedAt);
     const periodStartMs = Date.parse(input.periodStartIso);
     const alreadyReconciled =
-      balance.monthlyIncludedCredits === input.newMonthly &&
+      creditBalanceMonthlyIncludedUsdMicros(balance) ===
+        legacyCreditsToUsdMicros(input.newMonthly) &&
       Number.isFinite(balanceUpdatedAtMs) &&
       Number.isFinite(periodStartMs) &&
       balanceUpdatedAtMs >= periodStartMs;
     if (alreadyReconciled) return Promise.resolve(undefined);
+    const monthlyIncludedUsdMicros = legacyCreditsToUsdMicros(input.newMonthly);
+    const availableUsdMicros =
+      Math.max(
+        0,
+        creditBalanceAvailableUsdMicros(balance) -
+          creditBalanceMonthlyIncludedUsdMicros(balance),
+      ) + monthlyIncludedUsdMicros;
     const next: CreditBalance = {
       ...balance,
-      availableCredits:
-        Math.max(0, balance.availableCredits - balance.monthlyIncludedCredits) +
-        input.newMonthly,
+      availableUsdMicros,
+      monthlyIncludedUsdMicros,
+      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
       monthlyIncludedCredits: input.newMonthly,
       updatedAt: input.updatedAt,
     };
-    this.#creditBalances.set(spaceId, next);
-    return Promise.resolve(next);
+    const normalized = normalizeCreditBalance(next);
+    this.#creditBalances.set(spaceId, normalized);
+    return Promise.resolve(normalized);
   }
 
   putCreditReservation(
     reservation: CreditReservation,
   ): Promise<CreditReservation> {
-    this.#creditReservations.set(reservation.id, reservation);
-    return Promise.resolve(reservation);
+    const normalized = normalizeCreditReservation(reservation);
+    this.#creditReservations.set(reservation.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   getCreditReservationForRun(
@@ -2022,7 +2082,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         (a, b) =>
           b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
       );
-    return Promise.resolve(reservations[0]);
+    return Promise.resolve(
+      reservations[0] ? normalizeCreditReservation(reservations[0]) : undefined,
+    );
   }
 
   listCreditReservations(
@@ -2037,7 +2099,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
           b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
       )
       .slice(0, limit);
-    return Promise.resolve(reservations);
+    return Promise.resolve(reservations.map(normalizeCreditReservation));
   }
 
   putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
@@ -2045,8 +2107,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       (row) => row.idempotencyKey === event.idempotencyKey,
     );
     if (existing) return Promise.resolve(existing);
-    this.#usageEvents.set(event.id, event);
-    return Promise.resolve(event);
+    const normalized = normalizeUsageEvent(event);
+    this.#usageEvents.set(event.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]> {
@@ -2140,6 +2203,84 @@ function runRecordTimestamp(row: StoredRunRecord): number {
   if (Number.isFinite(numeric)) return numeric;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function creditAmountUsdMicros(input: CreditAmountInput): number {
+  if (input.usdMicros !== undefined) {
+    if (
+      !Number.isSafeInteger(input.usdMicros) ||
+      !Number.isFinite(input.usdMicros) ||
+      input.usdMicros <= 0
+    ) {
+      throw new TypeError("usdMicros must be a positive integer");
+    }
+    return input.usdMicros;
+  }
+  if (
+    input.credits === undefined ||
+    !Number.isFinite(input.credits) ||
+    input.credits <= 0
+  ) {
+    throw new TypeError("usdMicros must be a positive integer");
+  }
+  return legacyCreditsToUsdMicros(input.credits);
+}
+
+function normalizeBillingPlan(plan: BillingPlan): BillingPlan {
+  const includedUsdMicros = billingPlanIncludedUsdMicros(plan);
+  return {
+    ...plan,
+    includedUsdMicros,
+    includedCredits: usdMicrosToLegacyCredits(includedUsdMicros),
+  };
+}
+
+function normalizeCreditBalance(balance: CreditBalance): CreditBalance;
+function normalizeCreditBalance(
+  balance: CreditBalance | undefined,
+): CreditBalance | undefined;
+function normalizeCreditBalance(
+  balance: CreditBalance | undefined,
+): CreditBalance | undefined {
+  if (!balance) return undefined;
+  const availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+  const reservedUsdMicros = creditBalanceReservedUsdMicros(balance);
+  const monthlyIncludedUsdMicros =
+    creditBalanceMonthlyIncludedUsdMicros(balance);
+  const purchasedUsdMicros = creditBalancePurchasedUsdMicros(balance);
+  return {
+    ...balance,
+    availableUsdMicros,
+    reservedUsdMicros,
+    monthlyIncludedUsdMicros,
+    purchasedUsdMicros,
+    availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+    reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
+    monthlyIncludedCredits: usdMicrosToLegacyCredits(monthlyIncludedUsdMicros),
+    purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
+  };
+}
+
+function normalizeUsageEvent(event: UsageEvent): UsageEvent {
+  const usdMicros = usageEventUsdMicros(event);
+  return {
+    ...event,
+    usdMicros,
+    credits: usdMicrosToLegacyCredits(usdMicros),
+  };
+}
+
+function normalizeCreditReservation(
+  reservation: CreditReservation,
+): CreditReservation {
+  const estimatedUsdMicros =
+    reservation.estimatedUsdMicros ??
+    legacyCreditsToUsdMicros(reservation.estimatedCredits);
+  return {
+    ...reservation,
+    estimatedUsdMicros,
+    estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
+  };
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {

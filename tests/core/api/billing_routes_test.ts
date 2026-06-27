@@ -119,6 +119,10 @@ test("GET /internal/v1/spaces/:spaceId/billing returns settings and balance", as
       settings: { mode: "showback", provider: "none" },
       balance: {
         spaceId: "space_12345678",
+        availableUsdMicros: 702_000_000,
+        reservedUsdMicros: 2_000_000,
+        monthlyIncludedUsdMicros: 700_000_000,
+        purchasedUsdMicros: 4_000_000,
         availableCredits: 702,
         reservedCredits: 2,
         monthlyIncludedCredits: 700,
@@ -150,6 +154,7 @@ test("GET /internal/v1/spaces/:spaceId/billing returns settings and balance", as
         id: "pro",
         name: "Pro",
         monthlyBasePrice: 2000,
+        includedUsdMicros: 700_000_000,
         includedCredits: 700,
         limits: {
           maxEstimatedCreditsPerRun: 100,
@@ -228,7 +233,7 @@ test("POST /internal/v1/spaces/:spaceId/credits/top-up adds purchased credits", 
 test("POST /internal/v1/spaces/:spaceId/credits/top-up rejects invalid credits", async () => {
   const { app } = await makeApp();
 
-  for (const credits of [0, 1.5, "8"]) {
+  for (const credits of [0, "8"]) {
     const response = await app.request(
       "/internal/v1/spaces/space_12345678/credits/top-up",
       {
@@ -241,6 +246,16 @@ test("POST /internal/v1/spaces/:spaceId/credits/top-up rejects invalid credits",
     expect(response.status).toBe(400);
     expect((await response.json()).error.code).toBe("invalid_argument");
   }
+  const invalidMicros = await app.request(
+    "/internal/v1/spaces/space_12345678/credits/top-up",
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({ usdMicros: 1.5 }),
+    },
+  );
+  expect(invalidMicros.status).toBe(400);
+  expect((await invalidMicros.json()).error.code).toBe("invalid_argument");
 });
 
 test("billing routes reject an unknown Space", async () => {

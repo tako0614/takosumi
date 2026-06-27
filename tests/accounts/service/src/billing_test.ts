@@ -8,6 +8,7 @@ import {
   aggregateBillingUsage,
   applyStripeBillingEvent,
   createStripeBillingPortalSession,
+  createStripeAutoRechargePaymentIntent,
   createStripeCheckoutSession,
   createStripeInvoiceItem,
   createStripeUsageInvoiceItemsForBillingAccount,
@@ -17,6 +18,7 @@ import {
   parseStripeUsageInvoiceItemPrices,
   reconcileBillingEntitlements,
   STRIPE_API_VERSION,
+  stripeAutoRechargePaymentIntentParams,
   stripeInvoiceItemParams,
   verifyStripeWebhookSignature,
 } from "../../../../accounts/service/src/billing.ts";
@@ -114,7 +116,7 @@ test("stripe invoice credit reconciliation reads Stripe 2026 parent subscription
     ),
   ).toEqual({
     spaceId: "space_133669ab2c4c450c",
-    credits: 1000,
+    usdMicros: 1_000_000_000,
     stripeEventId: "evt_invoice_paid",
   });
 });
@@ -239,6 +241,69 @@ test("createStripeInvoiceItem posts customer amount metadata and idempotency key
     "cloudflare.workers_script",
   );
   expect(params.get("metadata[app]")).toEqual("takos");
+});
+
+test("createStripeAutoRechargePaymentIntent confirms off-session USD micros recharge", async () => {
+  let requestBody = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.url).toEqual("https://api.stripe.test/v1/payment_intents");
+    expect(request.method).toEqual("POST");
+    expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
+    expect(request.headers.get("stripe-version")).toEqual(STRIPE_API_VERSION);
+    expect(request.headers.get("idempotency-key")).toEqual(
+      "takosumi-autorecharge:space_1:run_1",
+    );
+    requestBody = await request.text();
+    return Response.json({
+      id: "pi_1",
+      status: "succeeded",
+      amount: 124,
+      currency: "usd",
+    });
+  };
+
+  const result = await createStripeAutoRechargePaymentIntent({
+    secretKey: "sk_test",
+    stripeCustomerId: "cus_1",
+    stripePaymentMethodId: "pm_1",
+    usdMicros: 1_230_001,
+    idempotencyKey: "takosumi-autorecharge:space_1:run_1",
+    metadata: { takosumi_space_id: "space_1" },
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+  const params = new URLSearchParams(requestBody);
+
+  expect(result).toEqual({
+    paymentIntentId: "pi_1",
+    status: "succeeded",
+    amount: 124,
+    currency: "usd",
+  });
+  expect(params.get("customer")).toEqual("cus_1");
+  expect(params.get("payment_method")).toEqual("pm_1");
+  expect(params.get("amount")).toEqual("124");
+  expect(params.get("currency")).toEqual("usd");
+  expect(params.get("confirm")).toEqual("true");
+  expect(params.get("off_session")).toEqual("true");
+  expect(params.get("metadata[takosumi_usd_micros]")).toEqual("1230001");
+  expect(params.get("metadata[takosumi_space_id]")).toEqual("space_1");
+});
+
+test("stripeAutoRechargePaymentIntentParams rejects missing payment method", () => {
+  assertThrows(
+    () =>
+      stripeAutoRechargePaymentIntentParams({
+        secretKey: "sk_test",
+        stripeCustomerId: "cus_1",
+        stripePaymentMethodId: "",
+        usdMicros: 1,
+        idempotencyKey: "key",
+      }),
+    TypeError,
+    "stripePaymentMethodId",
+  );
 });
 
 test("createStripeUsageInvoiceItem maps workers script rollups to Stripe invoice items", async () => {
@@ -399,7 +464,7 @@ test("parseStripeUsageInvoiceItemPrices rejects internal Workers for Platforms m
         ]),
       ),
     TypeError,
-    "must not expose the internal Workers for Platforms backend",
+    "must not expose an internal resource backend",
   );
 });
 

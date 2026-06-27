@@ -281,7 +281,7 @@ export const ALLOWED_KEYS: Record<
     "outputs",
     "sensitivePolicy",
   ]),
-  creditsTopUp: new Set(["credits"]),
+  creditsTopUp: new Set(["usdMicros", "credits"]),
   subscriptionChange: new Set(["billingSettings"]),
   deploy: new Set([
     "spaceId",

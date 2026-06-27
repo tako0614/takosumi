@@ -2244,6 +2244,10 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "spaceId",
+        "availableUsdMicros",
+        "reservedUsdMicros",
+        "monthlyIncludedUsdMicros",
+        "purchasedUsdMicros",
         "availableCredits",
         "reservedCredits",
         "monthlyIncludedCredits",
@@ -2252,10 +2256,14 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         spaceId: { type: "string" },
-        availableCredits: { type: "number" },
-        reservedCredits: { type: "number" },
-        monthlyIncludedCredits: { type: "number" },
-        purchasedCredits: { type: "number" },
+        availableUsdMicros: { type: "integer" },
+        reservedUsdMicros: { type: "integer" },
+        monthlyIncludedUsdMicros: { type: "integer" },
+        purchasedUsdMicros: { type: "integer" },
+        availableCredits: { type: "number", deprecated: true },
+        reservedCredits: { type: "number", deprecated: true },
+        monthlyIncludedCredits: { type: "number", deprecated: true },
+        purchasedCredits: { type: "number", deprecated: true },
         updatedAt: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
@@ -2267,6 +2275,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         "spaceId",
         "kind",
         "quantity",
+        "usdMicros",
         "credits",
         "source",
         "idempotencyKey",
@@ -2280,7 +2289,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         meterId: {
           type: "string",
           description:
-            "Stable customer-facing managed-resource meter id. Cloudflare Workers for Platforms/WfP is an internal backend and must not appear here.",
+            "Stable customer-facing Cloud resource meter id. Internal Cloud resource backend names must not appear here.",
         },
         resourceFamily: {
           type: "string",
@@ -2292,7 +2301,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         resourceMetadata: {
           type: "object",
           description:
-            "Optional non-secret customer-facing metadata. Internal implementation backend hints such as cloudflare.workers_for_platforms must not appear here.",
+            "Optional non-secret customer-facing metadata. Internal Cloud resource backend hints must not appear here.",
           additionalProperties: {
             anyOf: [
               { type: "string" },
@@ -2304,7 +2313,16 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         },
         kind: { type: "string" },
         quantity: { type: "number" },
-        credits: { type: "number" },
+        usdMicros: {
+          type: "integer",
+          description:
+            "USD-denominated usage amount in micros. 1 USD = 1,000,000 micros.",
+        },
+        credits: {
+          type: "number",
+          deprecated: true,
+          description: "Compatibility alias for the USD amount. Use usdMicros.",
+        },
         source: {
           type: "string",
           enum: [
@@ -2325,6 +2343,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         "id",
         "spaceId",
         "runId",
+        "estimatedUsdMicros",
         "estimatedCredits",
         "status",
         "mode",
@@ -2335,7 +2354,8 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         spaceId: { type: "string" },
         runId: { type: "string" },
-        estimatedCredits: { type: "number" },
+        estimatedUsdMicros: { type: "integer" },
+        estimatedCredits: { type: "number", deprecated: true },
         status: {
           type: "string",
           enum: ["reserved", "captured", "released", "expired"],
@@ -2407,6 +2427,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         "id",
         "name",
         "monthlyBasePrice",
+        "includedUsdMicros",
         "includedCredits",
         "limits",
         "createdAt",
@@ -2416,11 +2437,13 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         name: { type: "string" },
         monthlyBasePrice: { type: "number" },
-        includedCredits: { type: "number" },
+        includedUsdMicros: { type: "integer" },
+        includedCredits: { type: "number", deprecated: true },
         limits: {
           type: "object",
           properties: {
-            maxEstimatedCreditsPerRun: { type: "number" },
+            maxEstimatedUsdMicrosPerRun: { type: "integer" },
+            maxEstimatedCreditsPerRun: { type: "number", deprecated: true },
             quota: {
               type: "object",
               additionalProperties: { type: "number" },
@@ -2473,9 +2496,19 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
     },
     CreditsTopUpRequest: {
       type: "object",
-      required: ["credits"],
       properties: {
-        credits: { type: "integer", minimum: 1 },
+        usdMicros: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "USD amount to grant, in micros. 1 USD = 1,000,000 micros.",
+        },
+        credits: {
+          type: "number",
+          minimum: 0,
+          deprecated: true,
+          description: "Compatibility alias interpreted as a USD amount.",
+        },
       },
       additionalProperties: false,
     },

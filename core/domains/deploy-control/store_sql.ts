@@ -79,6 +79,16 @@ import type {
   SpaceSubscription,
   UsageEvent,
 } from "takosumi-contract/billing";
+import {
+  billingPlanIncludedUsdMicros,
+  creditBalanceAvailableUsdMicros,
+  creditBalanceMonthlyIncludedUsdMicros,
+  creditBalancePurchasedUsdMicros,
+  creditBalanceReservedUsdMicros,
+  legacyCreditsToUsdMicros,
+  usageEventUsdMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 import type {
   CredentialMintEvent,
   SecurityFinding,
@@ -96,6 +106,7 @@ import type {
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
+  CreditAmountInput,
   TransitionRunInput,
   TransitionRunResult,
 } from "./store.ts";
@@ -2137,29 +2148,36 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   // --- billing ledger (§28) -------------------------------------------------
 
   async putBillingPlan(plan: BillingPlan): Promise<BillingPlan> {
+    const normalized = normalizeBillingPlan(plan);
     await this.#pgUpsert(
       pgSchema.billingPlans,
       {
-        id: plan.id,
-        name: plan.name,
-        monthlyBasePrice: plan.monthlyBasePrice,
-        includedCredits: plan.includedCredits,
-        limitsJson: plan.limits,
-        planJson: plan,
-        createdAt: plan.createdAt,
-        updatedAt: plan.updatedAt,
+        id: normalized.id,
+        name: normalized.name,
+        monthlyBasePrice: normalized.monthlyBasePrice,
+        includedUsdMicros: normalized.includedUsdMicros,
+        includedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.includedUsdMicros ?? 0,
+        ),
+        limitsJson: normalized.limits,
+        planJson: normalized,
+        createdAt: normalized.createdAt,
+        updatedAt: normalized.updatedAt,
       },
       {
-        name: plan.name,
-        monthlyBasePrice: plan.monthlyBasePrice,
-        includedCredits: plan.includedCredits,
-        limitsJson: plan.limits,
-        planJson: plan,
-        updatedAt: plan.updatedAt,
+        name: normalized.name,
+        monthlyBasePrice: normalized.monthlyBasePrice,
+        includedUsdMicros: normalized.includedUsdMicros,
+        includedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.includedUsdMicros ?? 0,
+        ),
+        limitsJson: normalized.limits,
+        planJson: normalized,
+        updatedAt: normalized.updatedAt,
       },
       pgSchema.billingPlans.id,
     );
-    return plan;
+    return normalized;
   }
 
   async getBillingPlan(id: string): Promise<BillingPlan | undefined> {
@@ -2171,7 +2189,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         limit: 1,
       },
     );
-    return rows[0];
+    return rows[0] ? normalizeBillingPlan(rows[0]) : undefined;
   }
 
   async putBillingAccount(account: BillingAccount): Promise<BillingAccount> {
@@ -2277,26 +2295,51 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
+    const normalized = normalizeCreditBalance(balance);
     await this.#pgUpsert(
       pgSchema.creditBalances,
       {
-        spaceId: balance.spaceId,
-        availableCredits: balance.availableCredits,
-        reservedCredits: balance.reservedCredits,
-        monthlyIncludedCredits: balance.monthlyIncludedCredits,
-        purchasedCredits: balance.purchasedCredits,
-        updatedAt: balance.updatedAt,
+        spaceId: normalized.spaceId,
+        availableUsdMicros: normalized.availableUsdMicros,
+        reservedUsdMicros: normalized.reservedUsdMicros,
+        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
+        purchasedUsdMicros: normalized.purchasedUsdMicros,
+        availableCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.availableUsdMicros ?? 0,
+        ),
+        reservedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.reservedUsdMicros ?? 0,
+        ),
+        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.monthlyIncludedUsdMicros ?? 0,
+        ),
+        purchasedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.purchasedUsdMicros ?? 0,
+        ),
+        updatedAt: normalized.updatedAt,
       },
       {
-        availableCredits: balance.availableCredits,
-        reservedCredits: balance.reservedCredits,
-        monthlyIncludedCredits: balance.monthlyIncludedCredits,
-        purchasedCredits: balance.purchasedCredits,
-        updatedAt: balance.updatedAt,
+        availableUsdMicros: normalized.availableUsdMicros,
+        reservedUsdMicros: normalized.reservedUsdMicros,
+        monthlyIncludedUsdMicros: normalized.monthlyIncludedUsdMicros,
+        purchasedUsdMicros: normalized.purchasedUsdMicros,
+        availableCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.availableUsdMicros ?? 0,
+        ),
+        reservedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.reservedUsdMicros ?? 0,
+        ),
+        monthlyIncludedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.monthlyIncludedUsdMicros ?? 0,
+        ),
+        purchasedCredits: legacyStorageCreditsFromUsdMicros(
+          normalized.purchasedUsdMicros ?? 0,
+        ),
+        updatedAt: normalized.updatedAt,
       },
       pgSchema.creditBalances.spaceId,
     );
-    return balance;
+    return normalized;
   }
 
   async getCreditBalance(spaceId: string): Promise<CreditBalance | undefined> {
@@ -2307,55 +2350,54 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
-    return {
-      spaceId: row.spaceId,
-      availableCredits: row.availableCredits,
-      reservedCredits: row.reservedCredits,
-      monthlyIncludedCredits: row.monthlyIncludedCredits,
-      purchasedCredits: row.purchasedCredits,
-      updatedAt: row.updatedAt,
-    };
+    return creditBalanceFromRow(row);
   }
 
   async reserveCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance | undefined> {
+    const usdMicros = creditAmountUsdMicros(input);
+    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
     const rows = await this.#db
       .update(pgSchema.creditBalances)
       .set({
-        availableCredits: sql`${pgSchema.creditBalances.availableCredits} - ${input.credits}`,
-        reservedCredits: sql`${pgSchema.creditBalances.reservedCredits} + ${input.credits}`,
+        availableUsdMicros: sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) - ${usdMicros}`,
+        reservedUsdMicros: sql`coalesce(${pgSchema.creditBalances.reservedUsdMicros}, ${pgSchema.creditBalances.reservedCredits} * 1000000) + ${usdMicros}`,
+        availableCredits: sql`${pgSchema.creditBalances.availableCredits} - ${legacyCredits}`,
+        reservedCredits: sql`${pgSchema.creditBalances.reservedCredits} + ${legacyCredits}`,
         updatedAt: input.updatedAt,
       })
       .where(
         and(
           eq(pgSchema.creditBalances.spaceId, spaceId),
-          gte(pgSchema.creditBalances.availableCredits, input.credits),
+          gte(
+            sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000)`,
+            usdMicros,
+          ),
         ),
       )
       .returning();
     const row = rows[0];
     if (!row) return undefined;
-    return {
-      spaceId: row.spaceId,
-      availableCredits: row.availableCredits,
-      reservedCredits: row.reservedCredits,
-      monthlyIncludedCredits: row.monthlyIncludedCredits,
-      purchasedCredits: row.purchasedCredits,
-      updatedAt: row.updatedAt,
-    };
+    return creditBalanceFromRow(row);
   }
 
   async addCredits(
     spaceId: string,
-    input: { readonly credits: number; readonly updatedAt: string },
+    input: CreditAmountInput & { readonly updatedAt: string },
   ): Promise<CreditBalance> {
+    const usdMicros = creditAmountUsdMicros(input);
+    const legacyCredits = legacyStorageCreditsFromUsdMicros(usdMicros);
     // Ensure a row exists so the first grant lands (a no-op upsert seeds zero).
     await this.#db
       .insert(pgSchema.creditBalances)
       .values({
         spaceId,
+        availableUsdMicros: 0,
+        reservedUsdMicros: 0,
+        monthlyIncludedUsdMicros: 0,
+        purchasedUsdMicros: 0,
         availableCredits: 0,
         reservedCredits: 0,
         monthlyIncludedCredits: 0,
@@ -2366,21 +2408,16 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     const rows = await this.#db
       .update(pgSchema.creditBalances)
       .set({
-        availableCredits: sql`${pgSchema.creditBalances.availableCredits} + ${input.credits}`,
-        purchasedCredits: sql`${pgSchema.creditBalances.purchasedCredits} + ${input.credits}`,
+        availableUsdMicros: sql`coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) + ${usdMicros}`,
+        purchasedUsdMicros: sql`coalesce(${pgSchema.creditBalances.purchasedUsdMicros}, ${pgSchema.creditBalances.purchasedCredits} * 1000000) + ${usdMicros}`,
+        availableCredits: sql`${pgSchema.creditBalances.availableCredits} + ${legacyCredits}`,
+        purchasedCredits: sql`${pgSchema.creditBalances.purchasedCredits} + ${legacyCredits}`,
         updatedAt: input.updatedAt,
       })
       .where(eq(pgSchema.creditBalances.spaceId, spaceId))
       .returning();
     const row = rows[0]!;
-    return {
-      spaceId: row.spaceId,
-      availableCredits: row.availableCredits,
-      reservedCredits: row.reservedCredits,
-      monthlyIncludedCredits: row.monthlyIncludedCredits,
-      purchasedCredits: row.purchasedCredits,
-      updatedAt: row.updatedAt,
-    };
+    return creditBalanceFromRow(row);
   }
 
   async reconcileMonthlyCredits(
@@ -2391,14 +2428,19 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       readonly updatedAt: string;
     },
   ): Promise<CreditBalance | undefined> {
+    const newMonthlyUsdMicros = legacyCreditsToUsdMicros(input.newMonthly);
+    const newMonthlyLegacyCredits =
+      legacyStorageCreditsFromUsdMicros(newMonthlyUsdMicros);
     // Conditional, idempotent-per-period monthly RESET: carry over purchased
-    // credits and reset the monthly allotment to full. Column-relative so no
-    // read is needed: available = max(0, available - oldMonthly) + newMonthly.
+    // USD balance and reset the monthly allotment to full. Column-relative so
+    // no read is needed: available = max(0, available - oldMonthly) + newMonthly.
     const rows = await this.#db
       .update(pgSchema.creditBalances)
       .set({
-        availableCredits: sql`greatest(0, ${pgSchema.creditBalances.availableCredits} - ${pgSchema.creditBalances.monthlyIncludedCredits}) + ${input.newMonthly}`,
-        monthlyIncludedCredits: input.newMonthly,
+        availableUsdMicros: sql`greatest(0, coalesce(${pgSchema.creditBalances.availableUsdMicros}, ${pgSchema.creditBalances.availableCredits} * 1000000) - coalesce(${pgSchema.creditBalances.monthlyIncludedUsdMicros}, ${pgSchema.creditBalances.monthlyIncludedCredits} * 1000000)) + ${newMonthlyUsdMicros}`,
+        monthlyIncludedUsdMicros: newMonthlyUsdMicros,
+        availableCredits: sql`greatest(0, ${pgSchema.creditBalances.availableCredits} - ${pgSchema.creditBalances.monthlyIncludedCredits}) + ${newMonthlyLegacyCredits}`,
+        monthlyIncludedCredits: newMonthlyLegacyCredits,
         updatedAt: input.updatedAt,
       })
       .where(
@@ -2407,7 +2449,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           or(
             ne(
               pgSchema.creditBalances.monthlyIncludedCredits,
-              input.newMonthly,
+              newMonthlyLegacyCredits,
             ),
             lt(pgSchema.creditBalances.updatedAt, input.periodStartIso),
           ),
@@ -2416,31 +2458,28 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .returning();
     const row = rows[0];
     if (!row) return undefined;
-    return {
-      spaceId: row.spaceId,
-      availableCredits: row.availableCredits,
-      reservedCredits: row.reservedCredits,
-      monthlyIncludedCredits: row.monthlyIncludedCredits,
-      purchasedCredits: row.purchasedCredits,
-      updatedAt: row.updatedAt,
-    };
+    return creditBalanceFromRow(row);
   }
 
   async putCreditReservation(
     reservation: CreditReservation,
   ): Promise<CreditReservation> {
+    const normalized = normalizeCreditReservation(reservation);
     await this.#pgUpsert(pgSchema.creditReservations, {
-      id: reservation.id,
-      spaceId: reservation.spaceId,
-      runId: reservation.runId,
-      estimatedCredits: reservation.estimatedCredits,
-      status: reservation.status,
-      mode: reservation.mode,
-      reservationJson: reservation,
-      createdAt: reservation.createdAt,
-      expiresAt: reservation.expiresAt,
+      id: normalized.id,
+      spaceId: normalized.spaceId,
+      runId: normalized.runId,
+      estimatedUsdMicros: normalized.estimatedUsdMicros,
+      estimatedCredits: legacyStorageCreditsFromUsdMicros(
+        normalized.estimatedUsdMicros ?? 0,
+      ),
+      status: normalized.status,
+      mode: normalized.mode,
+      reservationJson: normalized,
+      createdAt: normalized.createdAt,
+      expiresAt: normalized.expiresAt,
     });
-    return reservation;
+    return normalized;
   }
 
   async getCreditReservationForRun(
@@ -2465,7 +2504,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     spaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly CreditReservation[]> {
-    return await this.#pgManyJson<CreditReservation>(
+    const rows = await this.#pgManyJson<CreditReservation>(
       pgSchema.creditReservations,
       pgSchema.creditReservations.reservationJson,
       {
@@ -2477,6 +2516,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         limit: options.limit ?? 100,
       },
     );
+    return rows.map(normalizeCreditReservation);
   }
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
@@ -2484,44 +2524,47 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       event.idempotencyKey,
     );
     if (existing) return existing;
+    const normalized = normalizeUsageEvent(event);
     await this.#pgUpsert(
       pgSchema.usageEvents,
       {
-        id: event.id,
-        spaceId: event.spaceId,
-        installationId: event.installationId ?? null,
-        runId: event.runId ?? null,
-        meterId: event.meterId ?? null,
-        resourceFamily: event.resourceFamily ?? null,
-        resourceId: event.resourceId ?? null,
-        operation: event.operation ?? null,
-        resourceMetadataJson: event.resourceMetadata ?? null,
-        kind: event.kind,
-        quantity: event.quantity,
-        credits: event.credits,
-        source: event.source,
-        idempotencyKey: event.idempotencyKey,
-        createdAt: event.createdAt,
+        id: normalized.id,
+        spaceId: normalized.spaceId,
+        installationId: normalized.installationId ?? null,
+        runId: normalized.runId ?? null,
+        meterId: normalized.meterId ?? null,
+        resourceFamily: normalized.resourceFamily ?? null,
+        resourceId: normalized.resourceId ?? null,
+        operation: normalized.operation ?? null,
+        resourceMetadataJson: normalized.resourceMetadata ?? null,
+        kind: normalized.kind,
+        quantity: normalized.quantity,
+        usdMicros: normalized.usdMicros,
+        credits: legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+        source: normalized.source,
+        idempotencyKey: normalized.idempotencyKey,
+        createdAt: normalized.createdAt,
       },
       {
-        id: event.id,
-        spaceId: event.spaceId,
-        installationId: event.installationId ?? null,
-        runId: event.runId ?? null,
-        meterId: event.meterId ?? null,
-        resourceFamily: event.resourceFamily ?? null,
-        resourceId: event.resourceId ?? null,
-        operation: event.operation ?? null,
-        resourceMetadataJson: event.resourceMetadata ?? null,
-        kind: event.kind,
-        quantity: event.quantity,
-        credits: event.credits,
-        source: event.source,
-        createdAt: event.createdAt,
+        id: normalized.id,
+        spaceId: normalized.spaceId,
+        installationId: normalized.installationId ?? null,
+        runId: normalized.runId ?? null,
+        meterId: normalized.meterId ?? null,
+        resourceFamily: normalized.resourceFamily ?? null,
+        resourceId: normalized.resourceId ?? null,
+        operation: normalized.operation ?? null,
+        resourceMetadataJson: normalized.resourceMetadata ?? null,
+        kind: normalized.kind,
+        quantity: normalized.quantity,
+        usdMicros: normalized.usdMicros,
+        credits: legacyStorageCreditsFromUsdMicros(normalized.usdMicros ?? 0),
+        source: normalized.source,
+        createdAt: normalized.createdAt,
       },
       pgSchema.usageEvents.idempotencyKey,
     );
-    return event;
+    return normalized;
   }
 
   async #usageEventByIdempotencyKey(
@@ -2715,6 +2758,117 @@ function parseJson(value: unknown): unknown {
   return value;
 }
 
+function normalizeBillingPlan(plan: BillingPlan): BillingPlan {
+  const includedUsdMicros = billingPlanIncludedUsdMicros(plan);
+  return {
+    ...plan,
+    includedUsdMicros,
+    includedCredits: usdMicrosToLegacyCredits(includedUsdMicros),
+  };
+}
+
+function creditAmountUsdMicros(input: CreditAmountInput): number {
+  if (input.usdMicros !== undefined) {
+    if (
+      !Number.isSafeInteger(input.usdMicros) ||
+      !Number.isFinite(input.usdMicros) ||
+      input.usdMicros <= 0
+    ) {
+      throw new TypeError("usdMicros must be a positive integer");
+    }
+    return input.usdMicros;
+  }
+  if (
+    input.credits === undefined ||
+    !Number.isFinite(input.credits) ||
+    input.credits <= 0
+  ) {
+    throw new TypeError("usdMicros must be a positive integer");
+  }
+  return legacyCreditsToUsdMicros(input.credits);
+}
+
+function normalizeCreditBalance(balance: CreditBalance): CreditBalance {
+  const availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+  const reservedUsdMicros = creditBalanceReservedUsdMicros(balance);
+  const monthlyIncludedUsdMicros =
+    creditBalanceMonthlyIncludedUsdMicros(balance);
+  const purchasedUsdMicros = creditBalancePurchasedUsdMicros(balance);
+  return {
+    ...balance,
+    availableUsdMicros,
+    reservedUsdMicros,
+    monthlyIncludedUsdMicros,
+    purchasedUsdMicros,
+    availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+    reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
+    monthlyIncludedCredits: usdMicrosToLegacyCredits(monthlyIncludedUsdMicros),
+    purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
+  };
+}
+
+function creditBalanceFromRow(row: {
+  readonly spaceId: string;
+  readonly availableUsdMicros?: number | null;
+  readonly reservedUsdMicros?: number | null;
+  readonly monthlyIncludedUsdMicros?: number | null;
+  readonly purchasedUsdMicros?: number | null;
+  readonly availableCredits: number;
+  readonly reservedCredits: number;
+  readonly monthlyIncludedCredits: number;
+  readonly purchasedCredits: number;
+  readonly updatedAt: string;
+}): CreditBalance {
+  return normalizeCreditBalance({
+    spaceId: row.spaceId,
+    ...(row.availableUsdMicros !== null && row.availableUsdMicros !== undefined
+      ? { availableUsdMicros: row.availableUsdMicros }
+      : {}),
+    ...(row.reservedUsdMicros !== null && row.reservedUsdMicros !== undefined
+      ? { reservedUsdMicros: row.reservedUsdMicros }
+      : {}),
+    ...(row.monthlyIncludedUsdMicros !== null &&
+    row.monthlyIncludedUsdMicros !== undefined
+      ? { monthlyIncludedUsdMicros: row.monthlyIncludedUsdMicros }
+      : {}),
+    ...(row.purchasedUsdMicros !== null && row.purchasedUsdMicros !== undefined
+      ? { purchasedUsdMicros: row.purchasedUsdMicros }
+      : {}),
+    availableCredits: row.availableCredits,
+    reservedCredits: row.reservedCredits,
+    monthlyIncludedCredits: row.monthlyIncludedCredits,
+    purchasedCredits: row.purchasedCredits,
+    updatedAt: row.updatedAt,
+  });
+}
+
+function normalizeCreditReservation(
+  reservation: CreditReservation,
+): CreditReservation {
+  const estimatedUsdMicros =
+    reservation.estimatedUsdMicros ??
+    legacyCreditsToUsdMicros(reservation.estimatedCredits);
+  return {
+    ...reservation,
+    estimatedUsdMicros,
+    estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
+  };
+}
+
+function normalizeUsageEvent(event: UsageEvent): UsageEvent {
+  const usdMicros = usageEventUsdMicros(event);
+  return {
+    ...event,
+    usdMicros,
+    credits: usdMicrosToLegacyCredits(usdMicros),
+  };
+}
+
+function legacyStorageCreditsFromUsdMicros(usdMicros: number): number {
+  const credits = usdMicrosToLegacyCredits(usdMicros);
+  return usdMicros >= 0 ? Math.ceil(credits) : Math.floor(credits);
+}
+
 function usageEventFromRow(row: {
   readonly id: string;
   readonly spaceId: string;
@@ -2727,6 +2881,7 @@ function usageEventFromRow(row: {
   readonly resourceMetadataJson?: unknown;
   readonly kind: string;
   readonly quantity: number;
+  readonly usdMicros?: number | null;
   readonly credits: number;
   readonly source: string;
   readonly idempotencyKey: string;
@@ -2744,7 +2899,10 @@ function usageEventFromRow(row: {
     ...usageResourceMetadataFromRow(row.resourceMetadataJson),
     kind: row.kind as UsageEvent["kind"],
     quantity: row.quantity,
-    credits: row.credits,
+    usdMicros: row.usdMicros ?? legacyCreditsToUsdMicros(row.credits),
+    credits: usdMicrosToLegacyCredits(
+      row.usdMicros ?? legacyCreditsToUsdMicros(row.credits),
+    ),
     source: row.source as UsageEvent["source"],
     idempotencyKey: row.idempotencyKey,
     createdAt: row.createdAt,

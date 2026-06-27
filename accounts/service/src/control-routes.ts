@@ -672,7 +672,7 @@ export interface ControlPlaneOperations {
   }>;
   topUpSpaceCredits(
     spaceId: string,
-    input: { readonly credits: number },
+    input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }>;
   changeSpaceSubscription(
     spaceId: string,
