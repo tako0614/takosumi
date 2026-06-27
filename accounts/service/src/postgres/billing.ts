@@ -3,7 +3,7 @@
 // the original PostgresAccountsStore.
 
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   doublePrecision,
   integer,
@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BillingAccountRecord,
+  BillingUsageExportMark,
   BillingUsageRecord,
   BillingWebhookEventClaimResult,
   BillingWebhookEventRecord,
@@ -91,6 +92,10 @@ const billingUsageRecords = accounts.table("billing_usage_records", {
   metadata: jsonb("metadata").notNull(),
   reportedBySubject: text("reported_by_subject"),
   reportedAt: timestamp("reported_at", { mode: "date" }).notNull(),
+  billingExportProvider: text("billing_export_provider"),
+  billingExportId: text("billing_export_id"),
+  billingExportReference: text("billing_export_reference"),
+  billingExportedAt: timestamp("billing_exported_at", { mode: "date" }),
 });
 
 const billingSchema = {
@@ -316,6 +321,73 @@ export async function listBillingUsageRecordsForInstallation(
   return rows.map(billingUsageFromRow);
 }
 
+export async function listBillingUsageRecordsForBillingAccount(
+  client: PostgresQueryClient,
+  billingAccountId: string,
+): Promise<readonly BillingUsageRecord[]> {
+  const rows = (await postgresDrizzle(client, billingSchema)
+    .select(billingUsageColumns)
+    .from(billingUsageRecords)
+    .where(eq(billingUsageRecords.billingAccountId, billingAccountId))
+    .orderBy(
+      asc(billingUsageRecords.reportedAt),
+      asc(billingUsageRecords.usageReportId),
+    )) as BillingUsageRow[];
+  return rows.map(billingUsageFromRow);
+}
+
+export async function markBillingUsageRecordsExported(
+  client: PostgresQueryClient,
+  mark: BillingUsageExportMark,
+): Promise<void> {
+  if (mark.usageReportIds.length === 0) return;
+  const rows = (await postgresDrizzle(client, billingSchema)
+    .select(billingUsageColumns)
+    .from(billingUsageRecords)
+    .where(inArray(billingUsageRecords.usageReportId, [...mark.usageReportIds]))
+    .orderBy(
+      asc(billingUsageRecords.reportedAt),
+      asc(billingUsageRecords.usageReportId),
+    )) as BillingUsageRow[];
+  const records = rows.map(billingUsageFromRow);
+  const recordsById = new Map(
+    records.map((record) => [record.usageReportId, record]),
+  );
+  for (const usageReportId of mark.usageReportIds) {
+    const record = recordsById.get(usageReportId);
+    if (!record) {
+      throw new TypeError("billing usage report was not found");
+    }
+    if (record.billingAccountId !== mark.billingAccountId) {
+      throw new TypeError(
+        "billing usage report is owned by another billing account",
+      );
+    }
+    if (
+      record.billingExportId &&
+      (record.billingExportProvider !== mark.provider ||
+        record.billingExportId !== mark.exportId ||
+        record.billingExportReference !== mark.exportReference)
+    ) {
+      throw new TypeError("billing usage report was already exported");
+    }
+  }
+  await postgresDrizzle(client, billingSchema)
+    .update(billingUsageRecords)
+    .set({
+      billingExportProvider: mark.provider,
+      billingExportId: mark.exportId,
+      billingExportReference: mark.exportReference,
+      billingExportedAt: toDate(mark.exportedAt),
+    })
+    .where(
+      and(
+        eq(billingUsageRecords.billingAccountId, mark.billingAccountId),
+        inArray(billingUsageRecords.usageReportId, [...mark.usageReportIds]),
+      ),
+    );
+}
+
 const billingAccountColumns = {
   billing_account_id: billingAccounts.billingAccountId,
   subject: billingAccounts.subject,
@@ -373,6 +445,10 @@ const billingUsageColumns = {
   metadata: billingUsageRecords.metadata,
   reported_by_subject: billingUsageRecords.reportedBySubject,
   reported_at: billingUsageRecords.reportedAt,
+  billing_export_provider: billingUsageRecords.billingExportProvider,
+  billing_export_id: billingUsageRecords.billingExportId,
+  billing_export_reference: billingUsageRecords.billingExportReference,
+  billing_exported_at: billingUsageRecords.billingExportedAt,
 };
 
 async function billingAccountFirst(
@@ -492,5 +568,12 @@ function billingUsageValues(record: BillingUsageRecord) {
     metadata: record.metadata,
     reportedBySubject: record.reportedBySubject ?? null,
     reportedAt: toDate(record.reportedAt),
+    billingExportProvider: record.billingExportProvider ?? null,
+    billingExportId: record.billingExportId ?? null,
+    billingExportReference: record.billingExportReference ?? null,
+    billingExportedAt:
+      record.billingExportedAt === undefined
+        ? null
+        : toDate(record.billingExportedAt),
   };
 }

@@ -191,6 +191,25 @@ test("InMemoryAccountsStore persists billing usage records per installation", ()
       metadata: { run_id: "run_1" },
     },
   ]);
+  expect(
+    store
+      .listBillingUsageRecordsForBillingAccount("bill_1")
+      .map((record) => record.usageReportId),
+  ).toEqual(["usage_report_1", "usage_report_2"]);
+  store.markBillingUsageRecordsExported({
+    billingAccountId: "bill_1",
+    usageReportIds: ["usage_report_1"],
+    provider: "stripe",
+    exportId: "export_1",
+    exportReference: "ii_1",
+    exportedAt: 4_000,
+  });
+  expect(store.findBillingUsageRecord("usage_report_1")).toMatchObject({
+    billingExportProvider: "stripe",
+    billingExportId: "export_1",
+    billingExportReference: "ii_1",
+    billingExportedAt: 4_000,
+  });
 });
 
 test("InMemoryAccountsStore indexes billing accounts by subject and Stripe customer", () => {

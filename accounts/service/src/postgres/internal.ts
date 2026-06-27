@@ -185,6 +185,10 @@ export interface BillingUsageRow {
   metadata: unknown;
   reported_by_subject: TakosumiSubject | null;
   reported_at: TimeValue;
+  billing_export_provider: string | null;
+  billing_export_id: string | null;
+  billing_export_reference: string | null;
+  billing_exported_at: TimeValue | null;
 }
 
 export interface PrivacyRequestRow {
@@ -473,6 +477,10 @@ export function billingUsageFromRow(row: BillingUsageRow): BillingUsageRecord {
     metadata: objectJson(row.metadata),
     reportedBySubject: row.reported_by_subject ?? undefined,
     reportedAt: millis(row.reported_at),
+    billingExportProvider: optional(row.billing_export_provider),
+    billingExportId: optional(row.billing_export_id),
+    billingExportReference: optional(row.billing_export_reference),
+    billingExportedAt: optionalMillis(row.billing_exported_at),
   };
 }
 

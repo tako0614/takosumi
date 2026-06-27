@@ -193,6 +193,15 @@ has been billed. Takosumi billing is closed only when the Cloud extension emits
 usage reports, the Workspace usage ledger records them, and billing/Stripe
 aggregates them into an invoice or entitlement decision.
 
+The Stripe integration rolls up unexported usage reports by billing account,
+meter, and unit, then creates Stripe invoice items for those rollups. After a
+successful invoice item creation, the source usage reports are marked with
+`billingExportProvider: "stripe"`, the export id, the Stripe invoice item id,
+and the exported timestamp so the next sync does not charge the same reports
+again. For Cloudflare Workers compatibility, the billing name remains
+`cloudflare.workers_script`; `resourceMetadata.backend:
+"cloudflare.workers_for_platforms"` is internal implementation evidence only.
+
 ## AI Gateway
 
 Base URL:
