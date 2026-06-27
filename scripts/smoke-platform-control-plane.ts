@@ -469,6 +469,12 @@ const CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS = [
     path: (accountId: string): string =>
       `/client/v4/accounts/${encodeURIComponent(accountId)}/queues?per_page=1`,
   },
+  {
+    id: "cloudflare.workflow.list",
+    label: "Workflows",
+    path: (accountId: string): string =>
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/workflows?per_page=1`,
+  },
 ] as const;
 
 interface BackupRestoreRehearsalResult {
@@ -4130,7 +4136,7 @@ Options:
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
   --cloudflare-resource-preflight <account-resources|d1|none>
-                                                   verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, and Queues
+                                                   verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, Queues, and Workflows
   --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
   --capsule-dir <path>                            default cloudflare-hello-worker module
