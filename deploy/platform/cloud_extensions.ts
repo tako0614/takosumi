@@ -97,10 +97,6 @@ export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRou
         "kv.namespaces",
         "r2.buckets",
         "d1.databases",
-        "workflows",
-        "containers",
-        "queues",
-        "durable_objects",
       ],
       smokeChecks: [
         "cloudflareCompatVerifyAuth",

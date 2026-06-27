@@ -1699,9 +1699,9 @@ test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage 
   expect(response.status).toBe(200);
   expect(usageCalls).toHaveLength(1);
   expect(usageCalls[0]?.spaceId).toBe("space_cf_usage");
-  expect(
-    Date.parse(usageCalls[0]!.input.periodEnd),
-  ).toBeGreaterThan(Date.parse(usageCalls[0]!.input.periodStart));
+  expect(Date.parse(usageCalls[0]!.input.periodEnd)).toBeGreaterThan(
+    Date.parse(usageCalls[0]!.input.periodStart),
+  );
   expect(usageCalls[0]?.input.meters).toEqual([
     {
       installationId: "inst_cf_compat",
@@ -1914,9 +1914,23 @@ test("Cloud-only extension catalog reports configured public capabilities withou
     true,
   ]);
   expect(catalog.extensions[0]?.smokeChecks).toContain("aiGatewayStatus");
+  const cloudflare = catalog.extensions.find(
+    (extension) => extension.id === "provider.cloudflare.client_v4",
+  );
+  expect(cloudflare?.capabilities).toEqual([
+    "user.tokens.verify",
+    "accounts.list",
+    "workers.scripts",
+    "workers.routes",
+    "kv.namespaces",
+    "r2.buckets",
+    "d1.databases",
+  ]);
   const serialized = JSON.stringify(catalog);
   expect(serialized).not.toContain("TAKOSUMI_CLOUD_AI_GATEWAY");
   expect(serialized).not.toContain("TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT");
+  expect(serialized).not.toContain("workers_for_platforms");
+  expect(serialized).not.toContain("durable_objects");
 });
 
 test("Cloud-only extension catalog is a stable platform endpoint", async () => {
