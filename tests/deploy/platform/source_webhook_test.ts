@@ -38,6 +38,92 @@ import {
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
 
+const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
+  minimumGrossMarginBps: 3_000,
+  meters: [
+    {
+      meterIdPrefix: "ai:",
+      kind: "ai_request",
+      unit: "request",
+      chargeUsdMicrosPerUnit: 1_000,
+      estimatedCostUsdMicrosPerUnit: 0,
+      minimumChargeUsdMicros: 1_000,
+    },
+    {
+      meterIdPrefix: "ai:",
+      kind: "ai_input_token",
+      unit: "token",
+      chargeUsdMicrosPerMillionUnits: 300_000,
+      estimatedCostUsdMicrosPerMillionUnits: 150_000,
+      minimumChargeUsdMicros: 2,
+    },
+    {
+      meterIdPrefix: "cloudflare:workers_script:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 1_000,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 1_000,
+    },
+    {
+      meterIdPrefix: "cloudflare:kv:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
+    {
+      meterIdPrefix: "cloudflare:kv:",
+      kind: "gateway_storage_gb_hour",
+      unit: "gb_hour",
+      chargeUsdMicrosPerMillionUnits: 100_000,
+      estimatedCostUsdMicrosPerMillionUnits: 50_000,
+      minimumChargeUsdMicros: 2,
+    },
+    {
+      meterIdPrefix: "cloudflare:r2:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
+    {
+      meterIdPrefix: "cloudflare:r2:",
+      kind: "gateway_storage_gb_hour",
+      unit: "gb_hour",
+      chargeUsdMicrosPerMillionUnits: 100_000,
+      estimatedCostUsdMicrosPerMillionUnits: 50_000,
+      minimumChargeUsdMicros: 2,
+    },
+    {
+      meterIdPrefix: "cloudflare:d1:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
+    {
+      meterIdPrefix: "cloudflare:workflows:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 1_000,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 1_000,
+    },
+    {
+      meterIdPrefix: "cloudflare:containers:",
+      kind: "gateway_compute",
+      unit: "vcpu_second",
+      chargeUsdMicrosPerMillionUnits: 1_000_000,
+      estimatedCostUsdMicrosPerMillionUnits: 500_000,
+      minimumChargeUsdMicros: 2,
+    },
+  ],
+});
+
 function makeWebhookOps(
   overrides: {
     valid?: boolean;
@@ -1259,13 +1345,19 @@ test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud e
 });
 
 test("Cloudflare Compatibility Gateway route delegates only to the Cloud extension binding", async () => {
+  const route = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!route) throw new Error("Cloudflare compat route missing");
   const forwarded: { url: string; authorization: string | null }[] = [];
-  const response = await handlePlatformCloudflareCompatRequest(
+  const usageCalls: unknown[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
       { headers: { authorization: "Bearer cf-compat-token" } },
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async (request: Request) => {
           forwarded.push({
@@ -1281,6 +1373,19 @@ test("Cloudflare Compatibility Gateway route delegates only to the Cloud extensi
         },
       },
     } as never,
+    route,
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
+    {
+      recordGatewayResourceUsage: async (...args) => {
+        usageCalls.push(args);
+        return { usageEvents: [{ id: "usage_precharge" }] };
+      },
+    },
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
@@ -1295,6 +1400,7 @@ test("Cloudflare Compatibility Gateway route delegates only to the Cloud extensi
       authorization: null,
     },
   ]);
+  expect(usageCalls).toHaveLength(1);
 });
 
 test("Cloud extension route records reported Workers and AI usage", async () => {
@@ -1322,6 +1428,7 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
       body: JSON.stringify({ model: "takosumi/default", messages: [] }),
     }),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_AI_GATEWAY: {
         fetch: async () =>
           Response.json(
@@ -1357,42 +1464,61 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_usage",
+      installationId: "inst_ai_gateway",
+    }),
     usageOps,
   );
   expect(response.status).toBe(200);
   expect(
     response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
   ).toBe(null);
-  expect(usageCalls).toEqual([
+  expect(usageCalls).toHaveLength(2);
+  expect(usageCalls[0]?.spaceId).toBe("space_usage");
+  expect(usageCalls[0]?.input.spendRequired).toBe(true);
+  expect(usageCalls[0]?.input.meters).toEqual([
     {
-      spaceId: "space_usage",
-      input: {
-        periodStart: "2026-06-26T13:00:00.000Z",
-        periodEnd: "2026-06-26T13:01:00.000Z",
-        spendRequired: true,
-        meters: [
-          {
-            meterId: "ai:takosumi-default:request",
-            kind: "ai_request",
-            quantity: 1,
-            usdMicros: 250_000,
-          },
-          {
-            meterId: "cloudflare:workers_script:request",
-            installationId: "inst_worker",
-            resourceFamily: "cloudflare.workers_script",
-            resourceId: "script:api",
-            operation: "request",
-            kind: "gateway_compute",
-            quantity: 42,
-            usdMicros: 1_500,
-          },
-        ],
-      },
+      installationId: "inst_ai_gateway",
+      meterId: "ai:openai_compatible:chat.completions",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "chat.completions",
+      operation: "chat.completions",
+      kind: "ai_request",
+      quantity: 1,
+      usdMicros: 1_000,
     },
   ]);
+  expect(usageCalls[1]).toEqual({
+    spaceId: "space_usage",
+    input: {
+      periodStart: "2026-06-26T13:00:00.000Z",
+      periodEnd: "2026-06-26T13:01:00.000Z",
+      spendRequired: true,
+      meters: [
+        {
+          meterId: "ai:takosumi-default:request",
+          kind: "ai_request",
+          quantity: 1,
+          usdMicros: 1_000,
+        },
+        {
+          meterId: "cloudflare:workers_script:request",
+          installationId: "inst_worker",
+          resourceFamily: "cloudflare.workers_script",
+          resourceId: "script:api",
+          operation: "request",
+          kind: "gateway_compute",
+          quantity: 42,
+          usdMicros: 42_000,
+        },
+      ],
+    },
+  });
   expect(billingUsageImports).toEqual([
+    [{ id: "usage_1", source: "resource_meter" }],
     [{ id: "usage_1", source: "resource_meter" }],
   ]);
 });
@@ -1423,7 +1549,7 @@ test("Cloud extension route prices reported usage from the operator price book",
         unit: "token",
         chargeUsdMicrosPerMillionUnits: 400_000,
         estimatedCostUsdMicrosPerMillionUnits: 100_000,
-        minimumChargeUsdMicros: 1,
+        minimumChargeUsdMicros: 2,
       },
       {
         meterIdPrefix: "cloudflare:workers_script:",
@@ -1457,6 +1583,10 @@ test("Cloud extension route prices reported usage from the operator price book",
                 [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
                   {
                     meterId: "ai:takosumi-default:chat.completions:request",
+                    installationId: "inst_ai_gateway",
+                    resourceFamily: "cloudflare.ai_gateway",
+                    resourceId: "takosumi/default",
+                    operation: "chat.completions",
                     kind: "ai_request",
                     quantity: 1,
                   },
@@ -1480,7 +1610,12 @@ test("Cloud extension route prices reported usage from the operator price book",
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_usage",
+      installationId: "inst_ai_gateway",
+    }),
     {
       recordGatewayResourceUsage: async (spaceId, input) => {
         usageCalls.push({ spaceId, input });
@@ -1490,45 +1625,52 @@ test("Cloud extension route prices reported usage from the operator price book",
   );
 
   expect(response.status).toBe(200);
-  expect(usageCalls).toEqual([
+  expect(usageCalls).toHaveLength(2);
+  expect(usageCalls[0]?.spaceId).toBe("space_usage");
+  expect(usageCalls[0]?.input.meters).toEqual([
     {
-      spaceId: "space_usage",
-      input: {
-        periodStart: "2026-06-26T13:00:00.000Z",
-        periodEnd: "2026-06-26T13:01:00.000Z",
-        spendRequired: true,
-        meters: [
-          {
-            meterId: "ai:takosumi-default:chat.completions:request",
-            kind: "ai_request",
-            quantity: 1,
-            usdMicros: 2_000,
-          },
-          {
-            meterId: "ai:takosumi-default:chat.completions:input_token",
-            kind: "ai_input_token",
-            quantity: 2_500,
-            usdMicros: 1_000,
-          },
-          {
-            meterId: "cloudflare:workers_script:request",
-            resourceFamily: "cloudflare.workers_script",
-            resourceId: "script:api",
-            operation: "request",
-            kind: "gateway_compute",
-            quantity: 2,
-            usdMicros: 3_000,
-          },
-        ],
-      },
+      installationId: "inst_ai_gateway",
+      meterId: "ai:openai_compatible:chat.completions",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "chat.completions",
+      operation: "chat.completions",
+      kind: "ai_request",
+      quantity: 1,
+      usdMicros: 2_000,
     },
   ]);
+  expect(usageCalls[1]).toEqual({
+    spaceId: "space_usage",
+    input: {
+      periodStart: "2026-06-26T13:00:00.000Z",
+      periodEnd: "2026-06-26T13:01:00.000Z",
+      spendRequired: true,
+      meters: [
+        {
+          meterId: "ai:takosumi-default:chat.completions:input_token",
+          kind: "ai_input_token",
+          quantity: 2_500,
+          usdMicros: 1_000,
+        },
+        {
+          meterId: "cloudflare:workers_script:request",
+          resourceFamily: "cloudflare.workers_script",
+          resourceId: "script:api",
+          operation: "request",
+          kind: "gateway_compute",
+          quantity: 2,
+          usdMicros: 3_000,
+        },
+      ],
+    },
+  });
 });
 
 test("Cloud extension route rejects a price book below the required margin", async () => {
   const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
   if (!route) throw new Error("AI Gateway route missing");
   const usageCalls: unknown[] = [];
+  let upstreamCalled = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
@@ -1548,8 +1690,9 @@ test("Cloud extension route rejects a price book below the required margin", asy
         ],
       }),
       TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () =>
-          Response.json(
+        fetch: async () => {
+          upstreamCalled = true;
+          return Response.json(
             { id: "chatcmpl_1", choices: [] },
             {
               headers: {
@@ -1567,11 +1710,17 @@ test("Cloud extension route rejects a price book below the required margin", asy
                 ]),
               },
             },
-          ),
+          );
+        },
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_usage",
+      installationId: "inst_ai_gateway",
+    }),
     {
       recordGatewayResourceUsage: async (...args) => {
         usageCalls.push(args);
@@ -1582,10 +1731,11 @@ test("Cloud extension route rejects a price book below the required margin", asy
 
   expect(response.status).toBe(502);
   expect(await response.json()).toEqual({
-    error: "usage metering failed",
+    error: "usage pricing unavailable",
     error_description:
-      "Cloud extension usage could not be recorded, so the request was not returned as a billable success.",
+      "Cloud resource requests require an operator price book before upstream usage is attempted.",
   });
+  expect(upstreamCalled).toBe(false);
   expect(usageCalls).toEqual([]);
 });
 
@@ -1600,6 +1750,7 @@ test("Cloud extension usage rejects Workers for Platforms as a public resource f
       { method: "PUT" },
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async () =>
           Response.json(
@@ -1630,7 +1781,12 @@ test("Cloud extension usage rejects Workers for Platforms as a public resource f
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
     {
       recordGatewayResourceUsage: async () => ({
         usageEvents: [{ id: "usage_unreachable" }],
@@ -1655,6 +1811,7 @@ test("Cloud extension usage rejects WfP as a public meter id", async () => {
       { method: "PUT" },
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async () =>
           Response.json(
@@ -1685,7 +1842,12 @@ test("Cloud extension usage rejects WfP as a public meter id", async () => {
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
     {
       recordGatewayResourceUsage: async () => ({
         usageEvents: [{ id: "usage_unreachable" }],
@@ -1710,6 +1872,7 @@ test("Cloud extension usage rejects Workers for Platforms as public metadata", a
       { method: "PUT" },
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async () =>
           Response.json(
@@ -1743,7 +1906,12 @@ test("Cloud extension usage rejects Workers for Platforms as public metadata", a
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
     {
       recordGatewayResourceUsage: async () => ({
         usageEvents: [{ id: "usage_unreachable" }],
@@ -1851,6 +2019,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/storage/kv/namespaces",
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async () =>
           Response.json(
@@ -1871,7 +2040,12 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_cf_usage",
+      installationId: "inst_cf_compat",
+    }),
     usageOps,
   );
 
@@ -1879,17 +2053,26 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
   expect(
     response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
   ).toBe(null);
-  expect(usageCalls).toEqual([
+  expect(usageCalls).toHaveLength(2);
+  expect(usageCalls[0]?.spaceId).toBe("space_cf_usage");
+  expect(usageCalls[0]?.input.spendRequired).toBe(true);
+  expect(usageCalls[0]?.input.meters).toEqual([
     {
-      spaceId: "space_cf_usage",
-      input: {
-        periodStart: "2026-06-26T13:00:00.000Z",
-        periodEnd: "2026-06-26T13:01:00.000Z",
-        spendRequired: true,
-        meters,
-      },
+      installationId: "inst_cf_compat",
+      meterId: "cloudflare:kv:read",
+      resourceFamily: "cloudflare.kv",
+      resourceId: "kv:collection",
+      operation: "read",
+      kind: "gateway_compute",
+      quantity: 1,
+      usdMicros: 500,
     },
   ]);
+  expect(usageCalls[1]?.spaceId).toBe("space_cf_usage");
+  expect(usageCalls[1]?.input.periodStart).toBe("2026-06-26T13:00:00.000Z");
+  expect(usageCalls[1]?.input.periodEnd).toBe("2026-06-26T13:01:00.000Z");
+  expect(usageCalls[1]?.input.spendRequired).toBe(true);
+  expect(usageCalls[1]?.input.meters).toHaveLength(meters.length);
 });
 
 test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage headers are absent", async () => {
@@ -1915,6 +2098,7 @@ test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage 
       },
     ),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
         fetch: async () =>
           Response.json({
@@ -1983,6 +2167,7 @@ test("Cloud extension returns upstream success when billing export lags after us
         body: JSON.stringify({ model: "takosumi/default", messages: [] }),
       }),
       {
+        TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
         TAKOSUMI_CLOUD_AI_GATEWAY: {
           fetch: async () =>
             Response.json({ id: "chatcmpl_1", choices: [{ index: 0 }] }),
@@ -2041,15 +2226,18 @@ test("Cloud extension returns upstream success when billing export lags after us
 test("Cloud extension route fails closed when reported usage cannot be recorded", async () => {
   const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
   if (!route) throw new Error("AI Gateway route missing");
+  let upstreamCalled = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
       body: JSON.stringify({ model: "takosumi/default", messages: [] }),
     }),
     {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () =>
-          Response.json(
+        fetch: async () => {
+          upstreamCalled = true;
+          return Response.json(
             { id: "chatcmpl_1", choices: [] },
             {
               headers: {
@@ -2068,21 +2256,28 @@ test("Cloud extension route fails closed when reported usage cannot be recorded"
                 ]),
               },
             },
-          ),
+          );
+        },
       },
     } as never,
     route,
-    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      spaceId: "space_usage",
+      installationId: "inst_ai_gateway",
+    }),
   );
   expect(response.status).toBe(502);
   expect(await response.json()).toEqual({
     error: "usage metering unavailable",
     error_description:
-      "Cloud extension reported usage, but the platform usage ledger is not wired.",
+      "Cloud resource requests require the platform usage ledger before upstream usage is attempted.",
   });
+  expect(upstreamCalled).toBe(false);
 });
 
-test("Cloudflare Compatibility Gateway route delegates through the platform worker fetch registry", async () => {
+test("Cloudflare Compatibility Gateway platform fetch requires billing context before delegation", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: string[] = [];
   const response = await worker.fetch(
@@ -2098,15 +2293,13 @@ test("Cloudflare Compatibility Gateway route delegates through the platform work
       },
     } as never,
   );
-  expect(response.status).toBe(200);
+  expect(response.status).toBe(400);
   expect(await response.json()).toEqual({
-    success: true,
-    result: {},
-    errors: [],
+    error: "billing workspace required",
+    error_description:
+      "Cloud resource requests require a billing workspace before upstream usage is attempted.",
   });
-  expect(forwarded).toEqual([
-    "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-  ]);
+  expect(forwarded).toEqual([]);
 });
 
 test("Cloud-only extension route matcher rejects near-prefixes and unregistered future gateways", async () => {

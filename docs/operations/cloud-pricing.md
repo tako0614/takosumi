@@ -86,7 +86,7 @@ AI model のように meter id が model ごとに増えるものは `meterIdPre
   "unit": "token",
   "chargeUsdMicrosPerMillionUnits": 300000,
   "estimatedCostUsdMicrosPerMillionUnits": 150000,
-  "minimumChargeUsdMicros": 1
+  "minimumChargeUsdMicros": 2
 }
 ```
 
@@ -106,6 +106,11 @@ AI model のように meter id が model ごとに増えるものは `meterIdPre
 任意 billing guard:
 
 - `minimumChargeUsdMicros`
+
+`chargeUsdMicrosPerMillionUnits` / `estimatedCostUsdMicrosPerMillionUnits` を使う meter は、
+small quantity の原価見積もりが `1` micro USD に切り上がることがあります。positive cost
+meter で `minimumGrossMarginBps: 3000` を満たすには、初期設定では
+`minimumChargeUsdMicros` を `2` 以上にします。
 
 ## Initial pricing
 
