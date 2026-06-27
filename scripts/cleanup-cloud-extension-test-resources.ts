@@ -333,13 +333,15 @@ export async function runCloudExtensionTestResourceCleanup(
     options.write && options.verifyAfterWrite
       ? await verifyRemainingCandidates(options, fetchImpl)
       : undefined;
-  const remainingCandidates = postWriteVerification?.candidates ?? 0;
+  const remainingCandidates = options.write
+    ? (postWriteVerification?.candidates ?? 0)
+    : candidates;
   return {
     kind: "takosumi.cloud-extension-test-resource-cleanup@v1",
     status:
       failedDeletes === 0 &&
       failedCollections === 0 &&
-      remainingCandidates === 0
+      (!options.write || remainingCandidates === 0)
         ? "passed"
         : "failed",
     mode: options.write ? "write" : "dry_run",

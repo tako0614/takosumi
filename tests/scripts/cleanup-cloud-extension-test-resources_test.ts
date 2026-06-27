@@ -48,6 +48,7 @@ test("cloud extension cleanup dry-run lists only public compat test resources", 
   expect(result.status).toBe("passed");
   expect(result.mode).toBe("dry_run");
   expect(result.totals.candidates).toBe(7);
+  expect(result.totals.remainingCandidates).toBe(7);
   expect(result.totals.deleted).toBe(0);
   expect(requests.every((request) => request.method === "GET")).toBe(true);
   expect(JSON.stringify(result)).not.toContain(options.sessionToken);
