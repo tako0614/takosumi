@@ -1336,8 +1336,14 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
                     credits: 2,
                   },
                   {
-                    meterId: "workers:compat:cpu",
+                    meterId: "cloudflare:workers_script:request",
                     installationId: "inst_worker",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:api",
+                    operation: "request",
+                    resourceMetadata: {
+                      backend: "cloudflare.workers_for_platforms",
+                    },
                     kind: "gateway_compute",
                     quantity: 42,
                     credits: 3,
@@ -1370,8 +1376,14 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
             credits: 2,
           },
           {
-            meterId: "workers:compat:cpu",
+            meterId: "cloudflare:workers_script:request",
             installationId: "inst_worker",
+            resourceFamily: "cloudflare.workers_script",
+            resourceId: "script:api",
+            operation: "request",
+            resourceMetadata: {
+              backend: "cloudflare.workers_for_platforms",
+            },
             kind: "gateway_compute",
             quantity: 42,
             credits: 3,
