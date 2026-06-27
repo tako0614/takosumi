@@ -1293,7 +1293,9 @@ function cloudflareCompatUsageEventMatches(
   );
 }
 
-function usageResourceMetadataLeaksInternalWorkersBackend(value: unknown): boolean {
+function usageResourceMetadataLeaksInternalWorkersBackend(
+  value: unknown,
+): boolean {
   const metadata = record(value);
   return Object.values(metadata).some(
     (entry) =>
@@ -1628,6 +1630,7 @@ async function runCloudflareCompatProviderE2E(
     await runCloudflareCompatR2BucketProviderE2E(options),
     await runCloudflareCompatKvNamespaceProviderE2E(options),
     await runCloudflareCompatD1DatabaseProviderE2E(options),
+    await runCloudflareCompatQueueProviderE2E(options),
     await runCloudflareCompatWorkersScriptProviderE2E(options),
     await runCloudflareCompatWorkersRouteProviderE2E(options),
   ];
@@ -1656,6 +1659,7 @@ async function cloudflareCompatRestLifecycleCheck(
       await runCloudflareCompatKvNamespaceRestLifecycle(fetchImpl, options),
       await runCloudflareCompatD1DatabaseRestLifecycle(fetchImpl, options),
       await runCloudflareCompatR2BucketRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatQueueRestLifecycle(fetchImpl, options),
       await runCloudflareCompatWorkerRouteRestLifecycle(fetchImpl, options),
       await runCloudflareCompatInvalidScopeRestCheck(fetchImpl, options),
     ];
@@ -1903,6 +1907,76 @@ async function runCloudflareCompatR2BucketRestLifecycle(
       "cloudflare_r2_bucket_rest",
       completedSteps,
       { name },
+      error,
+      cleanup,
+    );
+  }
+}
+
+async function runCloudflareCompatQueueRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const queueName = `takosumi-rest-queue-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  let queueId: string | undefined;
+  try {
+    const created = await cloudflareCompatJson(fetchImpl, options, {
+      path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues`,
+      method: "POST",
+      body: { queue_name: queueName },
+    });
+    queueId = expectCloudflareResultString(created, ["queue_id", "id"]);
+    completedSteps.push("create");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues/${encodeURIComponent(queueId)}`,
+      }),
+    );
+    completedSteps.push("read");
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues?name=${encodeURIComponent(queueName)}`,
+      }),
+      "queue_name",
+      queueName,
+    );
+    completedSteps.push("list-filter");
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues`,
+        method: "POST",
+        body: {},
+      }),
+    );
+    completedSteps.push("validation");
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues/${encodeURIComponent(queueId)}`,
+        method: "DELETE",
+      }),
+    );
+    completedSteps.push("delete");
+    queueId = undefined;
+    return {
+      resource: "cloudflare_queue_rest",
+      ok: true,
+      completedSteps,
+      summary: { queueName },
+    };
+  } catch (error) {
+    const cleanup = queueId
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues`,
+          query: { name: queueName },
+          idField: "queue_id",
+          fallbackIdField: "id",
+        })
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_queue_rest",
+      completedSteps,
+      { queueName },
       error,
       cleanup,
     );
@@ -2220,6 +2294,99 @@ output "namespace_title" {
         error instanceof Error ? error.message : String(error),
       ),
       cleanup,
+    };
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+}
+
+async function runCloudflareCompatQueueProviderE2E(
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const workdir = await mkdtemp(
+    join(tmpdir(), "takosumi-cloud-compat-provider-"),
+  );
+  const queueName = `takosumi-e2e-queue-${Date.now().toString(36)}`;
+  const completedSteps: string[] = [];
+  try {
+    await writeFile(
+      join(workdir, "main.tf"),
+      `terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+provider "cloudflare" {
+  base_url = "${options.url}/compat/cloudflare/client/v4"
+}
+
+variable "queue_name" {
+  type = string
+}
+
+resource "cloudflare_queue" "smoke" {
+  account_id  = "${CLOUDFLARE_COMPAT_ACCOUNT_ID}"
+  queue_name  = var.queue_name
+}
+
+output "queue_name" {
+  value = cloudflare_queue.smoke.queue_name
+}
+`,
+    );
+    const env = {
+      CLOUDFLARE_API_TOKEN: options.sessionToken,
+      TF_VAR_queue_name: queueName,
+      TF_IN_AUTOMATION: "1",
+    };
+    await tofu(["init", "-input=false", "-no-color"], workdir, env);
+    completedSteps.push("init");
+    await tofu(
+      ["plan", "-input=false", "-no-color", "-out=tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("plan");
+    await tofu(
+      ["apply", "-input=false", "-no-color", "-auto-approve", "tfplan"],
+      workdir,
+      env,
+    );
+    completedSteps.push("apply");
+    await tofu(
+      ["destroy", "-input=false", "-no-color", "-auto-approve"],
+      workdir,
+      env,
+    );
+    completedSteps.push("destroy");
+    return {
+      resource: "cloudflare_queue",
+      ok: true,
+      completedSteps,
+      summary: { queueName },
+    };
+  } catch (error) {
+    const cleanup = completedSteps.includes("apply")
+      ? await cleanupCloudflareCompatCollectionResource(fetch, options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/queues`,
+          query: { name: queueName },
+          idField: "queue_id",
+          fallbackIdField: "id",
+        })
+      : undefined;
+    return {
+      resource: "cloudflare_queue",
+      ok: false,
+      completedSteps,
+      summary: { queueName },
+      errorClass: error instanceof Error ? error.name || "Error" : typeof error,
+      message: sanitizeErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+      ...(cleanup ? { cleanup } : {}),
     };
   } finally {
     await rm(workdir, { recursive: true, force: true });

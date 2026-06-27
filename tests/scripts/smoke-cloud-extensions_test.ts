@@ -25,6 +25,7 @@ const PROVIDER_E2E_RESOURCES = [
   "cloudflare_r2_bucket",
   "cloudflare_workers_kv_namespace",
   "cloudflare_d1_database",
+  "cloudflare_queue",
   "cloudflare_workers_script",
   "cloudflare_workers_route",
 ] as const;
@@ -1310,6 +1311,23 @@ function responseForImplementedCompat(
       return cloudflare(true, { name: searchParams.get("name") ?? "r2-test" });
     }
     return cloudflare(true, [{ name: searchParams.get("name") ?? "r2-test" }]);
+  }
+  if (pathname.includes("/queues")) {
+    if (method === "POST" && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "POST") {
+      return cloudflare(true, { id: "queue_test", queue_name: "jobs" }, 201);
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { id: "queue_test", deleted: true });
+    }
+    if (pathname.endsWith("/queue_test")) {
+      return cloudflare(true, { id: "queue_test", queue_name: "jobs" });
+    }
+    return cloudflare(true, [
+      { id: "queue_test", queue_name: searchParams.get("name") ?? "jobs" },
+    ]);
   }
   if (pathname.includes("/workers/routes")) {
     if (method === "POST" && bodyText.includes("{}")) {

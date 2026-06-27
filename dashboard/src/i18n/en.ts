@@ -940,6 +940,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
+  "cloudResources.inventory.queues": "Queues",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "Names",
   "cloudResources.inventory.showAll": "Show all {count}",

@@ -1,8 +1,8 @@
 /**
  * Cloud screen (`/cloud`) — Takosumi Cloud only. Two management surfaces:
  *   - Cloud API keys (create / list / revoke)
- *   - Cloud resources (KV / Object Storage / Database / Workers Script): list,
- *     copy identifiers, and DELETE through the Cloudflare compatibility
+ *   - Cloud resources (KV / Object Storage / Database / Queue / Workers Script):
+ *     list, copy identifiers, and DELETE through the Cloudflare compatibility
  *     gateway.
  * Plus compact endpoint reference cards (AI gateway, Cloudflare compat).
  *
@@ -446,6 +446,7 @@ function ResourcesCard(props: {
     kv: false,
     r2: false,
     d1: false,
+    queue: false,
     worker: false,
   });
   const inventory = () => props.snapshot.compatInventory;
@@ -485,6 +486,15 @@ function ResourcesCard(props: {
         result: mapResult(inv.d1Databases, (item) => ({
           id: item.uuid ?? item.id ?? "",
           name: item.name ?? item.uuid ?? item.id ?? "",
+        })),
+      },
+      {
+        kind: "queue",
+        label: t("cloudResources.inventory.queues"),
+        icon: <Activity size={16} />,
+        result: mapResult(inv.queues, (item) => ({
+          id: item.queue_id ?? item.id ?? item.queue_name ?? "",
+          name: item.queue_name ?? item.queue_id ?? item.id ?? "",
         })),
       },
       {
