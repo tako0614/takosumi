@@ -424,7 +424,6 @@ test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers sc
     periodStart: 1_800_000_000,
     periodEnd: 1_800_086_400,
     requestDigest: "sha256:a",
-    metadata: { backend: "cloudflare.workers_for_platforms" },
     reportedAt: 1_800_000_100,
   });
   store.saveBillingUsageRecord({
@@ -437,7 +436,6 @@ test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers sc
     periodStart: 1_800_000_000,
     periodEnd: 1_800_086_400,
     requestDigest: "sha256:b",
-    metadata: { backend: "cloudflare.workers_for_platforms" },
     reportedAt: 1_800_000_200,
   });
   store.saveBillingUsageRecord({

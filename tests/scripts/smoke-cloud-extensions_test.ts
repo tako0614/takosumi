@@ -145,9 +145,6 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
                       resourceFamily: "cloudflare.workers_script",
                       resourceId: "script:smoke",
                       operation: "deploy",
-                      resourceMetadata: {
-                        backend: "cloudflare.workers_for_platforms",
-                      },
                       kind: "gateway_compute",
                       quantity: 1,
                       credits: 2,
@@ -242,6 +239,73 @@ test("cloud extension smoke rejects Workers for Platforms as compat usage eviden
               resourceFamily: "cloudflare.workers_for_platforms",
               resourceId: "script:smoke",
               operation: "deploy",
+              kind: "gateway_compute",
+              quantity: 1,
+              credits: 2,
+              source: "resource_meter",
+              createdAt: "2999-01-01T00:00:00.000Z",
+            },
+          ],
+        });
+      }
+      return responseForImplementedCompat(
+        parsed.pathname,
+        init?.method ?? "GET",
+        authorization(init) !== undefined,
+        "configured_upstreams",
+        requestBodyText(init),
+        parsed.searchParams,
+      );
+    },
+    async () => ({
+      status: 200,
+      ok: true,
+      summary: {
+        resources: successfulProviderResources(),
+        completedResources: [...PROVIDER_E2E_RESOURCES],
+        failedResources: [],
+      },
+    }),
+  );
+
+  expect(result.status).toBe("failed");
+  expect(result.gaReady).toBe(false);
+  expect(result.gaps).toContain("cloudflare_compat_usage_ledger_not_recorded");
+  expect(
+    result.checks.find((check) => check.name === "cloudflareCompatUsageLedger")
+      ?.summary,
+  ).toMatchObject({
+    cloudflareCompatUsageRecorded: false,
+    matchingCloudflareCompatUsageEventsAfter: 0,
+  });
+});
+
+test("cloud extension smoke rejects Workers for Platforms metadata as compat usage evidence", async () => {
+  const result = await runCloudExtensionSmoke(
+    {
+      ...BASE_OPTIONS,
+      requireCompatMaterialization: true,
+      requireProviderE2E: true,
+      requireCloudflareCompatUsageLedger: true,
+      cloudflareCompatUsageWorkspaceId: "space_compat_runtime",
+      cloudflareCompatUsageInstallationId: "inst_compat_runtime",
+    },
+    async (url, init) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/api/v1/workspaces/space_compat_runtime/usage") {
+        return json({
+          usageEvents: [
+            {
+              id: "usage_compat_runtime_wfp_metadata",
+              spaceId: "space_compat_runtime",
+              installationId: "inst_compat_runtime",
+              meterId: "cloudflare:workers_script:deploy",
+              resourceFamily: "cloudflare.workers_script",
+              resourceId: "script:smoke",
+              operation: "deploy",
+              resourceMetadata: {
+                backend: "cloudflare.workers_for_platforms",
+              },
               kind: "gateway_compute",
               quantity: 1,
               credits: 2,

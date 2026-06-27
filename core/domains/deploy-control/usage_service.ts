@@ -566,6 +566,15 @@ function normalizeUsageResourceMetadata(
         "usage resourceMetadata values must be strings, numbers, booleans, or null",
       );
     }
+    if (
+      typeof metadataValue === "string" &&
+      usageMeterNameLeaksInternalWorkersBackend(metadataValue)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage resourceMetadata must not expose the internal Workers for Platforms backend",
+      );
+    }
     normalized[normalizedKey] = metadataValue;
   }
   return normalized;

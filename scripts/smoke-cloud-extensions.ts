@@ -1274,7 +1274,9 @@ function cloudflareCompatUsageEventMatches(
   if (
     (resourceFamily &&
       usageMeterNameLeaksInternalWorkersBackend(resourceFamily)) ||
-    (meterId && usageMeterNameLeaksInternalWorkersBackend(meterId))
+    (meterId && usageMeterNameLeaksInternalWorkersBackend(meterId)) ||
+    usageResourceMetadataLeaksInternalWorkersBackend(event.resourceMetadata) ||
+    usageResourceMetadataLeaksInternalWorkersBackend(event.resource_metadata)
   ) {
     return false;
   }
@@ -1288,6 +1290,15 @@ function cloudflareCompatUsageEventMatches(
     (kind === "gateway_compute" || kind === "gateway_storage_gb_hour") &&
     familyMatches &&
     (!installationId || eventInstallationId === installationId)
+  );
+}
+
+function usageResourceMetadataLeaksInternalWorkersBackend(value: unknown): boolean {
+  const metadata = record(value);
+  return Object.values(metadata).some(
+    (entry) =>
+      typeof entry === "string" &&
+      usageMeterNameLeaksInternalWorkersBackend(entry),
   );
 }
 

@@ -1606,7 +1606,6 @@ function cloudflareCompatFallbackResource(
       resourceFamily: "cloudflare.workers_script",
       resourceId: `script:${scriptName}`,
       operation,
-      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
     };
   }
   if (accountTail[0] === "workers" && accountTail[1] === "routes") {
@@ -1616,7 +1615,6 @@ function cloudflareCompatFallbackResource(
       resourceFamily: "cloudflare.workers_script",
       resourceId: `route:${routeId}`,
       operation: `route.${operation}`,
-      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
     };
   }
   if (
@@ -1892,6 +1890,14 @@ function cloudExtensionUsageResourceMetadata(
     ) {
       throw new TypeError(
         "Cloud extension usage resourceMetadata values must be strings, numbers, booleans, or null",
+      );
+    }
+    if (
+      typeof metadataValue === "string" &&
+      usageMeterNameLeaksInternalWorkersBackend(metadataValue)
+    ) {
+      throw new TypeError(
+        "Cloud extension usage resourceMetadata must not expose the internal Workers for Platforms backend",
       );
     }
     normalized[metadataKey] = metadataValue;
