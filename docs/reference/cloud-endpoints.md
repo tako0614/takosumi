@@ -189,6 +189,14 @@ Cloudflare account に来ますが、それだけでは Takosumi ユーザーへ
 usage report を出し、Workspace usage ledger に記録され、billing/Stripe 側で
 集計・請求されることです。
 
+Stripe 連携では、billing account ごとの未 export usage report を meter / unit
+単位で rollup し、Stripe invoice item として作成します。成功した usage report
+には `billingExportProvider: "stripe"`、export id、Stripe invoice item id、
+exported timestamp を保存し、同じ report を次回同期で再請求しません。例えば
+Cloudflare Workers compat の請求名は `cloudflare.workers_script` のままで、
+`resourceMetadata.backend: "cloudflare.workers_for_platforms"` は内部実装の証跡に
+留めます。
+
 ## AI Gateway
 
 Base URL:

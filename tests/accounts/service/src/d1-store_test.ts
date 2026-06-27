@@ -210,6 +210,25 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
       metadata: { run_id: "run_1" },
     },
   ]);
+  expect(
+    (await store.listBillingUsageRecordsForBillingAccount("bill_1")).map(
+      (record) => record.usageReportId,
+    ),
+  ).toEqual(["usage_report_1"]);
+  await store.markBillingUsageRecordsExported({
+    billingAccountId: "bill_1",
+    usageReportIds: ["usage_report_1"],
+    provider: "stripe",
+    exportId: "export_1",
+    exportReference: "ii_1",
+    exportedAt: 4_000,
+  });
+  expect(await store.findBillingUsageRecord("usage_report_1")).toMatchObject({
+    billingExportProvider: "stripe",
+    billingExportId: "export_1",
+    billingExportReference: "ii_1",
+    billingExportedAt: 4_000,
+  });
 });
 
 test("D1AccountsStore indexes OIDC clients and installation events", async () => {

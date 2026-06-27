@@ -13,6 +13,7 @@ import type {
   AccountsStore,
   AuthorizationCodeRecord,
   BillingAccountRecord,
+  BillingUsageExportMark,
   BillingUsageRecord,
   BillingWebhookEventClaimResult,
   BillingWebhookEventRecord,
@@ -200,6 +201,19 @@ export class PostgresAccountsStore implements AccountsStore {
       this.#client,
       installationId,
     );
+  }
+
+  listBillingUsageRecordsForBillingAccount(
+    billingAccountId: string,
+  ): Promise<readonly BillingUsageRecord[]> {
+    return billing.listBillingUsageRecordsForBillingAccount(
+      this.#client,
+      billingAccountId,
+    );
+  }
+
+  markBillingUsageRecordsExported(mark: BillingUsageExportMark): Promise<void> {
+    return billing.markBillingUsageRecordsExported(this.#client, mark);
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {

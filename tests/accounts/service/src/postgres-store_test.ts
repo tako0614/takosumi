@@ -561,6 +561,10 @@ test("PostgresAccountsStore maps billing usage records", async () => {
       metadata: '{"run_id":"run_1"}',
       reported_by_subject: "tsub_owner",
       reported_at: new Date(3_000),
+      billing_export_provider: null,
+      billing_export_id: null,
+      billing_export_reference: null,
+      billing_exported_at: null,
     },
   ]);
   const store = new PostgresAccountsStore(client);
@@ -583,8 +587,72 @@ test("PostgresAccountsStore maps billing usage records", async () => {
       metadata: { run_id: "run_1" },
       reportedBySubject: "tsub_owner",
       reportedAt: 3_000,
+      billingExportProvider: undefined,
+      billingExportId: undefined,
+      billingExportReference: undefined,
+      billingExportedAt: undefined,
     },
   ]);
+
+  client.queuedRows.push([
+    {
+      usage_report_id: "usage_report_1",
+      installation_id: "inst_1",
+      billing_account_id: "bill_1",
+      meter: "agent.compute.seconds",
+      quantity: 12.5,
+      unit: "seconds",
+      period_start: new Date(1_000),
+      period_end: null,
+      idempotency_key: "usage-window-1",
+      request_digest: "sha256:usage-1",
+      metadata: '{"run_id":"run_1"}',
+      reported_by_subject: "tsub_owner",
+      reported_at: new Date(3_000),
+      billing_export_provider: null,
+      billing_export_id: null,
+      billing_export_reference: null,
+      billing_exported_at: null,
+    },
+  ]);
+  const billingRecords =
+    await store.listBillingUsageRecordsForBillingAccount("bill_1");
+  expect(client.calls[1].sql).toContain('"billing_account_id" = $1');
+  expect(billingRecords.map((record) => record.usageReportId)).toEqual([
+    "usage_report_1",
+  ]);
+
+  client.queuedRows.push([
+    {
+      usage_report_id: "usage_report_1",
+      installation_id: "inst_1",
+      billing_account_id: "bill_1",
+      meter: "agent.compute.seconds",
+      quantity: 12.5,
+      unit: "seconds",
+      period_start: new Date(1_000),
+      period_end: null,
+      idempotency_key: "usage-window-1",
+      request_digest: "sha256:usage-1",
+      metadata: '{"run_id":"run_1"}',
+      reported_by_subject: "tsub_owner",
+      reported_at: new Date(3_000),
+      billing_export_provider: null,
+      billing_export_id: null,
+      billing_export_reference: null,
+      billing_exported_at: null,
+    },
+  ]);
+  await store.markBillingUsageRecordsExported({
+    billingAccountId: "bill_1",
+    usageReportIds: ["usage_report_1"],
+    provider: "stripe",
+    exportId: "export_1",
+    exportReference: "ii_1",
+    exportedAt: 4_000,
+  });
+  expect(client.calls[3].sql).toContain('"billing_export_id"');
+  expect(client.calls[3].args).toContain("export_1");
 });
 
 test("PostgresAccountsStore reports launch token jti insert conflicts", async () => {

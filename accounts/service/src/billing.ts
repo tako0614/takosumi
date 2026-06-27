@@ -7,6 +7,11 @@ import {
   type StripeDisputeCustomerResolver,
 } from "./billing-apply.ts";
 import type { StripeWebhookEvent } from "./billing-events.ts";
+import {
+  aggregateBillingUsage,
+  type BillingUsageAggregationPolicy,
+  type BillingUsageRollup,
+} from "./billing-usage.ts";
 export {
   aggregateBillingUsage,
   type BillingUsageAggregationPolicy,
@@ -32,11 +37,15 @@ const STRIPE_API_BASE = "https://api.stripe.com/v1";
 export const STRIPE_API_VERSION = "2026-05-27.dahlia";
 const textEncoder = new TextEncoder();
 
-function stripeRequestHeaders(secretKey: string): Record<string, string> {
+function stripeRequestHeaders(
+  secretKey: string,
+  idempotencyKey?: string,
+): Record<string, string> {
   return {
     authorization: `Bearer ${secretKey}`,
     "content-type": "application/x-www-form-urlencoded",
     "Stripe-Version": STRIPE_API_VERSION,
+    ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
   };
 }
 
@@ -115,6 +124,71 @@ export interface CreateStripeBillingPortalSessionInput {
 export interface StripeBillingPortalSessionResult {
   sessionId: string;
   url: string;
+}
+
+export interface CreateStripeInvoiceItemInput {
+  secretKey: string;
+  stripeCustomerId: string;
+  amount: number;
+  currency: string;
+  description: string;
+  metadata?: Record<string, string>;
+  idempotencyKey?: string;
+  fetch?: typeof fetch;
+  stripeApiBase?: string;
+}
+
+export interface StripeInvoiceItemResult {
+  invoiceItemId: string;
+}
+
+export interface CreateStripeUsageInvoiceItemInput {
+  secretKey: string;
+  stripeCustomerId: string;
+  rollup: BillingUsageRollup;
+  unitAmount: number;
+  currency: string;
+  descriptionPrefix?: string;
+  metadata?: Record<string, string>;
+  fetch?: typeof fetch;
+  stripeApiBase?: string;
+}
+
+export interface StripeUsageInvoiceItemPrice {
+  meter: string;
+  unit: string;
+  unitAmount: number;
+  currency: string;
+  descriptionPrefix?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface CreateStripeUsageInvoiceItemsForBillingAccountInput {
+  store: AccountsStore;
+  secretKey: string;
+  billingAccountId: string;
+  prices: readonly StripeUsageInvoiceItemPrice[];
+  policy?: Omit<BillingUsageAggregationPolicy, "billingAccountId">;
+  metadata?: Record<string, string>;
+  now?: number;
+  fetch?: typeof fetch;
+  stripeApiBase?: string;
+}
+
+export interface StripeUsageInvoiceItemExport {
+  meter: string;
+  unit: string;
+  quantity: number;
+  usageReportCount: number;
+  usageReportIds: readonly string[];
+  exportId: string;
+  invoiceItemId: string;
+}
+
+export interface CreateStripeUsageInvoiceItemsForBillingAccountResult {
+  billingAccountId: string;
+  stripeCustomerId: string;
+  exported: readonly StripeUsageInvoiceItemExport[];
 }
 
 export interface HandleStripeWebhookInput {
@@ -241,6 +315,134 @@ export async function createStripeBillingPortalSession(
   };
 }
 
+export async function createStripeInvoiceItem(
+  input: CreateStripeInvoiceItemInput,
+): Promise<StripeInvoiceItemResult> {
+  const body = stripeInvoiceItemParams(input);
+  const response = await (input.fetch ?? fetch)(
+    `${input.stripeApiBase ?? STRIPE_API_BASE}/invoiceitems`,
+    {
+      method: "POST",
+      headers: stripeRequestHeaders(input.secretKey, input.idempotencyKey),
+      body,
+    },
+  );
+  if (!response.ok) {
+    const summary = await summarizeStripeErrorResponse(response);
+    console.error(
+      "stripe_api_error",
+      JSON.stringify({
+        endpoint: "invoiceitems",
+        status: response.status,
+        requestId: summary.requestId,
+        errorCode: summary.errorCode,
+        errorType: summary.errorType,
+      }),
+    );
+    throw new Error("stripe_api_error");
+  }
+
+  const data: unknown = await response.json();
+  if (!isRecord(data) || typeof data.id !== "string") {
+    throw new TypeError("Stripe invoice item response is missing id");
+  }
+  return { invoiceItemId: data.id };
+}
+
+export async function createStripeUsageInvoiceItem(
+  input: CreateStripeUsageInvoiceItemInput,
+): Promise<StripeInvoiceItemResult> {
+  const amount = stripeUsageRollupAmount(input.rollup, input.unitAmount);
+  return await createStripeInvoiceItem({
+    secretKey: input.secretKey,
+    stripeCustomerId: input.stripeCustomerId,
+    amount,
+    currency: input.currency,
+    description: stripeUsageRollupDescription(
+      input.rollup,
+      input.descriptionPrefix,
+    ),
+    metadata: {
+      ...(input.metadata ?? {}),
+      ...stripeUsageRollupMetadata(input.rollup),
+    },
+    idempotencyKey: stripeUsageRollupIdempotencyKey(input.rollup),
+    fetch: input.fetch,
+    stripeApiBase: input.stripeApiBase,
+  });
+}
+
+export async function createStripeUsageInvoiceItemsForBillingAccount(
+  input: CreateStripeUsageInvoiceItemsForBillingAccountInput,
+): Promise<CreateStripeUsageInvoiceItemsForBillingAccountResult> {
+  const billingAccount = await input.store.findBillingAccount(
+    input.billingAccountId,
+  );
+  if (!billingAccount) {
+    throw new TypeError("billing account was not found");
+  }
+  if (!billingAccount.stripeCustomerId) {
+    throw new TypeError("billing account is not linked to a Stripe customer");
+  }
+  const priceByMeterUnit = stripeUsagePriceMap(input.prices);
+  const records = (
+    await input.store.listBillingUsageRecordsForBillingAccount(
+      input.billingAccountId,
+    )
+  ).filter((record) => record.billingExportedAt === undefined);
+  const rollups = aggregateBillingUsage(records, {
+    ...(input.policy ?? {}),
+    billingAccountId: input.billingAccountId,
+  });
+  const exported: StripeUsageInvoiceItemExport[] = [];
+  const exportedAt = input.now ?? Date.now();
+  for (const rollup of rollups) {
+    const price = priceByMeterUnit.get(stripeUsagePriceKey(rollup));
+    if (!price) {
+      throw new TypeError(
+        `Stripe usage price is not configured for ${rollup.meter} ${rollup.unit}`,
+      );
+    }
+    const result = await createStripeUsageInvoiceItem({
+      secretKey: input.secretKey,
+      stripeCustomerId: billingAccount.stripeCustomerId,
+      rollup,
+      unitAmount: price.unitAmount,
+      currency: price.currency,
+      descriptionPrefix: price.descriptionPrefix,
+      metadata: {
+        ...(input.metadata ?? {}),
+        ...(price.metadata ?? {}),
+      },
+      fetch: input.fetch,
+      stripeApiBase: input.stripeApiBase,
+    });
+    const exportId = stripeUsageRollupIdempotencyKey(rollup);
+    await input.store.markBillingUsageRecordsExported({
+      billingAccountId: input.billingAccountId,
+      usageReportIds: rollup.usageReportIds,
+      provider: "stripe",
+      exportId,
+      exportReference: result.invoiceItemId,
+      exportedAt,
+    });
+    exported.push({
+      meter: rollup.meter,
+      unit: rollup.unit,
+      quantity: rollup.quantity,
+      usageReportCount: rollup.usageReportCount,
+      usageReportIds: rollup.usageReportIds,
+      exportId,
+      invoiceItemId: result.invoiceItemId,
+    });
+  }
+  return {
+    billingAccountId: input.billingAccountId,
+    stripeCustomerId: billingAccount.stripeCustomerId,
+    exported,
+  };
+}
+
 export function stripeCheckoutSessionParams(
   input: Omit<CreateStripeCheckoutSessionInput, "fetch" | "stripeApiBase">,
 ): URLSearchParams {
@@ -280,6 +482,125 @@ export function stripeCheckoutSessionParams(
   }
 
   return params;
+}
+
+export function stripeInvoiceItemParams(
+  input: Omit<CreateStripeInvoiceItemInput, "fetch" | "stripeApiBase">,
+): URLSearchParams {
+  if (!input.stripeCustomerId.trim()) {
+    throw new TypeError("Stripe invoice item requires stripeCustomerId");
+  }
+  if (
+    !Number.isSafeInteger(input.amount) ||
+    !Number.isFinite(input.amount) ||
+    input.amount <= 0
+  ) {
+    throw new TypeError(
+      "Stripe invoice item amount must be a positive integer",
+    );
+  }
+  const currency = input.currency.trim().toLowerCase();
+  if (!/^[a-z]{3}$/u.test(currency)) {
+    throw new TypeError("Stripe invoice item currency must be a 3-letter code");
+  }
+  const description = input.description.trim();
+  if (!description) {
+    throw new TypeError("Stripe invoice item description is required");
+  }
+  const params = new URLSearchParams();
+  params.set("customer", input.stripeCustomerId);
+  params.set("amount", String(input.amount));
+  params.set("currency", currency);
+  params.set("description", description);
+  for (const [key, value] of Object.entries(input.metadata ?? {})) {
+    params.set(`metadata[${key}]`, value);
+  }
+  return params;
+}
+
+function stripeUsageRollupAmount(
+  rollup: BillingUsageRollup,
+  unitAmount: number,
+): number {
+  if (
+    !Number.isFinite(unitAmount) ||
+    !Number.isSafeInteger(unitAmount) ||
+    unitAmount <= 0
+  ) {
+    throw new TypeError("Stripe usage unitAmount must be a positive integer");
+  }
+  if (!Number.isFinite(rollup.quantity) || rollup.quantity <= 0) {
+    throw new TypeError("Stripe usage rollup quantity must be positive");
+  }
+  const amount = Math.round(rollup.quantity * unitAmount);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new TypeError("Stripe usage amount must be a positive integer");
+  }
+  return amount;
+}
+
+function stripeUsageRollupDescription(
+  rollup: BillingUsageRollup,
+  prefix = "Takosumi usage",
+): string {
+  return `${prefix}: ${rollup.meter} (${rollup.quantity} ${rollup.unit})`;
+}
+
+function stripeUsageRollupMetadata(
+  rollup: BillingUsageRollup,
+): Record<string, string> {
+  return {
+    takosumi_billing_account_id: rollup.billingAccountId,
+    takosumi_usage_meter: rollup.meter,
+    takosumi_usage_unit: rollup.unit,
+    takosumi_usage_quantity: String(rollup.quantity),
+    takosumi_usage_report_count: String(rollup.usageReportCount),
+    takosumi_usage_report_ids: rollup.usageReportIds.join(",").slice(0, 500),
+    ...(rollup.periodStart === undefined
+      ? {}
+      : { takosumi_usage_period_start: String(rollup.periodStart) }),
+    ...(rollup.periodEnd === undefined
+      ? {}
+      : { takosumi_usage_period_end: String(rollup.periodEnd) }),
+  };
+}
+
+function stripeUsageRollupIdempotencyKey(rollup: BillingUsageRollup): string {
+  return [
+    "takosumi-usage",
+    rollup.billingAccountId,
+    rollup.meter,
+    rollup.unit,
+    rollup.periodStart ?? "no-start",
+    rollup.periodEnd ?? "no-end",
+    rollup.usageReportIds.join("."),
+  ]
+    .join(":")
+    .replace(/[^a-zA-Z0-9_.:-]+/g, "-")
+    .slice(0, 255);
+}
+
+function stripeUsagePriceMap(
+  prices: readonly StripeUsageInvoiceItemPrice[],
+): Map<string, StripeUsageInvoiceItemPrice> {
+  const mapped = new Map<string, StripeUsageInvoiceItemPrice>();
+  for (const price of prices) {
+    if (!price.meter.trim() || !price.unit.trim()) {
+      throw new TypeError("Stripe usage price requires meter and unit");
+    }
+    const key = stripeUsagePriceKey(price);
+    if (mapped.has(key)) {
+      throw new TypeError(
+        `Stripe usage price is duplicated for ${price.meter} ${price.unit}`,
+      );
+    }
+    mapped.set(key, price);
+  }
+  return mapped;
+}
+
+function stripeUsagePriceKey(input: { meter: string; unit: string }): string {
+  return `${input.meter}\u0000${input.unit}`;
 }
 
 export async function verifyStripeWebhookSignature(input: {

@@ -1,14 +1,22 @@
 import { expect, test } from "bun:test";
-import { assertEquals, assertRejects } from "../../../helpers/assert.ts";
+import {
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "../../../helpers/assert.ts";
 import {
   aggregateBillingUsage,
   applyStripeBillingEvent,
   createStripeBillingPortalSession,
   createStripeCheckoutSession,
+  createStripeInvoiceItem,
+  createStripeUsageInvoiceItemsForBillingAccount,
+  createStripeUsageInvoiceItem,
   handleStripeWebhook,
   normalizeStripeBillingEvent,
   reconcileBillingEntitlements,
   STRIPE_API_VERSION,
+  stripeInvoiceItemParams,
   verifyStripeWebhookSignature,
 } from "../../../../accounts/service/src/billing.ts";
 import { stripeInvoiceCreditReconciliationInput } from "../../../../accounts/service/src/billing-routes.ts";
@@ -187,6 +195,280 @@ test("createStripeBillingPortalSession posts customer and return URL", async () 
   expect(params.get("customer")).toEqual("cus_1");
   expect(params.get("return_url")).toEqual(
     "https://accounts.example.test/account/billing",
+  );
+});
+
+test("createStripeInvoiceItem posts customer amount metadata and idempotency key", async () => {
+  let requestBody = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.url).toEqual("https://api.stripe.test/v1/invoiceitems");
+    expect(request.method).toEqual("POST");
+    expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
+    expect(request.headers.get("stripe-version")).toEqual(STRIPE_API_VERSION);
+    expect(request.headers.get("idempotency-key")).toEqual("usage-key-1");
+    requestBody = await request.text();
+    return Response.json({ id: "ii_1" });
+  };
+
+  const result = await createStripeInvoiceItem({
+    secretKey: "sk_test",
+    stripeCustomerId: "cus_1",
+    amount: 450,
+    currency: "JPY",
+    description: "Takosumi usage: cloudflare.workers_script",
+    metadata: {
+      takosumi_usage_meter: "cloudflare.workers_script",
+      app: "takos",
+    },
+    idempotencyKey: "usage-key-1",
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+  const params = new URLSearchParams(requestBody);
+
+  expect(result).toEqual({ invoiceItemId: "ii_1" });
+  expect(params.get("customer")).toEqual("cus_1");
+  expect(params.get("amount")).toEqual("450");
+  expect(params.get("currency")).toEqual("jpy");
+  expect(params.get("description")).toEqual(
+    "Takosumi usage: cloudflare.workers_script",
+  );
+  expect(params.get("metadata[takosumi_usage_meter]")).toEqual(
+    "cloudflare.workers_script",
+  );
+  expect(params.get("metadata[app]")).toEqual("takos");
+});
+
+test("createStripeUsageInvoiceItem maps workers script rollups to Stripe invoice items", async () => {
+  let requestBody = "";
+  let idempotencyKey = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.url).toEqual("https://api.stripe.test/v1/invoiceitems");
+    idempotencyKey = request.headers.get("idempotency-key") ?? "";
+    requestBody = await request.text();
+    return Response.json({ id: "ii_workers_script" });
+  };
+
+  const result = await createStripeUsageInvoiceItem({
+    secretKey: "sk_test",
+    stripeCustomerId: "cus_workers",
+    unitAmount: 3,
+    currency: "usd",
+    metadata: { takosumi_workspace_id: "ws_1" },
+    rollup: {
+      billingAccountId: "bill_1",
+      meter: "cloudflare.workers_script",
+      unit: "requests",
+      quantity: 5,
+      usageReportCount: 2,
+      usageReportIds: ["usage_a", "usage_b"],
+      periodStart: 1_800_000_000,
+      periodEnd: 1_800_086_400,
+      firstReportedAt: 1_800_000_100,
+      lastReportedAt: 1_800_000_200,
+    },
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+  const params = new URLSearchParams(requestBody);
+
+  expect(result).toEqual({ invoiceItemId: "ii_workers_script" });
+  expect(params.get("customer")).toEqual("cus_workers");
+  expect(params.get("amount")).toEqual("15");
+  expect(params.get("currency")).toEqual("usd");
+  expect(params.get("description")).toEqual(
+    "Takosumi usage: cloudflare.workers_script (5 requests)",
+  );
+  expect(params.get("metadata[takosumi_billing_account_id]")).toEqual("bill_1");
+  expect(params.get("metadata[takosumi_usage_meter]")).toEqual(
+    "cloudflare.workers_script",
+  );
+  expect(params.get("metadata[takosumi_usage_unit]")).toEqual("requests");
+  expect(params.get("metadata[takosumi_usage_quantity]")).toEqual("5");
+  expect(params.get("metadata[takosumi_usage_report_count]")).toEqual("2");
+  expect(params.get("metadata[takosumi_usage_report_ids]")).toEqual(
+    "usage_a,usage_b",
+  );
+  expect(params.get("metadata[takosumi_usage_period_start]")).toEqual(
+    "1800000000",
+  );
+  expect(params.get("metadata[takosumi_usage_period_end]")).toEqual(
+    "1800086400",
+  );
+  expect(params.get("metadata[takosumi_workspace_id]")).toEqual("ws_1");
+  expect(params.get("metadata[takosumi_usage_meter]")).not.toContain(
+    "workers_for_platforms",
+  );
+  expect(idempotencyKey).toContain("cloudflare.workers_script");
+  expect(idempotencyKey).toContain("usage_a.usage_b");
+  expect(idempotencyKey.length).toBeLessThanOrEqual(255);
+});
+
+test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers script usage", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveBillingAccount({
+    billingAccountId: "bill_1",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_workers",
+    status: "active",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  store.saveBillingUsageRecord({
+    usageReportId: "usage_workers_a",
+    installationId: "inst_a",
+    billingAccountId: "bill_1",
+    meter: "cloudflare.workers_script",
+    quantity: 2,
+    unit: "requests",
+    periodStart: 1_800_000_000,
+    periodEnd: 1_800_086_400,
+    requestDigest: "sha256:a",
+    metadata: { backend: "cloudflare.workers_for_platforms" },
+    reportedAt: 1_800_000_100,
+  });
+  store.saveBillingUsageRecord({
+    usageReportId: "usage_workers_b",
+    installationId: "inst_b",
+    billingAccountId: "bill_1",
+    meter: "cloudflare.workers_script",
+    quantity: 3,
+    unit: "requests",
+    periodStart: 1_800_000_000,
+    periodEnd: 1_800_086_400,
+    requestDigest: "sha256:b",
+    metadata: { backend: "cloudflare.workers_for_platforms" },
+    reportedAt: 1_800_000_200,
+  });
+  store.saveBillingUsageRecord({
+    usageReportId: "usage_ai",
+    installationId: "inst_ai",
+    billingAccountId: "bill_1",
+    meter: "cloudflare.ai_gateway",
+    quantity: 7,
+    unit: "requests",
+    requestDigest: "sha256:ai",
+    metadata: {},
+    reportedAt: 1_800_000_300,
+    billingExportProvider: "stripe",
+    billingExportId: "already-exported",
+    billingExportReference: "ii_existing",
+    billingExportedAt: 1_800_000_400,
+  });
+  const invoiceBodies: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    invoiceBodies.push(await request.text());
+    return Response.json({ id: "ii_workers_rollup" });
+  };
+
+  const result = await createStripeUsageInvoiceItemsForBillingAccount({
+    store,
+    secretKey: "sk_test",
+    billingAccountId: "bill_1",
+    prices: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        unitAmount: 4,
+        currency: "usd",
+      },
+    ],
+    now: 1_800_000_500,
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+
+  expect(result).toEqual({
+    billingAccountId: "bill_1",
+    stripeCustomerId: "cus_workers",
+    exported: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        quantity: 5,
+        usageReportCount: 2,
+        usageReportIds: ["usage_workers_a", "usage_workers_b"],
+        exportId:
+          "takosumi-usage:bill_1:cloudflare.workers_script:requests:1800000000:1800086400:usage_workers_a.usage_workers_b",
+        invoiceItemId: "ii_workers_rollup",
+      },
+    ],
+  });
+  expect(invoiceBodies.length).toEqual(1);
+  const params = new URLSearchParams(invoiceBodies[0]);
+  expect(params.get("amount")).toEqual("20");
+  expect(params.get("metadata[takosumi_usage_meter]")).toEqual(
+    "cloudflare.workers_script",
+  );
+  expect(
+    store.findBillingUsageRecord("usage_workers_a")?.billingExportReference,
+  ).toEqual("ii_workers_rollup");
+  expect(
+    store.findBillingUsageRecord("usage_workers_b")?.billingExportedAt,
+  ).toEqual(1_800_000_500);
+  expect(
+    store.findBillingUsageRecord("usage_ai")?.billingExportReference,
+  ).toEqual("ii_existing");
+
+  const second = await createStripeUsageInvoiceItemsForBillingAccount({
+    store,
+    secretKey: "sk_test",
+    billingAccountId: "bill_1",
+    prices: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        unitAmount: 4,
+        currency: "usd",
+      },
+    ],
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+  expect(second.exported).toEqual([]);
+  expect(invoiceBodies.length).toEqual(1);
+});
+
+test("stripeInvoiceItemParams rejects invalid invoice item input", () => {
+  assertThrows(
+    () =>
+      stripeInvoiceItemParams({
+        secretKey: "sk_test",
+        stripeCustomerId: "",
+        amount: 100,
+        currency: "usd",
+        description: "usage",
+      }),
+    TypeError,
+    "stripeCustomerId",
+  );
+  assertThrows(
+    () =>
+      stripeInvoiceItemParams({
+        secretKey: "sk_test",
+        stripeCustomerId: "cus_1",
+        amount: 0,
+        currency: "usd",
+        description: "usage",
+      }),
+    TypeError,
+    "positive integer",
+  );
+  assertThrows(
+    () =>
+      stripeInvoiceItemParams({
+        secretKey: "sk_test",
+        stripeCustomerId: "cus_1",
+        amount: 100,
+        currency: "usd1",
+        description: "usage",
+      }),
+    TypeError,
+    "3-letter",
   );
 });
 

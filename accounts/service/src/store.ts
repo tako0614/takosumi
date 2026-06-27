@@ -340,6 +340,19 @@ export interface BillingUsageRecord {
   metadata: Record<string, unknown>;
   reportedBySubject?: TakosumiSubject;
   reportedAt: number;
+  billingExportProvider?: string;
+  billingExportId?: string;
+  billingExportReference?: string;
+  billingExportedAt?: number;
+}
+
+export interface BillingUsageExportMark {
+  billingAccountId: string;
+  usageReportIds: readonly string[];
+  provider: string;
+  exportId: string;
+  exportReference: string;
+  exportedAt: number;
 }
 
 export type PrivacyRequestKind = "export" | "delete";
@@ -479,6 +492,12 @@ export interface AccountsStore extends AppInstallationLedgerStore {
   listBillingUsageRecordsForInstallation(
     installationId: string,
   ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
+  listBillingUsageRecordsForBillingAccount(
+    billingAccountId: string,
+  ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
+  markBillingUsageRecordsExported(
+    mark: BillingUsageExportMark,
+  ): void | Promise<void>;
   savePrivacyRequest(record: PrivacyRequestRecord): void | Promise<void>;
   findPrivacyRequest(
     requestId: string,
@@ -1059,9 +1078,50 @@ export class InMemoryAccountsStore implements AccountsStore {
   listBillingUsageRecordsForInstallation(
     installationId: string,
   ): readonly BillingUsageRecord[] {
-    return [...this.#billingUsageRecords.values()].filter(
-      (record) => record.installationId === installationId,
+    return billingUsageRecordsSorted(
+      [...this.#billingUsageRecords.values()].filter(
+        (record) => record.installationId === installationId,
+      ),
     );
+  }
+
+  listBillingUsageRecordsForBillingAccount(
+    billingAccountId: string,
+  ): readonly BillingUsageRecord[] {
+    return billingUsageRecordsSorted(
+      [...this.#billingUsageRecords.values()].filter(
+        (record) => record.billingAccountId === billingAccountId,
+      ),
+    );
+  }
+
+  markBillingUsageRecordsExported(mark: BillingUsageExportMark): void {
+    for (const usageReportId of mark.usageReportIds) {
+      const existing = this.#billingUsageRecords.get(usageReportId);
+      if (!existing) {
+        throw new TypeError("billing usage report was not found");
+      }
+      if (existing.billingAccountId !== mark.billingAccountId) {
+        throw new TypeError(
+          "billing usage report is owned by another billing account",
+        );
+      }
+      if (
+        existing.billingExportId &&
+        (existing.billingExportProvider !== mark.provider ||
+          existing.billingExportId !== mark.exportId ||
+          existing.billingExportReference !== mark.exportReference)
+      ) {
+        throw new TypeError("billing usage report was already exported");
+      }
+      this.#billingUsageRecords.set(usageReportId, {
+        ...existing,
+        billingExportProvider: mark.provider,
+        billingExportId: mark.exportId,
+        billingExportReference: mark.exportReference,
+        billingExportedAt: mark.exportedAt,
+      });
+    }
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {
@@ -1464,4 +1524,14 @@ function upstreamIdentityKey(input: {
 function normalizeAccountEmail(email: string | undefined): string | undefined {
   const trimmed = email?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
+}
+
+function billingUsageRecordsSorted(
+  records: readonly BillingUsageRecord[],
+): readonly BillingUsageRecord[] {
+  return [...records].sort(
+    (left, right) =>
+      left.reportedAt - right.reportedAt ||
+      left.usageReportId.localeCompare(right.usageReportId),
+  );
 }

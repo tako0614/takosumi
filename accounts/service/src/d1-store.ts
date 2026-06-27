@@ -29,6 +29,7 @@ import type {
   AccountsStore,
   AuthorizationCodeRecord,
   BillingAccountRecord,
+  BillingUsageExportMark,
   BillingUsageRecord,
   BillingWebhookEventClaimResult,
   BillingWebhookEventRecord,
@@ -598,6 +599,11 @@ export class D1AccountsStore implements AccountsStore {
         key: record.installationId,
         sortKey: record.reportedAt,
       },
+      {
+        name: "billing_usage_by_billing_account",
+        key: record.billingAccountId,
+        sortKey: record.reportedAt,
+      },
     ];
     // G6 atomic claim: only the first writer for this usageReportId wins the
     // insert (and its index rows are written by the same primitive).
@@ -645,6 +651,65 @@ export class D1AccountsStore implements AccountsStore {
     installationId: string,
   ): Promise<readonly BillingUsageRecord[]> {
     return this.#listByIndex("billing_usage_by_installation", installationId);
+  }
+
+  listBillingUsageRecordsForBillingAccount(
+    billingAccountId: string,
+  ): Promise<readonly BillingUsageRecord[]> {
+    return this.#listByIndex(
+      "billing_usage_by_billing_account",
+      billingAccountId,
+    );
+  }
+
+  async markBillingUsageRecordsExported(
+    mark: BillingUsageExportMark,
+  ): Promise<void> {
+    for (const usageReportId of mark.usageReportIds) {
+      const existing = await this.#get<BillingUsageRecord>(
+        "billing_usage_records",
+        usageReportId,
+      );
+      if (!existing) {
+        throw new TypeError("billing usage report was not found");
+      }
+      if (existing.billingAccountId !== mark.billingAccountId) {
+        throw new TypeError(
+          "billing usage report is owned by another billing account",
+        );
+      }
+      if (
+        existing.billingExportId &&
+        (existing.billingExportProvider !== mark.provider ||
+          existing.billingExportId !== mark.exportId ||
+          existing.billingExportReference !== mark.exportReference)
+      ) {
+        throw new TypeError("billing usage report was already exported");
+      }
+      await this.#put(
+        "billing_usage_records",
+        usageReportId,
+        {
+          ...existing,
+          billingExportProvider: mark.provider,
+          billingExportId: mark.exportId,
+          billingExportReference: mark.exportReference,
+          billingExportedAt: mark.exportedAt,
+        } satisfies BillingUsageRecord,
+        [
+          {
+            name: "billing_usage_by_installation",
+            key: existing.installationId,
+            sortKey: existing.reportedAt,
+          },
+          {
+            name: "billing_usage_by_billing_account",
+            key: existing.billingAccountId,
+            sortKey: existing.reportedAt,
+          },
+        ],
+      );
+    }
   }
 
   async savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
