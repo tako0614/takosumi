@@ -222,7 +222,12 @@ export interface RunEventsResponse {
  */
 export interface RunCostInfo {
   readonly runId: string;
-  readonly billingMode: "disabled" | "showback" | "enforce";
+  /**
+   * OSS resolves only `disabled` | `showback`. A Cloud-injected
+   * {@link BillingEnforcement} port reports its own gating through `blocked` /
+   * `reasons`; the mode stays `showback` from the OSS controller's perspective.
+   */
+  readonly billingMode: "disabled" | "showback";
   readonly estimatedUsdMicros: number;
   readonly availableUsdMicros?: number;
   readonly shortfallUsdMicros?: number;

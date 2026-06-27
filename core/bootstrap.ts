@@ -54,7 +54,10 @@ import {
   type ReleaseActivator,
   type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
-import type { BillingAutoRechargePort } from "./domains/deploy-control/billing_service.ts";
+import type {
+  BillingEnforcement,
+  QuotaPolicy,
+} from "takosumi-contract/billing";
 import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
 import {
   type EnqueueSourceSync,
@@ -398,12 +401,19 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly releaseActivator?: ReleaseActivator;
   /**
-   * Cloud/account-plane hook that can charge a saved Stripe payment method and
-   * grant USD balance before an enforce-mode billing reservation is attempted.
-   * OSS/self-host deployments omit this and simply fail closed on insufficient
-   * balance.
+   * Seam B composition port (OSS/Cloud boundary). When omitted, OSS uses the
+   * showback no-op ({@link NOOP_BILLING_ENFORCEMENT}): cost is estimated and
+   * recorded but apply is NEVER blocked and no payment provider is contacted.
+   * Takosumi Cloud injects a Stripe-backed implementation (from its closed
+   * `billing-enforce` module) to gate apply on payment / USD balance.
    */
-  readonly billingAutoRecharge?: BillingAutoRechargePort;
+  readonly billingEnforcement?: BillingEnforcement;
+  /**
+   * Seam B composition port for plan quota / per-run limits. When omitted, OSS
+   * uses {@link NOOP_QUOTA_POLICY} (no plan limits). Cloud injects subscription
+   * plan-limit + resource-quota enforcement.
+   */
+  readonly quotaPolicy?: QuotaPolicy;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -513,18 +523,6 @@ export interface TakosumiOperations {
     spaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
-  reconcileStripeSpaceSubscription(
-    spaceId: string,
-    input: {
-      readonly stripeCustomerId: string;
-      readonly stripeSubscriptionId: string;
-      readonly stripePriceId?: string;
-      readonly stripeDefaultPaymentMethodId?: string;
-      readonly planCode: string;
-      readonly status: string;
-      readonly currentPeriodEndUnix?: number;
-    },
-  ): Promise<unknown>;
   /**
    * Control-backups domain service (Core Specification §33 / §26): exports a
    * Space's control ledger as a sealed R2_BACKUPS bundle.
@@ -925,9 +923,10 @@ export async function createTakosumiService(
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
       : {}),
-    ...(options.billingAutoRecharge
-      ? { billingAutoRecharge: options.billingAutoRecharge }
+    ...(options.billingEnforcement
+      ? { billingEnforcement: options.billingEnforcement }
       : {}),
+    ...(options.quotaPolicy ? { quotaPolicy: options.quotaPolicy } : {}),
     serviceGraphService,
     observability: context.adapters.observability,
     metricTags,
@@ -1088,8 +1087,6 @@ export async function createTakosumiService(
       opentofuController.topUpSpaceCredits(spaceId, input),
     changeSpaceSubscription: (spaceId, input) =>
       opentofuController.changeSpaceSubscription(spaceId, input),
-    reconcileStripeSpaceSubscription: (spaceId, input) =>
-      opentofuController.reconcileStripeSpaceSubscription(spaceId, input),
     backups: backupsService,
     recordUploadArchive: async (input) => {
       if (!options.writeSourceArchive) {

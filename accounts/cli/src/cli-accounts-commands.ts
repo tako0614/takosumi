@@ -55,7 +55,6 @@ import {
   buildSharedCellScaleOutPolicyConfig,
   buildSharedCellWarmPoolConfig,
   buildStaticBindingMaterializerConfig,
-  buildStripeBillingOptions,
   buildUpstreamOAuthOptions,
   buildServiceGraphMaterialResolverConfig,
   composeBindingMaterializers,
@@ -335,13 +334,6 @@ export async function runAccountsServe(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
   }
-  let stripeBilling;
-  try {
-    stripeBilling = buildStripeBillingOptions(options);
-  } catch (error) {
-    io.stderr(error instanceof Error ? error.message : String(error));
-    return 2;
-  }
   let upstreamOAuth;
   try {
     upstreamOAuth = buildUpstreamOAuthOptions(options);
@@ -444,13 +436,6 @@ export async function runAccountsServe(
     issuer: seedPlan.issuer,
     subject: seedPlan.subject,
     oidcClient: seedPlan.oidcClient,
-    stripeBilling: stripeBilling
-      ? {
-          configured: true,
-          stripeApiBase: stripeBilling.stripeApiBase,
-          webhookToleranceSeconds: stripeBilling.webhookToleranceSeconds,
-        }
-      : { configured: false },
     upstreamOAuth: upstreamOAuth
       ? {
           configured: true,
@@ -610,7 +595,6 @@ export async function runAccountsServe(
         },
       ],
       store: accountsStore,
-      stripeBilling,
       upstreamOAuth,
       passkeys,
       // The account-plane deploy-control path is in-process only (it dispatches

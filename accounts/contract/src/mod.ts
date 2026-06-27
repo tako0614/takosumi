@@ -14,13 +14,6 @@ export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
 export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
 export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH = "/v1/privacy/requests";
-export const TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH =
-  "/v1/billing/stripe/checkout";
-export const TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH = "/v1/billing/stripe/portal";
-export const TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH =
-  "/v1/billing/stripe/webhook";
-export const TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH =
-  "/v1/billing/stripe/usage-invoice-items";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
   "/v1/auth/upstream/authorize";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =

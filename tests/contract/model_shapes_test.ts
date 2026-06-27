@@ -568,7 +568,7 @@ test("Billing and security ledger shapes", () => {
     runId: "run_1",
     estimatedCredits: 32,
     status: "reserved",
-    mode: "enforce",
+    mode: "showback",
     createdAt: "2026-06-07T00:00:00Z",
     expiresAt: "2026-06-07T01:00:00Z",
   };

@@ -13,10 +13,6 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
-  TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
@@ -95,18 +91,6 @@ test("account token contract exposes the Accounts PAT route surface", () => {
 });
 
 test("optional Accounts HTTP path constants are exported from the contract", () => {
-  expect(TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH).toEqual(
-    "/v1/billing/stripe/checkout",
-  );
-  expect(TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH).toEqual(
-    "/v1/billing/stripe/portal",
-  );
-  expect(TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH).toEqual(
-    "/v1/billing/stripe/webhook",
-  );
-  expect(TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH).toEqual(
-    "/v1/billing/stripe/usage-invoice-items",
-  );
   expect(TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH).toEqual(
     "/v1/auth/upstream/authorize",
   );

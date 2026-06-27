@@ -50,6 +50,12 @@ import type {
   PlanResourceChange,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type {
+  BillingCaptureContext,
+  BillingEnforcement,
+  BillingReleaseContext,
+  BillingReservationContext,
+} from "takosumi-contract/billing";
 import {
   FIXTURE_ARCHIVE_DIGEST,
   seedInstallationModel,
@@ -2748,289 +2754,114 @@ test("plan cost estimate weights a mixed plan and bills replace once as a create
   ).toBe(6);
 });
 
-test("enforced billing blocks plan when credits are insufficient", async () => {
-  const { store, runner, controller } = await seededController();
-  const space = await store.getSpace("space_test");
-  await store.putSpace({
-    ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "manual",
-      reservationRequired: true,
-    },
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableCredits: 0,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 0,
-    purchasedCredits: 0,
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-
-  expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain(
-    "USD balance reservation failed",
-  );
-  expect(await store.getCreditReservationForRun(planRun.id)).toBeUndefined();
-});
-
-test("enforced Stripe billing auto-recharges before reserving USD balance", async () => {
+test("billing block is delegated to the injected enforcement port (Seam B)", async () => {
+  // OSS billing is showback-only; the BLOCK decision now lives in the Cloud
+  // `billingEnforcement` port. This proves the controller (a) consults the port
+  // at plan time and (b) folds a non-empty `reasons` into the plan's policy
+  // verdict so the run fails — without OSS itself owning any balance/enforce
+  // logic. The Space keeps a valid OSS `showback` mode (NOT the removed
+  // `enforce`); the injected port alone decides to block.
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   await seedRunnableInstallationModel(store, { environment: "preview" });
-  const recharges: Array<{
-    readonly spaceId: string;
-    readonly runId: string;
-    readonly rechargeUsdMicros: number;
-    readonly shortfallUsdMicros: number;
-  }> = [];
-  const controller = controllerWith(store, runner, {
-    billingAutoRecharge: async (input) => {
-      recharges.push({
-        spaceId: input.spaceId,
-        runId: input.runId,
-        rechargeUsdMicros: input.rechargeUsdMicros,
-        shortfallUsdMicros: input.shortfallUsdMicros,
-      });
+  const reservePlanBillingCalls: BillingReservationContext[] = [];
+  const billingEnforcement: BillingEnforcement = {
+    reservePlanBilling: async (ctx) => {
+      reservePlanBillingCalls.push(ctx);
       return {
-        balance: await store.addCredits(input.spaceId, {
-          usdMicros: input.rechargeUsdMicros,
-          updatedAt: new Date(input.now).toISOString(),
-        }),
-        chargedUsdMicros: input.rechargeUsdMicros,
+        reasons: [
+          "USD balance reservation failed: available 0 < estimated 1",
+        ],
+        audit: { mode: "enforce", reservationStatus: "insufficient_credits" },
       };
     },
-  });
+    assertReservationSatisfied: async () => {},
+    captureRunBilling: async () => {},
+    releaseReservation: async () => {},
+  };
+  const controller = controllerWith(store, runner, { billingEnforcement });
   const space = await store.getSpace("space_test");
   await store.putSpace({
     ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "stripe",
-      reservationRequired: true,
-      autoRecharge: {
-        enabled: true,
-        thresholdUsdMicros: 500_000,
-        rechargeUsdMicros: 2_000_000,
-      },
-    },
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableUsdMicros: 0,
-    reservedUsdMicros: 0,
-    monthlyIncludedUsdMicros: 0,
-    purchasedUsdMicros: 0,
-    availableCredits: 0,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 0,
-    purchasedCredits: 0,
-    updatedAt: "2026-06-07T00:00:00.000Z",
+    billingSettings: { mode: "showback", provider: "none" },
   });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(planRun.status).toBe("succeeded");
-  expect(recharges).toHaveLength(1);
-  expect(recharges[0]).toMatchObject({
+  // The runner still PLANNED — billing only gates the verdict, not the plan run.
+  expect(runner.planJobs).toHaveLength(1);
+  // The controller consulted the injected port at plan time, in showback mode,
+  // having already passed layered policy (so the block is genuinely billing's).
+  expect(reservePlanBillingCalls).toHaveLength(1);
+  expect(reservePlanBillingCalls[0]).toMatchObject({
     spaceId: "space_test",
     runId: planRun.id,
-    rechargeUsdMicros: 2_000_000,
-    shortfallUsdMicros: 1_000_000,
+    installationId: "inst_fixture",
+    mode: "showback",
+    policyPassedBeforeBilling: true,
   });
-  expect(await store.getCreditReservationForRun(planRun.id)).toMatchObject({
-    status: "reserved",
-    mode: "enforce",
-    estimatedUsdMicros: 1_000_000,
-  });
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
-    availableUsdMicros: 1_000_000,
-    reservedUsdMicros: 1_000_000,
-    purchasedUsdMicros: 2_000_000,
-  });
-});
-
-test("enforced Stripe billing fails closed when monthly auto-recharge cap is exceeded", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner();
-  await seedRunnableInstallationModel(store, { environment: "preview" });
-  const controller = controllerWith(store, runner, {
-    billingAutoRecharge: async (input) => {
-      expect(input.monthlyLimitUsdMicros).toEqual(1_500_000);
-      return { skippedReason: "monthly_limit_exceeded" };
-    },
-  });
-  const space = await store.getSpace("space_test");
-  await store.putSpace({
-    ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "stripe",
-      reservationRequired: true,
-      autoRecharge: {
-        enabled: true,
-        thresholdUsdMicros: 500_000,
-        rechargeUsdMicros: 2_000_000,
-        monthlyLimitUsdMicros: 1_500_000,
-      },
-    },
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableUsdMicros: 0,
-    reservedUsdMicros: 0,
-    monthlyIncludedUsdMicros: 0,
-    purchasedUsdMicros: 0,
-    availableCredits: 0,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 0,
-    purchasedCredits: 0,
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-
+  // ...and folded the port's blocking reason into the FAILED plan's policy.
   expect(planRun.status).toBe("failed");
-  const policyAudit = planRun.auditEvents.find(
-    (event) => event.type === "plan.policy_evaluated" && event.data?.billing,
-  );
-  expect(policyAudit?.data?.billing).toMatchObject({
-    autoRecharge: {
-      status: "skipped",
-      reason: "monthly_limit_exceeded",
-    },
-  });
   expect(planRun.policy.reasons.join("\n")).toContain(
     "USD balance reservation failed",
   );
+  // A blocked plan never records a showback reservation row.
   expect(await store.getCreditReservationForRun(planRun.id)).toBeUndefined();
 });
 
-test("enforced billing plan limits block oversized plans before reservation", async () => {
+test("controller drives the enforcement port through plan reserve and apply capture (Seam B)", async () => {
+  // Seam B lifecycle: the OSS controller records the showback ledger AND drives
+  // the injected Cloud port — `reservePlanBilling` at plan time, then
+  // `captureRunBilling` at apply time (with `releaseReservation` reserved for
+  // the failure path). All USD-balance math is the port's; OSS only records the
+  // transparent showback CreditReservation + UsageEvent.
   const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner({
-    planResourceChanges: [
-      {
-        address: "cloudflare_workers_script.one",
-        type: "cloudflare_workers_script",
-        actions: ["create"],
-      },
-      {
-        address: "cloudflare_dns_record.two",
-        type: "cloudflare_dns_record",
-        actions: ["create"],
-      },
-    ],
-  });
+  const runner = recordingRunner();
   await seedRunnableInstallationModel(store, { environment: "preview" });
-  const controller = controllerWith(store, runner);
+  const profile = multiProviderRunnerProfile();
+  const reservePlanBillingCalls: BillingReservationContext[] = [];
+  const captureRunBillingCalls: BillingCaptureContext[] = [];
+  const releaseReservationCalls: BillingReleaseContext[] = [];
+  const billingEnforcement: BillingEnforcement = {
+    reservePlanBilling: async (ctx) => {
+      reservePlanBillingCalls.push(ctx);
+      return { reasons: [] };
+    },
+    assertReservationSatisfied: async () => {},
+    captureRunBilling: async (ctx) => {
+      captureRunBillingCalls.push(ctx);
+    },
+    releaseReservation: async (ctx) => {
+      releaseReservationCalls.push(ctx);
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    billingEnforcement,
+  });
   const space = await store.getSpace("space_test");
   await store.putSpace({
     ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "manual",
-      reservationRequired: true,
-    },
-  });
-  await store.putBillingPlan({
-    id: "tiny",
-    name: "Tiny",
-    monthlyBasePrice: 0,
-    includedCredits: 1,
-    limits: { maxEstimatedCreditsPerRun: 1, quota: { resources: 1 } },
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putBillingAccount({
-    id: "bill_space_test",
-    ownerType: "space",
-    ownerId: "space_test",
-    provider: "manual",
-    status: "active",
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putSpaceSubscription({
-    id: "sub_tiny",
-    spaceId: "space_test",
-    billingAccountId: "bill_space_test",
-    planId: "tiny",
-    status: "active",
-    currentPeriodStart: "2026-06-01T00:00:00.000Z",
-    currentPeriodEnd: "2026-07-01T00:00:00.000Z",
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableCredits: 10,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 1,
-    purchasedCredits: 10,
-    updatedAt: "2026-06-07T00:00:00.000Z",
+    billingSettings: { mode: "showback", provider: "none" },
   });
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(runner.planJobs).toHaveLength(1);
-  expect(planRun.status).toBe("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain(
-    "billing plan tiny quota resources count 2 exceeds 1 is exceeded",
-  );
-  const policyAudit = planRun.auditEvents.find(
-    (event) => event.type === "plan.policy_evaluated" && event.data?.billing,
-  );
-  expect(policyAudit?.data?.billing).toMatchObject({
-    mode: "enforce",
-    planLimits: {
-      planId: "tiny",
-      subscriptionId: "sub_tiny",
-      quota: { resources: 1 },
-    },
-  });
-  expect(await store.getCreditReservationForRun(planRun.id)).toBeUndefined();
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
-    availableCredits: 10,
-    reservedCredits: 0,
-  });
-});
-
-test("enforced billing reserves credits at plan and captures them at apply", async () => {
-  const { store, controller } = await seededController();
-  const space = await store.getSpace("space_test");
-  await store.putSpace({
-    ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "manual",
-      reservationRequired: true,
-    },
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableCredits: 10,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 0,
-    purchasedCredits: 10,
-    updatedAt: "2026-06-07T00:00:00.000Z",
-  });
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-
+  // Plan time: port consulted in showback mode, and the showback CreditReservation
+  // ledger row recorded (estimate pins to BASE=1 for the no-change fixture plan).
   expect(planRun.status).toBe("succeeded");
+  expect(reservePlanBillingCalls).toHaveLength(1);
+  expect(reservePlanBillingCalls[0]).toMatchObject({
+    spaceId: "space_test",
+    runId: planRun.id,
+    installationId: "inst_fixture",
+    mode: "showback",
+  });
   expect(await store.getCreditReservationForRun(planRun.id)).toMatchObject({
     status: "reserved",
-    mode: "enforce",
+    mode: "showback",
     estimatedCredits: 1,
-  });
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
-    availableCredits: 9,
-    reservedCredits: 1,
   });
 
   const { applyRun } = await controller.createApplyRun({
@@ -3038,102 +2869,26 @@ test("enforced billing reserves credits at plan and captures them at apply", asy
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
+  // Apply time: capture delegated to the port, the showback reservation flipped
+  // to `captured`, and a showback UsageEvent recorded against the apply run.
   expect(applyRun.status).toBe("succeeded");
+  expect(captureRunBillingCalls).toHaveLength(1);
+  expect(captureRunBillingCalls[0]).toMatchObject({
+    spaceId: "space_test",
+    planRunId: planRun.id,
+    applyRunId: applyRun.id,
+  });
   expect((await store.getCreditReservationForRun(planRun.id))?.status).toBe(
     "captured",
   );
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
-    availableCredits: 9,
-    reservedCredits: 0,
-  });
-});
-
-test("monthly included credits roll over from the active subscription period before billing reads and reservations", async () => {
-  const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner();
-  await seedRunnableInstallationModel(store, { environment: "preview" });
-  const now = Date.parse("2026-07-02T00:00:00.000Z");
-  const controller = new OpenTofuDeploymentController({
-    store,
-    runner,
-    vault: fakeProviderVault() as never,
-    now: () => now,
-    newId: deterministicIds(),
-  });
-  const space = await store.getSpace("space_test");
-  await store.putSpace({
-    ...space!,
-    billingSettings: {
-      mode: "enforce",
-      provider: "manual",
-      reservationRequired: true,
-    },
-  });
-  await store.putBillingPlan({
-    id: "pro",
-    name: "Pro",
-    monthlyBasePrice: 2000,
-    includedCredits: 20,
-    limits: {},
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-  });
-  await store.putBillingAccount({
-    id: "bill_space_test",
-    ownerType: "space",
-    ownerId: "space_test",
-    provider: "manual",
-    status: "active",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-  });
-  await store.putSpaceSubscription({
-    id: "sub_pro",
-    spaceId: "space_test",
-    billingAccountId: "bill_space_test",
-    planId: "pro",
-    status: "active",
-    currentPeriodStart: "2026-07-01T00:00:00.000Z",
-    currentPeriodEnd: "2026-08-01T00:00:00.000Z",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-07-01T00:00:00.000Z",
-  });
-  await store.putCreditBalance({
-    spaceId: "space_test",
-    availableCredits: 12,
-    reservedCredits: 0,
-    monthlyIncludedCredits: 10,
-    purchasedCredits: 4,
-    updatedAt: "2026-06-15T00:00:00.000Z",
-  });
-
-  await expect(controller.getSpaceBilling("space_test")).resolves.toMatchObject(
-    {
-      billing: {
-        balance: {
-          availableCredits: 22,
-          reservedCredits: 0,
-          monthlyIncludedCredits: 20,
-          purchasedCredits: 4,
-        },
-      },
-    },
-  );
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-
-  expect(planRun.status).toBe("succeeded");
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
-    availableCredits: 21,
-    reservedCredits: 1,
-    monthlyIncludedCredits: 20,
-    purchasedCredits: 4,
-  });
-  expect(await store.getCreditReservationForRun(planRun.id)).toMatchObject({
-    status: "reserved",
-    mode: "enforce",
-    estimatedCredits: 1,
-  });
+  const usageEvents = await store.listUsageEvents("space_test");
+  expect(
+    usageEvents.some(
+      (event) => event.runId === applyRun.id && event.kind === "operation",
+    ),
+  ).toBe(true);
+  // The success path never releases the reservation.
+  expect(releaseReservationCalls).toHaveLength(0);
 });
 
 test("resource meter usage reconciliation is idempotent and rejects runner source", async () => {
@@ -3252,82 +3007,6 @@ test("invoice usage reconciliation records billing adjustment idempotently", asy
       invoicedCredits: 1,
     }),
   ).rejects.toThrow("periodStart < periodEnd");
-});
-
-test("Stripe subscription reconciliation updates billing ledger and Space settings", async () => {
-  const { store, controller } = await seededController();
-
-  const result = await controller.reconcileStripeSpaceSubscription(
-    "space_test",
-    {
-      stripeCustomerId: "cus_space",
-      stripeSubscriptionId: "sub_space",
-      stripePriceId: "price_pro",
-      stripeDefaultPaymentMethodId: "pm_space",
-      planCode: "pro",
-      status: "active",
-      currentPeriodStartUnix: 1_780_000_000,
-      currentPeriodEndUnix: 1_782_592_000,
-    },
-  );
-
-  expect(result.billingAccount).toMatchObject({
-    id: "bill_space_space_test",
-    ownerType: "space",
-    ownerId: "space_test",
-    provider: "stripe",
-    stripeCustomerId: "cus_space",
-    stripeDefaultPaymentMethodId: "pm_space",
-    status: "active",
-  });
-  expect(result.subscription).toMatchObject({
-    id: "sub_space",
-    spaceId: "space_test",
-    billingAccountId: "bill_space_space_test",
-    planId: "pro",
-    status: "active",
-  });
-  expect(result.billing.settings).toEqual({
-    mode: "enforce",
-    provider: "stripe",
-    reservationRequired: true,
-  });
-  expect(
-    await store.getBillingAccountForOwner("space", "space_test"),
-  ).toMatchObject({
-    id: "bill_space_space_test",
-    stripeDefaultPaymentMethodId: "pm_space",
-    status: "active",
-  });
-  expect(await store.getSpaceSubscription("space_test")).toMatchObject({
-    id: "sub_space",
-    planId: "pro",
-  });
-  expect((await store.getSpace("space_test"))?.billingSettings).toEqual({
-    mode: "enforce",
-    provider: "stripe",
-    reservationRequired: true,
-  });
-
-  const cancelled = await controller.reconcileStripeSpaceSubscription(
-    "space_test",
-    {
-      stripeCustomerId: "cus_space",
-      stripeSubscriptionId: "sub_space",
-      planCode: "pro",
-      status: "canceled",
-    },
-  );
-
-  expect(cancelled.billingAccount.status).toBe("disabled");
-  expect(cancelled.billing.settings).toEqual({
-    mode: "disabled",
-    provider: "none",
-  });
-  expect((await store.getSpace("space_test"))?.billingSettings).toEqual({
-    mode: "disabled",
-    provider: "none",
-  });
 });
 
 test("installation plan returns a typed source_sync_required 409 when no snapshot exists", async () => {

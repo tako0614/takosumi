@@ -1,16 +1,22 @@
 /**
- * Billing / credit / usage facade (§28 / §32 credit reservation; Space billing).
+ * Showback billing / usage facade (§28 / §32; Space billing).
  *
- * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
- * Space subscription mutation methods, the per-plan credit-reservation
- * evaluation, the apply-time reserve / capture / release / expire ceremony, the
- * monthly-credit reconciliation, and basic billing reservation.
- * The controller holds one instance, re-exposes `changeSpaceSubscription` /
- * `reconcileStripeSpaceSubscription` on its public API unchanged, and the
- * run-engine call sites delegate to `this.#billing.<method>`.
+ * OSS Takosumi (and Takosumi for-Operators) only ever runs a NON-blocking
+ * Workspace-scoped ledger: `disabled` (no ledger) or `showback` (record a
+ * transparent cost estimate + usage WITHOUT ever blocking apply). Official
+ * billing, enforced payment gates, Stripe, and per-plan quota that BLOCK apply
+ * are Takosumi Cloud-only CLOSED features.
  *
- * The shared `requireSpace` guard stays on the controller and is injected as a
- * port rather than moved.
+ * This collaborator therefore:
+ *   - computes the transparent plan cost estimate,
+ *   - records the showback CreditReservation + UsageEvent ledger rows, and
+ *   - delegates EVERY enforcement decision to the injected
+ *     {@link BillingEnforcement} / {@link QuotaPolicy} composition ports
+ *     (Seam B). OSS injects the no-op defaults (showback: never block, never
+ *     charge); Takosumi Cloud injects a Stripe-backed implementation from its
+ *     closed `billing-enforce` module.
+ *
+ * No Stripe API call and no apply-blocking code path lives here anymore.
  */
 
 import type { JsonValue } from "takosumi-contract";
@@ -20,38 +26,30 @@ import type {
   ApplyRun,
 } from "@takosumi/internal/deploy-control-api";
 import type {
-  BillingAccount,
-  BillingAutoRechargeSettings,
+  BillingEnforcement,
   BillingProvider,
   BillingSettings,
-  CreditBalance,
   CreditReservation,
-  SpaceSubscription,
+  QuotaPolicy,
 } from "takosumi-contract/billing";
 import {
   billingPlanIncludedUsdMicros,
-  billingPlanMaxEstimatedUsdMicros,
-  billingReservationRequired,
-  creditBalanceAvailableUsdMicros,
   creditBalanceMonthlyIncludedUsdMicros,
-  creditBalanceReservedUsdMicros,
   creditReservationEstimatedUsdMicros,
   legacyCreditsToUsdMicros,
-  nonNegativeUsdMicros,
-  positiveUsdMicros,
+  NOOP_BILLING_ENFORCEMENT,
+  NOOP_QUOTA_POLICY,
   usdFromMicros,
   usdMicrosToLegacyCredits,
 } from "takosumi-contract/billing";
 import type { Space } from "takosumi-contract/spaces";
-import { evaluateQuotaPolicy } from "takosumi-policy";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { OpenTofuPlanResult } from "./mod.ts";
 
 /**
  * Operator/self-host billing default (§28). The controller falls back to this
- * when no `defaultBillingSettings` dependency is wired (self-host style), and
- * the Stripe-cancelled path resets a Space to it.
+ * when no `defaultBillingSettings` dependency is wired (self-host style).
  */
 export const DISABLED_BILLING_SETTINGS: BillingSettings = {
   mode: "disabled",
@@ -68,10 +66,6 @@ const BILLING_RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
  * replacement (`["delete","create"]` / `["create","delete"]`) is therefore
  * billed once as a create (`max(delete=1, create=2) = 2`) rather than
  * double-counted as create + delete. `read` / `no-op` contribute nothing.
- *
- * Future runner-minute cost (`runner_minute` usage) is intentionally NOT folded
- * in here; it is metered separately as a `UsageEvent` after the run and would be
- * added to this estimate as a separate additive term when introduced.
  */
 const PLAN_CREDIT_BASE = 1;
 const PLAN_CREDIT_WEIGHT_CREATE = 2;
@@ -117,13 +111,7 @@ function planChangeWeight(change: PlanResourceChange): number {
 
 /**
  * Transparent, deterministic credit estimate for a plan (core-spec §32.3.1):
- * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)`. The per-change weight
- * is the heaviest action token of that change (see {@link planChangeWeight}), so
- * a replacement is billed once as a create. With no resource changes the
- * estimate falls back to `PLAN_CREDIT_BASE` (minimum charge).
- *
- * `planRun` is unused today: cost depends only on the plan resource changes, but
- * the signature keeps the run available for a future runner-minute term.
+ * `credits = max(PLAN_CREDIT_BASE, Σ per-change weight)`.
  */
 function estimatePlanCredits(
   _planRun: PlanRun,
@@ -150,28 +138,6 @@ function formatUsdMicros(value: number): string {
     .replace(/\.?0+$/u, "")}`;
 }
 
-function requirePositiveUsdMicros(value: unknown, label: string): number {
-  try {
-    return positiveUsdMicros(value, label);
-  } catch {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must be a positive USD micros integer`,
-    );
-  }
-}
-
-function requireNonNegativeUsdMicros(value: unknown, label: string): number {
-  try {
-    return nonNegativeUsdMicros(value, label);
-  } catch {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      `${label} must be a non-negative USD micros integer`,
-    );
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -180,46 +146,12 @@ function isBillingProvider(value: unknown): value is BillingProvider {
   return value === "stripe" || value === "manual" || value === "none";
 }
 
-function normalizeAutoRechargeSettings(
-  value: unknown,
-): BillingAutoRechargeSettings | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "autoRecharge must be an object",
-    );
-  }
-  if (value.enabled !== true) {
-    return {
-      enabled: false,
-      thresholdUsdMicros: 0,
-      rechargeUsdMicros: 0,
-    };
-  }
-  const thresholdUsdMicros = requireNonNegativeUsdMicros(
-    value.thresholdUsdMicros,
-    "autoRecharge.thresholdUsdMicros",
-  );
-  const rechargeUsdMicros = requirePositiveUsdMicros(
-    value.rechargeUsdMicros,
-    "autoRecharge.rechargeUsdMicros",
-  );
-  return {
-    enabled: true,
-    thresholdUsdMicros,
-    rechargeUsdMicros,
-    ...(value.monthlyLimitUsdMicros !== undefined
-      ? {
-          monthlyLimitUsdMicros: requirePositiveUsdMicros(
-            value.monthlyLimitUsdMicros,
-            "autoRecharge.monthlyLimitUsdMicros",
-          ),
-        }
-      : {}),
-  };
-}
-
+/**
+ * Normalizes operator-supplied billing settings. OSS ACCEPTS only `disabled` and
+ * `showback`. A legacy/Cloud `enforce` value is rejected here: OSS never
+ * PRODUCES an enforce setting, and the only way to gate an apply on payment is a
+ * Cloud-injected {@link BillingEnforcement} port.
+ */
 function normalizeBillingSettings(value: unknown): BillingSettings {
   if (!isRecord(value)) {
     throw new OpenTofuControllerError(
@@ -260,122 +192,16 @@ function normalizeBillingSettings(value: unknown): BillingSettings {
         : {}),
     };
   }
-  if (value.mode === "enforce") {
-    if (value.provider !== "stripe" && value.provider !== "manual") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "enforced billing requires stripe or manual provider",
-      );
-    }
-    if (value.reservationRequired !== true) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "enforced billing requires reservationRequired true",
-      );
-    }
-    const autoRecharge = normalizeAutoRechargeSettings(value.autoRecharge);
-    if (autoRecharge?.enabled && value.provider !== "stripe") {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "autoRecharge requires stripe billing",
-      );
-    }
-    return {
-      mode: "enforce",
-      provider: value.provider,
-      reservationRequired: true,
-      ...(autoRecharge ? { autoRecharge } : {}),
-    };
-  }
-  throw new OpenTofuControllerError("invalid_argument", "unknown billing mode");
+  // `enforce` (and anything else) is not an OSS-producible mode.
+  throw new OpenTofuControllerError(
+    "invalid_argument",
+    "billing mode must be disabled or showback (enforce is Takosumi Cloud-only)",
+  );
 }
-
-function stripeCoreBillingStatus(status: string): BillingAccount["status"] {
-  switch (status) {
-    case "active":
-      return "active";
-    case "trialing":
-      return "trialing";
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    default:
-      return "disabled";
-  }
-}
-
-function stripeSpaceSubscriptionStatus(
-  status: string,
-): SpaceSubscription["status"] {
-  switch (status) {
-    case "active":
-      return "active";
-    case "trialing":
-      return "trialing";
-    case "past_due":
-    case "unpaid":
-      return "past_due";
-    case "cancelled":
-    case "canceled":
-      return "cancelled";
-    default:
-      return "cancelled";
-  }
-}
-
-function stripeSpaceBillingSettings(status: string): BillingSettings {
-  switch (status) {
-    case "active":
-    case "trialing":
-    case "past_due":
-    case "unpaid":
-      return {
-        mode: "enforce",
-        provider: "stripe",
-        reservationRequired: true,
-      };
-    default:
-      return DISABLED_BILLING_SETTINGS;
-  }
-}
-
-export interface ReconcileStripeSpaceSubscriptionInput {
-  readonly stripeCustomerId: string;
-  readonly stripeSubscriptionId: string;
-  readonly stripePriceId?: string;
-  readonly stripeDefaultPaymentMethodId?: string;
-  readonly planCode: string;
-  readonly status: string;
-  readonly currentPeriodStartUnix?: number;
-  readonly currentPeriodEndUnix?: number;
-}
-
-export interface BillingAutoRechargeInput {
-  readonly spaceId: string;
-  readonly runId: string;
-  readonly estimatedUsdMicros: number;
-  readonly availableUsdMicros: number;
-  readonly shortfallUsdMicros: number;
-  readonly thresholdUsdMicros: number;
-  readonly rechargeUsdMicros: number;
-  readonly monthlyLimitUsdMicros?: number;
-  readonly now: number;
-}
-
-export interface BillingAutoRechargeResult {
-  readonly balance?: CreditBalance;
-  readonly chargedUsdMicros?: number;
-  readonly skippedReason?: string;
-}
-
-export type BillingAutoRechargePort = (
-  input: BillingAutoRechargeInput,
-) => Promise<BillingAutoRechargeResult>;
 
 /**
- * Ports the controller injects into {@link BillingService}. The Space guard is
- * passed as a callback; `store` / `newId` / `now` mirror the controller's own
- * handles so timestamps and ids line up across both surfaces.
+ * Ports the controller injects into {@link BillingService}. `enforcement` /
+ * `quota` default to the OSS showback no-ops; Cloud overrides them.
  */
 export interface BillingServiceDependencies {
   readonly store: OpenTofuDeploymentStore;
@@ -385,17 +211,17 @@ export interface BillingServiceDependencies {
   readonly defaultBillingSettings: BillingSettings;
   /** Shared Space-existence guard (used by many non-billing controller methods too). */
   readonly requireSpace: (spaceId: string) => Promise<Space>;
-  /**
-   * Cloud/account-plane hook that can create an off-session Stripe charge and
-   * grant USD balance before a reservation is attempted.
-   */
-  readonly autoRecharge?: BillingAutoRechargePort;
+  /** Seam B enforcement port. Defaults to the showback no-op. */
+  readonly enforcement?: BillingEnforcement;
+  /** Seam B plan-quota port. Defaults to the no-op. */
+  readonly quota?: QuotaPolicy;
 }
 
 /**
- * Collaborator owning the Space billing subsystem: subscription mutation, the
- * per-plan credit reservation, the apply-time reserve / capture / release /
- * expire ceremony, and monthly-credit reconciliation.
+ * Collaborator owning the Space showback ledger: subscription mutation
+ * (disabled|showback), the per-plan cost estimate, the showback
+ * CreditReservation + UsageEvent rows, and monthly-credit bookkeeping. All
+ * enforcement is delegated to the injected ports.
  */
 export class BillingService {
   readonly #store: OpenTofuDeploymentStore;
@@ -403,7 +229,8 @@ export class BillingService {
   readonly #now: () => number;
   readonly #defaultBillingSettings: BillingSettings;
   readonly #requireSpace: (spaceId: string) => Promise<Space>;
-  readonly #autoRecharge?: BillingAutoRechargePort;
+  readonly #enforcement: BillingEnforcement;
+  readonly #quota: QuotaPolicy;
 
   constructor(dependencies: BillingServiceDependencies) {
     this.#store = dependencies.store;
@@ -411,7 +238,8 @@ export class BillingService {
     this.#now = dependencies.now;
     this.#defaultBillingSettings = dependencies.defaultBillingSettings;
     this.#requireSpace = dependencies.requireSpace;
-    this.#autoRecharge = dependencies.autoRecharge;
+    this.#enforcement = dependencies.enforcement ?? NOOP_BILLING_ENFORCEMENT;
+    this.#quota = dependencies.quota ?? NOOP_QUOTA_POLICY;
   }
 
   async changeSpaceSubscription(
@@ -429,82 +257,6 @@ export class BillingService {
     return { billing: { settings } };
   }
 
-  async reconcileStripeSpaceSubscription(
-    spaceId: string,
-    input: ReconcileStripeSpaceSubscriptionInput,
-  ): Promise<{
-    readonly billingAccount: BillingAccount;
-    readonly subscription: SpaceSubscription;
-    readonly billing: { readonly settings: BillingSettings };
-  }> {
-    requireNonEmptyString(spaceId, "spaceId");
-    const space = await this.#requireSpace(spaceId);
-    requireNonEmptyString(input.stripeCustomerId, "stripeCustomerId");
-    requireNonEmptyString(input.stripeSubscriptionId, "stripeSubscriptionId");
-    requireNonEmptyString(input.planCode, "planCode");
-    const nowIso = new Date(this.#now()).toISOString();
-    const existingAccount = await this.#store.getBillingAccountForOwner(
-      "space",
-      spaceId,
-    );
-    const billingAccountId = existingAccount?.id ?? `bill_space_${spaceId}`;
-    const billingAccount = await this.#store.putBillingAccount({
-      id: billingAccountId,
-      ownerType: "space",
-      ownerId: spaceId,
-      provider: "stripe",
-      stripeCustomerId: input.stripeCustomerId,
-      ...(input.stripeDefaultPaymentMethodId
-        ? { stripeDefaultPaymentMethodId: input.stripeDefaultPaymentMethodId }
-        : existingAccount?.stripeDefaultPaymentMethodId
-          ? {
-              stripeDefaultPaymentMethodId:
-                existingAccount.stripeDefaultPaymentMethodId,
-            }
-          : {}),
-      status: stripeCoreBillingStatus(input.status),
-      createdAt: existingAccount?.createdAt ?? nowIso,
-      updatedAt: nowIso,
-    });
-    const existingSubscription =
-      await this.#store.getSpaceSubscription(spaceId);
-    const subscription = await this.#store.putSpaceSubscription({
-      id: existingSubscription?.id ?? input.stripeSubscriptionId,
-      spaceId,
-      billingAccountId: billingAccount.id,
-      planId: input.planCode,
-      status: stripeSpaceSubscriptionStatus(input.status),
-      currentPeriodStart: input.currentPeriodStartUnix
-        ? new Date(input.currentPeriodStartUnix * 1000).toISOString()
-        : (existingSubscription?.currentPeriodStart ?? nowIso),
-      currentPeriodEnd: input.currentPeriodEndUnix
-        ? new Date(input.currentPeriodEndUnix * 1000).toISOString()
-        : (existingSubscription?.currentPeriodEnd ?? nowIso),
-      createdAt: existingSubscription?.createdAt ?? nowIso,
-      updatedAt: nowIso,
-    });
-    const settings = stripeSpaceBillingSettings(input.status);
-    await this.#store.putSpace({
-      ...space,
-      billingAccountId: billingAccount.id,
-      billingSettings: settings,
-      updatedAt: nowIso,
-    });
-    // On cancellation, end the monthly subscription grant: zero
-    // monthlyIncludedCredits and remove the unused monthly portion, keeping
-    // purchased credits. `reconcileMonthlyCredits(newMonthly: 0)` resolves to
-    // `available = max(0, available - oldMonthly)`, monthly = 0 — atomic and
-    // idempotent (a second cancel finds monthly already 0 and is skipped).
-    if (subscription.status === "cancelled") {
-      await this.#store.reconcileMonthlyCredits(spaceId, {
-        newMonthly: 0,
-        periodStartIso: nowIso,
-        updatedAt: nowIso,
-      });
-    }
-    return { billingAccount, subscription, billing: { settings } };
-  }
-
   async billingSettingsForSpace(spaceId: string): Promise<BillingSettings> {
     const space = await this.#store.getSpace(spaceId);
     return space?.billingSettings ?? this.#defaultBillingSettings;
@@ -517,6 +269,11 @@ export class BillingService {
     return plan ? { subscription, plan } : undefined;
   }
 
+  /**
+   * Monthly-credit bookkeeping for a subscribed Space. Inert for OSS-only
+   * deployments (no subscription rows exist without Cloud enforcement); kept so
+   * the usage service can call it uniformly. No Stripe, no blocking.
+   */
   async reconcileSpaceMonthlyCredits(spaceId: string): Promise<void> {
     const billingPlan = await this.#billingPlanForSpace(spaceId);
     if (!billingPlan) return;
@@ -559,10 +316,6 @@ export class BillingService {
     ) {
       return;
     }
-    // Atomic, idempotent-per-period monthly RESET (same semantics as the old
-    // `max(0, available - oldMonthly) + newMonthly` but in one conditional
-    // UPDATE, so a concurrent top-up can no longer clobber the read-modify-
-    // write).
     await this.#store.reconcileMonthlyCredits(spaceId, {
       newMonthly: includedCredits,
       periodStartIso: new Date(periodStartMs).toISOString(),
@@ -570,6 +323,11 @@ export class BillingService {
     });
   }
 
+  /**
+   * Plan-time billing. Records the transparent showback estimate and consults
+   * the injected quota + enforcement ports. Billing may BLOCK only a plan that
+   * would otherwise pass; the OSS no-op ports never block.
+   */
   async evaluatePlanBillingReservation(input: {
     readonly planRun: PlanRun;
     readonly result: OpenTofuPlanResult;
@@ -596,142 +354,51 @@ export class BillingService {
       input.result,
     );
     const estimatedCredits = usdMicrosToLegacyCredits(estimatedUsdMicros);
-    const auditBase = {
+    const changes = input.result.planResourceChanges ?? [];
+    let audit: Readonly<Record<string, JsonValue>> = {
       mode: settings.mode,
       estimatedUsdMicros,
       estimatedCredits,
-    } satisfies Readonly<Record<string, JsonValue>>;
-    const planLimit = await this.#evaluateBillingPlanLimits({
+    };
+
+    // Seam B quota port (OSS no-op: no plan limits).
+    const quota = await this.#quota.evaluatePlanQuota({
       spaceId: input.planRun.spaceId,
       estimatedUsdMicros,
-      changes: input.result.planResourceChanges ?? [],
+      planResourceChanges: changes,
     });
-    const auditWithPlanLimits = planLimit.audit
-      ? { ...auditBase, planLimits: planLimit.audit }
-      : auditBase;
-    if (!input.policyPassedBeforeBilling) {
-      return { reasons: [], audit: auditWithPlanLimits };
-    }
-    if (settings.mode === "enforce" && planLimit.reasons.length > 0) {
-      return { reasons: planLimit.reasons, audit: auditWithPlanLimits };
-    }
-    if (billingReservationRequired(settings)) {
-      let balance = await this.#store.getCreditBalance(input.planRun.spaceId);
-      let availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
-      let billingAudit: Readonly<Record<string, JsonValue>> =
-        auditWithPlanLimits;
-      const autoRecharge =
-        settings.mode === "enforce" ? settings.autoRecharge : undefined;
-      const postReserveUsdMicros = availableUsdMicros - estimatedUsdMicros;
-      const shouldAutoRecharge =
-        autoRecharge?.enabled === true &&
-        settings.provider === "stripe" &&
-        this.#autoRecharge !== undefined &&
-        (availableUsdMicros < estimatedUsdMicros ||
-          postReserveUsdMicros < autoRecharge.thresholdUsdMicros);
-      if (shouldAutoRecharge && autoRecharge) {
-        const neededUsdMicros = Math.max(
-          0,
-          estimatedUsdMicros +
-            autoRecharge.thresholdUsdMicros -
-            availableUsdMicros,
-        );
-        const result = await this.#autoRecharge({
-          spaceId: input.planRun.spaceId,
-          runId: input.planRun.id,
-          estimatedUsdMicros,
-          availableUsdMicros,
-          shortfallUsdMicros: Math.max(
-            0,
-            estimatedUsdMicros - availableUsdMicros,
-          ),
-          thresholdUsdMicros: autoRecharge.thresholdUsdMicros,
-          rechargeUsdMicros: Math.max(
-            autoRecharge.rechargeUsdMicros,
-            neededUsdMicros,
-          ),
-          ...(autoRecharge.monthlyLimitUsdMicros !== undefined
-            ? { monthlyLimitUsdMicros: autoRecharge.monthlyLimitUsdMicros }
-            : {}),
-          now: input.now,
-        });
-        billingAudit = {
-          ...billingAudit,
-          autoRecharge: result.chargedUsdMicros
-            ? {
-                status: "charged",
-                chargedUsdMicros: result.chargedUsdMicros,
-                chargedCredits: usdMicrosToLegacyCredits(
-                  result.chargedUsdMicros,
-                ),
-              }
-            : {
-                status: "skipped",
-                reason: result.skippedReason ?? "unknown",
-              },
-        };
-        balance =
-          result.balance ??
-          (await this.#store.getCreditBalance(input.planRun.spaceId));
-        availableUsdMicros = creditBalanceAvailableUsdMicros(balance);
+    if (quota.audit) audit = { ...audit, ...quota.audit };
+
+    // Seam B enforcement port (OSS no-op: never blocks, never charges).
+    const enforced = await this.#enforcement.reservePlanBilling({
+      spaceId: input.planRun.spaceId,
+      runId: input.planRun.id,
+      ...(input.planRun.installationId
+        ? { installationId: input.planRun.installationId }
+        : {}),
+      mode: settings.mode,
+      estimatedUsdMicros,
+      planResourceChanges: changes,
+      policyPassedBeforeBilling: input.policyPassedBeforeBilling,
+      now: input.now,
+    });
+    if (enforced.audit) audit = { ...audit, ...enforced.audit };
+
+    // Enforcement may only block a plan that would otherwise PASS policy.
+    if (input.policyPassedBeforeBilling) {
+      const reasons = [...quota.reasons, ...enforced.reasons];
+      if (reasons.length > 0) {
+        return { reasons, audit };
       }
-      if (availableUsdMicros < estimatedUsdMicros) {
-        return {
-          reasons: [
-            `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(availableUsdMicros)} available`,
-          ],
-          audit: {
-            ...billingAudit,
-            availableUsdMicros,
-            availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
-            reservationStatus: "insufficient_credits",
-          },
-        };
-      }
-      const reservedBalance = await this.#store.reserveCredits(
-        input.planRun.spaceId,
-        {
-          usdMicros: estimatedUsdMicros,
-          credits: estimatedCredits,
-          updatedAt: new Date(input.now).toISOString(),
-        },
-      );
-      if (!reservedBalance) {
-        const latest = await this.#store.getCreditBalance(
-          input.planRun.spaceId,
-        );
-        const latestAvailableUsdMicros =
-          creditBalanceAvailableUsdMicros(latest);
-        return {
-          reasons: [
-            `USD balance reservation failed: ${formatUsdMicros(estimatedUsdMicros)} estimated but only ${formatUsdMicros(latestAvailableUsdMicros)} available`,
-          ],
-          audit: {
-            ...billingAudit,
-            availableUsdMicros: latestAvailableUsdMicros,
-            availableCredits: usdMicrosToLegacyCredits(
-              latestAvailableUsdMicros,
-            ),
-            reservationStatus: "insufficient_credits",
-          },
-        };
-      }
-      return await this.#recordCreditReservation({
-        planRun: input.planRun,
-        estimatedUsdMicros,
-        estimatedCredits,
-        settings,
-        now: input.now,
-        audit: billingAudit,
-      });
     }
+    // Showback ledger: record the estimate reservation (never blocks).
     return await this.#recordCreditReservation({
       planRun: input.planRun,
       estimatedUsdMicros,
       estimatedCredits,
       settings,
       now: input.now,
-      audit: auditWithPlanLimits,
+      audit,
     });
   }
 
@@ -768,80 +435,25 @@ export class BillingService {
     };
   }
 
-  async #evaluateBillingPlanLimits(input: {
-    readonly spaceId: string;
-    readonly estimatedUsdMicros: number;
-    readonly changes: readonly PlanResourceChange[];
-  }): Promise<{
-    readonly reasons: readonly string[];
-    readonly audit?: Readonly<Record<string, JsonValue>>;
-  }> {
-    const billingPlan = await this.#billingPlanForSpace(input.spaceId);
-    if (!billingPlan) return { reasons: [] };
-    const reasons: string[] = [];
-    const limits = billingPlan.plan.limits;
-    const maxEstimatedUsdMicros = billingPlanMaxEstimatedUsdMicros(limits);
-    if (
-      maxEstimatedUsdMicros !== undefined &&
-      Number.isFinite(maxEstimatedUsdMicros) &&
-      input.estimatedUsdMicros > maxEstimatedUsdMicros
-    ) {
-      reasons.push(
-        `billing plan ${billingPlan.plan.id} limits estimated USD per run to ${formatUsdMicros(maxEstimatedUsdMicros)}; plan estimated ${formatUsdMicros(input.estimatedUsdMicros)}`,
-      );
-    }
-    const quota = evaluateQuotaPolicy(input.changes, limits.quota);
-    reasons.push(
-      ...quota.reasons.map(
-        (reason) => `billing plan ${billingPlan.plan.id} ${reason}`,
-      ),
-    );
-    return {
-      reasons,
-      audit: {
-        planId: billingPlan.plan.id,
-        subscriptionId: billingPlan.subscription.id,
-        ...(maxEstimatedUsdMicros !== undefined
-          ? {
-              maxEstimatedUsdMicrosPerRun: maxEstimatedUsdMicros,
-              maxEstimatedCreditsPerRun: usdMicrosToLegacyCredits(
-                maxEstimatedUsdMicros,
-              ),
-            }
-          : {}),
-        ...(limits.quota ? { quota: limits.quota } : {}),
-        exceeded: reasons,
-      },
-    };
-  }
-
+  /**
+   * Apply-time precondition. Showback never blocks; an injected enforcement port
+   * may throw (e.g. expired reservation / insufficient balance) to fail closed.
+   */
   async assertApplyBillingReservation(planRun: PlanRun): Promise<void> {
     const settings = await this.billingSettingsForSpace(planRun.spaceId);
-    if (!billingReservationRequired(settings)) return;
-    const reservation = await this.#store.getCreditReservationForRun(
-      planRun.id,
-    );
-    if (!reservation) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_missing: plan run ${planRun.id} has no reserved credits`,
-      );
-    }
-    if (reservation.status !== "reserved") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_not_reserved: reservation ${reservation.id} is ${reservation.status}`,
-      );
-    }
-    if (Date.parse(reservation.expiresAt) <= this.#now()) {
-      await this.#expireCreditReservation(reservation);
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `credit_reservation_expired: reservation ${reservation.id} expired at ${reservation.expiresAt}`,
-      );
-    }
+    if (settings.mode === "disabled") return;
+    await this.#enforcement.assertReservationSatisfied({
+      spaceId: planRun.spaceId,
+      planRunId: planRun.id,
+      now: this.#now(),
+    });
   }
 
+  /**
+   * Records the showback usage event for a successful apply (against the
+   * recorded estimate) and delegates any balance capture to the enforcement
+   * port.
+   */
   async captureApplyBillingUsage(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
@@ -872,76 +484,36 @@ export class BillingService {
       ...reservation,
       status: "captured",
     });
-    const balance = await this.#store.getCreditBalance(input.planRun.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      const nextReservedUsdMicros = Math.max(
-        0,
-        creditBalanceReservedUsdMicros(balance) - reservedUsdMicros,
-      );
-      await this.#store.putCreditBalance({
-        ...balance,
-        reservedUsdMicros: nextReservedUsdMicros,
-        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
-        updatedAt: new Date(input.now).toISOString(),
-      });
-    }
+    await this.#enforcement.captureRunBilling({
+      spaceId: input.planRun.spaceId,
+      planRunId: input.planRun.id,
+      applyRunId: input.applyRun.id,
+      ...(input.planRun.installationId
+        ? { installationId: input.planRun.installationId }
+        : {}),
+      capturedUsdMicros: reservedUsdMicros,
+      now: input.now,
+    });
   }
 
+  /**
+   * Releases a reservation on a failed/abandoned apply. Marks the showback row
+   * released and delegates any balance restore to the enforcement port.
+   */
   async releaseApplyBillingReservation(planRun: PlanRun): Promise<void> {
     const reservation = await this.#store.getCreditReservationForRun(
       planRun.id,
     );
-    if (!reservation || reservation.status !== "reserved") return;
-    await this.#store.putCreditReservation({
-      ...reservation,
-      status: "released",
-    });
-    const balance = await this.#store.getCreditBalance(planRun.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      const reservationUsdMicros =
-        creditReservationEstimatedUsdMicros(reservation);
-      const nextAvailableUsdMicros =
-        creditBalanceAvailableUsdMicros(balance) + reservationUsdMicros;
-      const nextReservedUsdMicros = Math.max(
-        0,
-        creditBalanceReservedUsdMicros(balance) - reservationUsdMicros,
-      );
-      await this.#store.putCreditBalance({
-        ...balance,
-        availableUsdMicros: nextAvailableUsdMicros,
-        reservedUsdMicros: nextReservedUsdMicros,
-        availableCredits: usdMicrosToLegacyCredits(nextAvailableUsdMicros),
-        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
-        updatedAt: new Date(this.#now()).toISOString(),
+    if (reservation && reservation.status === "reserved") {
+      await this.#store.putCreditReservation({
+        ...reservation,
+        status: "released",
       });
     }
-  }
-
-  async #expireCreditReservation(
-    reservation: CreditReservation,
-  ): Promise<void> {
-    await this.#store.putCreditReservation({
-      ...reservation,
-      status: "expired",
+    await this.#enforcement.releaseReservation({
+      spaceId: planRun.spaceId,
+      planRunId: planRun.id,
+      now: this.#now(),
     });
-    const balance = await this.#store.getCreditBalance(reservation.spaceId);
-    if (balance && reservation.mode === "enforce") {
-      const reservationUsdMicros =
-        creditReservationEstimatedUsdMicros(reservation);
-      const nextAvailableUsdMicros =
-        creditBalanceAvailableUsdMicros(balance) + reservationUsdMicros;
-      const nextReservedUsdMicros = Math.max(
-        0,
-        creditBalanceReservedUsdMicros(balance) - reservationUsdMicros,
-      );
-      await this.#store.putCreditBalance({
-        ...balance,
-        availableUsdMicros: nextAvailableUsdMicros,
-        reservedUsdMicros: nextReservedUsdMicros,
-        availableCredits: usdMicrosToLegacyCredits(nextAvailableUsdMicros),
-        reservedCredits: usdMicrosToLegacyCredits(nextReservedUsdMicros),
-        updatedAt: new Date(this.#now()).toISOString(),
-      });
-    }
   }
 }

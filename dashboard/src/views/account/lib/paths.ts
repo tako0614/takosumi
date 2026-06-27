@@ -10,16 +10,19 @@
  */
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
 export const SESSION_ME = "/v1/account/session/me";
 
-export const STRIPE_CHECKOUT = TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH;
-export const STRIPE_PORTAL = TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH;
+// Stripe checkout / customer portal are Takosumi Cloud-only endpoints. The OSS
+// account plane no longer serves them (they 404 on an OSS-only deployment;
+// Takosumi Cloud serves them). The dashboard keeps the client paths as plain
+// literals so the same SPA can talk to a Cloud-backed origin without a separate
+// build.
+export const STRIPE_CHECKOUT = "/v1/billing/stripe/checkout";
+export const STRIPE_PORTAL = "/v1/billing/stripe/portal";
 
 export const UPSTREAM_AUTHORIZE = TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH;
 export const UPSTREAM_CALLBACK = TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH;

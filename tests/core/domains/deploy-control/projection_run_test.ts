@@ -324,7 +324,9 @@ test("projectPlanRunCost surfaces an enforce-mode credit shortfall as blocked", 
     }),
   );
   expect(cost.runId).toBe("plan_1");
-  expect(cost.billingMode).toBe("enforce");
+  // Public billingMode is always `showback` in OSS; the enforce decision lives
+  // in the injected Cloud port's recorded audit and surfaces via `blocked`.
+  expect(cost.billingMode).toBe("showback");
   expect(cost.estimatedUsdMicros).toBe(12_000_000);
   expect(cost.availableUsdMicros).toBe(5_000_000);
   expect(cost.shortfallUsdMicros).toBe(7_000_000);
@@ -387,7 +389,7 @@ test("projectPlanRunCost surfaces a reserved plan as non-blocked with no shortfa
       ],
     }),
   );
-  expect(cost.billingMode).toBe("enforce");
+  expect(cost.billingMode).toBe("showback");
   expect(cost.estimatedUsdMicros).toBe(4_000_000);
   expect(cost.availableUsdMicros).toBe(40_000_000);
   expect(cost.shortfallUsdMicros).toBeUndefined();

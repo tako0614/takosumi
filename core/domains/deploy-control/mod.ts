@@ -202,9 +202,11 @@ import { RunQueryService } from "./run_query.ts";
 import {
   BillingService,
   DISABLED_BILLING_SETTINGS,
-  type BillingAutoRechargePort,
-  type ReconcileStripeSpaceSubscriptionInput,
 } from "./billing_service.ts";
+import type {
+  BillingEnforcement,
+  QuotaPolicy,
+} from "takosumi-contract/billing";
 import { redactString } from "takosumi-contract/redaction";
 import type { ObservabilitySink } from "../observability/mod.ts";
 import { UsageReportingService } from "./usage_service.ts";
@@ -268,7 +270,6 @@ export {
 } from "./runner_profiles.ts";
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
-export type { ReconcileStripeSpaceSubscriptionInput } from "./billing_service.ts";
 
 function publicInstallation(installation: Installation): PublicInstallation {
   const { installType: _installType, ...publicRecord } = installation;
@@ -996,7 +997,13 @@ export interface OpenTofuDeploymentControllerDependencies {
    * this. Omitted means self-host style `disabled`.
    */
   readonly defaultBillingSettings?: BillingSettings;
-  readonly billingAutoRecharge?: BillingAutoRechargePort;
+  /**
+   * Seam B enforcement port. Omitted ⇒ OSS showback no-op (never blocks /
+   * never charges). Cloud injects a Stripe-backed implementation.
+   */
+  readonly billingEnforcement?: BillingEnforcement;
+  /** Seam B plan-quota port. Omitted ⇒ OSS no-op (no plan limits). */
+  readonly quotaPolicy?: QuotaPolicy;
 }
 
 export interface DeployControlActorContext {
@@ -1260,9 +1267,10 @@ export class OpenTofuDeploymentController {
       now: this.#now,
       defaultBillingSettings: this.#defaultBillingSettings,
       requireSpace: (spaceId) => this.#requireSpace(spaceId),
-      ...(dependencies.billingAutoRecharge
-        ? { autoRecharge: dependencies.billingAutoRecharge }
+      ...(dependencies.billingEnforcement
+        ? { enforcement: dependencies.billingEnforcement }
         : {}),
+      ...(dependencies.quotaPolicy ? { quota: dependencies.quotaPolicy } : {}),
     });
     this.#usage = new UsageReportingService({
       store: this.#store,
@@ -1433,17 +1441,6 @@ export class OpenTofuDeploymentController {
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }> {
     return await this.#billing.changeSpaceSubscription(spaceId, input);
-  }
-
-  async reconcileStripeSpaceSubscription(
-    spaceId: string,
-    input: ReconcileStripeSpaceSubscriptionInput,
-  ): Promise<{
-    readonly billingAccount: BillingAccount;
-    readonly subscription: SpaceSubscription;
-    readonly billing: { readonly settings: BillingSettings };
-  }> {
-    return await this.#billing.reconcileStripeSpaceSubscription(spaceId, input);
   }
 
   async createPlanRun(

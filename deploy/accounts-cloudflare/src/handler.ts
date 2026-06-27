@@ -23,12 +23,9 @@ import {
   type PlatformAccessPolicy,
   type OidcClientAuthMethod,
   type OidcClientRegistration,
-  parseBillingPlans,
-  parseStripeUsageInvoiceItemPrices,
   registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
   signEs256Jwt,
-  type StripeBillingOptions,
   type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
   type ServiceGraphMaterialResolverHttpOptions,
@@ -65,20 +62,6 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNT_SESSION_HASH_SALT?: string;
   readonly TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
-  readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS?: string;
-  readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
-  readonly TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN?: string;
-  readonly TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES?: string;
-  /**
-   * Operator billing plan catalog (spec §32): JSON array of
-   * `{ id, kind: "subscription"|"pack", stripePriceId, usdMicros,
-   *    name: {ja,en}, priceDisplay: {ja,en} }`.
-   * Empty/absent → no plans offered (dashboard shows the empty catalog).
-   */
-  readonly TAKOSUMI_BILLING_PLANS?: string;
   /**
    * Cloud-only managed resource price book. The platform worker applies this to
    * Cloud extension usage before it records and spends Workspace USD balance.
@@ -448,29 +431,12 @@ async function buildAccountsHandler(
     issuer,
     clients,
     store,
-    stripeBilling: parseStripeBilling(env),
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     platformAccess: parsePlatformAccess(env),
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
-    ...(controlPlaneOperations
-      ? {
-          billingReconciler:
-            controlPlaneOperations.reconcileStripeSpaceSubscription,
-          billingCreditReconciler: (
-            spaceId: string,
-            input: { readonly usdMicros?: number; readonly credits: number },
-          ) =>
-            controlPlaneOperations.topUpSpaceCredits(spaceId, {
-              ...(input.usdMicros !== undefined
-                ? { usdMicros: input.usdMicros }
-                : {}),
-              credits: input.credits,
-            }),
-        }
-      : {}),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     serviceGraphRuntimeAvailability: {
       ...hostRuntimeAvailability,
@@ -482,20 +448,11 @@ async function buildAccountsHandler(
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
     ),
-    billingRedirectAllowlist: splitList(
-      env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
-    ),
-    billingCheckoutSmokeToken: billingCheckoutSmokeTokenFromEnv(env),
-    billingUsageSyncToken: billingUsageSyncTokenFromEnv(env),
-    stripeUsageInvoiceItemPrices: parseStripeUsageInvoiceItemPrices(
-      optionalString(env.TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES),
-    ),
     materializeDrillToken: materializeDrillTokenFromEnv(env),
     sharedCellRuntime: parseSharedCellRuntime(env),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,
     ),
-    billingPlans: parseBillingPlans(optionalString(env.TAKOSUMI_BILLING_PLANS)),
   };
   const stableOidc = await parseStableOidcFlow(env);
   if (stableOidc) {
@@ -897,30 +854,6 @@ function parseClientAuthMethod(
   return raw;
 }
 
-function parseStripeBilling(
-  env: CloudflareWorkerEnv,
-): StripeBillingOptions | undefined {
-  const secretKey = optionalString(env.TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY);
-  const webhookSecret = optionalString(
-    env.TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET,
-  );
-  const stripeApiBase = optionalString(env.TAKOSUMI_ACCOUNTS_STRIPE_API_BASE);
-  const webhookToleranceSeconds = optionalInteger(
-    env.TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS,
-  );
-  if (!secretKey && !webhookSecret && !stripeApiBase) return undefined;
-  if (!secretKey || !webhookSecret) {
-    throw new TypeError(
-      "Stripe billing requires TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY and TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-    );
-  }
-  return {
-    secretKey,
-    webhookSecret,
-    stripeApiBase,
-    webhookToleranceSeconds,
-  };
-}
 
 function parsePasskeys(
   env: CloudflareWorkerEnv,
@@ -1512,24 +1445,6 @@ function parsePlatformAccess(env: CloudflareWorkerEnv): PlatformAccessPolicy {
       ready: true,
       evidenceDigest,
     },
-  );
-}
-
-function billingCheckoutSmokeTokenFromEnv(
-  env: CloudflareWorkerEnv,
-): string | undefined {
-  return (
-    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN) ??
-    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
-  );
-}
-
-function billingUsageSyncTokenFromEnv(
-  env: CloudflareWorkerEnv,
-): string | undefined {
-  return (
-    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN) ??
-    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
   );
 }
 
