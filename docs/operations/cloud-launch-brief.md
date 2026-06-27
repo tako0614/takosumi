@@ -249,19 +249,22 @@ kill switch, abuse queue, override, and audit drills are recorded.
 Billing meter reference:
 
 ```text
-meter://takosumi-cloud/credits/v1
+meter://takosumi-cloud/usd-balance/v1
 ```
 
 The planned customer-visible units are:
 
-- runner minutes;
-- compatibility checks;
-- plan/apply/destroy runs;
-- stored state/log/artifact size;
-- managed resource units when Cloud-only managed resources are opened.
+- USD-denominated balance (`usdMicros` in the ledger);
+- Cloudflare Compatibility Gateway usage priced by the operator price book;
+- AI Gateway usage priced by the operator price book;
+- managed resource usage when Cloud-only managed resources are opened.
 
-Billing may remain `disabled` or `showback` while access is closed. `enforce`
-requires Stripe and entitlement readiness evidence.
+Billing may remain `disabled` or `showback` for OSS/operator showback while
+access is closed. Takosumi Cloud-provided WfP / AI / managed resources are
+still spend-required: their usage must be priced by
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`, deducted from Workspace USD balance, and
+fail closed when balance is exhausted. Current customer prices and the free
+tier are defined in [`cloud-pricing.md`](cloud-pricing.md).
 
 ## Support Tier And SLA
 
@@ -296,8 +299,9 @@ policy://takosumi-cloud/free-trial/closed-ga-v1
 ```
 
 The first trial may include hosted dashboard access, compatibility checks, and a
-limited number of plan/apply Runs. It must not silently open paid billing or
-unbounded managed resource usage.
+limited monthly USD grant. Initial free tier is `$0.25 / Workspace / month`,
+non-carrying, and bounded by account/workspace abuse controls. It must not
+silently open paid billing or unbounded managed resource usage.
 
 ## Accepted Use Policy
 

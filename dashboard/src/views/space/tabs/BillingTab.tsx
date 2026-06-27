@@ -1,6 +1,6 @@
 /**
  * Workspace settings — billing / usage. The Takosumi Cloud billing surface:
- *   - plan / credit-pack cards from the operator catalog
+ *   - plan / USD balance-pack cards from the operator catalog
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
  *   - balance + billing-mode explanation
  *   - Stripe customer portal (payment methods / invoices)
@@ -8,7 +8,7 @@
  *
  * The old debug controls (billing-mode select, free top-up input,
  * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
- * credits enter through paid checkout only.
+ * USD balance enters through paid checkout only.
  */
 import "../../../styles/wave-b.css";
 import {
@@ -221,7 +221,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   const planCard = (plan: PublicBillingPlan) => (
     <li class="av-plan-card">
       <div class="av-plan-text">
-        <span class="av-plan-name">{plan.name[locale()]}</span>
+        <span class="av-plan-name">{planDisplayName(plan)}</span>
         <span class="av-plan-price">{plan.priceDisplay[locale()]}</span>
         <span class="av-plan-credits">
           {plan.kind === "subscription"
@@ -485,9 +485,21 @@ function balanceReservedUsdMicros(balance: CreditBalance | undefined): number {
 }
 
 function formatPlanUsd(plan: PublicBillingPlan): string {
-  return formatUsdMicros(
-    plan.usdMicros ?? Math.round(plan.credits * 1_000_000),
-  );
+  return formatUsdMicros(planUsdMicros(plan));
+}
+
+function planDisplayName(plan: PublicBillingPlan): string {
+  if (plan.kind === "pack") {
+    return t("billing.packs.balance", { n: formatPlanUsd(plan) });
+  }
+  return plan.name[locale()];
+}
+
+function planUsdMicros(plan: PublicBillingPlan): number {
+  if (typeof plan.usdMicros === "number" && Number.isFinite(plan.usdMicros)) {
+    return plan.usdMicros;
+  }
+  return Math.round((plan.credits ?? 0) * 1_000_000);
 }
 
 function isThisMonthUsage(event: UsageEvent): boolean {

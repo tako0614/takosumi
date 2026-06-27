@@ -169,7 +169,7 @@ Cloud extension の usage report は `meterId`、`kind`、`quantity`、resource 
 `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` が単価・原価見積もり・最低粗利を検証して
 `usdMicros` を確定します。price book に meter がない、または最低粗利を満たさない
 meter は fail closed し、WfP / AI の未課金成功を返しません。価格表と無料枠の
-運用正本は [`../operations/cloud-pricing.md`](../operations/cloud-pricing.md) です。
+運用正本は `docs/operations/cloud-pricing.md` です。
 
 内部 header:
 

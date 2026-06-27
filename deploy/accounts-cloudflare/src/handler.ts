@@ -276,7 +276,11 @@ export function createCloudflareWorker(
         (request.method === "GET" || request.method === "HEAD") &&
         !isAccountsApiPath(url.pathname)
       ) {
-        return await env.ASSETS.fetch(request);
+        const assetResponse = await env.ASSETS.fetch(request);
+        if (isDashboardAssetPath(url.pathname)) {
+          return dashboardAssetResponse(assetResponse, request.method);
+        }
+        return assetResponse;
       }
       if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
         if (request.method !== "GET") {
@@ -1628,6 +1632,27 @@ function requireCommitPinnedEvidencePairs(
       throw new TypeError(`${digestName} must be sha256:<64hex>`);
     }
   }
+}
+
+function isDashboardAssetPath(pathname: string): boolean {
+  return pathname === "/favicon.ico" || pathname.startsWith("/assets/");
+}
+
+function dashboardAssetResponse(response: Response, method: string): Response {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (
+    response.status === 200 &&
+    contentType.toLowerCase().includes("text/html")
+  ) {
+    return new Response(method === "HEAD" ? null : "asset not found", {
+      status: 404,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+  return response;
 }
 
 function optionalString(value: unknown): string | undefined {
