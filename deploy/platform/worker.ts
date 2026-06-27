@@ -19,7 +19,11 @@ import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
-import { type ControlPlaneOperations } from "@takosjp/takosumi-accounts-service";
+import {
+  TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER,
+  type ControlPlaneOperations,
+} from "@takosjp/takosumi-accounts-service";
+import { TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH } from "@takosjp/takosumi-accounts-contract";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createDeployControlQueueConsumer,
@@ -108,6 +112,53 @@ async function controlPlaneOperationsFor(
   return await deployControlSeam(env).operations();
 }
 
+async function platformCloudExtensionUsageOperationsFor(
+  env: PlatformEnv,
+  requestUrl: string,
+): Promise<PlatformCloudExtensionUsageOperations> {
+  const operations = (await deployControlSeam(
+    env,
+  ).operations()) as PlatformCloudExtensionUsageOperations;
+  return {
+    recordGatewayResourceUsage: (spaceId, input) =>
+      operations.recordGatewayResourceUsage(spaceId, input),
+    recordBillingUsageReports: async (input) => {
+      if (input.usageEvents.length === 0) return;
+      const token = platformBillingUsageSyncToken(env);
+      if (!token) {
+        throw new Error("billing_usage_sync_token_missing");
+      }
+      const response = await accountsWorker.fetch(
+        new Request(
+          new URL(
+            TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
+            requestUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: token,
+            },
+            body: JSON.stringify({ usageEvents: input.usageEvents }),
+          },
+        ),
+        env,
+      );
+      if (!response.ok) {
+        throw new Error("billing_usage_report_import_failed");
+      }
+    },
+  };
+}
+
+function platformBillingUsageSyncToken(env: PlatformEnv): string | undefined {
+  return (
+    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN) ??
+    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
+  );
+}
+
 const accountsWorker = createCloudflareWorker({
   deployControlOperations: (env) => deployControlSeam(env).operations(),
   // The session-authed `/api/v1/*` dashboard surface (M10) reads the SAME
@@ -158,10 +209,7 @@ export default {
         env,
         cloudExtensionRoute,
         verifyPlatformCloudExtensionSession,
-        async () =>
-          (await deployControlSeam(
-            env,
-          ).operations()) as PlatformCloudExtensionUsageOperations,
+        async () => platformCloudExtensionUsageOperationsFor(env, request.url),
       );
     }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
@@ -1012,6 +1060,9 @@ export interface PlatformCloudExtensionUsageOperations {
       readonly meters: readonly GatewayResourceUsageMeter[];
     },
   ): Promise<{ readonly usageEvents: readonly unknown[] }>;
+  recordBillingUsageReports?(input: {
+    readonly usageEvents: readonly unknown[];
+  }): Promise<void>;
 }
 
 type PlatformCloudExtensionUsageOperationsInput =
@@ -1175,11 +1226,16 @@ async function recordPlatformCloudExtensionUsage(
       typeof operationsInput === "function"
         ? await operationsInput()
         : operationsInput;
-    await operations.recordGatewayResourceUsage(usage.spaceId, {
+    const result = await operations.recordGatewayResourceUsage(usage.spaceId, {
       periodStart: usage.periodStart,
       periodEnd: usage.periodEnd,
       meters: usage.meters,
     });
+    if (operations.recordBillingUsageReports) {
+      await operations.recordBillingUsageReports({
+        usageEvents: result.usageEvents,
+      });
+    }
     return { ok: true };
   } catch {
     return {

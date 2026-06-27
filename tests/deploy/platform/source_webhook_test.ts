@@ -1305,10 +1305,14 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
       PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
     >[1];
   }[] = [];
+  const billingUsageImports: readonly unknown[][] = [];
   const usageOps: PlatformCloudExtensionUsageOperations = {
     recordGatewayResourceUsage: async (spaceId, input) => {
       usageCalls.push({ spaceId, input });
-      return { usageEvents: [{ id: "usage_1" }] };
+      return { usageEvents: [{ id: "usage_1", source: "resource_meter" }] };
+    },
+    recordBillingUsageReports: async (input) => {
+      billingUsageImports.push(input.usageEvents);
     },
   };
   const response = await handlePlatformCloudExtensionRouteRequest(
@@ -1391,6 +1395,9 @@ test("Cloud extension route records reported Workers and AI usage", async () => 
         ],
       },
     },
+  ]);
+  expect(billingUsageImports).toEqual([
+    [{ id: "usage_1", source: "resource_meter" }],
   ]);
 });
 

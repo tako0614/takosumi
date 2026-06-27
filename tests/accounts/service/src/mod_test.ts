@@ -4574,6 +4574,125 @@ test("accounts handler syncs unexported billing usage to Stripe invoice items", 
   expect(stripeBodies.length).toEqual(1);
 });
 
+test("accounts handler imports Cloud extension usage events before Stripe invoice item sync", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = 1_800_000_000;
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveBillingAccount({
+    billingAccountId: "bill_workers",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_workers",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_workers",
+    accountId: "acct_1",
+    spaceId: "space_workers",
+    appId: "takosumi.cloudflare-compat",
+    sourceGitUrl: "https://github.com/example/app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    billingAccountId: "bill_workers",
+    status: "ready",
+    createdBySubject: "tsub_account",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const stripeBodies: string[] = [];
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      stripeApiBase: "https://api.stripe.test/v1",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        stripeBodies.push(await request.text());
+        return Response.json({ id: "ii_workers" });
+      },
+    },
+    billingUsageSyncToken: "usage_sync_token",
+    stripeUsageInvoiceItemPrices: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        unitAmount: 4,
+        currency: "usd",
+      },
+    ],
+  });
+
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
+        },
+        body: JSON.stringify({
+          usageEvents: [
+            {
+              id: "usage_evt_workers_request",
+              spaceId: "space_workers",
+              installationId: "inst_workers",
+              meterId: "cloudflare:workers_script:request",
+              resourceFamily: "cloudflare.workers_script",
+              resourceId: "script:api",
+              operation: "request",
+              resourceMetadata: {
+                backend: "cloudflare.workers_for_platforms",
+              },
+              kind: "gateway_compute",
+              quantity: 12,
+              credits: 3,
+              source: "resource_meter",
+              idempotencyKey:
+                "provider-runtime:space_workers:window:workers-script",
+              createdAt: "2026-06-26T13:01:00.000Z",
+            },
+          ],
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(body.imported_usage_report_count).toEqual(1);
+  expect(body.billing_accounts[0].billing_account_id).toEqual("bill_workers");
+  expect(body.billing_accounts[0].exported[0]).toMatchObject({
+    meter: "cloudflare.workers_script",
+    unit: "requests",
+    quantity: 12,
+    usage_report_count: 1,
+    invoice_item_id: "ii_workers",
+  });
+  expect(stripeBodies.length).toEqual(1);
+  const invoiceParams = new URLSearchParams(stripeBodies[0]);
+  expect(invoiceParams.get("customer")).toEqual("cus_workers");
+  expect(invoiceParams.get("amount")).toEqual("48");
+  expect(invoiceParams.get("metadata[takosumi_usage_meter]")).toEqual(
+    "cloudflare.workers_script",
+  );
+  const [usageRecord] =
+    store.listBillingUsageRecordsForInstallation("inst_workers");
+  expect(usageRecord?.meter).toEqual("cloudflare.workers_script");
+  expect(usageRecord?.unit).toEqual("requests");
+  expect(usageRecord?.billingExportReference).toEqual("ii_workers");
+});
+
 test("checkout rejects an unknown planId (catalog is server-side)", async () => {
   const store = new InMemoryAccountsStore();
   store.saveAccount({
