@@ -70,6 +70,7 @@ import {
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
+  BillingAutoRechargeAttempt,
   BillingPlan,
   CreditBalance,
   CreditReservation,
@@ -416,6 +417,49 @@ export interface CreditAmountInput {
    */
   readonly credits?: number;
 }
+
+export interface ClaimBillingAutoRechargeAttemptInput {
+  readonly attempt: BillingAutoRechargeAttempt;
+  readonly monthlyLimitUsdMicros?: number;
+}
+
+export type ClaimBillingAutoRechargeAttemptResult =
+  | {
+      readonly claimed: true;
+      readonly attempt: BillingAutoRechargeAttempt;
+    }
+  | {
+      readonly claimed: false;
+      readonly attempt: BillingAutoRechargeAttempt;
+      readonly skippedReason: "already_claimed";
+    }
+  | {
+      readonly claimed: false;
+      readonly skippedReason: "monthly_limit_exceeded";
+    };
+
+export interface SettleBillingAutoRechargeAttemptInput {
+  readonly attemptId: string;
+  readonly status: "pending_unknown" | "succeeded" | "failed";
+  readonly chargedUsdMicros?: number;
+  readonly stripePaymentIntentId?: string;
+  readonly providerStatus?: string;
+  readonly failureReason?: string;
+  readonly updatedAt: string;
+}
+
+export type SettleBillingAutoRechargeAttemptResult =
+  | {
+      readonly settled: true;
+      readonly attempt: BillingAutoRechargeAttempt;
+      readonly balance?: CreditBalance;
+    }
+  | {
+      readonly settled: false;
+      readonly attempt?: BillingAutoRechargeAttempt;
+      readonly balance?: CreditBalance;
+      readonly skippedReason: "already_succeeded" | "attempt_not_found";
+    };
 
 export interface OpenTofuDeploymentStore {
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile>;
@@ -812,6 +856,23 @@ export interface OpenTofuDeploymentStore {
     spaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly CreditReservation[]>;
+  /**
+   * Claims monthly auto-recharge capacity before a Stripe off-session charge is
+   * attempted. `pending` and `succeeded` attempts count toward the optional
+   * monthly limit so concurrent runs cannot all pass the cap check and then
+   * charge. Idempotency is keyed by `attempt.idempotencyKey`; an existing row is
+   * returned without mutating or charging again.
+   */
+  claimBillingAutoRechargeAttempt(
+    input: ClaimBillingAutoRechargeAttemptInput,
+  ): Promise<ClaimBillingAutoRechargeAttemptResult>;
+  settleBillingAutoRechargeAttempt(
+    input: SettleBillingAutoRechargeAttemptInput,
+  ): Promise<SettleBillingAutoRechargeAttemptResult>;
+  listBillingAutoRechargeAttempts(
+    spaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly BillingAutoRechargeAttempt[]>;
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(spaceId: string): Promise<readonly UsageEvent[]>;
   /** Keyset-paged usage-event listing for a Space (spec §30 pagination). */
@@ -898,6 +959,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #spaceSubscriptions = new Map<string, SpaceSubscription>();
   readonly #creditBalances = new Map<string, CreditBalance>();
   readonly #creditReservations = new Map<string, CreditReservation>();
+  readonly #billingAutoRechargeAttempts = new Map<
+    string,
+    BillingAutoRechargeAttempt
+  >();
   readonly #usageEvents = new Map<string, UsageEvent>();
   readonly #backupRecords = new Map<string, BackupRecord>();
   readonly #artifactRecords = new Map<string, ArtifactRecord>();
@@ -2102,6 +2167,131 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(reservations.map(normalizeCreditReservation));
   }
 
+  claimBillingAutoRechargeAttempt(
+    input: ClaimBillingAutoRechargeAttemptInput,
+  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
+    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
+    const existing = Array.from(
+      this.#billingAutoRechargeAttempts.values(),
+    ).find((row) => row.idempotencyKey === normalized.idempotencyKey);
+    if (existing) {
+      return Promise.resolve({
+        claimed: false,
+        attempt: normalizeBillingAutoRechargeAttempt(existing),
+        skippedReason: "already_claimed",
+      });
+    }
+    if (input.monthlyLimitUsdMicros !== undefined) {
+      const countedUsdMicros = Array.from(
+        this.#billingAutoRechargeAttempts.values(),
+      )
+        .filter(
+          (row) =>
+            row.spaceId === normalized.spaceId &&
+            row.periodStart === normalized.periodStart &&
+            (row.status === "pending" ||
+              row.status === "pending_unknown" ||
+              row.status === "succeeded"),
+        )
+        .reduce(
+          (sum, row) => sum + billingAutoRechargeAttemptCountedUsdMicros(row),
+          0,
+        );
+      if (
+        countedUsdMicros + normalized.requestedUsdMicros >
+        input.monthlyLimitUsdMicros
+      ) {
+        return Promise.resolve({
+          claimed: false,
+          skippedReason: "monthly_limit_exceeded",
+        });
+      }
+    }
+    this.#billingAutoRechargeAttempts.set(normalized.id, normalized);
+    return Promise.resolve({ claimed: true, attempt: normalized });
+  }
+
+  settleBillingAutoRechargeAttempt(
+    input: SettleBillingAutoRechargeAttemptInput,
+  ): Promise<SettleBillingAutoRechargeAttemptResult> {
+    const existing = this.#billingAutoRechargeAttempts.get(input.attemptId);
+    if (!existing) {
+      return Promise.resolve({
+        settled: false,
+        skippedReason: "attempt_not_found",
+      });
+    }
+    if (existing.status === "succeeded") {
+      return Promise.resolve({
+        settled: false,
+        attempt: normalizeBillingAutoRechargeAttempt(existing),
+        balance: normalizeCreditBalance(
+          this.#creditBalances.get(existing.spaceId),
+        ),
+        skippedReason: "already_succeeded",
+      });
+    }
+    const next = normalizeBillingAutoRechargeAttempt({
+      ...existing,
+      status: input.status,
+      ...(input.chargedUsdMicros !== undefined
+        ? { chargedUsdMicros: input.chargedUsdMicros }
+        : {}),
+      ...(input.stripePaymentIntentId
+        ? { stripePaymentIntentId: input.stripePaymentIntentId }
+        : {}),
+      ...(input.providerStatus ? { providerStatus: input.providerStatus } : {}),
+      ...(input.failureReason ? { failureReason: input.failureReason } : {}),
+      updatedAt: input.updatedAt,
+    });
+    this.#billingAutoRechargeAttempts.set(next.id, next);
+    if (next.status !== "succeeded") {
+      return Promise.resolve({ settled: true, attempt: next });
+    }
+    const chargedUsdMicros = next.chargedUsdMicros ?? next.requestedUsdMicros;
+    const existingBalance = normalizeCreditBalance(
+      this.#creditBalances.get(next.spaceId),
+    );
+    const availableUsdMicros =
+      creditBalanceAvailableUsdMicros(existingBalance) + chargedUsdMicros;
+    const purchasedUsdMicros =
+      creditBalancePurchasedUsdMicros(existingBalance) + chargedUsdMicros;
+    const reservedUsdMicros = creditBalanceReservedUsdMicros(existingBalance);
+    const monthlyIncludedUsdMicros =
+      creditBalanceMonthlyIncludedUsdMicros(existingBalance);
+    const balance = normalizeCreditBalance({
+      spaceId: next.spaceId,
+      availableUsdMicros,
+      reservedUsdMicros,
+      monthlyIncludedUsdMicros,
+      purchasedUsdMicros,
+      availableCredits: usdMicrosToLegacyCredits(availableUsdMicros),
+      reservedCredits: usdMicrosToLegacyCredits(reservedUsdMicros),
+      monthlyIncludedCredits: usdMicrosToLegacyCredits(
+        monthlyIncludedUsdMicros,
+      ),
+      purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
+      updatedAt: input.updatedAt,
+    })!;
+    this.#creditBalances.set(next.spaceId, balance);
+    return Promise.resolve({ settled: true, attempt: next, balance });
+  }
+
+  listBillingAutoRechargeAttempts(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly BillingAutoRechargeAttempt[]> {
+    const limit = options.limit ?? 100;
+    const attempts = Array.from(this.#billingAutoRechargeAttempts.values())
+      .filter((row) => row.spaceId === spaceId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      )
+      .slice(0, limit);
+    return Promise.resolve(attempts.map(normalizeBillingAutoRechargeAttempt));
+  }
+
   putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = Array.from(this.#usageEvents.values()).find(
       (row) => row.idempotencyKey === event.idempotencyKey,
@@ -2281,6 +2471,60 @@ function normalizeCreditReservation(
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
   };
+}
+
+function normalizeBillingAutoRechargeAttempt(
+  attempt: BillingAutoRechargeAttempt,
+): BillingAutoRechargeAttempt {
+  if (
+    attempt.status !== "pending" &&
+    attempt.status !== "pending_unknown" &&
+    attempt.status !== "succeeded" &&
+    attempt.status !== "failed"
+  ) {
+    throw new TypeError("auto recharge status is invalid");
+  }
+  if (
+    !Number.isSafeInteger(attempt.requestedUsdMicros) ||
+    attempt.requestedUsdMicros <= 0
+  ) {
+    throw new TypeError("auto recharge requestedUsdMicros must be positive");
+  }
+  if (
+    attempt.monthlyLimitUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.monthlyLimitUsdMicros) ||
+      attempt.monthlyLimitUsdMicros <= 0)
+  ) {
+    throw new TypeError("auto recharge monthlyLimitUsdMicros must be positive");
+  }
+  if (
+    attempt.chargedUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.chargedUsdMicros) ||
+      attempt.chargedUsdMicros < 0)
+  ) {
+    throw new TypeError("auto recharge chargedUsdMicros must be non-negative");
+  }
+  return {
+    ...attempt,
+    ...(attempt.status === "succeeded"
+      ? {
+          chargedUsdMicros:
+            attempt.chargedUsdMicros ?? attempt.requestedUsdMicros,
+        }
+      : {}),
+  };
+}
+
+function billingAutoRechargeAttemptCountedUsdMicros(
+  attempt: BillingAutoRechargeAttempt,
+): number {
+  if (attempt.status === "succeeded") {
+    return attempt.chargedUsdMicros ?? attempt.requestedUsdMicros;
+  }
+  if (attempt.status === "pending" || attempt.status === "pending_unknown") {
+    return attempt.requestedUsdMicros;
+  }
+  return 0;
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {

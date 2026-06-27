@@ -167,6 +167,7 @@ test("d1 store persists security findings and billing ledger rows", async () => 
       kind: "operation",
       quantity: 1,
       credits: 7,
+      usdMicros: 7_000_000,
       source: "runner",
       idempotencyKey: "apply_1:operation",
       createdAt: "2026-06-07T00:00:03.000Z",
@@ -220,7 +221,8 @@ test("d1 commitAppliedDeployment writes the unit atomically and rolls back a gua
     spaceId: "space_1",
     installationId: "inst_1",
     stateGeneration: gen,
-    rawOutputArtifactKey: "spaces/space_1/installations/inst_1/runs/run_apply_1/outputs.raw.json.enc",
+    rawOutputArtifactKey:
+      "spaces/space_1/installations/inst_1/runs/run_apply_1/outputs.raw.json.enc",
     publicOutputs: { launch_url: "https://x.example" },
     spaceOutputs: { launch_url: "https://x.example" },
     outputDigest: "sha256:out",
@@ -447,6 +449,90 @@ test("d1 store accepts operator-scoped connections without a space id", async ()
   ]);
 });
 
+test("d1 auto recharge settle does not double-grant when another writer wins", async () => {
+  const backing = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuDeploymentStore(backing);
+  const attempt = {
+    id: "takosumi-autorecharge:space_auto:run_auto",
+    spaceId: "space_auto",
+    runId: "run_auto",
+    billingAccountId: "bill_auto",
+    idempotencyKey: "takosumi-autorecharge:space_auto:run_auto",
+    periodStart: "2026-06-01T00:00:00.000Z",
+    requestedUsdMicros: 500_000,
+    monthlyLimitUsdMicros: 1_000_000,
+    status: "pending" as const,
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  };
+  expect(
+    await store.claimBillingAutoRechargeAttempt({
+      attempt,
+      monthlyLimitUsdMicros: 1_000_000,
+    }),
+  ).toMatchObject({ claimed: true });
+
+  const racingStore = new CloudflareD1OpenTofuDeploymentStore(
+    new AutoRechargeSettledBeforeBatchD1(backing, {
+      attemptId: attempt.id,
+      spaceId: attempt.spaceId,
+      chargedUsdMicros: 500_000,
+      updatedAt: "2026-06-07T00:00:01.000Z",
+    }),
+  );
+  expect(
+    await racingStore.settleBillingAutoRechargeAttempt({
+      attemptId: attempt.id,
+      status: "succeeded",
+      chargedUsdMicros: 500_000,
+      stripePaymentIntentId: "pi_auto",
+      providerStatus: "succeeded",
+      updatedAt: "2026-06-07T00:00:02.000Z",
+    }),
+  ).toMatchObject({
+    settled: false,
+    skippedReason: "already_succeeded",
+  });
+
+  const balance = await store.getCreditBalance(attempt.spaceId);
+  expect(balance?.availableUsdMicros).toBe(500_000);
+  expect(balance?.purchasedUsdMicros).toBe(500_000);
+});
+
+test("d1 auto recharge settle fails closed when batch is unavailable", async () => {
+  const backing = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuDeploymentStore(new NoBatchD1(backing));
+  const attempt = {
+    id: "takosumi-autorecharge:space_nobatch:run_nobatch",
+    spaceId: "space_nobatch",
+    runId: "run_nobatch",
+    billingAccountId: "bill_nobatch",
+    idempotencyKey: "takosumi-autorecharge:space_nobatch:run_nobatch",
+    periodStart: "2026-06-01T00:00:00.000Z",
+    requestedUsdMicros: 500_000,
+    status: "pending" as const,
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.claimBillingAutoRechargeAttempt({ attempt });
+
+  await expect(
+    store.settleBillingAutoRechargeAttempt({
+      attemptId: attempt.id,
+      status: "succeeded",
+      chargedUsdMicros: 500_000,
+      updatedAt: "2026-06-07T00:00:01.000Z",
+    }),
+  ).rejects.toThrow("D1 batch support is required");
+  expect(
+    (await store.listBillingAutoRechargeAttempts(attempt.spaceId))[0],
+  ).toMatchObject({
+    id: attempt.id,
+    status: "pending",
+  });
+  expect(await store.getCreditBalance(attempt.spaceId)).toBeUndefined();
+});
+
 class LeaseChangingD1 implements D1Database {
   #changed = false;
 
@@ -463,7 +549,7 @@ class LeaseChangingD1 implements D1Database {
       !this.#changed &&
       lower.includes("select") &&
       lower.includes("lease_token") &&
-      lower.includes("from \"runs\"")
+      lower.includes('from "runs"')
     ) {
       return new LeaseChangingStatement(statement, async () => {
         if (this.#changed) return;
@@ -484,6 +570,114 @@ class LeaseChangingD1 implements D1Database {
       throw new Error("wrapped D1 binding does not support batch");
     }
     return this.inner.batch<T>(statements);
+  }
+}
+
+class NoBatchD1 implements D1Database {
+  constructor(private readonly inner: D1Database) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.inner.prepare(query);
+  }
+}
+
+class AutoRechargeSettledBeforeBatchD1 implements D1Database {
+  #settled = false;
+
+  constructor(
+    private readonly inner: D1Database,
+    private readonly options: {
+      readonly attemptId: string;
+      readonly spaceId: string;
+      readonly chargedUsdMicros: number;
+      readonly updatedAt: string;
+    },
+  ) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.inner.prepare(query);
+  }
+
+  async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    if (!this.inner.batch) {
+      throw new Error("wrapped D1 binding does not support batch");
+    }
+    if (!this.#settled) {
+      this.#settled = true;
+      await this.#settleExternally();
+    }
+    return this.inner.batch<T>(statements);
+  }
+
+  async #settleExternally(): Promise<void> {
+    const row = await this.inner
+      .prepare(
+        "select record_json from billing_auto_recharge_attempts where id = ?",
+      )
+      .bind(this.options.attemptId)
+      .first<{ readonly record_json: unknown }>();
+    const current =
+      typeof row?.record_json === "string"
+        ? (JSON.parse(row.record_json) as Record<string, unknown>)
+        : ((row?.record_json ?? {}) as Record<string, unknown>);
+    const next = {
+      ...current,
+      status: "succeeded",
+      chargedUsdMicros: this.options.chargedUsdMicros,
+      stripePaymentIntentId: "pi_external",
+      providerStatus: "succeeded",
+      updatedAt: this.options.updatedAt,
+    };
+    await this.inner
+      .prepare(
+        `update billing_auto_recharge_attempts
+         set status = 'succeeded',
+             charged_usd_micros = ?,
+             stripe_payment_intent_id = 'pi_external',
+             provider_status = 'succeeded',
+             record_json = ?,
+             updated_at = ?
+         where id = ?`,
+      )
+      .bind(
+        this.options.chargedUsdMicros,
+        JSON.stringify(next),
+        this.options.updatedAt,
+        this.options.attemptId,
+      )
+      .run();
+    await this.inner
+      .prepare(
+        `insert or ignore into credit_balances
+           (space_id, available_usd_micros, reserved_usd_micros,
+            monthly_included_usd_micros, purchased_usd_micros,
+            available_credits, reserved_credits,
+            monthly_included_credits, purchased_credits, updated_at)
+         values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?)`,
+      )
+      .bind(this.options.spaceId, this.options.updatedAt)
+      .run();
+    await this.inner
+      .prepare(
+        `update credit_balances
+         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + ?,
+             purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + ?,
+             available_credits = available_credits + ?,
+             purchased_credits = purchased_credits + ?,
+             updated_at = ?
+         where space_id = ?`,
+      )
+      .bind(
+        this.options.chargedUsdMicros,
+        this.options.chargedUsdMicros,
+        Math.ceil(this.options.chargedUsdMicros / 1_000_000),
+        Math.ceil(this.options.chargedUsdMicros / 1_000_000),
+        this.options.updatedAt,
+        this.options.spaceId,
+      )
+      .run();
   }
 }
 

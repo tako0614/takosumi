@@ -80,6 +80,199 @@ test("Stripe billing auto recharge charges saved payment method and grants USD b
   });
 });
 
+test("Stripe billing auto recharge respects monthly cap before calling Stripe", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putBillingAccount({
+    id: "bill_space_1",
+    ownerType: "space",
+    ownerId: "space_1",
+    provider: "stripe",
+    stripeCustomerId: "cus_1",
+    stripeDefaultPaymentMethodId: "pm_1",
+    status: "active",
+    createdAt: "2026-06-27T00:00:00.000Z",
+    updatedAt: "2026-06-27T00:00:00.000Z",
+  });
+  await store.claimBillingAutoRechargeAttempt({
+    attempt: {
+      id: "takosumi-autorecharge:space_1:plan_existing",
+      spaceId: "space_1",
+      runId: "plan_existing",
+      billingAccountId: "bill_space_1",
+      idempotencyKey: "takosumi-autorecharge:space_1:plan_existing",
+      periodStart: "2026-06-01T00:00:00.000Z",
+      periodEnd: "2026-07-01T00:00:00.000Z",
+      requestedUsdMicros: 1_500_000,
+      monthlyLimitUsdMicros: 2_000_000,
+      status: "pending",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    },
+    monthlyLimitUsdMicros: 2_000_000,
+  });
+  let called = 0;
+  const port = createStripeBillingAutoRechargePort({
+    env: {
+      TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test",
+    } as CloudflareWorkerEnv,
+    store,
+    fetch: async () => {
+      called++;
+      return Response.json({});
+    },
+  });
+
+  const result = await port!({
+    spaceId: "space_1",
+    runId: "plan_2",
+    estimatedUsdMicros: 1_000_000,
+    availableUsdMicros: 0,
+    shortfallUsdMicros: 1_000_000,
+    thresholdUsdMicros: 0,
+    rechargeUsdMicros: 1_000_000,
+    monthlyLimitUsdMicros: 2_000_000,
+    now: Date.parse("2026-06-27T00:00:00.000Z"),
+  });
+
+  expect(result).toEqual({ skippedReason: "monthly_limit_exceeded" });
+  expect(called).toEqual(0);
+});
+
+test("Stripe billing auto recharge replay does not grant credits twice", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putBillingAccount({
+    id: "bill_space_1",
+    ownerType: "space",
+    ownerId: "space_1",
+    provider: "stripe",
+    stripeCustomerId: "cus_1",
+    stripeDefaultPaymentMethodId: "pm_1",
+    status: "active",
+    createdAt: "2026-06-27T00:00:00.000Z",
+    updatedAt: "2026-06-27T00:00:00.000Z",
+  });
+  let called = 0;
+  const port = createStripeBillingAutoRechargePort({
+    env: {
+      TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test",
+    } as CloudflareWorkerEnv,
+    store,
+    fetch: async () => {
+      called++;
+      return Response.json({
+        id: "pi_1",
+        status: "succeeded",
+        amount: 100,
+        currency: "usd",
+      });
+    },
+  });
+  const request = {
+    spaceId: "space_1",
+    runId: "plan_1",
+    estimatedUsdMicros: 1_000_000,
+    availableUsdMicros: 0,
+    shortfallUsdMicros: 1_000_000,
+    thresholdUsdMicros: 0,
+    rechargeUsdMicros: 1_000_000,
+    monthlyLimitUsdMicros: 3_000_000,
+    now: Date.parse("2026-06-27T00:00:00.000Z"),
+  };
+
+  expect(await port!(request)).toMatchObject({
+    chargedUsdMicros: 1_000_000,
+  });
+  expect(await port!(request)).toMatchObject({
+    chargedUsdMicros: 1_000_000,
+  });
+  expect(called).toEqual(1);
+  expect(await store.getCreditBalance("space_1")).toMatchObject({
+    availableUsdMicros: 1_000_000,
+    purchasedUsdMicros: 1_000_000,
+  });
+});
+
+test("Stripe billing auto recharge retries pending_unknown with the same idempotency key", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putBillingAccount({
+    id: "bill_space_1",
+    ownerType: "space",
+    ownerId: "space_1",
+    provider: "stripe",
+    stripeCustomerId: "cus_1",
+    stripeDefaultPaymentMethodId: "pm_1",
+    status: "active",
+    createdAt: "2026-06-27T00:00:00.000Z",
+    updatedAt: "2026-06-27T00:00:00.000Z",
+  });
+  const idempotencyKeys: string[] = [];
+  let called = 0;
+  const port = createStripeBillingAutoRechargePort({
+    env: {
+      TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test",
+    } as CloudflareWorkerEnv,
+    store,
+    fetch: async (_url, init) => {
+      called++;
+      idempotencyKeys.push(
+        init?.headers instanceof Headers
+          ? (init.headers.get("Idempotency-Key") ?? "")
+          : ((init?.headers as Record<string, string> | undefined)?.[
+              "Idempotency-Key"
+            ] ?? ""),
+      );
+      if (called === 1) {
+        return Response.json({
+          id: "pi_1",
+          status: "processing",
+          amount: 100,
+          currency: "usd",
+        });
+      }
+      return Response.json({
+        id: "pi_1",
+        status: "succeeded",
+        amount: 100,
+        currency: "usd",
+      });
+    },
+  });
+  const request = {
+    spaceId: "space_1",
+    runId: "plan_retry",
+    estimatedUsdMicros: 1_000_000,
+    availableUsdMicros: 0,
+    shortfallUsdMicros: 1_000_000,
+    thresholdUsdMicros: 0,
+    rechargeUsdMicros: 1_000_000,
+    monthlyLimitUsdMicros: 1_000_000,
+    now: Date.parse("2026-06-27T00:00:00.000Z"),
+  };
+
+  expect(await port!(request)).toEqual({
+    skippedReason: "stripe_payment_intent_processing",
+  });
+  expect(
+    (await store.listBillingAutoRechargeAttempts("space_1"))[0],
+  ).toMatchObject({
+    id: "takosumi-autorecharge:space_1:plan_retry",
+    status: "pending_unknown",
+  });
+  expect(
+    await port!({ ...request, now: Date.parse("2026-06-27T00:01:00.000Z") }),
+  ).toMatchObject({
+    chargedUsdMicros: 1_000_000,
+  });
+  expect(idempotencyKeys).toEqual([
+    "takosumi-autorecharge:space_1:plan_retry",
+    "takosumi-autorecharge:space_1:plan_retry",
+  ]);
+  expect(await store.getCreditBalance("space_1")).toMatchObject({
+    availableUsdMicros: 1_000_000,
+    purchasedUsdMicros: 1_000_000,
+  });
+});
+
 test("Stripe billing auto recharge skips safely when no payment method is stored", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await store.putBillingAccount({

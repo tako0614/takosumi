@@ -956,6 +956,32 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       primaryKey: ["space_id"],
     },
     {
+      name: "takosumi_billing_auto_recharge_attempts",
+      domain: "deploy",
+      columns: [
+        "id",
+        "space_id",
+        "run_id",
+        "billing_account_id",
+        "idempotency_key",
+        "period_start",
+        "period_end",
+        "requested_usd_micros",
+        "monthly_limit_usd_micros",
+        "charged_usd_micros",
+        "status",
+        "stripe_payment_intent_id",
+        "provider_status",
+        "failure_reason",
+        "attempt_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["idempotency_key"]],
+      indexes: [["space_id", "period_start", "status"], ["run_id"]],
+    },
+    {
       name: "takosumi_usage_events",
       domain: "deploy",
       columns: [
@@ -2146,6 +2172,32 @@ create table if not exists takosumi_credit_balances (
   purchased_credits        integer not null,
   updated_at               text    not null
 );
+create table if not exists takosumi_billing_auto_recharge_attempts (
+  id                       text   primary key,
+  space_id                 text   not null,
+  run_id                   text   not null,
+  billing_account_id       text   not null,
+  idempotency_key          text   not null,
+  period_start             text   not null,
+  period_end               text,
+  requested_usd_micros     bigint not null,
+  monthly_limit_usd_micros bigint,
+  charged_usd_micros       bigint,
+  status                   text   not null
+    check (status in ('pending','pending_unknown','succeeded','failed')),
+  stripe_payment_intent_id text,
+  provider_status          text,
+  failure_reason           text,
+  attempt_json             jsonb  not null,
+  created_at               text   not null,
+  updated_at               text   not null
+);
+create unique index if not exists takosumi_billing_auto_recharge_attempts_idempotency_unique
+  on takosumi_billing_auto_recharge_attempts (idempotency_key);
+create index if not exists takosumi_billing_auto_recharge_attempts_space_period_status_idx
+  on takosumi_billing_auto_recharge_attempts (space_id, period_start, status);
+create index if not exists takosumi_billing_auto_recharge_attempts_run_idx
+  on takosumi_billing_auto_recharge_attempts (run_id);
 create table if not exists takosumi_usage_events (
   id              text             primary key,
   space_id        text             not null,
@@ -2235,6 +2287,9 @@ drop table if exists takosumi_credit_reservations;
 drop index if exists takosumi_usage_events_run_idx;
 drop index if exists takosumi_usage_events_space_idx;
 drop table if exists takosumi_usage_events;
+drop index if exists takosumi_billing_auto_recharge_attempts_run_idx;
+drop index if exists takosumi_billing_auto_recharge_attempts_space_period_status_idx;
+drop table if exists takosumi_billing_auto_recharge_attempts;
 drop table if exists takosumi_credit_balances;
 drop index if exists takosumi_space_subscriptions_billing_account_idx;
 drop index if exists takosumi_space_subscriptions_space_idx;
@@ -2997,5 +3052,42 @@ alter table takosumi_credit_balances
   drop column if exists available_usd_micros;
 alter table takosumi_plans
   drop column if exists included_usd_micros;`,
+    },
+    {
+      id: "deploy.billing_auto_recharge_attempts.create",
+      version: 54,
+      domain: "deploy",
+      description:
+        "Create the Takosumi Cloud billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets the worker count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before it creates an off-session Stripe PaymentIntent. It stores Stripe object ids and status metadata only, never card data or secrets.",
+      sql: `create table if not exists takosumi_billing_auto_recharge_attempts (
+  id                       text   primary key,
+  space_id                 text   not null,
+  run_id                   text   not null,
+  billing_account_id       text   not null,
+  idempotency_key          text   not null,
+  period_start             text   not null,
+  period_end               text,
+  requested_usd_micros     bigint not null,
+  monthly_limit_usd_micros bigint,
+  charged_usd_micros       bigint,
+  status                   text   not null
+    check (status in ('pending','pending_unknown','succeeded','failed')),
+  stripe_payment_intent_id text,
+  provider_status          text,
+  failure_reason           text,
+  attempt_json             jsonb  not null,
+  created_at               text   not null,
+  updated_at               text   not null
+);
+create unique index if not exists takosumi_billing_auto_recharge_attempts_idempotency_unique
+  on takosumi_billing_auto_recharge_attempts (idempotency_key);
+create index if not exists takosumi_billing_auto_recharge_attempts_space_period_status_idx
+  on takosumi_billing_auto_recharge_attempts (space_id, period_start, status);
+create index if not exists takosumi_billing_auto_recharge_attempts_run_idx
+  on takosumi_billing_auto_recharge_attempts (run_id);`,
+      down: `drop index if exists takosumi_billing_auto_recharge_attempts_run_idx;
+drop index if exists takosumi_billing_auto_recharge_attempts_space_period_status_idx;
+drop index if exists takosumi_billing_auto_recharge_attempts_idempotency_unique;
+drop table if exists takosumi_billing_auto_recharge_attempts;`,
     },
   ]);

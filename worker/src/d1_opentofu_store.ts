@@ -84,6 +84,7 @@ import {
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
+  BillingAutoRechargeAttempt,
   BillingPlan,
   CreditBalance,
   CreditReservation,
@@ -117,7 +118,11 @@ import type {
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
+  ClaimBillingAutoRechargeAttemptInput,
+  ClaimBillingAutoRechargeAttemptResult,
   type CreditAmountInput,
+  SettleBillingAutoRechargeAttemptInput,
+  SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
 } from "../../core/domains/deploy-control/store.ts";
@@ -2403,6 +2408,243 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return rows.map(normalizeCreditReservation);
   }
 
+  async claimBillingAutoRechargeAttempt(
+    input: ClaimBillingAutoRechargeAttemptInput,
+  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
+    await this.#ensureSchema();
+    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
+    const existing = await this.#billingAutoRechargeAttemptByIdempotencyKey(
+      normalized.idempotencyKey,
+    );
+    if (existing) {
+      return {
+        claimed: false,
+        attempt: existing,
+        skippedReason: "already_claimed",
+      };
+    }
+    const result = await this.db
+      .prepare(
+        `insert into billing_auto_recharge_attempts (
+           id, space_id, run_id, billing_account_id, idempotency_key,
+           period_start, period_end, requested_usd_micros,
+           monthly_limit_usd_micros, charged_usd_micros, status,
+           stripe_payment_intent_id, provider_status, failure_reason,
+           record_json, created_at, updated_at
+         )
+         select
+           ?, ?, ?, ?, ?,
+           ?, ?, ?,
+           ?, ?, ?,
+           ?, ?, ?,
+           ?, ?, ?
+         where (
+           ? is null
+           or coalesce((
+             select sum(
+               case
+                 when status = 'succeeded'
+                   then coalesce(charged_usd_micros, requested_usd_micros)
+                 else requested_usd_micros
+               end
+             )
+             from billing_auto_recharge_attempts
+             where space_id = ?
+               and period_start = ?
+               and status in ('pending', 'pending_unknown', 'succeeded')
+           ), 0) + ? <= ?
+         )
+         on conflict(idempotency_key) do nothing`,
+      )
+      .bind(
+        normalized.id,
+        normalized.spaceId,
+        normalized.runId,
+        normalized.billingAccountId,
+        normalized.idempotencyKey,
+        normalized.periodStart,
+        normalized.periodEnd ?? null,
+        normalized.requestedUsdMicros,
+        normalized.monthlyLimitUsdMicros ?? null,
+        normalized.chargedUsdMicros ?? null,
+        normalized.status,
+        normalized.stripePaymentIntentId ?? null,
+        normalized.providerStatus ?? null,
+        normalized.failureReason ?? null,
+        JSON.stringify(normalized),
+        normalized.createdAt,
+        normalized.updatedAt,
+        input.monthlyLimitUsdMicros ?? null,
+        normalized.spaceId,
+        normalized.periodStart,
+        normalized.requestedUsdMicros,
+        input.monthlyLimitUsdMicros ?? null,
+      )
+      .run();
+    if (changes(result) > 0) {
+      return { claimed: true, attempt: normalized };
+    }
+    const raced = await this.#billingAutoRechargeAttemptByIdempotencyKey(
+      normalized.idempotencyKey,
+    );
+    if (raced) {
+      return {
+        claimed: false,
+        attempt: raced,
+        skippedReason: "already_claimed",
+      };
+    }
+    return { claimed: false, skippedReason: "monthly_limit_exceeded" };
+  }
+
+  async settleBillingAutoRechargeAttempt(
+    input: SettleBillingAutoRechargeAttemptInput,
+  ): Promise<SettleBillingAutoRechargeAttemptResult> {
+    await this.#ensureSchema();
+    const existing = await this.#billingAutoRechargeAttemptById(
+      input.attemptId,
+    );
+    if (!existing) {
+      return {
+        settled: false,
+        skippedReason: "attempt_not_found",
+      };
+    }
+    if (existing.status === "succeeded") {
+      return {
+        settled: false,
+        attempt: existing,
+        balance: await this.getCreditBalance(existing.spaceId),
+        skippedReason: "already_succeeded",
+      };
+    }
+    const next = normalizeBillingAutoRechargeAttempt({
+      ...existing,
+      status: input.status,
+      ...(input.chargedUsdMicros !== undefined
+        ? { chargedUsdMicros: input.chargedUsdMicros }
+        : {}),
+      ...(input.stripePaymentIntentId
+        ? { stripePaymentIntentId: input.stripePaymentIntentId }
+        : {}),
+      ...(input.providerStatus ? { providerStatus: input.providerStatus } : {}),
+      ...(input.failureReason ? { failureReason: input.failureReason } : {}),
+      updatedAt: input.updatedAt,
+    });
+    const updateAttempt = this.db
+      .prepare(
+        `update billing_auto_recharge_attempts
+         set charged_usd_micros = ?,
+             status = ?,
+             stripe_payment_intent_id = ?,
+             provider_status = ?,
+             failure_reason = ?,
+             record_json = ?,
+             updated_at = ?
+         where id = ?
+           and status <> 'succeeded'`,
+      )
+      .bind(
+        next.chargedUsdMicros ?? null,
+        next.status,
+        next.stripePaymentIntentId ?? null,
+        next.providerStatus ?? null,
+        next.failureReason ?? null,
+        JSON.stringify(next),
+        next.updatedAt,
+        next.id,
+      );
+    if (next.status !== "succeeded") {
+      const result = await updateAttempt.run();
+      if (changes(result) <= 0) {
+        return {
+          settled: false,
+          attempt: await this.#billingAutoRechargeAttemptById(next.id),
+          balance: await this.getCreditBalance(next.spaceId),
+          skippedReason: "already_succeeded",
+        };
+      }
+      return { settled: true, attempt: next };
+    }
+    const chargedUsdMicros = next.chargedUsdMicros ?? next.requestedUsdMicros;
+    const legacyCredits = legacyStorageCreditsFromUsdMicros(chargedUsdMicros);
+    const seedBalance = this.db
+      .prepare(
+        `insert or ignore into credit_balances
+           (space_id, available_usd_micros, reserved_usd_micros,
+            monthly_included_usd_micros, purchased_usd_micros,
+            available_credits, reserved_credits,
+            monthly_included_credits, purchased_credits, updated_at)
+         values (?, 0, 0, 0, 0, 0, 0, 0, 0, ?)`,
+      )
+      .bind(next.spaceId, input.updatedAt);
+    const grantBalance = this.db
+      .prepare(
+        `update credit_balances
+         set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + ?,
+             purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + ?,
+             available_credits = available_credits + ?,
+             purchased_credits = purchased_credits + ?,
+             updated_at = ?
+         where space_id = ?`,
+      )
+      .bind(
+        chargedUsdMicros,
+        chargedUsdMicros,
+        legacyCredits,
+        legacyCredits,
+        input.updatedAt,
+        next.spaceId,
+      );
+    if (typeof this.db.batch !== "function") {
+      throw new Error(
+        "D1 batch support is required to settle billing auto recharge attempts",
+      );
+    }
+    try {
+      await this.db.batch([
+        d1BillingAutoRechargePendingGuardStmt(this.db, next.id),
+        updateAttempt,
+        seedBalance,
+        grantBalance,
+      ]);
+    } catch (error) {
+      if (isD1BillingAutoRechargeAlreadySettledError(error)) {
+        return {
+          settled: false,
+          attempt: await this.#billingAutoRechargeAttemptById(next.id),
+          balance: await this.getCreditBalance(next.spaceId),
+          skippedReason: "already_succeeded",
+        };
+      }
+      throw error;
+    }
+    return {
+      settled: true,
+      attempt: next,
+      balance: await this.getCreditBalance(next.spaceId),
+    };
+  }
+
+  async listBillingAutoRechargeAttempts(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly BillingAutoRechargeAttempt[]> {
+    const rows = await this.#drizzleManyJson<BillingAutoRechargeAttempt>(
+      schema.billingAutoRechargeAttempts,
+      schema.billingAutoRechargeAttempts.recordJson,
+      {
+        where: eq(schema.billingAutoRechargeAttempts.spaceId, spaceId),
+        orderBy: [
+          desc(schema.billingAutoRechargeAttempts.createdAt),
+          desc(schema.billingAutoRechargeAttempts.id),
+        ],
+        limit: options.limit ?? 100,
+      },
+    );
+    return rows.map(normalizeBillingAutoRechargeAttempt);
+  }
+
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = await this.#usageEventByIdempotencyKey(
       event.idempotencyKey,
@@ -2483,6 +2725,30 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .where(eq(schema.usageEvents.idempotencyKey, idempotencyKey))
       .get();
     return row ? usageEventFromRow(row) : undefined;
+  }
+
+  async #billingAutoRechargeAttemptById(
+    id: string,
+  ): Promise<BillingAutoRechargeAttempt | undefined> {
+    return await this.#drizzleFirstJson<BillingAutoRechargeAttempt>(
+      schema.billingAutoRechargeAttempts,
+      schema.billingAutoRechargeAttempts.recordJson,
+      eq(schema.billingAutoRechargeAttempts.id, id),
+    ).then((row) =>
+      row ? normalizeBillingAutoRechargeAttempt(row) : undefined,
+    );
+  }
+
+  async #billingAutoRechargeAttemptByIdempotencyKey(
+    idempotencyKey: string,
+  ): Promise<BillingAutoRechargeAttempt | undefined> {
+    return await this.#drizzleFirstJson<BillingAutoRechargeAttempt>(
+      schema.billingAutoRechargeAttempts,
+      schema.billingAutoRechargeAttempts.recordJson,
+      eq(schema.billingAutoRechargeAttempts.idempotencyKey, idempotencyKey),
+    ).then((row) =>
+      row ? normalizeBillingAutoRechargeAttempt(row) : undefined,
+    );
   }
 
   // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------
@@ -2851,6 +3117,37 @@ function d1InstallationStateGuardStmt(
   );
 }
 
+function d1BillingAutoRechargePendingGuardStmt(
+  db: D1Database,
+  attemptId: string,
+) {
+  return db
+    .prepare(
+      `insert into billing_auto_recharge_attempts (
+         id, space_id, run_id, billing_account_id, idempotency_key,
+         period_start, period_end, requested_usd_micros,
+         monthly_limit_usd_micros, charged_usd_micros, status,
+         stripe_payment_intent_id, provider_status, failure_reason,
+         record_json, created_at, updated_at
+       )
+       select
+         id, space_id, run_id, billing_account_id, idempotency_key,
+         period_start, period_end, requested_usd_micros,
+         monthly_limit_usd_micros, charged_usd_micros, status,
+         stripe_payment_intent_id, provider_status, failure_reason,
+         record_json, created_at, updated_at
+       from billing_auto_recharge_attempts
+       where id = ?
+         and not exists (
+           select 1
+           from billing_auto_recharge_attempts
+           where id = ?
+             and status <> 'succeeded'
+         )`,
+    )
+    .bind(attemptId, attemptId);
+}
+
 function isD1RunLeaseLostError(error: unknown): boolean {
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: runs.id") ||
@@ -2862,6 +3159,17 @@ function isD1InstallationStateGuardError(error: unknown): boolean {
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: installations.id") ||
         error.message.includes("constraint failed: installations.id")
+    : false;
+}
+
+function isD1BillingAutoRechargeAlreadySettledError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes(
+        "UNIQUE constraint failed: billing_auto_recharge_attempts.id",
+      ) ||
+        error.message.includes(
+          "constraint failed: billing_auto_recharge_attempts.id",
+        )
     : false;
 }
 
@@ -3087,6 +3395,48 @@ function normalizeCreditReservation(
     ...reservation,
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
+  };
+}
+
+function normalizeBillingAutoRechargeAttempt(
+  attempt: BillingAutoRechargeAttempt,
+): BillingAutoRechargeAttempt {
+  if (
+    attempt.status !== "pending" &&
+    attempt.status !== "pending_unknown" &&
+    attempt.status !== "succeeded" &&
+    attempt.status !== "failed"
+  ) {
+    throw new TypeError("auto recharge status is invalid");
+  }
+  if (
+    !Number.isSafeInteger(attempt.requestedUsdMicros) ||
+    attempt.requestedUsdMicros <= 0
+  ) {
+    throw new TypeError("auto recharge requestedUsdMicros must be positive");
+  }
+  if (
+    attempt.monthlyLimitUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.monthlyLimitUsdMicros) ||
+      attempt.monthlyLimitUsdMicros <= 0)
+  ) {
+    throw new TypeError("auto recharge monthlyLimitUsdMicros must be positive");
+  }
+  if (
+    attempt.chargedUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.chargedUsdMicros) ||
+      attempt.chargedUsdMicros < 0)
+  ) {
+    throw new TypeError("auto recharge chargedUsdMicros must be non-negative");
+  }
+  return {
+    ...attempt,
+    ...(attempt.status === "succeeded"
+      ? {
+          chargedUsdMicros:
+            attempt.chargedUsdMicros ?? attempt.requestedUsdMicros,
+        }
+      : {}),
   };
 }
 
@@ -3591,6 +3941,31 @@ export async function ensureD1OpenTofuLedgerSchema(
       purchased_credits integer not null,
       updated_at text not null
     )`,
+    `create table if not exists billing_auto_recharge_attempts (
+      id text primary key,
+      space_id text not null,
+      run_id text not null,
+      billing_account_id text not null,
+      idempotency_key text not null,
+      period_start text not null,
+      period_end text,
+      requested_usd_micros integer not null,
+      monthly_limit_usd_micros integer,
+      charged_usd_micros integer,
+      status text not null,
+      stripe_payment_intent_id text,
+      provider_status text,
+      failure_reason text,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists billing_auto_recharge_attempts_idempotency_unique
+      on billing_auto_recharge_attempts (idempotency_key)`,
+    `create index if not exists billing_auto_recharge_attempts_space_period_status_idx
+      on billing_auto_recharge_attempts (space_id, period_start, status)`,
+    `create index if not exists billing_auto_recharge_attempts_run_idx
+      on billing_auto_recharge_attempts (run_id)`,
     `create table if not exists usage_events (
       id text primary key,
       space_id text not null,
@@ -3983,6 +4358,57 @@ credit_reservations.estimated_usd_micros nullable with legacy-credit backfill
           `update credit_reservations
            set estimated_usd_micros = estimated_credits * 1000000
            where estimated_usd_micros is null`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 15,
+    name: "d1_opentofu_billing_auto_recharge_attempts",
+    checksumSource: `
+billing_auto_recharge_attempts table with unique idempotency key
+monthly cap index over space_id, period_start, status
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create table if not exists billing_auto_recharge_attempts (
+            id text primary key,
+            space_id text not null,
+            run_id text not null,
+            billing_account_id text not null,
+            idempotency_key text not null,
+            period_start text not null,
+            period_end text,
+            requested_usd_micros integer not null,
+            monthly_limit_usd_micros integer,
+            charged_usd_micros integer,
+            status text not null,
+            stripe_payment_intent_id text,
+            provider_status text,
+            failure_reason text,
+            record_json text not null,
+            created_at text not null,
+            updated_at text not null
+          )`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create unique index if not exists billing_auto_recharge_attempts_idempotency_unique
+            on billing_auto_recharge_attempts (idempotency_key)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists billing_auto_recharge_attempts_space_period_status_idx
+            on billing_auto_recharge_attempts (space_id, period_start, status)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists billing_auto_recharge_attempts_run_idx
+            on billing_auto_recharge_attempts (run_id)`,
         )
         .run();
     },

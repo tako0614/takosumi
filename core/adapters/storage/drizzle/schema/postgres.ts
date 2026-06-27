@@ -495,6 +495,44 @@ export const creditBalances = pgTable(names.creditBalances, {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const billingAutoRechargeAttempts = pgTable(
+  names.billingAutoRechargeAttempts,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    runId: text("run_id").notNull(),
+    billingAccountId: text("billing_account_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    periodStart: text("period_start").notNull(),
+    periodEnd: text("period_end"),
+    requestedUsdMicros: bigint("requested_usd_micros", {
+      mode: "number",
+    }).notNull(),
+    monthlyLimitUsdMicros: bigint("monthly_limit_usd_micros", {
+      mode: "number",
+    }),
+    chargedUsdMicros: bigint("charged_usd_micros", { mode: "number" }),
+    status: text("status").notNull(),
+    stripePaymentIntentId: text("stripe_payment_intent_id"),
+    providerStatus: text("provider_status"),
+    failureReason: text("failure_reason"),
+    attemptJson: json("attempt_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex(
+      "takosumi_billing_auto_recharge_attempts_idempotency_unique",
+    ).on(table.idempotencyKey),
+    index("takosumi_billing_auto_recharge_attempts_space_period_status_idx").on(
+      table.spaceId,
+      table.periodStart,
+      table.status,
+    ),
+    index("takosumi_billing_auto_recharge_attempts_run_idx").on(table.runId),
+  ],
+);
+
 export const usageEvents = pgTable(
   names.usageEvents,
   {
