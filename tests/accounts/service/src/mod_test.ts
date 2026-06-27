@@ -12,7 +12,6 @@ import {
   TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
   type TakosumiSubject,
   takosumiAccountsInstallationBillingUsageReportsPath,
   takosumiAccountsInstallationDeploymentPlanRunsPath,
@@ -34,7 +33,6 @@ import {
   customOidcOAuthProvider,
   type DeployControlOperations,
   InMemorySharedCellWarmPool,
-  TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER,
   TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
   TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER,
 } from "../../../../accounts/service/src/mod.ts";
@@ -180,24 +178,6 @@ function accountSessionHeaders(sessionId: string): HeadersInit {
  * gate: `canAccessSpace` calls `spaces.getSpace(id)` and short-circuits when
  * `space.ownerUserId === subject`. Only that one accessor is exercised here.
  */
-function checkoutControlOps(
-  ownerUserId: string,
-): import("../../../../accounts/service/src/control-routes.ts").ControlPlaneOperations {
-  return {
-    spaces: {
-      getSpace: async (id: string) => ({
-        id,
-        handle: id,
-        displayName: id,
-        type: "personal" as const,
-        ownerUserId,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      }),
-    },
-  } as unknown as import("../../../../accounts/service/src/control-routes.ts").ControlPlaneOperations;
-}
-
 async function withTestAppInstallationAuth(
   request: Request,
   store: AccountsStore,
@@ -2033,11 +2013,14 @@ test("accounts handler blocks open platform readiness policy without evidence me
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }),
+    new Request(
+      "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    ),
   );
 
   expect(response.status).toEqual(503);
@@ -2077,11 +2060,14 @@ test("accounts handler rejects weak open platform readiness policy metadata", as
     });
 
     const response = await handler(
-      new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      }),
+      new Request(
+        "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      ),
     );
 
     expect(response.status).toEqual(503);
@@ -2095,14 +2081,17 @@ test("accounts handler rejects weak open platform readiness policy metadata", as
 test("raw accounts handler defaults platform readiness access to closed", async () => {
   const handler = createRawAccountsHandler({ issuer: testIssuer });
 
-  // The platform readiness checkout surface defaults to the launch-gated 503
-  // when no policy is supplied.
+  // The platform readiness materialize surface defaults to the launch-gated
+  // 503 when no policy is supplied.
   const response = await handler(
-    new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }),
+    new Request(
+      `${testIssuer}/v1/installation-projections/inst_1/materialize`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    ),
   );
   expect(response.status).toEqual(503);
   const body = await response.json();
@@ -2129,11 +2118,14 @@ test("ephemeral accounts handler defaults platform readiness access to closed", 
     allowEphemeralKeyOnHttpsIssuer: true,
   });
   const response = await handler(
-    new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    }),
+    new Request(
+      `${testIssuer}/v1/installation-projections/inst_1/materialize`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    ),
   );
 
   expect(response.status).toEqual(503);
@@ -2198,12 +2190,6 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
         },
       ),
     ],
-    [
-      "stripe webhook",
-      new Request(`${testIssuer}/v1/billing/stripe/webhook`, {
-        method: "POST",
-      }),
-    ],
   ] as const) {
     const response = await handler(request);
     const body = await response.text();
@@ -2211,7 +2197,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
   }
 });
 
-test("accounts reference operator distribution exposes Accounts, OIDC, and billing routes", async () => {
+test("accounts reference operator distribution exposes Accounts and OIDC routes", async () => {
   const store = new InMemoryAccountsStore();
   seedOwnedSpace(store, "tsub_operator", "acct_operator", "space_operator");
   const sessionId = seedAccountSession(
@@ -2225,7 +2211,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
     createdAt: 1000,
     updatedAt: 1000,
   });
-  const stripeRequests: Request[] = [];
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
@@ -2242,32 +2227,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
         },
       ],
     },
-    stripeBilling: {
-      secretKey: "sk_test_operator",
-      webhookSecret: "whsec_operator",
-      fetch: (input, init) => {
-        stripeRequests.push(new Request(input, init));
-        return Promise.resolve(
-          Response.json({
-            id: "cs_test_operator",
-            url: "https://checkout.stripe.test/cs_operator",
-          }),
-        );
-      },
-      stripeApiBase: "https://api.stripe.test/v1",
-    },
-    billingRedirectAllowlist: ["https://dashboard.example.test"],
-    billingPlans: [
-      {
-        id: "operator-plan",
-        kind: "subscription",
-        stripePriceId: "price_operator",
-        credits: 1000,
-        name: { ja: "オペレーター", en: "Operator" },
-        priceDisplay: { ja: "¥1,000 / 月", en: "$7 / mo" },
-      },
-    ],
-    controlPlaneOperations: checkoutControlOps("tsub_operator"),
   });
 
   const health = await handler(new Request(`${testIssuer}/healthz`));
@@ -2278,22 +2237,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
   const session = await handler(
     new Request(`${testIssuer}/v1/account/session/me`, {
       headers: accountSessionHeaders(sessionId),
-    }),
-  );
-  const checkout = await handler(
-    new Request(`${testIssuer}/v1/billing/stripe/checkout`, {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(sessionId),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        subject: "tsub_operator",
-        planId: "operator-plan",
-        spaceId: "space_operator",
-        successUrl: "https://dashboard.example.test/billing/success",
-        cancelUrl: "https://dashboard.example.test/billing/cancel",
-      }),
     }),
   );
 
@@ -2307,14 +2250,6 @@ test("accounts reference operator distribution exposes Accounts, OIDC, and billi
   expect((await jwks.json()).keys[0].kid).toEqual("operator-key");
   expect(session.status).toEqual(200);
   expect((await session.json()).subject).toEqual("tsub_operator");
-  expect(checkout.status).toEqual(200);
-  expect((await checkout.json()).url).toEqual(
-    "https://checkout.stripe.test/cs_operator",
-  );
-  expect(stripeRequests.length).toEqual(1);
-  expect(stripeRequests[0].url).toEqual(
-    "https://api.stripe.test/v1/checkout/sessions",
-  );
 });
 
 test("accounts handler rejects installation PlanRun when deployControl is not configured", async () => {
@@ -4350,1095 +4285,6 @@ test("accounts handler does not launch-gate passkey flows when platform readines
     expect(body.includes("launch_readiness_not_complete")).toEqual(false);
   }
   expect(store.findPasskeyCredential("credential-1")).toEqual(undefined);
-});
-
-test("accounts handler starts Stripe checkout sessions", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_account");
-
-  let requestBody = "";
-  const fetchImpl: typeof fetch = async (input, init) => {
-    const request = new Request(input, init);
-    expect(request.url).toEqual("https://api.stripe.test/v1/checkout/sessions");
-    requestBody = await request.text();
-    return Response.json({
-      id: "cs_1",
-      url: "https://checkout.stripe.test/cs_1",
-    });
-  };
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: fetchImpl,
-    },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-    billingPlans: [
-      {
-        id: "plus",
-        kind: "subscription",
-        stripePriceId: "price_1",
-        credits: 1000,
-        name: { ja: "プラス", en: "Plus" },
-        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
-      },
-    ],
-    controlPlaneOperations: checkoutControlOps("tsub_account"),
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: accountSessionHeaders(checkoutSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        planId: "plus",
-        spaceId: "space_a",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(200);
-  expect(await response.json()).toEqual({
-    session_id: "cs_1",
-    url: "https://checkout.stripe.test/cs_1",
-  });
-  const params = new URLSearchParams(requestBody);
-  expect(params.get("customer_email")).toEqual("user@example.test");
-  expect(params.get("metadata[takosumi_subject]")).toEqual("tsub_account");
-  // The SERVER resolved the plan: Stripe price + mode + grant metadata come
-  // from the operator catalog, never from the client body (spec §32).
-  expect(params.get("mode")).toEqual("subscription");
-  expect(params.get("line_items[0][price]")).toEqual("price_1");
-  expect(params.get("metadata[space_id]")).toEqual("space_a");
-  expect(params.get("metadata[plan_code]")).toEqual("plus");
-  expect(params.get("metadata[credits]")).toEqual("1000");
-  // Subscription plans mirror the grant metadata onto the subscription so
-  // every paid invoice carries it (the monthly credit-grant path).
-  expect(params.get("subscription_data[metadata][space_id]")).toEqual(
-    "space_a",
-  );
-  expect(params.get("subscription_data[metadata][credits]")).toEqual("1000");
-});
-
-test("accounts handler syncs unexported billing usage to Stripe invoice items", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  store.saveBillingAccount({
-    billingAccountId: "bill_workers",
-    subject: "tsub_account",
-    provider: "stripe",
-    stripeCustomerId: "cus_workers",
-    status: "active",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  store.saveBillingUsageRecord({
-    usageReportId: "usage_workers_a",
-    installationId: "inst_workers_a",
-    billingAccountId: "bill_workers",
-    meter: "cloudflare.workers_script",
-    quantity: 2,
-    unit: "requests",
-    periodStart: 1_800_000_000,
-    periodEnd: 1_800_086_400,
-    requestDigest: "sha256:workers-a",
-    reportedAt: 1_800_000_100,
-  });
-  store.saveBillingUsageRecord({
-    usageReportId: "usage_workers_b",
-    installationId: "inst_workers_b",
-    billingAccountId: "bill_workers",
-    meter: "cloudflare.workers_script",
-    quantity: 3,
-    unit: "requests",
-    periodStart: 1_800_000_000,
-    periodEnd: 1_800_086_400,
-    requestDigest: "sha256:workers-b",
-    reportedAt: 1_800_000_200,
-  });
-
-  const stripeBodies: string[] = [];
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: async (input, init) => {
-        const request = new Request(input, init);
-        expect(request.url).toEqual("https://api.stripe.test/v1/invoiceitems");
-        expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
-        stripeBodies.push(await request.text());
-        return Response.json({ id: "ii_workers" });
-      },
-    },
-    billingUsageSyncToken: "usage_sync_token",
-    stripeUsageInvoiceItemPrices: [
-      {
-        meter: "cloudflare.workers_script",
-        unit: "requests",
-        unitAmount: 4,
-        currency: "usd",
-      },
-    ],
-  });
-
-  const denied = await handler(
-    new Request(
-      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ billingAccountId: "bill_workers" }),
-      },
-    ),
-  );
-  expect(denied.status).toEqual(401);
-
-  const response = await handler(
-    new Request(
-      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
-      {
-        method: "POST",
-        headers: {
-          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
-        },
-        body: JSON.stringify({
-          billingAccountId: "bill_workers",
-          windowStart: 1_800_000_000,
-          windowEnd: 1_800_086_400,
-        }),
-      },
-    ),
-  );
-
-  expect(response.status).toEqual(200);
-  expect(await response.json()).toEqual({
-    billing_account_id: "bill_workers",
-    stripe_customer_id: "cus_workers",
-    exported: [
-      {
-        meter: "cloudflare.workers_script",
-        unit: "requests",
-        quantity: 5,
-        usage_report_count: 2,
-        usage_report_ids: ["usage_workers_a", "usage_workers_b"],
-        export_id:
-          "takosumi-usage:bill_workers:cloudflare.workers_script:requests:1800000000:1800086400:usage_workers_a.usage_workers_b",
-        invoice_item_id: "ii_workers",
-      },
-    ],
-  });
-  expect(stripeBodies.length).toEqual(1);
-  const invoiceParams = new URLSearchParams(stripeBodies[0]);
-  expect(invoiceParams.get("customer")).toEqual("cus_workers");
-  expect(invoiceParams.get("amount")).toEqual("20");
-  expect(invoiceParams.get("metadata[takosumi_usage_meter]")).toEqual(
-    "cloudflare.workers_script",
-  );
-  expect(
-    store.findBillingUsageRecord("usage_workers_a")?.billingExportReference,
-  ).toEqual("ii_workers");
-
-  const duplicate = await handler(
-    new Request(
-      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
-      {
-        method: "POST",
-        headers: {
-          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
-        },
-        body: JSON.stringify({ billingAccountId: "bill_workers" }),
-      },
-    ),
-  );
-  expect(duplicate.status).toEqual(200);
-  expect((await duplicate.json()).exported).toEqual([]);
-  expect(stripeBodies.length).toEqual(1);
-});
-
-test("accounts handler imports Cloud extension usage events before Stripe invoice item sync", async () => {
-  const store = new InMemoryAccountsStore();
-  const now = 1_800_000_000;
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: now,
-    updatedAt: now,
-  });
-  store.saveBillingAccount({
-    billingAccountId: "bill_workers",
-    subject: "tsub_account",
-    provider: "stripe",
-    stripeCustomerId: "cus_workers",
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  });
-  store.saveAppInstallation({
-    installationId: "inst_workers",
-    accountId: "acct_1",
-    spaceId: "space_workers",
-    appId: "takosumi.cloudflare-compat",
-    sourceGitUrl: "https://github.com/example/app",
-    sourceRef: "main",
-    sourceCommit: "abc123",
-    planDigest: "sha256:manifest",
-    mode: "shared-cell",
-    billingAccountId: "bill_workers",
-    status: "ready",
-    createdBySubject: "tsub_account",
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  const stripeBodies: string[] = [];
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: async (input, init) => {
-        const request = new Request(input, init);
-        stripeBodies.push(await request.text());
-        return Response.json({ id: "ii_workers" });
-      },
-    },
-    billingUsageSyncToken: "usage_sync_token",
-    stripeUsageInvoiceItemPrices: [
-      {
-        meter: "cloudflare.workers_script",
-        unit: "requests",
-        unitAmount: 4,
-        currency: "usd",
-      },
-    ],
-  });
-
-  const response = await handler(
-    new Request(
-      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
-      {
-        method: "POST",
-        headers: {
-          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
-        },
-        body: JSON.stringify({
-          usageEvents: [
-            {
-              id: "usage_evt_workers_request",
-              spaceId: "space_workers",
-              installationId: "inst_workers",
-              meterId: "cloudflare:workers_script:request",
-              resourceFamily: "cloudflare.workers_script",
-              resourceId: "script:api",
-              operation: "request",
-              kind: "egress_gb",
-              quantity: 12,
-              credits: 3,
-              source: "resource_meter",
-              idempotencyKey:
-                "provider-runtime:space_workers:window:workers-script",
-              createdAt: "2026-06-26T13:01:00.000Z",
-            },
-          ],
-        }),
-      },
-    ),
-  );
-
-  expect(response.status).toEqual(200);
-  const body = await response.json();
-  expect(body.imported_usage_report_count).toEqual(1);
-  expect(body.billing_accounts[0].billing_account_id).toEqual("bill_workers");
-  expect(body.billing_accounts[0].exported[0]).toMatchObject({
-    meter: "cloudflare.workers_script",
-    unit: "requests",
-    quantity: 12,
-    usage_report_count: 1,
-    invoice_item_id: "ii_workers",
-  });
-  expect(stripeBodies.length).toEqual(1);
-  const invoiceParams = new URLSearchParams(stripeBodies[0]);
-  expect(invoiceParams.get("customer")).toEqual("cus_workers");
-  expect(invoiceParams.get("amount")).toEqual("48");
-  expect(invoiceParams.get("metadata[takosumi_usage_meter]")).toEqual(
-    "cloudflare.workers_script",
-  );
-  const [usageRecord] =
-    store.listBillingUsageRecordsForInstallation("inst_workers");
-  expect(usageRecord?.meter).toEqual("cloudflare.workers_script");
-  expect(usageRecord?.unit).toEqual("requests");
-  expect(usageRecord?.billingExportReference).toEqual("ii_workers");
-});
-
-test("accounts handler rejects internal Workers for Platforms usage before Stripe invoice item sync", async () => {
-  const store = new InMemoryAccountsStore();
-  const now = 1_800_000_000;
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: now,
-    updatedAt: now,
-  });
-  store.saveBillingAccount({
-    billingAccountId: "bill_workers",
-    subject: "tsub_account",
-    provider: "stripe",
-    stripeCustomerId: "cus_workers",
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  });
-  store.saveAppInstallation({
-    installationId: "inst_workers",
-    accountId: "acct_1",
-    spaceId: "space_workers",
-    appId: "takosumi.cloudflare-compat",
-    sourceGitUrl: "https://github.com/example/app",
-    sourceRef: "main",
-    sourceCommit: "abc123",
-    planDigest: "sha256:manifest",
-    mode: "shared-cell",
-    billingAccountId: "bill_workers",
-    status: "ready",
-    createdBySubject: "tsub_account",
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      fetch: async () => Response.json({ id: "ii_unreachable" }),
-    },
-    billingUsageSyncToken: "usage_sync_token",
-    stripeUsageInvoiceItemPrices: [
-      {
-        meter: "cloudflare.workers_script",
-        unit: "requests",
-        unitAmount: 4,
-        currency: "usd",
-      },
-    ],
-  });
-
-  const response = await handler(
-    new Request(
-      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
-      {
-        method: "POST",
-        headers: {
-          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
-        },
-        body: JSON.stringify({
-          usageEvents: [
-            {
-              id: "usage_evt_wfp_request",
-              spaceId: "space_workers",
-              installationId: "inst_workers",
-              meterId: "cloudflare:wfp:request",
-              resourceFamily: "cloudflare.workers_script",
-              resourceId: "script:api",
-              operation: "request",
-              kind: "egress_gb",
-              quantity: 12,
-              credits: 3,
-              source: "resource_meter",
-              idempotencyKey: "provider-runtime:space_workers:window:wfp",
-              createdAt: "2026-06-26T13:01:00.000Z",
-            },
-          ],
-        }),
-      },
-    ),
-  );
-
-  expect(response.status).toEqual(400);
-  expect(await response.json()).toMatchObject({
-    error: {
-      code: "invalid_request",
-      message:
-        "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
-    },
-  });
-  expect(store.listBillingUsageRecordsForInstallation("inst_workers")).toEqual(
-    [],
-  );
-});
-
-test("checkout rejects an unknown planId (catalog is server-side)", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_account");
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-    },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-    billingPlans: [],
-    controlPlaneOperations: checkoutControlOps("tsub_account"),
-  });
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: accountSessionHeaders(checkoutSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        planId: "nope",
-        spaceId: "space_a",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-  expect(response.status).toEqual(404);
-  const body = (await response.json()) as { error: { code: string } };
-  expect(body.error.code).toEqual("plan_not_found");
-});
-
-test("checkout rejects a Space the session does not own (cross-account grant)", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_attacker",
-    email: "attacker@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_attacker");
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: { secretKey: "sk_test", webhookSecret: "whsec_test" },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-    billingPlans: [
-      {
-        id: "plus",
-        kind: "subscription",
-        stripePriceId: "price_1",
-        credits: 1000,
-        name: { ja: "プラス", en: "Plus" },
-        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
-      },
-    ],
-    // The Space is owned by someone else; the attacker session must not be able
-    // to grant the plan's credits to it.
-    controlPlaneOperations: checkoutControlOps("tsub_victim"),
-  });
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: accountSessionHeaders(checkoutSession),
-      body: JSON.stringify({
-        subject: "tsub_attacker",
-        planId: "plus",
-        spaceId: "space_victim",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-  expect(response.status).toEqual(403);
-  const body = (await response.json()) as { error: { code: string } };
-  expect(body.error.code).toEqual("forbidden");
-});
-
-test("checkout rejects non-loopback http billing redirects even when allowlisted", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_account");
-  let stripeCalled = false;
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      fetch: () => {
-        stripeCalled = true;
-        return Promise.resolve(Response.json({ unexpected: true }));
-      },
-    },
-    billingRedirectAllowlist: ["http://dashboard.example.test"],
-    billingPlans: [
-      {
-        id: "plus",
-        kind: "subscription",
-        stripePriceId: "price_1",
-        credits: 1000,
-        name: { ja: "プラス", en: "Plus" },
-        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
-      },
-    ],
-    controlPlaneOperations: checkoutControlOps("tsub_account"),
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: accountSessionHeaders(checkoutSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        planId: "plus",
-        spaceId: "space_a",
-        successUrl: "http://dashboard.example.test/success",
-        cancelUrl: "http://dashboard.example.test/cancel",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(400);
-  expect(stripeCalled).toEqual(false);
-  expect((await response.json()).error.code).toEqual("invalid_redirect_uri");
-});
-
-test("checkout fails closed when the control plane cannot verify ownership", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_account");
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: { secretKey: "sk_test", webhookSecret: "whsec_test" },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-    billingPlans: [
-      {
-        id: "plus",
-        kind: "subscription",
-        stripePriceId: "price_1",
-        credits: 1000,
-        name: { ja: "プラス", en: "Plus" },
-        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
-      },
-    ],
-    // No controlPlaneOperations → ownership unverifiable → reject.
-  });
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: accountSessionHeaders(checkoutSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        planId: "plus",
-        spaceId: "space_a",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-  expect(response.status).toEqual(503);
-});
-
-test("accounts handler starts Stripe Customer Portal sessions for linked customers", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  store.saveBillingAccount({
-    billingAccountId: "bill_1",
-    subject: "tsub_account",
-    provider: "stripe",
-    stripeCustomerId: "cus_1",
-    stripeSubscriptionId: "sub_1",
-    status: "active",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const accountSession = seedAccountSession(store, "tsub_account");
-
-  let requestBody = "";
-  const fetchImpl: typeof fetch = async (input, init) => {
-    const request = new Request(input, init);
-    expect(request.url).toEqual(
-      "https://api.stripe.test/v1/billing_portal/sessions",
-    );
-    requestBody = await request.text();
-    return Response.json({
-      id: "bps_1",
-      url: "https://billing.stripe.test/session/bps_1",
-    });
-  };
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: fetchImpl,
-    },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/portal", {
-      method: "POST",
-      headers: accountSessionHeaders(accountSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        returnUrl: "https://accounts.example.test/account/billing",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(200);
-  expect(await response.json()).toEqual({
-    session_id: "bps_1",
-    url: "https://billing.stripe.test/session/bps_1",
-  });
-  const params = new URLSearchParams(requestBody);
-  expect(params.get("customer")).toEqual("cus_1");
-  expect(params.get("return_url")).toEqual(
-    "https://accounts.example.test/account/billing",
-  );
-});
-
-test("accounts handler rejects Stripe Customer Portal without a linked customer", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const accountSession = seedAccountSession(store, "tsub_account");
-
-  let portalCalled = false;
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: () => {
-        portalCalled = true;
-        return Promise.resolve(Response.json({ unexpected: true }));
-      },
-    },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/portal", {
-      method: "POST",
-      headers: accountSessionHeaders(accountSession),
-      body: JSON.stringify({
-        subject: "tsub_account",
-        returnUrl: "https://accounts.example.test/account/billing",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(409);
-  expect(portalCalled).toEqual(false);
-  const portalBody = await response.json();
-  expect(portalBody.error.code).toEqual("billing_account_not_linked");
-  expect(portalBody.error.message).toEqual(
-    "Stripe Customer Portal requires an existing Stripe customer.",
-  );
-});
-
-test("accounts handler blocks Stripe checkout when platform readiness access is closed", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-
-  let checkoutCalled = false;
-  const handler = createAccountsHandler({
-    store,
-    platformAccess: {
-      status: "closed",
-      evidenceRef: "vault://platform-readiness/staging/rehearsal.json",
-      publicSummary: "Launch rehearsal is still blocked.",
-    },
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: () => {
-        checkoutCalled = true;
-        return Promise.resolve(Response.json({ unexpected: true }));
-      },
-    },
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      body: JSON.stringify({
-        subject: "tsub_account",
-        priceId: "price_1",
-        mode: "subscription",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(503);
-  expect(checkoutCalled).toEqual(false);
-  const portalDenied = await response.json();
-  expect(portalDenied.error.code).toEqual("launch_readiness_not_complete");
-  expect(portalDenied.error.message).toEqual(
-    "Hosted platform readiness access is blocked until launch readiness evidence is approved",
-  );
-  expect(portalDenied.platform_access).toEqual("closed");
-});
-
-test("accounts handler lets operator checkout smoke bypass only the readiness gate", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    email: "user@example.test",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const checkoutSession = seedAccountSession(store, "tsub_account");
-
-  let checkoutCalled = 0;
-  const handler = createAccountsHandler({
-    store,
-    platformAccess: { status: "closed" },
-    billingCheckoutSmokeToken: "smoke_token",
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      stripeApiBase: "https://api.stripe.test/v1",
-      fetch: (input, init) => {
-        checkoutCalled += 1;
-        const request = new Request(input, init);
-        expect(request.url).toEqual(
-          "https://api.stripe.test/v1/checkout/sessions",
-        );
-        return Promise.resolve(
-          Response.json({
-            id: "cs_smoke",
-            url: "https://checkout.stripe.test/cs_smoke",
-          }),
-        );
-      },
-    },
-    billingRedirectAllowlist: ["https://accounts.example.test"],
-    billingPlans: [
-      {
-        id: "plus",
-        kind: "subscription",
-        stripePriceId: "price_1",
-        credits: 1000,
-        name: { ja: "プラス", en: "Plus" },
-        priceDisplay: { ja: "¥1,500 / 月", en: "$10 / mo" },
-      },
-    ],
-    controlPlaneOperations: checkoutControlOps("tsub_account"),
-  });
-
-  const invalidToken = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(checkoutSession),
-        "content-type": "application/json",
-        "x-takosumi-billing-smoke-token": "wrong",
-      },
-      body: JSON.stringify({}),
-    }),
-  );
-  expect(invalidToken.status).toEqual(503);
-  expect((await invalidToken.json()).error.code).toEqual(
-    "launch_readiness_not_complete",
-  );
-  expect(checkoutCalled).toEqual(0);
-
-  const noSession = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-takosumi-billing-smoke-token": "smoke_token",
-      },
-      body: JSON.stringify({}),
-    }),
-  );
-  expect(noSession.status).toEqual(401);
-  expect(checkoutCalled).toEqual(0);
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
-      method: "POST",
-      headers: {
-        ...accountSessionHeaders(checkoutSession),
-        "content-type": "application/json",
-        "x-takosumi-billing-smoke-token": "smoke_token",
-      },
-      body: JSON.stringify({
-        subject: "tsub_account",
-        planId: "plus",
-        spaceId: "space_a",
-        successUrl: "https://accounts.example.test/success",
-        cancelUrl: "https://accounts.example.test/cancel",
-      }),
-    }),
-  );
-
-  expect(response.status).toEqual(200);
-  expect(await response.json()).toEqual({
-    session_id: "cs_smoke",
-    url: "https://checkout.stripe.test/cs_smoke",
-  });
-  expect(checkoutCalled).toEqual(1);
-});
-
-test("accounts handler receives Stripe webhooks into billing state", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      webhookToleranceSeconds: 1_000,
-    },
-  });
-  const payload = JSON.stringify({
-    id: "evt_checkout",
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        customer: "cus_1",
-        subscription: "sub_1",
-        payment_status: "paid",
-        metadata: { takosumi_subject: "tsub_account" },
-      },
-    },
-  });
-  const signature = await stripeSignatureHeader({
-    payload,
-    secret: "whsec_test",
-    timestamp: Math.floor(Date.now() / 1000),
-  });
-
-  const response = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
-      method: "POST",
-      headers: {
-        "stripe-signature": signature,
-      },
-      body: payload,
-    }),
-  );
-
-  expect(response.status).toEqual(200);
-  const body = await response.json();
-  expect(body.received).toEqual(true);
-  expect(body.status).toEqual("processed");
-  expect(
-    store.findBillingAccountForSubject("tsub_account")?.stripeCustomerId,
-  ).toEqual("cus_1");
-  expect(store.findBillingWebhookEvent("evt_checkout")?.status).toEqual(
-    "processed",
-  );
-});
-
-test("accounts handler reconciles Stripe Space subscription webhooks once", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const reconciliations: Array<{
-    readonly spaceId: string;
-    readonly input: {
-      readonly stripeCustomerId: string;
-      readonly stripeSubscriptionId: string;
-      readonly planCode: string;
-      readonly status: string;
-    };
-  }> = [];
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      webhookToleranceSeconds: 1_000,
-    },
-    billingReconciler: (spaceId, input) => {
-      reconciliations.push({ spaceId, input });
-    },
-  });
-  const payload = JSON.stringify({
-    id: "evt_checkout_space",
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        customer: "cus_space",
-        subscription: "sub_space",
-        payment_status: "paid",
-        metadata: {
-          takosumi_subject: "tsub_account",
-          space_id: "space_paid",
-          plan_code: "pro",
-        },
-      },
-    },
-  });
-  const signature = await stripeSignatureHeader({
-    payload,
-    secret: "whsec_test",
-    timestamp: Math.floor(Date.now() / 1000),
-  });
-
-  const first = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
-      method: "POST",
-      headers: { "stripe-signature": signature },
-      body: payload,
-    }),
-  );
-  const second = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
-      method: "POST",
-      headers: { "stripe-signature": signature },
-      body: payload,
-    }),
-  );
-
-  expect(first.status).toEqual(200);
-  expect(second.status).toEqual(200);
-  expect((await second.json()).duplicate).toEqual(true);
-  expect(reconciliations).toEqual([
-    {
-      spaceId: "space_paid",
-      input: {
-        stripeCustomerId: "cus_space",
-        stripeSubscriptionId: "sub_space",
-        planCode: "pro",
-        status: "active",
-      },
-    },
-  ]);
-});
-
-test("accounts handler captures Stripe Space credit purchase webhooks once", async () => {
-  const store = new InMemoryAccountsStore();
-  store.saveAccount({
-    subject: "tsub_account",
-    createdAt: 1000,
-    updatedAt: 1000,
-  });
-  const captures: Array<{
-    readonly spaceId: string;
-    readonly input: {
-      readonly credits: number;
-      readonly stripeEventId: string;
-      readonly stripeCheckoutSessionId?: string;
-    };
-  }> = [];
-  const handler = createAccountsHandler({
-    store,
-    stripeBilling: {
-      secretKey: "sk_test",
-      webhookSecret: "whsec_test",
-      webhookToleranceSeconds: 1_000,
-    },
-    billingCreditReconciler: (spaceId, input) => {
-      captures.push({ spaceId, input });
-    },
-  });
-  const payload = JSON.stringify({
-    id: "evt_credit_space",
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        id: "cs_credit_space",
-        mode: "payment",
-        customer: "cus_credit",
-        payment_status: "paid",
-        metadata: {
-          takosumi_subject: "tsub_account",
-          space_id: "space_credit",
-          credits: "42",
-        },
-      },
-    },
-  });
-  const signature = await stripeSignatureHeader({
-    payload,
-    secret: "whsec_test",
-    timestamp: Math.floor(Date.now() / 1000),
-  });
-
-  const first = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
-      method: "POST",
-      headers: { "stripe-signature": signature },
-      body: payload,
-    }),
-  );
-  const second = await handler(
-    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
-      method: "POST",
-      headers: { "stripe-signature": signature },
-      body: payload,
-    }),
-  );
-
-  expect(first.status).toEqual(200);
-  expect(second.status).toEqual(200);
-  expect((await second.json()).duplicate).toEqual(true);
-  expect(captures).toEqual([
-    {
-      spaceId: "space_credit",
-      input: {
-        usdMicros: 42_000_000,
-        credits: 42,
-        stripeEventId: "evt_credit_space",
-        stripeCheckoutSessionId: "cs_credit_space",
-      },
-    },
-  ]);
 });
 
 test("accounts handler manages AppInstallation lifecycle records", async () => {
@@ -11634,32 +10480,6 @@ async function s256Challenge(verifier: string): Promise<string> {
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
-}
-
-async function stripeSignatureHeader(input: {
-  payload: string;
-  secret: string;
-  timestamp: number;
-}): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    textEncoder.encode(input.secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = [
-    ...new Uint8Array(
-      await crypto.subtle.sign(
-        "HMAC",
-        key,
-        textEncoder.encode(`${input.timestamp}.${input.payload}`),
-      ),
-    ),
-  ]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return `t=${input.timestamp},v1=${signature}`;
 }
 
 interface SignedPasskeyAssertionInput {

@@ -20,7 +20,6 @@ describe("isAccountsApiPath", () => {
       "/oauth/jwks",
       "/v1/account/session/me",
       "/v1/account/tokens",
-      "/v1/billing/stripe/webhook",
       "/v1/auth/upstream/callback",
       "/v1/auth/passkeys/register/options",
       "/v1/installation-projections",

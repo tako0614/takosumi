@@ -391,10 +391,11 @@ function numberOrUndefined(value: JsonValue | undefined): number | undefined {
 export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   const billing = planBillingAudit(planRun);
   const modeValue = billing?.mode;
+  // OSS resolves only disabled|showback. A legacy/Cloud-written `enforce` audit
+  // value is surfaced as `showback` here; the actual gating (if any) is reported
+  // via `blocked` / `reasons` recorded by the injected enforcement port.
   const billingMode: RunCostInfo["billingMode"] =
-    modeValue === "enforce" || modeValue === "showback"
-      ? modeValue
-      : "disabled";
+    modeValue === "showback" || modeValue === "enforce" ? "showback" : "disabled";
   const legacyEstimatedCredits = numberOrUndefined(billing?.estimatedCredits);
   const legacyAvailableCredits = numberOrUndefined(billing?.availableCredits);
   const estimatedUsdMicros =
@@ -428,8 +429,14 @@ export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
     planRun.policy.status === "blocked"
       ? planRun.policy.reasons.filter(isBillingReason)
       : [];
+  // Billing blocks only when an injected Cloud enforcement port recorded an
+  // enforce decision (`mode: "enforce"` in its billing audit) AND that decision
+  // is a shortfall / plan-limit on a policy-`blocked` run. OSS showback uses the
+  // no-op port, which never records `enforce`, so this is structurally false for
+  // an OSS-only deployment (enforcement is reachable only via the injected port).
+  const enforcedByPort = modeValue === "enforce";
   const blocked =
-    billingMode === "enforce" &&
+    enforcedByPort &&
     (reservationStatus === "insufficient_credits" || reasons.length > 0);
   return {
     runId: planRun.id,

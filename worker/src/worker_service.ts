@@ -43,7 +43,6 @@ import {
   releaseActivatorFromEnv,
 } from "./release_activator.ts";
 import { CloudflareD1MetricObservabilitySink } from "./d1_observability.ts";
-import { createStripeBillingAutoRechargePort } from "./billing_auto_recharge.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -107,10 +106,6 @@ export async function createWorkerServiceApp(
       operator: envReleaseActivator,
       runner: runnerReleaseActivator,
     });
-  const billingAutoRecharge = createStripeBillingAutoRechargePort({
-    env,
-    store: opentofuDeploymentStore,
-  });
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
   return await createTakosumiService({
     role,
@@ -154,7 +149,6 @@ export async function createWorkerServiceApp(
     ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
-    ...(billingAutoRecharge ? { billingAutoRecharge } : {}),
   });
 }
 

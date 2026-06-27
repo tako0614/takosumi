@@ -4905,7 +4905,6 @@ test("accounts serve dry-run prints server plan", async () => {
   expect(plan.hostname).toEqual("127.0.0.1");
   expect(plan.port).toEqual(9797);
   expect(plan.oidcClient.clientId).toEqual("takos-test");
-  expect(plan.stripeBilling.configured).toEqual(false);
   expect(plan.upstreamOAuth.configured).toEqual(false);
   expect(plan.passkeys.configured).toEqual(false);
   expect(plan.platformAccess).toEqual({
@@ -5779,41 +5778,6 @@ test("accounts serve rejects non-HTTPS export download base outside loopback", a
   ]);
 });
 
-test("accounts serve dry-run redacts Stripe billing secrets", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    [
-      "accounts",
-      "serve",
-      "--dry-run",
-      "--stripe-secret-key",
-      "sk_test",
-      "--stripe-webhook-secret",
-      "whsec_test",
-      "--stripe-api-base",
-      "https://api.stripe.test/v1",
-      "--stripe-webhook-tolerance-seconds",
-      "600",
-    ],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(0);
-  expect(stderr).toEqual([]);
-  const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.stripeBilling).toEqual({
-    configured: true,
-    stripeApiBase: "https://api.stripe.test/v1",
-    webhookToleranceSeconds: 600,
-  });
-  expect(stdout.join("\n").includes("sk_test")).toEqual(false);
-  expect(stdout.join("\n").includes("whsec_test")).toEqual(false);
-});
-
 test("accounts serve dry-run redacts Postgres persistence URL", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -6272,24 +6236,6 @@ test("accounts serve rejects invalid database URLs", async () => {
   expect(stdout).toEqual([]);
   expect(stderr).toEqual([
     "--database-url must be a postgres:// or postgresql:// URL",
-  ]);
-});
-
-test("accounts serve rejects partial Stripe billing config", async () => {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const code = await main(
-    ["accounts", "serve", "--dry-run", "--stripe-secret-key", "sk_test"],
-    {
-      stdout: (line) => stdout.push(line),
-      stderr: (line) => stderr.push(line),
-    },
-  );
-
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "Stripe billing requires --stripe-secret-key and --stripe-webhook-secret",
   ]);
 });
 
@@ -9437,44 +9383,6 @@ test("platform-secrets status requires configured upstream OAuth client secret",
   }
 });
 
-test("platform-secrets status requires Stripe secrets when billing is configured", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      "TAKOSUMI_BILLING_PLANS = '''",
-      '[{"id":"starter","name":"Starter","stripePriceId":"price_starter","includedCredits":1000}]',
-      "'''",
-      'TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST = "https://app.takosumi.com"',
-    ].join("\n"),
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["status", "--config", config, "--secrets-dir", dir],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async () => ({ code: 0, stdout: "[]", stderr: "" }),
-    );
-
-    expect(code).toEqual(1);
-    expect(stderr).toEqual([]);
-    const output = stdout.join("\n");
-    expect(output).toContain("TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY");
-    expect(output).toContain("TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET");
-    expect(output).toContain("Manual present: none");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
 test("platform-secrets status reads multiline AI Gateway profiles from wrangler vars", async () => {
   const dir = await makeTempDir();
   const config = await makeTempFile({ suffix: ".toml" });
@@ -9983,53 +9891,6 @@ test("platform-secrets apply pushes Cloud extension confidential client secret w
     const output = stdout.concat(stderr).join("\n");
     expect(output).toContain("Pushed 6 platform secret(s)");
     expect(output).not.toContain("cloud-extension-client-secret");
-  } finally {
-    await removePath(dir, { recursive: true });
-    await removePath(config);
-  }
-});
-
-test("platform-secrets apply fails when configured billing Stripe secrets are missing", async () => {
-  const dir = await makeTempDir();
-  const config = await makeTempFile({ suffix: ".toml" });
-  await writeTextFile(
-    config,
-    [
-      "[vars]",
-      "TAKOSUMI_BILLING_PLANS = '''",
-      '[{"id":"starter","name":"Starter","stripePriceId":"price_starter","includedCredits":1000}]',
-      "'''",
-      'TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST = "https://app.takosumi.com"',
-    ].join("\n"),
-  );
-  await writeTextFile(
-    pathJoin(dir, "TAKOSUMI_SECRET_STORE_PASSPHRASE"),
-    "protected-key",
-  );
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const commands: string[][] = [];
-
-  try {
-    const code = await runPlatformSecrets(
-      ["apply", "--config", config, "--secrets-dir", dir, "--dry-run"],
-      {
-        stdout: (line) => stdout.push(line),
-        stderr: (line) => stderr.push(line),
-      },
-      async (args) => {
-        commands.push([...args]);
-        return { code: 0, stdout: "ok", stderr: "" };
-      },
-    );
-
-    expect(code).toEqual(2);
-    expect(stdout).toEqual([]);
-    expect(stderr.join("\n")).toContain("TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY");
-    expect(stderr.join("\n")).toContain(
-      "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-    );
-    expect(commands).toEqual([]);
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);

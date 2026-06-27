@@ -69,7 +69,6 @@ describe("createStaticAssetResponder", () => {
       const apiPaths = [
         "/v1/account/session/me",
         "/v1/installation-projections",
-        "/v1/billing/stripe/webhook",
         "/v1/auth/upstream/callback",
         "/oauth/authorize",
         "/.well-known/openid-configuration",

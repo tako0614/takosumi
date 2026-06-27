@@ -6,6 +6,9 @@
  * interpreted as USD amounts where no `usdMicros` value exists.
  */
 
+import type { JsonValue } from "./types.ts";
+import type { PlanResourceChange } from "./internal-deploy-control-api.ts";
+
 export const USD_MICROS_PER_DOLLAR = 1_000_000;
 export const USD_MICROS_PER_CENT = 10_000;
 
@@ -59,10 +62,30 @@ export function nonNegativeUsdMicros(value: unknown, label: string): number {
   return value;
 }
 
-export type BillingMode = "disabled" | "showback" | "enforce";
+/**
+ * OSS / Takosumi for-Operators billing mode.
+ *
+ * The open control plane supports only an operator-scoped, NON-blocking ledger:
+ *   - `disabled` (self-host default): no billing ledger, no UI gate.
+ *   - `showback`: record cost estimates and usage WITHOUT ever blocking apply.
+ *
+ * `enforce` (Stripe-backed payment gating / quota that blocks apply) is a
+ * Takosumi Cloud-only CLOSED feature. It is intentionally NOT part of this
+ * union: OSS code can never PRODUCE an enforce setting, and the only way to gate
+ * an apply on payment is to inject a Cloud {@link BillingEnforcement} port (see
+ * `core/bootstrap.ts`). The string `"enforce"` survives only as a DB enum /
+ * migration value for rows a Cloud deployment may have written; OSS never reads
+ * or acts on it.
+ */
+export type BillingMode = "disabled" | "showback";
 
 export type BillingProvider = "stripe" | "manual" | "none";
 
+/**
+ * @deprecated Auto-recharge is a Cloud-only enforcement concern. Retained as an
+ * inert wire/storage shape so the ledger tables and Cloud port can describe it;
+ * OSS never produces or acts on it.
+ */
 export interface BillingAutoRechargeSettings {
   readonly enabled: boolean;
   /** Recharge when available USD balance is below this amount. */
@@ -83,17 +106,7 @@ export type BillingSettings =
       readonly mode: "showback";
       readonly provider: BillingProvider;
       readonly reservationRequired?: false;
-    }
-  | {
-      readonly mode: "enforce";
-      readonly provider: Exclude<BillingProvider, "none">;
-      readonly reservationRequired: true;
-      readonly autoRecharge?: BillingAutoRechargeSettings;
     };
-
-export function billingReservationRequired(settings: BillingSettings): boolean {
-  return settings.mode === "enforce";
-}
 
 export interface BillingAccount {
   readonly id: string;
@@ -346,3 +359,128 @@ export function billingPlanMaxEstimatedUsdMicros(
       : legacyCreditsToUsdMicros(limits.maxEstimatedCreditsPerRun))
   );
 }
+
+// ---------------------------------------------------------------------------
+// Composition ports (OSS/Cloud boundary, Seam B)
+//
+// The OSS deploy controller computes a transparent showback cost estimate, then
+// consults these injectable ports for any ENFORCEMENT decision. OSS ships the
+// no-op defaults below ({@link NOOP_BILLING_ENFORCEMENT} / {@link
+// NOOP_QUOTA_POLICY}), which NEVER block and NEVER touch a payment provider, so
+// `showback`/`disabled` are the only behaviors an OSS-only deployment can
+// exhibit. Takosumi Cloud injects real port implementations (Stripe-backed
+// reserve/capture/release + plan quota) from its closed `billing-enforce`
+// module, keeping all official-billing/enforced-payment code out of OSS source.
+//
+// These types intentionally live in the public contract so the Cloud delta can
+// implement them by importing `takosumi-contract` ONLY (never OSS internals).
+// ---------------------------------------------------------------------------
+
+/** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
+export interface BillingReservationContext {
+  readonly spaceId: string;
+  readonly runId: string;
+  readonly installationId?: string;
+  /** The OSS-resolved billing mode (`disabled` | `showback`). */
+  readonly mode: BillingMode;
+  /** Transparent showback estimate the OSS controller already computed. */
+  readonly estimatedUsdMicros: number;
+  readonly planResourceChanges: readonly PlanResourceChange[];
+  /**
+   * Whether layered policy + compatibility passed before billing. Enforcement
+   * may only BLOCK a plan that would otherwise pass; an already-blocked plan is
+   * recorded for audit but never additionally blocked by billing.
+   */
+  readonly policyPassedBeforeBilling: boolean;
+  readonly now: number;
+}
+
+/** Decision returned by a {@link BillingEnforcement} / {@link QuotaPolicy} port. */
+export interface BillingEnforcementDecision {
+  /** Blocking reasons; an empty array means "allowed". OSS no-op returns `[]`. */
+  readonly reasons: readonly string[];
+  /** Extra audit fields merged into the plan's billing audit record. */
+  readonly audit?: Readonly<Record<string, JsonValue>>;
+}
+
+export interface BillingReservationCheckContext {
+  readonly spaceId: string;
+  readonly planRunId: string;
+  readonly now: number;
+}
+
+export interface BillingCaptureContext {
+  readonly spaceId: string;
+  readonly planRunId: string;
+  readonly applyRunId: string;
+  readonly installationId?: string;
+  /** USD micros the OSS controller recorded as the captured usage estimate. */
+  readonly capturedUsdMicros: number;
+  readonly now: number;
+}
+
+export interface BillingReleaseContext {
+  readonly spaceId: string;
+  readonly planRunId: string;
+  readonly now: number;
+}
+
+/**
+ * Cloud-injectable enforcement port mirroring the OSS controller's
+ * reserve/capture/release surface. OSS supplies {@link NOOP_BILLING_ENFORCEMENT}
+ * (showback: never blocks, never charges); Cloud supplies a Stripe-backed
+ * implementation that reserves/captures USD balance against its own ledger and
+ * can return blocking reasons.
+ */
+export interface BillingEnforcement {
+  /**
+   * Plan-time reservation. Returns blocking `reasons` (e.g. insufficient USD
+   * balance) for an enforce-mode Space; OSS returns `{ reasons: [] }`.
+   */
+  reservePlanBilling(
+    ctx: BillingReservationContext,
+  ): Promise<BillingEnforcementDecision>;
+  /**
+   * Apply-time precondition. Throws when an enforce reservation is missing /
+   * expired so the apply fails closed; OSS is a no-op.
+   */
+  assertReservationSatisfied(ctx: BillingReservationCheckContext): Promise<void>;
+  /** Capture the reserved amount on a successful apply (Cloud debits balance). */
+  captureRunBilling(ctx: BillingCaptureContext): Promise<void>;
+  /** Release a reservation on a failed/abandoned apply (Cloud restores balance). */
+  releaseReservation(ctx: BillingReleaseContext): Promise<void>;
+}
+
+export interface QuotaEvaluationContext {
+  readonly spaceId: string;
+  readonly estimatedUsdMicros: number;
+  readonly planResourceChanges: readonly PlanResourceChange[];
+}
+
+/**
+ * Cloud-injectable plan quota / per-run limit port. OSS supplies
+ * {@link NOOP_QUOTA_POLICY} (no plan limits); Cloud enforces subscription plan
+ * limits + resource quotas and can return blocking reasons.
+ */
+export interface QuotaPolicy {
+  evaluatePlanQuota(
+    ctx: QuotaEvaluationContext,
+  ): Promise<BillingEnforcementDecision>;
+}
+
+/** OSS default: showback enforcement that never blocks and never charges. */
+export const NOOP_BILLING_ENFORCEMENT: BillingEnforcement = {
+  async reservePlanBilling(): Promise<BillingEnforcementDecision> {
+    return { reasons: [] };
+  },
+  async assertReservationSatisfied(): Promise<void> {},
+  async captureRunBilling(): Promise<void> {},
+  async releaseReservation(): Promise<void> {},
+};
+
+/** OSS default: no plan quota enforcement. */
+export const NOOP_QUOTA_POLICY: QuotaPolicy = {
+  async evaluatePlanQuota(): Promise<BillingEnforcementDecision> {
+    return { reasons: [] };
+  },
+};

@@ -2228,16 +2228,6 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
           },
           additionalProperties: false,
         },
-        {
-          type: "object",
-          required: ["mode", "provider", "reservationRequired"],
-          properties: {
-            mode: { const: "enforce" },
-            provider: { enum: ["stripe", "manual"] },
-            reservationRequired: { const: true },
-          },
-          additionalProperties: false,
-        },
       ],
     },
     CreditBalance: {
@@ -2360,7 +2350,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
           type: "string",
           enum: ["reserved", "captured", "released", "expired"],
         },
-        mode: { type: "string", enum: ["disabled", "showback", "enforce"] },
+        mode: { type: "string", enum: ["disabled", "showback"] },
         createdAt: { type: "string", format: "date-time" },
         expiresAt: { type: "string", format: "date-time" },
       },
@@ -3173,7 +3163,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         runId: { type: "string" },
-        billingMode: { enum: ["disabled", "showback", "enforce"] },
+        billingMode: { enum: ["disabled", "showback"] },
         estimatedUsdMicros: {
           type: "integer",
           description:

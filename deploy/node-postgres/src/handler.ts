@@ -9,8 +9,6 @@ import type {
   LoginEmailAllowlist,
   OidcClientRegistration,
   PasskeyHttpOptions,
-  StripeBillingOptions,
-  StripeUsageInvoiceItemPrice,
   UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
   ServiceGraphMaterialResolverHttpOptions,
@@ -20,7 +18,6 @@ import {
   customOidcOAuthProvider,
   googleOAuthProvider,
   isRetiredUpstreamOAuthProviderId,
-  parseStripeUsageInvoiceItemPrices,
 } from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
@@ -73,11 +70,6 @@ export interface NodeAccountsServerConfig {
   readonly serviceGraphMaterialResolver:
     | ServiceGraphMaterialResolverHttpOptions
     | undefined;
-  readonly stripeBilling: StripeBillingOptions | undefined;
-  readonly stripeUsageInvoiceItemPrices:
-    | readonly StripeUsageInvoiceItemPrice[]
-    | undefined;
-  readonly billingUsageSyncToken: string | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
@@ -105,13 +97,6 @@ export function parseEnv(
     clients: parseClients(env),
     platformAccess: parsePlatformAccess(env),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
-    stripeBilling: parseStripeBilling(env),
-    stripeUsageInvoiceItemPrices: parseStripeUsageInvoiceItemPrices(
-      optional(env, "TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES"),
-    ),
-    billingUsageSyncToken:
-      optional(env, "TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN") ??
-      optional(env, "TAKOSUMI_DEPLOY_CONTROL_TOKEN"),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -349,63 +334,6 @@ function parseServiceGraphMaterials(
       "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_ALLOW_DIRECT_DEPLOY_CONTROL",
     )
       ? { allowDeployControlInstallations: true }
-      : {}),
-  };
-}
-
-/**
- * Parse Stripe billing config. Mirrors the Cloudflare worker's
- * `parseStripeBilling`. The Node profile uses `_STRIPE_API_KEY` as
- * the spec-required name.
- *
- * `TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY` is intentionally **not** wired
- * into the returned `StripeBillingOptions`: the upstream
- * `@takosjp/takosumi-accounts-service` `StripeBillingOptions` type
- * (see `accounts/service/src/mod.ts`) currently exposes only
- * `secretKey`, `webhookSecret`, `fetch`, `stripeApiBase`, and
- * `webhookToleranceSeconds`. The publishable key is surfaced to the
- * dashboard / SDKs through the operator distribution's separate
- * dashboard-config plumbing, not through `StripeBillingOptions`. The
- * parser still validates the env var so operators get a deterministic
- * error rather than a silent typo, and so the Node-Postgres .env.example
- * documents a complete operator surface.
- */
-export function parseStripeBilling(
-  env: Record<string, string | undefined>,
-): StripeBillingOptions | undefined {
-  const secretKey = optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_API_KEY");
-  const webhookSecret = optional(
-    env,
-    "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-  );
-  const stripeApiBase = optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_API_BASE");
-  const webhookToleranceSeconds = optionalNonNegativeInteger(
-    env,
-    "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS",
-  );
-  const publicKey = optional(env, "TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY");
-  if (!secretKey && !webhookSecret && !stripeApiBase && !publicKey) {
-    return undefined;
-  }
-  if (!secretKey || !webhookSecret) {
-    throw new TypeError(
-      "Stripe billing requires TAKOSUMI_ACCOUNTS_STRIPE_API_KEY and TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-    );
-  }
-  if (publicKey && !publicKey.startsWith("pk_")) {
-    throw new TypeError(
-      "TAKOSUMI_ACCOUNTS_STRIPE_PUBLIC_KEY must be a Stripe publishable key (pk_live_... or pk_test_...)",
-    );
-  }
-  // `publicKey` is parsed for env-surface completeness; see the function
-  // docstring for why it is not forwarded into the returned options.
-  void publicKey;
-  return {
-    secretKey,
-    webhookSecret,
-    ...(stripeApiBase ? { stripeApiBase } : {}),
-    ...(webhookToleranceSeconds !== undefined
-      ? { webhookToleranceSeconds }
       : {}),
   };
 }

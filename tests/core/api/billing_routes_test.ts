@@ -315,9 +315,8 @@ test("POST /internal/v1/spaces/:spaceId/subscription/change updates billing sett
       headers: HEADERS,
       body: JSON.stringify({
         billingSettings: {
-          mode: "enforce",
+          mode: "showback",
           provider: "manual",
-          reservationRequired: true,
         },
       }),
     },
@@ -325,14 +324,12 @@ test("POST /internal/v1/spaces/:spaceId/subscription/change updates billing sett
 
   expect(response.status).toBe(200);
   expect((await response.json()).billing.settings).toEqual({
-    mode: "enforce",
+    mode: "showback",
     provider: "manual",
-    reservationRequired: true,
   });
   expect((await store.getSpace("space_12345678"))?.billingSettings).toEqual({
-    mode: "enforce",
+    mode: "showback",
     provider: "manual",
-    reservationRequired: true,
   });
 });
 
@@ -340,7 +337,9 @@ test("POST /internal/v1/spaces/:spaceId/subscription/change rejects invalid bill
   const { app } = await makeApp();
 
   for (const billingSettings of [
+    // enforce is a Takosumi Cloud-only mode; OSS rejects it outright.
     { mode: "enforce", provider: "none", reservationRequired: true },
+    { mode: "enforce", provider: "manual", reservationRequired: true },
     { mode: "disabled", provider: "manual" },
     { mode: "showback", provider: "manual", reservationRequired: true },
     { mode: "showback", provider: "bogus" },

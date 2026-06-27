@@ -163,18 +163,6 @@ const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
     name: "TAKOSUMI_METRICS_SCRAPE_TOKEN",
     secretClass: "manual_external",
   },
-  {
-    name: "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
-    secretClass: "manual_external",
-  },
-  {
-    name: "TAKOSUMI_ACCOUNTS_STRIPE_API_KEY",
-    secretClass: "manual_external",
-  },
-  {
-    name: "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-    secretClass: "manual_external",
-  },
 ] as const;
 
 const manifestByName = new Map(
@@ -296,10 +284,6 @@ async function platformSecretManifest(
     markRequiredManualSecret(entries, name);
     known.add(name);
   }
-  for (const name of await configuredStripeBillingSecretNames(options)) {
-    markRequiredManualSecret(entries, name);
-    known.add(name);
-  }
   for (const name of await aiGatewayProfileApiKeyEnvNames(options)) {
     if (known.has(name)) continue;
     entries.push({ name, secretClass: "required_manual_external" });
@@ -354,17 +338,6 @@ async function configuredCloudExtensionClientSecretNames(
   return ["TAKOSUMI_ACCOUNTS_CLIENT_SECRET"];
 }
 
-async function configuredStripeBillingSecretNames(
-  options: Record<string, string | boolean>,
-): Promise<readonly string[]> {
-  const configText = await readWranglerConfigText(options);
-  if (!hasConfiguredHostedBilling({ configText })) return [];
-  return [
-    "TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
-    "TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET",
-  ];
-}
-
 function hasConfiguredCloudExtensionClient({
   configText,
 }: {
@@ -373,17 +346,6 @@ function hasConfiguredCloudExtensionClient({
   return [
     "TAKOSUMI_ACCOUNTS_CLIENT_ID",
     "TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION",
-  ].some((name) => configuredStringValue(name, configText) !== undefined);
-}
-
-function hasConfiguredHostedBilling({
-  configText,
-}: {
-  readonly configText: string | undefined;
-}): boolean {
-  return [
-    "TAKOSUMI_BILLING_PLANS",
-    "TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST",
   ].some((name) => configuredStringValue(name, configText) !== undefined);
 }
 

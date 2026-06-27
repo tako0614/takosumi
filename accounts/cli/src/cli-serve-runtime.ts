@@ -11,7 +11,6 @@ import {
   type PlatformAccessPolicy,
   type PasskeyHttpOptions,
   type SharedCellWarmPoolSlot,
-  type StripeBillingOptions,
   type UpstreamOAuthOptions,
   type ServiceGraphMaterialResolverHttpOptions,
   exportDownloadUrl,
@@ -118,35 +117,6 @@ export interface PlatformReadinessAccessConfig extends PlatformAccessPolicy {
   readinessFile?: string;
   readinessDigest?: string;
   approvalRef?: string;
-}
-
-export function buildStripeBillingOptions(
-  options: Record<string, string | boolean>,
-): StripeBillingOptions | undefined {
-  const secretKey = optionalStringOption(options, "stripeSecretKey");
-  const webhookSecret = optionalStringOption(options, "stripeWebhookSecret");
-  const stripeApiBase = optionalStringOption(options, "stripeApiBase");
-  const webhookToleranceSeconds = optionalIntegerOption(
-    options,
-    "stripeWebhookToleranceSeconds",
-  );
-
-  const hasStripeOption = Boolean(
-    secretKey || webhookSecret || stripeApiBase || webhookToleranceSeconds,
-  );
-  if (!hasStripeOption) return undefined;
-  if (!secretKey || !webhookSecret) {
-    throw new TypeError(
-      "Stripe billing requires --stripe-secret-key and --stripe-webhook-secret",
-    );
-  }
-
-  return {
-    secretKey,
-    webhookSecret,
-    stripeApiBase,
-    webhookToleranceSeconds,
-  };
 }
 
 export async function buildPlatformReadinessAccessConfig(

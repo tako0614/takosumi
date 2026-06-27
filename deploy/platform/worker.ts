@@ -811,28 +811,8 @@ function parseBillingSettings(
       },
     };
   }
-  if (value.mode === "enforce") {
-    if (value.provider !== "stripe" && value.provider !== "manual") {
-      return {
-        ok: false,
-        error: "enforced billing requires stripe or manual provider",
-      };
-    }
-    if (value.reservationRequired !== true) {
-      return {
-        ok: false,
-        error: "enforced billing requires reservationRequired true",
-      };
-    }
-    return {
-      ok: true,
-      value: {
-        mode: "enforce",
-        provider: value.provider,
-        reservationRequired: true,
-      },
-    };
-  }
+  // `enforce` is a Takosumi Cloud-only closed mode. OSS / the operator platform
+  // worker never accepts it: the only billing modes are disabled | showback.
   return { ok: false, error: "unknown billing mode" };
 }
 

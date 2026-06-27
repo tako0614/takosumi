@@ -48,7 +48,6 @@ function testConfig(): NodeAccountsServerConfig {
     clients: undefined,
     platformAccess: { status: "closed" },
     serviceGraphMaterialResolver: undefined,
-    stripeBilling: undefined,
     passkeys: undefined,
     upstreamOAuth: undefined,
     stableOidc: undefined,

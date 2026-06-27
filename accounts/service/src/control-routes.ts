@@ -144,12 +144,6 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import {
-  type BillingPlan,
-  parseBillingPlans,
-  publicBillingPlans,
-} from "./billing-plans.ts";
-import { readEnvVar } from "./read-env.ts";
-import {
   requireAccountSession,
   requireAccountsBearer,
   type AccountsBearerRequiredScope,
@@ -678,18 +672,6 @@ export interface ControlPlaneOperations {
     spaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
-  reconcileStripeSpaceSubscription(
-    spaceId: string,
-    input: {
-      readonly stripeCustomerId: string;
-      readonly stripeSubscriptionId: string;
-      readonly stripePriceId?: string;
-      readonly stripeDefaultPaymentMethodId?: string;
-      readonly planCode: string;
-      readonly status: string;
-      readonly currentPeriodEndUnix?: number;
-    },
-  ): Promise<unknown>;
   // --- Connections (§9) ---
   readonly connections: {
     listProviderEnvs(spaceId?: string): Promise<readonly ProviderEnv[]>;
@@ -912,11 +894,6 @@ interface ControlRouteContext {
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
-  /**
-   * Operator billing plan catalog (spec §32) for `GET /api/v1/billing/plans`.
-   * Falls back to the `TAKOSUMI_BILLING_PLANS` env var when omitted.
-   */
-  readonly billingPlans?: readonly BillingPlan[];
 }
 
 /**
@@ -1014,7 +991,6 @@ export async function handleControlRoute(
       store,
       session: { subject: bearer.auth.subject },
       sharedCellRuntime: context.sharedCellRuntime,
-      billingPlans: context.billingPlans,
     });
   } catch (error) {
     return controllerErrorResponse(error);
@@ -1059,7 +1035,6 @@ interface DispatchInput {
   readonly store: AccountsStore;
   readonly session: { readonly subject: string };
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
-  readonly billingPlans?: readonly BillingPlan[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -1068,24 +1043,6 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   const segments = normalizePublicControlSegments(
     tail.split("/").filter(Boolean),
   );
-
-  // GET /api/v1/billing/plans — the instance-wide operator plan catalog
-  // (spec §32), public projection (no Stripe price ids). Session-authed but
-  // not Space-scoped: the catalog is the same for every Space.
-  if (
-    segments.length === 2 &&
-    segments[0] === "billing" &&
-    segments[1] === "plans"
-  ) {
-    if (method !== "GET") return methodNotAllowed("GET");
-    return json({
-      plans: publicBillingPlans(
-        input.billingPlans && input.billingPlans.length > 0
-          ? input.billingPlans
-          : parseBillingPlans(readEnvVar("TAKOSUMI_BILLING_PLANS")),
-      ),
-    });
-  }
 
   // GET/POST /api/v1/workspaces (legacy-compatible: /api/v1/spaces)
   if (segments.length === 1 && segments[0] === "spaces") {

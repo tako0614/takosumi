@@ -17,10 +17,6 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   TAKOSUMI_ACCOUNTS_REVOKE_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_TOKEN_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
@@ -38,9 +34,6 @@ export {
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
-  TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
@@ -94,23 +87,6 @@ import {
   handleListPrivacyRequests,
   matchPrivacyRequestRoute,
 } from "./privacy-routes.ts";
-import {
-  handleStripeBillingPortalRequest,
-  handleStripeCheckoutRequest,
-  handleStripeUsageInvoiceItemsSyncRequest,
-  handleStripeWebhookRequest,
-  type StripeSpaceBillingReconciler,
-  type StripeSpaceCreditReconciler,
-} from "./billing-routes.ts";
-import type { StripeUsageInvoiceItemPrice } from "./billing.ts";
-import type { BillingPlan } from "./billing-plans.ts";
-export {
-  type BillingPlan,
-  type BillingPlanText,
-  parseBillingPlans,
-  type PublicBillingPlan,
-  publicBillingPlans,
-} from "./billing-plans.ts";
 import {
   handleAuthorize,
   handleIntrospect,
@@ -216,7 +192,6 @@ export * from "./store.ts";
 export * from "./upstream.ts";
 export * from "./passkey.ts";
 export * from "./identity.ts";
-export * from "./billing.ts";
 export * from "./jwt.ts";
 // `ledger.ts` re-export is intentionally selective: the v1 contract reset
 // (Wave 6) removed `RuntimeBindingRecord` / `ServiceBindingMaterialRecord` / `ServiceGrantMaterialRecord`
@@ -264,10 +239,6 @@ export type { PasskeyChallengeIntent } from "./passkey-challenge-store.ts";
 
 export type AccountsHandler = (request: Request) => Promise<Response>;
 
-export const TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER =
-  "x-takosumi-billing-smoke-token";
-export const TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER =
-  "x-takosumi-billing-usage-sync-token";
 export const TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER =
   "x-takosumi-materialize-drill-token";
 export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
@@ -279,7 +250,6 @@ export interface AccountsHandlerOptions {
   clients?: readonly OidcClientRegistration[];
   store?: AccountsStore;
   oidcFlow?: OidcAuthorizationCodeFlow;
-  stripeBilling?: StripeBillingOptions;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: LaunchTokenOptions;
@@ -292,10 +262,6 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
-  billingReconciler?: StripeSpaceBillingReconciler;
-  billingCreditReconciler?: StripeSpaceCreditReconciler;
-  stripeUsageInvoiceItemPrices?: readonly StripeUsageInvoiceItemPrice[];
-  billingUsageSyncToken?: string;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -304,20 +270,6 @@ export interface AccountsHandlerOptions {
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
-  /**
-   * Allowlist of origins permitted as Stripe checkout `successUrl` /
-   * `cancelUrl` redirect targets. When omitted the operator MUST set the
-   * `TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST` env var (comma- or
-   * space-separated list of origins).
-   */
-  billingRedirectAllowlist?: readonly string[];
-  /**
-   * Operator-only token that lets the billing readiness checker exercise
-   * Stripe checkout while hosted platform access is still closed. This bypasses
-   * only the launch-readiness gate; account session, Space ownership, redirect
-   * allowlist, plan catalog, and Stripe validation still run normally.
-   */
-  billingCheckoutSmokeToken?: string;
   /**
    * Operator-only token that lets the dedicated-materialize readiness drill
    * request materialization while hosted platform access is still closed. This
@@ -334,14 +286,6 @@ export interface AccountsHandlerOptions {
    */
   privacyOperationsToken?: string;
   /**
-   * Operator billing plan catalog (spec §32): subscription plans / USD balance
-   * packs the dashboard offers, each bound server-side to a Stripe price.
-   * When omitted the handler falls back to the `TAKOSUMI_BILLING_PLANS` env
-   * var (a JSON array); with neither, the catalog is empty and the dashboard
-   * shows "no plans offered".
-   */
-  billingPlans?: readonly BillingPlan[];
-  /**
    * HMAC secret used to sign installation export download redirects. When
    * omitted the handler falls back to the
    * `TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET` env var; if both are
@@ -357,16 +301,11 @@ export interface EphemeralAccountsHandlerOptions {
   keyId?: string;
   clients?: readonly OidcClientRegistration[];
   store?: AccountsStore;
-  stripeBilling?: StripeBillingOptions;
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   launchTokens?: EphemeralLaunchTokenOptions;
   deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
-  billingReconciler?: StripeSpaceBillingReconciler;
-  billingCreditReconciler?: StripeSpaceCreditReconciler;
-  stripeUsageInvoiceItemPrices?: readonly StripeUsageInvoiceItemPrice[];
-  billingUsageSyncToken?: string;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -375,10 +314,7 @@ export interface EphemeralAccountsHandlerOptions {
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   serviceGraphRuntimeAvailability?: ServiceGraphRuntimeAvailability;
-  billingRedirectAllowlist?: readonly string[];
-  billingCheckoutSmokeToken?: string;
   privacyOperationsToken?: string;
-  billingPlans?: readonly BillingPlan[];
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
    * Escape hatch for the fail-closed ephemeral-key guard. The ephemeral
@@ -430,14 +366,6 @@ export interface OidcClientRegistration {
    * introspection remains the default.
    */
   serviceGraphTokenIntrospection?: boolean;
-}
-
-export interface StripeBillingOptions {
-  secretKey: string;
-  webhookSecret: string;
-  fetch?: typeof fetch;
-  stripeApiBase?: string;
-  webhookToleranceSeconds?: number;
 }
 
 export interface ServiceBindingMaterializerInput {
@@ -630,15 +558,10 @@ export async function createEphemeralAccountsHandler(
     issuer,
     clients: options.clients,
     store: options.store,
-    stripeBilling: options.stripeBilling,
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
     deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
-    billingReconciler: options.billingReconciler,
-    billingCreditReconciler: options.billingCreditReconciler,
-    stripeUsageInvoiceItemPrices: options.stripeUsageInvoiceItemPrices,
-    billingUsageSyncToken: options.billingUsageSyncToken,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -648,7 +571,6 @@ export async function createEphemeralAccountsHandler(
     },
     loginEmailAllowlist: options.loginEmailAllowlist,
     serviceGraphMaterialResolver: options.serviceGraphMaterialResolver,
-    billingRedirectAllowlist: options.billingRedirectAllowlist,
     privacyOperationsToken: options.privacyOperationsToken,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
     launchTokens: {
@@ -709,7 +631,6 @@ export function createAccountsHandler(
   const authorizeLimiter = createInMemoryRateLimiter(60);
   const tokenLimiter = createInMemoryRateLimiter(120);
   const accountTokensLimiter = createInMemoryRateLimiter(10);
-  const checkoutLimiter = createInMemoryRateLimiter(30);
   const installationsLimiter = createInMemoryRateLimiter(30);
   const launchConsumeLimiter = createInMemoryRateLimiter(30);
 
@@ -1015,98 +936,6 @@ export function createAccountsHandler(
       });
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      // Checkout has two gates: the platform-readiness admission policy
-      // (consistent with the other platform readiness entry points)
-      // and an account session. The webhook route below intentionally bypasses
-      // BOTH so internal Stripe -> us events keep converging while the managed
-      // offering surfaces stay blocked.
-      const limited = checkoutLimiter.consume(request);
-      if (limited) return limited;
-      const checkoutSmokeAllowed = billingCheckoutSmokeAllowed({
-        request,
-        token: options.billingCheckoutSmokeToken,
-      });
-      const blocked = checkoutSmokeAllowed
-        ? null
-        : platformAccessBlocked(options.platformAccess);
-      if (blocked) return blocked;
-      const session = await requireAccountSession({
-        request: request.clone(),
-        store,
-      });
-      if (!session.ok) return session.response;
-      if (!options.stripeBilling) return billingNotConfigured();
-      return await handleStripeCheckoutRequest({
-        request,
-        store,
-        stripe: options.stripeBilling,
-        sessionSubject: session.subject,
-        billingRedirectAllowlist: options.billingRedirectAllowlist,
-        billingPlans: options.billingPlans,
-        ...(options.controlPlaneOperations
-          ? { controlPlaneOperations: options.controlPlaneOperations }
-          : {}),
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const limited = checkoutLimiter.consume(request);
-      if (limited) return limited;
-      const blocked = platformAccessBlocked(options.platformAccess);
-      if (blocked) return blocked;
-      const session = await requireAccountSession({
-        request: request.clone(),
-        store,
-      });
-      if (!session.ok) return session.response;
-      if (!options.stripeBilling) return billingNotConfigured();
-      return await handleStripeBillingPortalRequest({
-        request,
-        store,
-        stripe: options.stripeBilling,
-        sessionSubject: session.subject,
-        billingRedirectAllowlist: options.billingRedirectAllowlist,
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.stripeBilling) return billingNotConfigured();
-      const billingUsageSyncAuth = requireBillingUsageSyncAccess({
-        request,
-        token: options.billingUsageSyncToken,
-      });
-      if (billingUsageSyncAuth) return billingUsageSyncAuth;
-      return await handleStripeUsageInvoiceItemsSyncRequest({
-        request,
-        store,
-        stripe: options.stripeBilling,
-        prices: options.stripeUsageInvoiceItemPrices ?? [],
-      });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      // Stripe webhooks are server-to-server (Stripe -> us) and are
-      // authenticated via the Stripe signature, not via an Account session.
-      // We deliberately keep webhook processing ENABLED even when the
-      // platform-readiness access policy is "closed": billing state must keep
-      // converging (refunds, dunning, subscription cancellations, etc.) even
-      // while public-facing surfaces are blocked. Only the user-facing
-      // checkout entry point above is gated by platformAccessBlocked.
-      if (!options.stripeBilling) return billingNotConfigured();
-      return await handleStripeWebhookRequest({
-        request,
-        store,
-        stripe: options.stripeBilling,
-        billingReconciler: options.billingReconciler,
-        billingCreditReconciler: options.billingCreditReconciler,
-      });
-    }
-
     if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const authBlocked = await requireInstallationPlanRunWriteAccess({
@@ -1374,7 +1203,6 @@ export function createAccountsHandler(
         store,
         operations: options.controlPlaneOperations,
         sharedCellRuntime: options.sharedCellRuntime,
-        billingPlans: options.billingPlans,
       });
       if (controlResponse) return controlResponse;
     }
@@ -1605,14 +1433,6 @@ function reservedOidcEndpoint(): Response {
   );
 }
 
-function billingNotConfigured(): Response {
-  return errorJson(
-    "feature_unavailable",
-    "Billing is temporarily unavailable.",
-    503,
-  );
-}
-
 function passkeysNotConfigured(): Response {
   return errorJson(
     "feature_unavailable",
@@ -1642,17 +1462,6 @@ function requireServiceGraphMaterialResolverAccess(input: {
   );
 }
 
-function billingCheckoutSmokeAllowed(input: {
-  request: Request;
-  token: string | undefined;
-}): boolean {
-  if (!input.token) return false;
-  const header =
-    input.request.headers.get(TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER) ??
-    "";
-  return constantTimeEqual(header, input.token);
-}
-
 function materializeDrillAccessAllowed(input: {
   request: Request;
   token: string | undefined;
@@ -1661,28 +1470,6 @@ function materializeDrillAccessAllowed(input: {
   const header =
     input.request.headers.get(TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER) ?? "";
   return constantTimeEqual(header, input.token);
-}
-
-function requireBillingUsageSyncAccess(input: {
-  request: Request;
-  token: string | undefined;
-}): Response | undefined {
-  if (!input.token) {
-    return errorJson(
-      "feature_unavailable",
-      "Billing usage sync is temporarily unavailable.",
-      503,
-    );
-  }
-  const header =
-    input.request.headers.get(TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER) ?? "";
-  if (constantTimeEqual(header, input.token)) return undefined;
-  return errorJson(
-    "unauthorized",
-    "billing usage sync token is required",
-    401,
-    undefined,
-  );
 }
 
 function requirePrivacyOperationsAccess(input: {
