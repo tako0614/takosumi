@@ -2491,6 +2491,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         spaceId: event.spaceId,
         installationId: event.installationId ?? null,
         runId: event.runId ?? null,
+        meterId: event.meterId ?? null,
+        resourceFamily: event.resourceFamily ?? null,
+        resourceId: event.resourceId ?? null,
+        operation: event.operation ?? null,
+        resourceMetadataJson: event.resourceMetadata ?? null,
         kind: event.kind,
         quantity: event.quantity,
         credits: event.credits,
@@ -2503,6 +2508,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         spaceId: event.spaceId,
         installationId: event.installationId ?? null,
         runId: event.runId ?? null,
+        meterId: event.meterId ?? null,
+        resourceFamily: event.resourceFamily ?? null,
+        resourceId: event.resourceId ?? null,
+        operation: event.operation ?? null,
+        resourceMetadataJson: event.resourceMetadata ?? null,
         kind: event.kind,
         quantity: event.quantity,
         credits: event.credits,
@@ -2710,6 +2720,11 @@ function usageEventFromRow(row: {
   readonly spaceId: string;
   readonly installationId: string | null;
   readonly runId: string | null;
+  readonly meterId?: string | null;
+  readonly resourceFamily?: string | null;
+  readonly resourceId?: string | null;
+  readonly operation?: string | null;
+  readonly resourceMetadataJson?: unknown;
   readonly kind: string;
   readonly quantity: number;
   readonly credits: number;
@@ -2722,6 +2737,11 @@ function usageEventFromRow(row: {
     spaceId: row.spaceId,
     ...(row.installationId ? { installationId: row.installationId } : {}),
     ...(row.runId ? { runId: row.runId } : {}),
+    ...(row.meterId ? { meterId: row.meterId } : {}),
+    ...(row.resourceFamily ? { resourceFamily: row.resourceFamily } : {}),
+    ...(row.resourceId ? { resourceId: row.resourceId } : {}),
+    ...(row.operation ? { operation: row.operation } : {}),
+    ...usageResourceMetadataFromRow(row.resourceMetadataJson),
     kind: row.kind as UsageEvent["kind"],
     quantity: row.quantity,
     credits: row.credits,
@@ -2729,6 +2749,22 @@ function usageEventFromRow(row: {
     idempotencyKey: row.idempotencyKey,
     createdAt: row.createdAt,
   };
+}
+
+function usageResourceMetadataFromRow(
+  value: unknown,
+): Pick<UsageEvent, "resourceMetadata"> {
+  if (typeof value === "string") {
+    if (value === "") return {};
+    try {
+      return usageResourceMetadataFromRow(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (Object.keys(value).length === 0) return {};
+  return { resourceMetadata: value as UsageEvent["resourceMetadata"] };
 }
 
 function artifactRecordFromRow(row: {

@@ -133,6 +133,13 @@ test("cloud extension smoke can require Cloudflare compat usage ledger evidence"
                     id: "usage_compat_runtime_1",
                     spaceId: "space_compat_runtime",
                     installationId: "inst_compat_runtime",
+                    meterId: "cloudflare:workers_script:deploy",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:smoke",
+                    operation: "deploy",
+                    resourceMetadata: {
+                      backend: "cloudflare.workers_for_platforms",
+                    },
                     kind: "gateway_compute",
                     quantity: 1,
                     credits: 2,

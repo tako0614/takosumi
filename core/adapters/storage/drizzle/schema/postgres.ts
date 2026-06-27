@@ -192,9 +192,7 @@ export const installations = pgTable(
     index("takosumi_opentofu_installations_current_deployment_idx").on(
       table.currentDeploymentId,
     ),
-    index("takosumi_opentofu_installations_created_at_idx").on(
-      table.createdAt,
-    ),
+    index("takosumi_opentofu_installations_created_at_idx").on(table.createdAt),
   ],
 );
 
@@ -497,6 +495,11 @@ export const usageEvents = pgTable(
     spaceId: text("space_id").notNull(),
     installationId: text("installation_id"),
     runId: text("run_id"),
+    meterId: text("meter_id"),
+    resourceFamily: text("resource_family"),
+    resourceId: text("resource_id"),
+    operation: text("operation"),
+    resourceMetadataJson: json("resource_metadata_json"),
     kind: text("kind").notNull(),
     quantity: real("quantity").notNull(),
     credits: integer("credits").notNull(),
@@ -586,10 +589,7 @@ export const auditEvents = pgTable(
     eventJson: json("event_json").notNull(),
   },
   (table) => [
-    index("takosumi_audit_events_space_idx").on(
-      table.spaceId,
-      table.createdAt,
-    ),
+    index("takosumi_audit_events_space_idx").on(table.spaceId, table.createdAt),
   ],
 );
 

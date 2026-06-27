@@ -710,6 +710,9 @@ function aiGatewayUsageMeters(input: {
     {
       ...(installationId ? { installationId } : {}),
       meterId: aiGatewayUsageMeterId(input.model.publicModel, input.endpoint),
+      resourceFamily: "cloudflare.ai_gateway",
+      operation: input.endpoint,
+      resourceId: input.model.publicModel,
       kind: "ai_request",
       quantity: 1,
       credits,

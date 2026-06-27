@@ -174,12 +174,16 @@ x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
 ```
 
-The Cloudflare Compatibility Gateway / managed resource backend reports Workers
-script/route execution and KV/R2/D1 managed resource usage as
-`gateway_compute` or `gateway_storage_gb_hour`. Example:
+The Cloudflare Compatibility Gateway / managed resource backend presents
+resources to users as Cloudflare provider `cloudflare_workers_script`, routes,
+KV, R2, D1, Workflows, Containers, and similar managed resources. Workers for
+Platforms is an internal backend and must not become the user-facing billing or
+usage-ledger family. Worker script usage is reported with
+`resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
+`gateway_storage_gb_hour`. Example:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"workers:script:api:request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.

@@ -1387,6 +1387,80 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
     "provider.cloudflare.client_v4",
   );
   if (!route) throw new Error("Cloudflare compat route missing");
+  const meters = [
+    {
+      meterId: "cloudflare:workers_script:deploy",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: "script:api",
+      operation: "deploy",
+      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
+      kind: "gateway_compute",
+      quantity: 1,
+      credits: 2,
+    },
+    {
+      meterId: "cloudflare:workers_script:request",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: "script:api",
+      operation: "request",
+      resourceMetadata: { backend: "cloudflare.workers_for_platforms" },
+      kind: "gateway_compute",
+      quantity: 42,
+      credits: 3,
+    },
+    {
+      meterId: "cloudflare:kv:list",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.kv",
+      resourceId: "namespace:session",
+      operation: "list",
+      kind: "gateway_storage_gb_hour",
+      quantity: 0.25,
+      credits: 1,
+    },
+    {
+      meterId: "cloudflare:r2:object_storage",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.r2",
+      resourceId: "bucket:assets",
+      operation: "storage_gb_hour",
+      kind: "gateway_storage_gb_hour",
+      quantity: 3.5,
+      credits: 4,
+    },
+    {
+      meterId: "cloudflare:d1:query",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.d1",
+      resourceId: "database:app",
+      operation: "query",
+      kind: "gateway_compute",
+      quantity: 7,
+      credits: 2,
+    },
+    {
+      meterId: "cloudflare:workflows:step",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.workflows",
+      resourceId: "workflow:deploy",
+      operation: "step",
+      kind: "gateway_compute",
+      quantity: 5,
+      credits: 2,
+    },
+    {
+      meterId: "cloudflare:containers:vcpu_second",
+      installationId: "inst_cf_compat",
+      resourceFamily: "cloudflare.containers",
+      resourceId: "container:runner",
+      operation: "vcpu_second",
+      kind: "gateway_compute",
+      quantity: 10,
+      credits: 6,
+    },
+  ] as const;
   const usageCalls: {
     spaceId: string;
     input: Parameters<
@@ -1416,15 +1490,8 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
                   "2026-06-26T13:00:00.000Z",
                 [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
                   "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "cloudflare:kv:list",
-                    installationId: "inst_cf_compat",
-                    kind: "gateway_storage_gb_hour",
-                    quantity: 0.25,
-                    credits: 1,
-                  },
-                ]),
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]:
+                  JSON.stringify(meters),
               },
             },
           ),
@@ -1445,15 +1512,7 @@ test("Cloudflare Compatibility Gateway route records reported managed resource u
       input: {
         periodStart: "2026-06-26T13:00:00.000Z",
         periodEnd: "2026-06-26T13:01:00.000Z",
-        meters: [
-          {
-            meterId: "cloudflare:kv:list",
-            installationId: "inst_cf_compat",
-            kind: "gateway_storage_gb_hour",
-            quantity: 0.25,
-            credits: 1,
-          },
-        ],
+        meters,
       },
     },
   ]);

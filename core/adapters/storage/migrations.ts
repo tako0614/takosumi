@@ -943,6 +943,11 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "space_id",
         "installation_id",
         "run_id",
+        "meter_id",
+        "resource_family",
+        "resource_id",
+        "operation",
+        "resource_metadata_json",
         "kind",
         "quantity",
         "credits",
@@ -2119,6 +2124,11 @@ create table if not exists takosumi_usage_events (
   space_id        text             not null,
   installation_id text,
   run_id          text,
+  meter_id        text,
+  resource_family text,
+  resource_id     text,
+  operation       text,
+  resource_metadata_json jsonb,
   kind            text             not null,
   quantity        double precision not null,
   credits         integer          not null,
@@ -2753,5 +2763,32 @@ drop index if exists takosumi_provider_env_bindings_installation_idx;
 drop index if exists takosumi_provider_env_bindings_installation_environment_unique;
 drop index if exists takosumi_opentofu_installations_space_name_environment_unique;
 drop index if exists takosumi_spaces_handle_unique;`,
+    },
+    {
+      id: "deploy.usage_event_meter_metadata",
+      version: 52,
+      domain: "deploy",
+      description:
+        "Add open managed-resource meter metadata to usage events so Cloud-only gateways can bill Workers for Platforms, KV, R2, D1, Workflows, Containers, and future resource families without enum migrations.",
+      sql: `alter table takosumi_usage_events
+  add column if not exists meter_id text;
+alter table takosumi_usage_events
+  add column if not exists resource_family text;
+alter table takosumi_usage_events
+  add column if not exists resource_id text;
+alter table takosumi_usage_events
+  add column if not exists operation text;
+alter table takosumi_usage_events
+  add column if not exists resource_metadata_json jsonb;`,
+      down: `alter table takosumi_usage_events
+  drop column if exists resource_metadata_json;
+alter table takosumi_usage_events
+  drop column if exists operation;
+alter table takosumi_usage_events
+  drop column if exists resource_id;
+alter table takosumi_usage_events
+  drop column if exists resource_family;
+alter table takosumi_usage_events
+  drop column if exists meter_id;`,
     },
   ]);

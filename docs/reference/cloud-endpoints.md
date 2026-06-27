@@ -171,12 +171,15 @@ x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1,"credits":2}]
 ```
 
-Cloudflare Compatibility Gateway / managed resource backend は、Workers
-script/route 実行や KV/R2/D1 などの managed resource 使用量を
-`gateway_compute` または `gateway_storage_gb_hour` として報告します。例:
+Cloudflare Compatibility Gateway / managed resource backend は、ユーザー向けには
+Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1 /
+Workflows / Containers などとして見せます。Workers for Platforms は内部 backend
+であり、請求・画面・usage ledger の user-facing family には出しません。Worker
+script の使用量は `resourceFamily: "cloudflare.workers_script"` として
+`gateway_compute` または `gateway_storage_gb_hour` を報告します。例:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"workers:script:api:request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
 ```
 
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
