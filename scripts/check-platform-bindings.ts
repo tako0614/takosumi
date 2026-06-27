@@ -20,26 +20,9 @@ const SECTIONS: ReadonlyArray<{ readonly label: string; readonly names: readonly
   { label: "Static assets", names: REQUIRED_PLATFORM_BINDINGS.assets },
 ];
 
-const CLOUD_EXTENSION_SECTIONS: ReadonlyArray<{
-  readonly label: string;
-  readonly names: readonly string[];
-}> = [
-  {
-    label: "Cloud-only extension service bindings",
-    names: REQUIRED_PLATFORM_BINDINGS.cloudExtensions,
-  },
-];
-
 function main(): void {
   console.log("Platform worker required bindings (deploy/platform/wrangler.toml):\n");
   for (const section of SECTIONS) {
-    console.log(`  ${section.label}:`);
-    for (const name of section.names) {
-      console.log(`    - ${name}`);
-    }
-  }
-  console.log("\nOptional for Takosumi Cloud GA feature claims:\n");
-  for (const section of CLOUD_EXTENSION_SECTIONS) {
     console.log(`  ${section.label}:`);
     for (const name of section.names) {
       console.log(`    - ${name}`);
@@ -50,10 +33,9 @@ function main(): void {
       "operator wrangler/Cloudflare credentials and wire the realized ids in the\n" +
       "operator-private config. After deploy, GET /readyz on the worker fails\n" +
       "with the named missing required bindings until every one is present.\n" +
-      "Cloud-only extension bindings stay optional for OSS/operator readiness;\n" +
-      "wire them only when the closed Takosumi Cloud extension workers are\n" +
-      "deployed and the platform is claiming AI Gateway or compatibility\n" +
-      "Gateway support.",
+      "Cloud extension service bindings are NOT part of OSS/operator readiness;\n" +
+      "the closed Takosumi Cloud delta declares them via TAKOSUMI_CLOUD_EXTENSIONS\n" +
+      "plus the named service bindings in its realized operator-private config.",
   );
 }
 

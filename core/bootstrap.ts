@@ -50,7 +50,6 @@ import {
   OpenTofuDeploymentController,
   type DeployControlActorContext,
   type ReconcileInvoiceUsageInput,
-  type RecordGatewayResourceUsageInput,
   type OpenTofuRunner,
   type ReleaseActivator,
   type RecordMeteredUsageInput,
@@ -499,10 +498,6 @@ export interface TakosumiOperations {
     spaceId: string,
     input: RecordMeteredUsageInput,
   ): Promise<{ readonly usageEvent: UsageEvent }>;
-  recordGatewayResourceUsage(
-    spaceId: string,
-    input: RecordGatewayResourceUsageInput,
-  ): Promise<{ readonly usageEvents: readonly UsageEvent[] }>;
   reconcileInvoiceUsage(
     spaceId: string,
     input: ReconcileInvoiceUsageInput,
@@ -1085,8 +1080,6 @@ export async function createTakosumiService(
       opentofuController.listSpaceUsage(spaceId, params),
     recordMeteredUsage: (spaceId, input) =>
       opentofuController.recordMeteredUsage(spaceId, input),
-    recordGatewayResourceUsage: (spaceId, input) =>
-      opentofuController.recordGatewayResourceUsage(spaceId, input),
     reconcileInvoiceUsage: (spaceId, input) =>
       opentofuController.reconcileInvoiceUsage(spaceId, input),
     listSpaceCreditReservations: (spaceId) =>

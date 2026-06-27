@@ -199,11 +199,6 @@ export interface BillingAutoRechargeAttempt {
 
 export type UsageEventKind =
   | "runner_minute"
-  | "gateway_compute"
-  | "gateway_storage_gb_hour"
-  | "ai_request"
-  | "ai_input_token"
-  | "ai_output_token"
   | "artifact_storage_gb_hour"
   | "backup_storage_gb_hour"
   | "egress_gb"
@@ -262,39 +257,6 @@ export interface UsageEvent {
   readonly idempotencyKey: string;
   readonly createdAt: string;
 }
-
-export interface GatewayResourceUsageMeter {
-  readonly installationId?: string;
-  readonly resourceFamily?: UsageResourceFamily;
-  readonly resourceId?: string;
-  readonly operation?: string;
-  readonly resourceMetadata?: UsageResourceMetadata;
-  readonly kind: Extract<
-    UsageEventKind,
-    | "gateway_compute"
-    | "gateway_storage_gb_hour"
-    | "ai_request"
-    | "ai_input_token"
-    | "ai_output_token"
-    | "artifact_storage_gb_hour"
-    | "backup_storage_gb_hour"
-    | "egress_gb"
-  >;
-  readonly quantity: number;
-  readonly usdMicros?: number;
-  /** @deprecated Use usdMicros. */
-  readonly credits?: number;
-  readonly meterId: string;
-}
-
-export const TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
-  "x-takosumi-cloud-usage-space-id";
-export const TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
-  "x-takosumi-cloud-usage-period-start";
-export const TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
-  "x-takosumi-cloud-usage-period-end";
-export const TAKOSUMI_CLOUD_EXTENSION_USAGE_METERS_HEADER =
-  "x-takosumi-cloud-usage-meters";
 
 export interface InvoiceUsageReconciliation {
   readonly invoiceId: string;

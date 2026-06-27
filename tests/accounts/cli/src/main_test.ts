@@ -6397,7 +6397,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(26);
+  expect(plan.migrations.length).toEqual(28);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",

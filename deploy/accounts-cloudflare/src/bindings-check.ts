@@ -8,10 +8,10 @@
  * install/apply fails deep in the run pipeline. This check names the missing
  * bindings up front so `/readyz` fails loudly instead.
  *
- * Cloud-only extension service bindings are listed separately. They are not
- * required for OSS/operator readiness, but Takosumi Cloud GA evidence that
- * claims AI Gateway or Cloudflare compatibility support must wire them in the
- * realized operator-private config.
+ * Cloud extension service bindings are NOT part of OSS/operator readiness. They
+ * are config-driven (the closed Takosumi Cloud delta declares them via
+ * `TAKOSUMI_CLOUD_EXTENSIONS` + the named service bindings in its realized
+ * operator-private config); OSS never hardcodes a Cloud-feature binding name.
  *
  * It validates PRESENCE (the binding object exists on `env`), not liveness — it
  * never touches D1/R2/DO so it is cheap and side-effect-free. ASSETS is treated
@@ -33,10 +33,6 @@ export const REQUIRED_PLATFORM_BINDINGS = {
   durableObjects: ["COORDINATION", "RUN_OWNER", "RUNNER"],
   queues: ["RUN_QUEUE"],
   assets: ["ASSETS"],
-  cloudExtensions: [
-    "TAKOSUMI_CLOUD_AI_GATEWAY",
-    "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
-  ],
 } as const;
 
 export interface BindingCheckResult {
@@ -53,20 +49,15 @@ export function checkPlatformBindings(
   env: Record<string, unknown>,
   options: {
     readonly requireAssets?: boolean;
-    readonly requireCloudExtensions?: boolean;
   } = {},
 ): BindingCheckResult {
   const requireAssets = options.requireAssets ?? true;
-  const requireCloudExtensions = options.requireCloudExtensions ?? false;
   const required: string[] = [
     ...REQUIRED_PLATFORM_BINDINGS.d1,
     ...REQUIRED_PLATFORM_BINDINGS.r2,
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
     ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...(requireAssets ? REQUIRED_PLATFORM_BINDINGS.assets : []),
-    ...(requireCloudExtensions
-      ? REQUIRED_PLATFORM_BINDINGS.cloudExtensions
-      : []),
   ];
   const missing = required.filter(
     (name) => env[name] === undefined || env[name] === null,

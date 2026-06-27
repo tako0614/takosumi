@@ -84,7 +84,6 @@ export * from "./billing.ts";
 export * from "./security.ts";
 export * from "./providers.ts";
 export * from "./service-graph.ts";
-export * from "./ai-gateway.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal `/v1`
 // compatibility seam owns a separate status union for its private execution
 // records. The public Run status union is reachable via the

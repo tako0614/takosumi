@@ -33,7 +33,6 @@ import type {
   BillingSettings,
   CreditReservation,
   InvoiceUsageReconciliation,
-  GatewayResourceUsageMeter,
   UsageEvent,
 } from "../../contract/billing.ts";
 import type { CapsuleCompatibilityReport } from "../../contract/capsules.ts";
@@ -602,13 +601,6 @@ test("Billing and security ledger shapes", () => {
     createdAt: "2026-06-07T00:00:00Z",
     updatedAt: "2026-06-07T00:00:01Z",
   };
-  const managedMeter: GatewayResourceUsageMeter = {
-    installationId: "inst_talk",
-    kind: "gateway_storage_gb_hour",
-    quantity: 12.5,
-    credits: 3,
-    meterId: "r2:inst_talk",
-  };
   const invoiceReconciliation: InvoiceUsageReconciliation = {
     invoiceId: "in_123",
     periodStart: "2026-06-07T00:00:00Z",
@@ -653,7 +645,6 @@ test("Billing and security ledger shapes", () => {
   expect(reservation.estimatedCredits).toBe(32);
   expect(usage.kind).toBe("runner_minute");
   expect(autoRechargeAttempt.status).toBe("succeeded");
-  expect(managedMeter.kind).toBe("gateway_storage_gb_hour");
   expect(invoiceReconciliation.adjustmentCredits).toBe(1);
   expect(mint.capabilities).toEqual(["cloudflare"]);
   expect(finding.severity).toBe("warning");

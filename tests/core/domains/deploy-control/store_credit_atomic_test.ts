@@ -124,7 +124,7 @@ test("putUsageEventAndSpendCredits spends USD micros once per idempotency key", 
   const event = {
     id: "usage_1",
     spaceId: "space_1",
-    kind: "ai_request" as const,
+    kind: "egress_gb" as const,
     quantity: 1,
     usdMicros: 250_000,
     credits: 0.25,
@@ -166,7 +166,7 @@ test("putUsageEventAndSpendCredits rejects insufficient USD balance without inse
     {
       id: "usage_1",
       spaceId: "space_1",
-      kind: "gateway_compute",
+      kind: "egress_gb",
       quantity: 1,
       usdMicros: 250_000,
       credits: 0.25,

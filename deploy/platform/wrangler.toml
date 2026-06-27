@@ -140,18 +140,11 @@ queue = "takosumi-runs-dlq"
 max_batch_size = 10
 max_batch_timeout = 5
 
-# Cloud-only extension seams. The OSS platform worker only delegates these
-# paths through service bindings; the provider-compatible Gateway / AI runtime
-# behavior lives in closed Takosumi Cloud workers. Keep these placeholder names
-# in sync with `deploy/platform/worker.ts` and replace the `service` values in
-# the operator-private realized config.
-[[services]]
-binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
-service = "takosumi-cloud-ai-gateway"
-
-[[services]]
-binding = "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT"
-service = "takosumi-cloud-cloudflare-compat"
+# Cloud extension seams are NOT declared in the OSS template. The generic Seam A
+# (deploy/platform/worker.ts + cloud_extensions.ts) is config-driven: the closed
+# Takosumi Cloud delta supplies `TAKOSUMI_CLOUD_EXTENSIONS` (the matched base
+# paths + service-binding names) plus the corresponding `[[services]]` bindings
+# in its realized operator-private config. The OSS worker names no Cloud feature.
 
 # Scheduled source polling (Core Specification §6). Every 5 minutes the worker's
 # scheduled() handler scans active autoSync sources and enqueues a deduped
@@ -211,9 +204,6 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
-# Optional (AI Gateway; set one secret per openai_compatible profile apiKeyEnv; workers_ai_binding uses [ai]):
-#   TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN       Cloudflare AI Gateway REST API / Unified Billing token
-#   TAKOSUMI_AI_GATEWAY_*_API_KEY                  direct/BYOK OpenAI-compatible provider key
 # Optional (billing; set both when hosted billing is enabled):
 #   TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY / _WEBHOOK_SECRET
 # Optional (upstream OAuth provider):

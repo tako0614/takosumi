@@ -8,8 +8,6 @@ import {
   handlePlatformCloudExtensionRequest,
   handlePlatformCloudExtensionCatalogRequest,
   handlePlatformCloudExtensionRouteRequest,
-  handlePlatformCloudflareCompatRequest,
-  handlePlatformAiGatewayRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handlePlatformRuntimeCellDrillRequest,
@@ -18,22 +16,15 @@ import {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
   platformCloudExtensionCatalog,
-  platformCloudExtensionRouteById,
+  platformCloudExtensionRoutes,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
-  PLATFORM_CLOUD_EXTENSION_ROUTES,
-  PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
-  PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
   pollAutoSyncSources,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
   type OperatorBillingOperations,
-  type PlatformCloudExtensionUsageOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
@@ -734,118 +725,91 @@ test("runtime-cell drill route records drain and evacuation events", async () =>
   expect(evacuationWork?.result?.action).toBe("evacuation");
 });
 
-test("AI Gateway route stays unmounted without the Cloud extension binding", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+// --- Generic, config-driven Cloud extension seam (Seam A) ------------------
+//
+// The OSS platform worker names no Cloud feature. The extension seam is driven
+// entirely by the operator/Cloud-supplied `TAKOSUMI_CLOUD_EXTENSIONS` env var
+// (a JSON array of opaque `{ basePath, bindingName, requiredScopes? }`
+// descriptors). When that env is unset, every extension path 404s; when it is
+// set, a matching path verifies the platform session and proxies to the named
+// service binding.
 
-  const response = await worker.fetch(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    {
-      TAKOSUMI_AI_GATEWAY_PROFILES: JSON.stringify([
-        {
-          id: "deepseek",
-          provider: "deepseek",
-          baseUrl: "https://api.deepseek.example/v1",
-          apiKeyEnv: "TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY",
-          models: [
-            {
-              publicModel: "deepseek/chat",
-              upstreamModel: "deepseek-chat",
-              endpoints: ["chat.completions"],
-              default: true,
-            },
-          ],
-        },
-      ]),
-      TAKOSUMI_AI_GATEWAY_DEEPSEEK_API_KEY: "upstream-secret",
-    } as never,
+test("platformCloudExtensionRoutes is empty when the env is unset", () => {
+  expect(platformCloudExtensionRoutes({})).toEqual([]);
+  expect(platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "" })).toEqual(
+    [],
   );
-  expect(response.status).toBe(404);
-  expect(await response.json()).toEqual({ error: "not found" });
 });
 
-test("AI Gateway route delegates only to the Cloud extension binding", async () => {
+test("platformCloudExtensionRoutes parses opaque descriptors", () => {
+  expect(
+    platformCloudExtensionRoutes({
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/gateway/ai/v1",
+          bindingName: "TAKOSUMI_CLOUD_AI",
+          requiredScopes: ["ai.chat"],
+        },
+        { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+      ]),
+    }),
+  ).toEqual([
+    {
+      basePath: "/gateway/ai/v1",
+      bindingName: "TAKOSUMI_CLOUD_AI",
+      requiredScopes: ["ai.chat"],
+    },
+    { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+  ]);
+});
+
+test("platformCloudExtensionRoutes rejects malformed descriptors", () => {
+  expect(() =>
+    platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "{" }),
+  ).toThrow("must be valid JSON");
+  expect(() =>
+    platformCloudExtensionRoutes({
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ bindingName: "X" }]),
+    }),
+  ).toThrow("basePath");
+  expect(() =>
+    platformCloudExtensionRoutes({
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ basePath: "/x" }]),
+    }),
+  ).toThrow("bindingName");
+});
+
+test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset", async () => {
+  // With no TAKOSUMI_CLOUD_EXTENSIONS the seam matches nothing, so the request
+  // is NOT claimed (returns undefined) and falls through to the accounts handler
+  // — i.e. an OSS worker with no Cloud config exposes no extension paths.
+  const result = await handlePlatformCloudExtensionRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    {
+      // A binding object exists on env, but with no descriptors it is unreachable.
+      TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({}) },
+    } as never,
+  );
+  expect(result).toBeUndefined();
+});
+
+test("a configured cloud extension proxies to the named binding through worker.fetch", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
-  const response = await handlePlatformAiGatewayRequest(
+  const response = await worker.fetch(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
       headers: { authorization: "Bearer runtime-token" },
     }),
     {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+      ]),
+      TAKOSUMI_CLOUD_AI: {
         fetch: async (request: Request) => {
           forwarded.push({
             url: request.url,
             authorization: request.headers.get("authorization"),
           });
-          return Response.json({
-            object: "list",
-            data: [{ id: "takosumi/default", object: "model" }],
-          });
-        },
-      },
-    } as never,
-  );
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
-    object: "list",
-    data: [{ id: "takosumi/default", object: "model" }],
-  });
-  expect(forwarded).toEqual([
-    {
-      url: "https://app.takosumi.com/gateway/ai/v1/models",
-      authorization: null,
-    },
-  ]);
-});
-
-test("AI Gateway HEAD delegates as GET and returns no body", async () => {
-  const forwarded: { method: string; url: string }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
-      method: "HEAD",
-      headers: { cookie: "takosumi_session=sess_cookie" },
-    }),
-    {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async (request: Request) => {
-          forwarded.push({ method: request.method, url: request.url });
-          return Response.json({ object: "list", data: [] });
-        },
-      },
-    } as never,
-    {
-      id: "ai.openai_compatible.v1",
-      kind: "ai_gateway",
-      basePath: "/gateway/ai/v1",
-      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
-      protocol: "openai-compatible",
-      capabilities: ["models"],
-      smokeChecks: ["aiModelsAuth"],
-    },
-    async () => ({
-      authenticated: true,
-      authKind: "session",
-      subject: "tsub_cloud_extension_head",
-    }),
-  );
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe("");
-  expect(forwarded).toEqual([
-    {
-      method: "GET",
-      url: "https://app.takosumi.com/gateway/ai/v1/models",
-    },
-  ]);
-});
-
-test("AI Gateway route delegates through the platform worker fetch registry", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const forwarded: string[] = [];
-  const response = await worker.fetch(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async (request: Request) => {
-          forwarded.push(request.url);
           return Response.json({ object: "list", data: [] });
         },
       },
@@ -853,84 +817,65 @@ test("AI Gateway route delegates through the platform worker fetch registry", as
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ object: "list", data: [] });
-  expect(forwarded).toEqual(["https://app.takosumi.com/gateway/ai/v1/models"]);
+  // Raw credential material is never forwarded to the bound Cloud service.
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/gateway/ai/v1/models",
+      authorization: null,
+    },
+  ]);
 });
 
-test("Cloud-only extension routes receive platform auth context without raw session material", async () => {
+test("a configured cloud extension 404s when its binding is absent", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    {
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+      ]),
+    } as never,
+  );
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: "not found" });
+});
+
+test("cloud extension route injects verified session context and strips raw credentials", async () => {
   const forwarded: {
     authorization: string | null;
     cookie: string | null;
-    proxyAuthorization: string | null;
-    xAuthEmail: string | null;
-    xAuthKey: string | null;
-    xAuthUserServiceKey: string | null;
-    session: string | null;
     authenticated: string | null;
-    authKind: string | null;
-    scopes: string | null;
     subject: string | null;
-    installationId: string | null;
     spaceId: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
       headers: {
-        authorization: "Bearer sess_secret",
+        authorization: "Bearer raw-token",
         cookie: "takosumi_session=sess_cookie",
-        "proxy-authorization": "Basic proxy_secret",
-        "x-auth-email": "root@example.test",
-        "x-auth-key": "global_api_key",
-        "x-auth-user-service-key": "service_key",
-        "x-takosumi-account-session": "sess_header",
         "x-takosumi-cloud-authenticated": "1",
-        "x-takosumi-cloud-auth-kind": "spoofed",
-        "x-takosumi-cloud-scopes": "admin",
-        "x-takosumi-cloud-subject": "spoofed",
-        "x-takosumi-cloud-installation-id": "spoofed",
-        "x-takosumi-cloud-space-id": "spoofed",
       },
     }),
     {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
+      TAKOSUMI_CLOUD_AI: {
         fetch: async (request: Request) => {
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
-            proxyAuthorization: request.headers.get("proxy-authorization"),
-            xAuthEmail: request.headers.get("x-auth-email"),
-            xAuthKey: request.headers.get("x-auth-key"),
-            xAuthUserServiceKey: request.headers.get("x-auth-user-service-key"),
-            session: request.headers.get("x-takosumi-account-session"),
-            authenticated: request.headers.get(
-              "x-takosumi-cloud-authenticated",
-            ),
-            authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
-            scopes: request.headers.get("x-takosumi-cloud-scopes"),
+            authenticated: request.headers.get("x-takosumi-cloud-authenticated"),
             subject: request.headers.get("x-takosumi-cloud-subject"),
-            installationId: request.headers.get(
-              "x-takosumi-cloud-installation-id",
-            ),
             spaceId: request.headers.get("x-takosumi-cloud-space-id"),
           });
           return Response.json({ object: "list", data: [] });
         },
       },
     } as never,
-    {
-      id: "ai.openai_compatible.v1",
-      kind: "ai_gateway",
-      basePath: "/gateway/ai/v1",
-      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
-      protocol: "openai-compatible",
-      capabilities: ["models"],
-      smokeChecks: ["aiModelsAuth"],
-    },
+    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
     async () => ({
       authenticated: true,
       authKind: "session",
-      subject: "tsub_cloud_extension_smoke",
-      installationId: "inst_cloud_extension_smoke",
-      spaceId: "space_cloud_extension_smoke",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
     }),
   );
   expect(response.status).toBe(200);
@@ -938,1501 +883,208 @@ test("Cloud-only extension routes receive platform auth context without raw sess
     {
       authorization: null,
       cookie: null,
-      proxyAuthorization: null,
-      xAuthEmail: null,
-      xAuthKey: null,
-      xAuthUserServiceKey: null,
-      session: null,
       authenticated: "1",
-      authKind: "session",
-      scopes: null,
-      subject: "tsub_cloud_extension_smoke",
-      installationId: "inst_cloud_extension_smoke",
-      spaceId: "space_cloud_extension_smoke",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
     },
   ]);
 });
 
-test("Cloud-only extension routes strip raw credentials even when auth fails", async () => {
-  const forwarded: {
-    authorization: string | null;
-    cookie: string | null;
-    proxyAuthorization: string | null;
-    xAuthEmail: string | null;
-    xAuthKey: string | null;
-    xAuthUserServiceKey: string | null;
-    session: string | null;
-    authenticated: string | null;
-    authKind: string | null;
-    scopes: string | null;
-    subject: string | null;
-    installationId: string | null;
-    spaceId: string | null;
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
-      headers: {
-        authorization: "Bearer taksrv_bad_scope",
-        cookie: "takosumi_session=sess_cookie",
-        "proxy-authorization": "Basic proxy_secret",
-        "x-auth-email": "root@example.test",
-        "x-auth-key": "global_api_key",
-        "x-auth-user-service-key": "service_key",
-        "x-takosumi-account-session": "sess_header",
-        "x-takosumi-cloud-authenticated": "1",
-        "x-takosumi-cloud-auth-kind": "spoofed",
-        "x-takosumi-cloud-scopes": "admin",
-        "x-takosumi-cloud-subject": "spoofed",
-        "x-takosumi-cloud-installation-id": "spoofed",
-        "x-takosumi-cloud-space-id": "spoofed",
-      },
+test("cloud extension requiredScopes gate token auth", async () => {
+  const binding = {
+    TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({ ok: true }) },
+  } as never;
+  const route = {
+    basePath: "/gateway/ai/v1",
+    bindingName: "TAKOSUMI_CLOUD_AI",
+    requiredScopes: ["ai.chat"],
+  };
+
+  const denied = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
     }),
-    {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async (request: Request) => {
-          forwarded.push({
-            authorization: request.headers.get("authorization"),
-            cookie: request.headers.get("cookie"),
-            proxyAuthorization: request.headers.get("proxy-authorization"),
-            xAuthEmail: request.headers.get("x-auth-email"),
-            xAuthKey: request.headers.get("x-auth-key"),
-            xAuthUserServiceKey: request.headers.get("x-auth-user-service-key"),
-            session: request.headers.get("x-takosumi-account-session"),
-            authenticated: request.headers.get(
-              "x-takosumi-cloud-authenticated",
-            ),
-            authKind: request.headers.get("x-takosumi-cloud-auth-kind"),
-            scopes: request.headers.get("x-takosumi-cloud-scopes"),
-            subject: request.headers.get("x-takosumi-cloud-subject"),
-            installationId: request.headers.get(
-              "x-takosumi-cloud-installation-id",
-            ),
-            spaceId: request.headers.get("x-takosumi-cloud-space-id"),
-          });
-          return Response.json(
-            {
-              error: {
-                type: "unauthorized",
-                code: "unauthorized",
-              },
-            },
-            { status: 401 },
-          );
-        },
-      },
-    } as never,
-    {
-      id: "ai.openai_compatible.v1",
-      kind: "ai_gateway",
-      basePath: "/gateway/ai/v1",
-      bindingName: "TAKOSUMI_CLOUD_AI_GATEWAY",
-      protocol: "openai-compatible",
-      capabilities: ["models"],
-      smokeChecks: ["aiModelsAuth"],
-    },
-    async () => ({ authenticated: false }),
+    binding,
+    route,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub",
+      scopes: ["ai.models.read"],
+    }),
   );
-  expect(response.status).toBe(401);
-  expect(forwarded).toEqual([
-    {
-      authorization: null,
-      cookie: null,
-      proxyAuthorization: null,
-      xAuthEmail: null,
-      xAuthKey: null,
-      xAuthUserServiceKey: null,
-      session: null,
-      authenticated: null,
-      authKind: null,
-      scopes: null,
-      subject: null,
-      installationId: null,
-      spaceId: null,
-    },
-  ]);
+  expect(denied.status).toBe(401);
+
+  const allowed = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    binding,
+    route,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub",
+      scopes: ["ai.chat"],
+    }),
+  );
+  expect(allowed.status).toBe(200);
+
+  // A full human session is allowed through regardless of descriptor scopes;
+  // the bound Cloud service performs any finer authorization.
+  const session = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    binding,
+    route,
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub",
+    }),
+  );
+  expect(session.status).toBe(200);
 });
 
-test("Cloud-only extension routes authenticate personal access tokens through accounts introspection", async () => {
-  const introspectionRequests: {
-    url: string;
-    body: string;
-    contentType: string | null;
-  }[] = [];
-  const providerRoute = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!providerRoute) throw new Error("Cloudflare extension route is missing");
+test("cloud extension authenticates personal access tokens through accounts introspection", async () => {
+  const introspectionRequests: { url: string; body: string }[] = [];
   const context = await verifyPlatformCloudExtensionPersonalAccessToken(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts",
-      {
-        headers: { authorization: "Bearer takpat_cloud_provider" },
-      },
-    ),
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      headers: { authorization: "Bearer takpat_cloud" },
+    }),
     {
       TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
     } as never,
-    "takpat_cloud_provider",
-    providerRoute,
+    "takpat_cloud",
+    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
     async (request: Request) => {
       introspectionRequests.push({
         url: request.url,
         body: await request.text(),
-        contentType: request.headers.get("content-type"),
       });
       return Response.json({
         active: true,
-        scope: "read write",
-        sub: "tsub_provider_user",
+        scope: "ai.chat ai.models.read",
+        sub: "tsub_pat_user",
       });
     },
   );
-
   expect(context).toEqual({
     authenticated: true,
     authKind: "personal-access-token",
-    subject: "tsub_provider_user",
-    scopes: ["read", "write"],
+    subject: "tsub_pat_user",
+    scopes: ["ai.chat", "ai.models.read"],
   });
-  expect(introspectionRequests).toHaveLength(1);
   expect(introspectionRequests[0]?.url).toBe(
     "https://app.takosumi.com/oauth/introspect",
   );
-  expect(introspectionRequests[0]?.contentType).toBe(
-    "application/x-www-form-urlencoded",
-  );
-  expect(introspectionRequests[0]?.body).toContain(
-    "client_id=takosumi-cloud-extensions",
-  );
-  expect(introspectionRequests[0]?.body).toContain(
-    "token=takpat_cloud_provider",
-  );
+  expect(introspectionRequests[0]?.body).toContain("token=takpat_cloud");
 });
 
-test("Cloud-only extension personal access token scopes are route and method aware", async () => {
-  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  const providerRoute = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!aiRoute || !providerRoute) {
-    throw new Error("Cloud extension routes are missing");
-  }
+test("cloud extension service access token enforces descriptor scopes", async () => {
   const env = {
     TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
     TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
   } as never;
+  const route = {
+    basePath: "/gateway/ai/v1",
+    bindingName: "TAKOSUMI_CLOUD_AI",
+    requiredScopes: ["ai.chat"],
+  };
   const introspect = (scope: string) => async () =>
-    Response.json({
-      active: true,
-      scope,
-      sub: "tsub_provider_user",
-    });
+    Response.json({ active: true, scope, sub: "svc" });
 
-  const readModels = await verifyPlatformCloudExtensionPersonalAccessToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    env,
-    "takpat_read",
-    aiRoute,
-    introspect("read"),
-  );
-  expect(readModels.authenticated).toBe(true);
-
-  const readChat = await verifyPlatformCloudExtensionPersonalAccessToken(
+  const denied = await verifyPlatformCloudExtensionServiceAccessToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
     env,
-    "takpat_read",
-    aiRoute,
-    introspect("read"),
+    "taksrv_token",
+    route,
+    introspect("ai.models.read"),
   );
-  expect(readChat).toEqual({ authenticated: false });
+  expect(denied).toEqual({ authenticated: false });
 
-  const writeChat = await verifyPlatformCloudExtensionPersonalAccessToken(
+  const allowed = await verifyPlatformCloudExtensionServiceAccessToken(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
     }),
     env,
-    "takpat_write",
-    aiRoute,
-    introspect("write"),
-  );
-  expect(writeChat.authenticated).toBe(true);
-
-  const readCloudflareMutation =
-    await verifyPlatformCloudExtensionPersonalAccessToken(
-      new Request(
-        "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-        { method: "PUT" },
-      ),
-      env,
-      "takpat_read",
-      providerRoute,
-      introspect("read"),
-    );
-  expect(readCloudflareMutation).toEqual({ authenticated: false });
-
-  const writeCloudflareMutation =
-    await verifyPlatformCloudExtensionPersonalAccessToken(
-      new Request(
-        "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-        { method: "PUT" },
-      ),
-      env,
-      "takpat_write",
-      providerRoute,
-      introspect("write"),
-    );
-  expect(writeCloudflareMutation.authenticated).toBe(true);
-});
-
-test("Cloud-only extension personal access token auth fails closed", async () => {
-  const inactive = await verifyPlatformCloudExtensionPersonalAccessToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-    {
-      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-    } as never,
-    "takpat_inactive",
-    async () => Response.json({ active: false }),
-  );
-  expect(inactive).toEqual({ authenticated: false });
-
-  const insufficientScope =
-    await verifyPlatformCloudExtensionPersonalAccessToken(
-      new Request("https://app.takosumi.com/gateway/ai/v1/models"),
-      {
-        TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-        TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-      } as never,
-      "takpat_insufficient",
-      async () => Response.json({ active: true, scope: "profile" }),
-    );
-  expect(insufficientScope).toEqual({ authenticated: false });
-});
-
-test("Cloud-only AI Gateway accepts scoped Service Graph runtime tokens", async () => {
-  const introspectionRequests: { body: string }[] = [];
-  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!aiRoute) throw new Error("AI Gateway extension route is missing");
-
-  const context = await verifyPlatformCloudExtensionServiceAccessToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
-      headers: { authorization: "Bearer taksrv_runtime" },
-    }),
-    {
-      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-    } as never,
-    "taksrv_runtime",
-    aiRoute,
-    async (request: Request) => {
-      introspectionRequests.push({ body: await request.text() });
-      return Response.json({
-        active: true,
-        client_id: "service-graph-service:takosumi.ai.gateway",
-        scope: "ai.model ai.models.read",
-        sub: "service-graph-service:inst_ai",
-        takosumi: {
-          installation_id: "inst_ai",
-          space_id: "space_ai",
-        },
-      });
-    },
-  );
-
-  expect(context).toEqual({
-    authenticated: true,
-    authKind: "service-token",
-    subject: "service-graph-service:inst_ai",
-    installationId: "inst_ai",
-    spaceId: "space_ai",
-    scopes: ["ai.model", "ai.models.read"],
-  });
-  expect(introspectionRequests[0]?.body).toContain("token=taksrv_runtime");
-
-  const headContext = await verifyPlatformCloudExtensionServiceAccessToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
-      method: "HEAD",
-      headers: { authorization: "Bearer taksrv_runtime" },
-    }),
-    {
-      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-    } as never,
-    "taksrv_runtime",
-    aiRoute,
-    async () =>
-      Response.json({
-        active: true,
-        client_id: "service-graph-service:takosumi.ai.gateway",
-        scope: "ai.model ai.models.read",
-        sub: "service-graph-service:inst_ai",
-        takosumi: {
-          installation_id: "inst_ai",
-          space_id: "space_ai",
-        },
-      }),
-  );
-  expect(headContext).toMatchObject({
-    authenticated: true,
-    installationId: "inst_ai",
-    spaceId: "space_ai",
-  });
-
-  const missingChatScope = await verifyPlatformCloudExtensionServiceAccessToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: "Bearer taksrv_runtime" },
-    }),
-    {
-      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-    } as never,
-    "taksrv_runtime",
-    aiRoute,
-    async () =>
-      Response.json({
-        active: true,
-        client_id: "service-graph-service:takosumi.ai.gateway",
-        scope: "ai.model ai.models.read",
-      }),
-  );
-  expect(missingChatScope).toEqual({ authenticated: false });
-
-  const providerRoute = {
-    id: "provider.cloudflare.client_v4",
-    kind: "provider_compat",
-    provider: "cloudflare",
-    basePath: "/compat/cloudflare/client/v4",
-    bindingName: "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT",
-    protocol: "cloudflare-v4",
-    capabilities: ["accounts.list"],
-    smokeChecks: ["cloudflareCompatAccountsAuth"],
-  } as const;
-  const providerContext = await verifyPlatformCloudExtensionServiceAccessToken(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts",
-      {
-        headers: { authorization: "Bearer taksrv_runtime" },
-      },
-    ),
-    {
-      TAKOSUMI_ACCOUNTS_CLIENT_ID: "takosumi-cloud-extensions",
-      TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
-    } as never,
-    "taksrv_runtime",
-    providerRoute,
-    async () => {
-      throw new Error("provider compat must not introspect service tokens");
-    },
-  );
-  expect(providerContext).toEqual({ authenticated: false });
-});
-
-test("Cloudflare Compatibility Gateway route stays unmounted without the Cloud extension binding", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const response = await worker.fetch(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      { headers: { authorization: "Bearer runtime-token" } },
-    ),
-    {} as never,
-  );
-  expect(response.status).toBe(404);
-  expect(await response.json()).toEqual({ error: "not found" });
-});
-
-test("Cloudflare Compatibility Gateway route delegates only to the Cloud extension binding", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const forwarded: { url: string; authorization: string | null }[] = [];
-  const usageCalls: unknown[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      { headers: { authorization: "Bearer cf-compat-token" } },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async (request: Request) => {
-          forwarded.push({
-            url: request.url,
-            authorization: request.headers.get("authorization"),
-          });
-          return Response.json({
-            success: true,
-            result: { id: "api", script_name: "api" },
-            errors: [],
-            messages: [],
-          });
-        },
-      },
-    } as never,
+    "taksrv_token",
     route,
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    {
-      recordGatewayResourceUsage: async (...args) => {
-        usageCalls.push(args);
-        return { usageEvents: [{ id: "usage_precharge" }] };
-      },
-    },
+    introspect("ai.chat"),
   );
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
-    success: true,
-    result: { id: "api", script_name: "api" },
-    errors: [],
-    messages: [],
-  });
-  expect(forwarded).toEqual([
-    {
-      url: "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      authorization: null,
-    },
-  ]);
-  expect(usageCalls).toHaveLength(1);
+  expect(allowed.authenticated).toBe(true);
+  expect(allowed.authKind).toBe("service-token");
 });
 
-test("Cloud extension route records reported Workers and AI usage", async () => {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) throw new Error("AI Gateway route missing");
-  const usageCalls: {
-    spaceId: string;
-    input: Parameters<
-      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
-    >[1];
-  }[] = [];
-  const billingUsageImports: readonly unknown[][] = [];
-  const usageOps: PlatformCloudExtensionUsageOperations = {
-    recordGatewayResourceUsage: async (spaceId, input) => {
-      usageCalls.push({ spaceId, input });
-      return { usageEvents: [{ id: "usage_1", source: "resource_meter" }] };
-    },
-    recordBillingUsageReports: async (input) => {
-      billingUsageImports.push(input.usageEvents);
-    },
-  };
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () =>
-          Response.json(
-            { id: "chatcmpl_1", choices: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "ai:takosumi-default:request",
-                    kind: "ai_request",
-                    quantity: 1,
-                    usdMicros: 250_000,
-                  },
-                  {
-                    meterId: "cloudflare:workers_script:request",
-                    installationId: "inst_worker",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "request",
-                    kind: "gateway_compute",
-                    quantity: 42,
-                    usdMicros: 1_500,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_usage",
-      installationId: "inst_ai_gateway",
-    }),
-    usageOps,
-  );
-  expect(response.status).toBe(200);
-  expect(
-    response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
-  ).toBe(null);
-  expect(usageCalls).toHaveLength(2);
-  expect(usageCalls[0]?.spaceId).toBe("space_usage");
-  expect(usageCalls[0]?.input.spendRequired).toBe(true);
-  expect(usageCalls[0]?.input.meters).toEqual([
-    {
-      installationId: "inst_ai_gateway",
-      meterId: "ai:openai_compatible:chat.completions",
-      resourceFamily: "cloudflare.ai_gateway",
-      resourceId: "chat.completions",
-      operation: "chat.completions",
-      kind: "ai_request",
-      quantity: 1,
-      usdMicros: 1_000,
-    },
-  ]);
-  expect(usageCalls[1]).toEqual({
-    spaceId: "space_usage",
-    input: {
-      periodStart: "2026-06-26T13:00:00.000Z",
-      periodEnd: "2026-06-26T13:01:00.000Z",
-      spendRequired: true,
-      meters: [
-        {
-          meterId: "ai:takosumi-default:request",
-          kind: "ai_request",
-          quantity: 1,
-          usdMicros: 1_000,
-        },
-        {
-          meterId: "cloudflare:workers_script:request",
-          installationId: "inst_worker",
-          resourceFamily: "cloudflare.workers_script",
-          resourceId: "script:api",
-          operation: "request",
-          kind: "gateway_compute",
-          quantity: 42,
-          usdMicros: 42_000,
-        },
-      ],
-    },
-  });
-  expect(billingUsageImports).toEqual([
-    [{ id: "usage_1", source: "resource_meter" }],
-    [{ id: "usage_1", source: "resource_meter" }],
-  ]);
-});
-
-test("Cloud extension route prices reported usage from the operator price book", async () => {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) throw new Error("AI Gateway route missing");
-  const usageCalls: {
-    spaceId: string;
-    input: Parameters<
-      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
-    >[1];
-  }[] = [];
-  const priceBook = {
-    minimumGrossMarginBps: 3_000,
-    meters: [
-      {
-        meterIdPrefix: "ai:",
-        kind: "ai_request",
-        unit: "request",
-        chargeUsdMicrosPerUnit: 2_000,
-        estimatedCostUsdMicrosPerUnit: 1_000,
-        minimumChargeUsdMicros: 2_000,
-      },
-      {
-        meterIdPrefix: "ai:",
-        kind: "ai_input_token",
-        unit: "token",
-        chargeUsdMicrosPerMillionUnits: 400_000,
-        estimatedCostUsdMicrosPerMillionUnits: 100_000,
-        minimumChargeUsdMicros: 2,
-      },
-      {
-        meterIdPrefix: "cloudflare:workers_script:",
-        kind: "gateway_compute",
-        unit: "operation",
-        chargeUsdMicrosPerUnit: 1_500,
-        estimatedCostUsdMicrosPerUnit: 500,
-        minimumChargeUsdMicros: 1_000,
-      },
-    ],
-  };
-
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: JSON.stringify(priceBook),
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () =>
-          Response.json(
-            { id: "chatcmpl_1", choices: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "ai:takosumi-default:chat.completions:request",
-                    installationId: "inst_ai_gateway",
-                    resourceFamily: "cloudflare.ai_gateway",
-                    resourceId: "takosumi/default",
-                    operation: "chat.completions",
-                    kind: "ai_request",
-                    quantity: 1,
-                  },
-                  {
-                    meterId: "ai:takosumi-default:chat.completions:input_token",
-                    kind: "ai_input_token",
-                    quantity: 2_500,
-                  },
-                  {
-                    meterId: "cloudflare:workers_script:request",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "request",
-                    kind: "gateway_compute",
-                    quantity: 2,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_usage",
-      installationId: "inst_ai_gateway",
-    }),
-    {
-      recordGatewayResourceUsage: async (spaceId, input) => {
-        usageCalls.push({ spaceId, input });
-        return { usageEvents: [{ id: "usage_1", source: "resource_meter" }] };
-      },
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect(usageCalls).toHaveLength(2);
-  expect(usageCalls[0]?.spaceId).toBe("space_usage");
-  expect(usageCalls[0]?.input.meters).toEqual([
-    {
-      installationId: "inst_ai_gateway",
-      meterId: "ai:openai_compatible:chat.completions",
-      resourceFamily: "cloudflare.ai_gateway",
-      resourceId: "chat.completions",
-      operation: "chat.completions",
-      kind: "ai_request",
-      quantity: 1,
-      usdMicros: 2_000,
-    },
-  ]);
-  expect(usageCalls[1]).toEqual({
-    spaceId: "space_usage",
-    input: {
-      periodStart: "2026-06-26T13:00:00.000Z",
-      periodEnd: "2026-06-26T13:01:00.000Z",
-      spendRequired: true,
-      meters: [
-        {
-          meterId: "ai:takosumi-default:chat.completions:input_token",
-          kind: "ai_input_token",
-          quantity: 2_500,
-          usdMicros: 1_000,
-        },
-        {
-          meterId: "cloudflare:workers_script:request",
-          resourceFamily: "cloudflare.workers_script",
-          resourceId: "script:api",
-          operation: "request",
-          kind: "gateway_compute",
-          quantity: 2,
-          usdMicros: 3_000,
-        },
-      ],
-    },
-  });
-});
-
-test("Cloud extension route rejects a price book below the required margin", async () => {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) throw new Error("AI Gateway route missing");
-  const usageCalls: unknown[] = [];
-  let upstreamCalled = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: JSON.stringify({
-        minimumGrossMarginBps: 3_000,
-        meters: [
-          {
-            meterIdPrefix: "ai:",
-            kind: "ai_request",
-            unit: "request",
-            chargeUsdMicrosPerUnit: 1_000,
-            estimatedCostUsdMicrosPerUnit: 1_000,
-          },
-        ],
-      }),
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () => {
-          upstreamCalled = true;
-          return Response.json(
-            { id: "chatcmpl_1", choices: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "ai:takosumi-default:chat.completions:request",
-                    kind: "ai_request",
-                    quantity: 1,
-                  },
-                ]),
-              },
-            },
-          );
-        },
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_usage",
-      installationId: "inst_ai_gateway",
-    }),
-    {
-      recordGatewayResourceUsage: async (...args) => {
-        usageCalls.push(args);
-        return { usageEvents: [] };
-      },
-    },
-  );
-
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "usage pricing unavailable",
-    error_description:
-      "Cloud resource requests require an operator price book before upstream usage is attempted.",
-  });
-  expect(upstreamCalled).toBe(false);
-  expect(usageCalls).toEqual([]);
-});
-
-test("Cloud extension usage rejects Workers for Platforms as a public resource family", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true, result: { id: "api" }, errors: [], messages: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
-                  "space_cf_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "cloudflare:workers_script:deploy",
-                    installationId: "inst_cf_compat",
-                    resourceFamily: "cloudflare.workers_for_platforms",
-                    resourceId: "script:api",
-                    operation: "deploy",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                    usdMicros: 2_000,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    {
-      recordGatewayResourceUsage: async () => ({
-        usageEvents: [{ id: "usage_unreachable" }],
-      }),
-    },
-  );
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "invalid usage metering report",
-    error_description: "Cloud extension returned a malformed usage report.",
-  });
-});
-
-test("Cloud extension usage rejects WfP as a public meter id", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true, result: { id: "api" }, errors: [], messages: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
-                  "space_cf_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "cloudflare:wfp:deploy",
-                    installationId: "inst_cf_compat",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "deploy",
-                    kind: "gateway_compute",
-                    quantity: 1,
-                    usdMicros: 2_000,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    {
-      recordGatewayResourceUsage: async () => ({
-        usageEvents: [{ id: "usage_unreachable" }],
-      }),
-    },
-  );
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "invalid usage metering report",
-    error_description: "Cloud extension returned a malformed usage report.",
-  });
-});
-
-test("Cloud extension usage rejects Workers for Platforms as public metadata", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      { method: "PUT" },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true, result: { id: "api" }, errors: [], messages: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
-                  "space_cf_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "cloudflare:workers_script:deploy",
-                    installationId: "inst_cf_compat",
-                    resourceFamily: "cloudflare.workers_script",
-                    resourceId: "script:api",
-                    operation: "deploy",
-                    resourceMetadata: {
-                      backend: "cloudflare.workers_for_platforms",
-                    },
-                    kind: "gateway_compute",
-                    quantity: 1,
-                    usdMicros: 2_000,
-                  },
-                ]),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    {
-      recordGatewayResourceUsage: async () => ({
-        usageEvents: [{ id: "usage_unreachable" }],
-      }),
-    },
-  );
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "invalid usage metering report",
-    error_description: "Cloud extension returned a malformed usage report.",
-  });
-});
-
-test("Cloudflare Compatibility Gateway route records reported managed resource usage", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const meters = [
-    {
-      meterId: "cloudflare:workers_script:deploy",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.workers_script",
-      resourceId: "script:api",
-      operation: "deploy",
-      kind: "gateway_compute",
-      quantity: 1,
-      usdMicros: 2_000,
-    },
-    {
-      meterId: "cloudflare:workers_script:request",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.workers_script",
-      resourceId: "script:api",
-      operation: "request",
-      kind: "gateway_compute",
-      quantity: 42,
-      usdMicros: 1_500,
-    },
-    {
-      meterId: "cloudflare:kv:list",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.kv",
-      resourceId: "namespace:session",
-      operation: "list",
-      kind: "gateway_storage_gb_hour",
-      quantity: 0.25,
-      usdMicros: 250,
-    },
-    {
-      meterId: "cloudflare:r2:object_storage",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.r2",
-      resourceId: "bucket:assets",
-      operation: "storage_gb_hour",
-      kind: "gateway_storage_gb_hour",
-      quantity: 3.5,
-      usdMicros: 4_000,
-    },
-    {
-      meterId: "cloudflare:d1:query",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.d1",
-      resourceId: "database:app",
-      operation: "query",
-      kind: "gateway_compute",
-      quantity: 7,
-      usdMicros: 2_000,
-    },
-    {
-      meterId: "cloudflare:workflows:step",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.workflows",
-      resourceId: "workflow:deploy",
-      operation: "step",
-      kind: "gateway_compute",
-      quantity: 5,
-      usdMicros: 2_000,
-    },
-    {
-      meterId: "cloudflare:containers:vcpu_second",
-      installationId: "inst_cf_compat",
-      resourceFamily: "cloudflare.containers",
-      resourceId: "container:runner",
-      operation: "vcpu_second",
-      kind: "gateway_compute",
-      quantity: 10,
-      usdMicros: 6_000,
-    },
-  ] as const;
-  const usageCalls: {
-    spaceId: string;
-    input: Parameters<
-      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
-    >[1];
-  }[] = [];
-  const usageOps: PlatformCloudExtensionUsageOperations = {
-    recordGatewayResourceUsage: async (spaceId, input) => {
-      usageCalls.push({ spaceId, input });
-      return { usageEvents: [{ id: "usage_cf_1" }] };
-    },
-  };
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/storage/kv/namespaces",
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json(
-            { success: true, result: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
-                  "space_cf_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]:
-                  JSON.stringify(meters),
-              },
-            },
-          ),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    usageOps,
-  );
-
-  expect(response.status).toBe(200);
-  expect(
-    response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER),
-  ).toBe(null);
-  expect(usageCalls).toHaveLength(2);
-  expect(usageCalls[0]?.spaceId).toBe("space_cf_usage");
-  expect(usageCalls[0]?.input.spendRequired).toBe(true);
-  expect(usageCalls[0]?.input.meters).toEqual([
-    {
-      installationId: "inst_cf_compat",
-      meterId: "cloudflare:kv:read",
-      resourceFamily: "cloudflare.kv",
-      resourceId: "kv:collection",
-      operation: "read",
-      kind: "gateway_compute",
-      quantity: 1,
-      usdMicros: 500,
-    },
-  ]);
-  expect(usageCalls[1]?.spaceId).toBe("space_cf_usage");
-  expect(usageCalls[1]?.input.periodStart).toBe("2026-06-26T13:00:00.000Z");
-  expect(usageCalls[1]?.input.periodEnd).toBe("2026-06-26T13:01:00.000Z");
-  expect(usageCalls[1]?.input.spendRequired).toBe(true);
-  expect(usageCalls[1]?.input.meters).toHaveLength(meters.length);
-});
-
-test("Cloudflare Compatibility Gateway fallback bills Workers Script when usage headers are absent", async () => {
-  const route = platformCloudExtensionRouteById(
-    "provider.cloudflare.client_v4",
-  );
-  if (!route) throw new Error("Cloudflare compat route missing");
-  const usageCalls: {
-    spaceId: string;
-    input: Parameters<
-      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
-    >[1];
-  }[] = [];
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-      {
-        method: "PUT",
-        headers: {
-          [PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER]:
-            "space_ignored_when_token_has_space",
-        },
-      },
-    ),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json({
-            success: true,
-            result: { id: "api" },
-            errors: [],
-            messages: [],
-          }),
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "service-token",
-      spaceId: "space_cf_usage",
-      installationId: "inst_cf_compat",
-    }),
-    {
-      recordGatewayResourceUsage: async (spaceId, input) => {
-        usageCalls.push({ spaceId, input });
-        return { usageEvents: [{ id: "usage_fallback" }] };
-      },
-    },
-  );
-
-  expect(response.status).toBe(200);
-  expect(usageCalls).toHaveLength(1);
-  expect(usageCalls[0]?.spaceId).toBe("space_cf_usage");
-  expect(Date.parse(usageCalls[0]!.input.periodEnd)).toBeGreaterThan(
-    Date.parse(usageCalls[0]!.input.periodStart),
-  );
-  expect(usageCalls[0]?.input.spendRequired).toBe(true);
-  expect(usageCalls[0]?.input.meters).toEqual([
-    {
-      installationId: "inst_cf_compat",
-      meterId: "cloudflare:workers_script:deploy",
-      resourceFamily: "cloudflare.workers_script",
-      resourceId: "script:api",
-      operation: "deploy",
-      kind: "gateway_compute",
-      quantity: 1,
-      usdMicros: 1_000,
-    },
-  ]);
-});
-
-test("Cloud extension returns upstream success when billing export lags after usage ledger recording", async () => {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) throw new Error("AI Gateway route missing");
-  const usageCalls: {
-    spaceId: string;
-    input: Parameters<
-      PlatformCloudExtensionUsageOperations["recordGatewayResourceUsage"]
-    >[1];
-  }[] = [];
-  const billingImports: readonly unknown[][] = [];
-  const warn = console.warn;
-  const warnings: string[] = [];
-  console.warn = (message?: unknown) => {
-    warnings.push(String(message));
-  };
-  try {
-    const response = await handlePlatformCloudExtensionRouteRequest(
-      new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-        method: "POST",
-        body: JSON.stringify({ model: "takosumi/default", messages: [] }),
-      }),
-      {
-        TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-        TAKOSUMI_CLOUD_AI_GATEWAY: {
-          fetch: async () =>
-            Response.json({ id: "chatcmpl_1", choices: [{ index: 0 }] }),
-        },
-      } as never,
-      route,
-      async () => ({
-        authenticated: true,
-        authKind: "service-token",
-        spaceId: "space_ai_usage",
-        installationId: "inst_ai_gateway",
-      }),
-      {
-        recordGatewayResourceUsage: async (spaceId, input) => {
-          usageCalls.push({ spaceId, input });
-          return { usageEvents: [{ id: "usage_ai_1" }] };
-        },
-        recordBillingUsageReports: async (input) => {
-          billingImports.push(input.usageEvents);
-          throw new Error("billing_usage_report_import_failed");
-        },
-      },
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      id: "chatcmpl_1",
-      choices: [{ index: 0 }],
-    });
-  } finally {
-    console.warn = warn;
-  }
-
-  expect(usageCalls).toHaveLength(1);
-  expect(usageCalls[0]?.spaceId).toBe("space_ai_usage");
-  expect(usageCalls[0]?.input.spendRequired).toBe(true);
-  expect(usageCalls[0]?.input.meters).toEqual([
-    {
-      installationId: "inst_ai_gateway",
-      meterId: "ai:openai_compatible:chat.completions",
-      resourceFamily: "cloudflare.ai_gateway",
-      resourceId: "chat.completions",
-      operation: "chat.completions",
-      kind: "ai_request",
-      quantity: 1,
-      usdMicros: 1_000,
-    },
-  ]);
-  expect(billingImports).toEqual([[{ id: "usage_ai_1" }]]);
-  expect(warnings.join("\n")).toContain(
-    "takosumi_cloud_extension_billing_usage_sync_failed",
-  );
-  expect(warnings.join("\n")).toContain("billing_usage_report_import_failed");
-});
-
-test("Cloud extension route fails closed when reported usage cannot be recorded", async () => {
-  const route = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  if (!route) throw new Error("AI Gateway route missing");
-  let upstreamCalled = false;
-  const response = await handlePlatformCloudExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({ model: "takosumi/default", messages: [] }),
-    }),
-    {
-      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () => {
-          upstreamCalled = true;
-          return Response.json(
-            { id: "chatcmpl_1", choices: [] },
-            {
-              headers: {
-                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: "space_usage",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
-                  "2026-06-26T13:00:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
-                  "2026-06-26T13:01:00.000Z",
-                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
-                  {
-                    meterId: "ai:takosumi-default:request",
-                    kind: "ai_request",
-                    quantity: 1,
-                    usdMicros: 250_000,
-                  },
-                ]),
-              },
-            },
-          );
-        },
-      },
-    } as never,
-    route,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      spaceId: "space_usage",
-      installationId: "inst_ai_gateway",
-    }),
-  );
-  expect(response.status).toBe(502);
-  expect(await response.json()).toEqual({
-    error: "usage metering unavailable",
-    error_description:
-      "Cloud resource requests require the platform usage ledger before upstream usage is attempted.",
-  });
-  expect(upstreamCalled).toBe(false);
-});
-
-test("Cloudflare Compatibility Gateway platform fetch requires billing context before delegation", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const forwarded: string[] = [];
-  const response = await worker.fetch(
-    new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
-    ),
-    {
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async (request: Request) => {
-          forwarded.push(request.url);
-          return Response.json({ success: true, result: {}, errors: [] });
-        },
-      },
-    } as never,
-  );
-  expect(response.status).toBe(400);
-  expect(await response.json()).toEqual({
-    error: "billing workspace required",
-    error_description:
-      "Cloud resource requests require a billing workspace before upstream usage is attempted.",
-  });
-  expect(forwarded).toEqual([]);
-});
-
-test("Cloud-only extension route matcher rejects near-prefixes and unregistered future gateways", async () => {
-  expect(matchPlatformCloudExtensionRoute("/gateway/ai/v10/models")).toBe(
-    undefined,
-  );
-  expect(
-    matchPlatformCloudExtensionRoute(
-      "/compat/cloudflare/client/v40/accounts/virtual",
-    ),
-  ).toBe(undefined);
-  expect(matchPlatformCloudExtensionRoute("/compat/not-registered/v1")).toBe(
-    undefined,
-  );
-  expect(
-    await handlePlatformCloudExtensionRequest(
-      new Request("https://app.takosumi.com/compat/not-registered/v1"),
-      {
-        TAKOSUMI_CLOUD_NOT_REGISTERED: {
-          fetch: async () => Response.json({ delegated: true }),
-        },
-      } as never,
-    ),
-  ).toBe(undefined);
-});
-
-test("Cloud-only extension catalog reports configured public capabilities without binding names", async () => {
-  const catalog = platformCloudExtensionCatalog(
-    {
-      TAKOSUMI_CLOUD_AI_GATEWAY: {
-        fetch: async () => Response.json({ object: "list", data: [] }),
-      },
-      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
-        fetch: async () =>
-          Response.json({ success: true, result: [], errors: [] }),
-      },
-    } as never,
-    "https://app.takosumi.com",
-  );
-
-  expect(catalog.kind).toBe("takosumi.platform-cloud-extensions@v1");
-  expect(catalog.serviceUrl).toBe("https://app.takosumi.com");
-  expect(catalog.summary).toEqual({ total: 2, configured: 2, missing: 0 });
-  expect(catalog.extensions.map((extension) => extension.id)).toEqual([
-    "ai.openai_compatible.v1",
-    "provider.cloudflare.client_v4",
-  ]);
-  expect(catalog.extensions.map((extension) => extension.configured)).toEqual([
-    true,
-    true,
-  ]);
-  expect(catalog.extensions[0]?.smokeChecks).toContain("aiGatewayStatus");
-  const cloudflare = catalog.extensions.find(
-    (extension) => extension.id === "provider.cloudflare.client_v4",
-  );
-  expect(cloudflare?.capabilities).toEqual([
-    "user.tokens.verify",
-    "accounts.list",
-    "workers.scripts",
-    "workers.routes",
-    "kv.namespaces",
-    "r2.buckets",
-    "d1.databases",
-    "queues",
-    "workflows",
-  ]);
-  const serialized = JSON.stringify(catalog);
-  expect(serialized).not.toContain("TAKOSUMI_CLOUD_AI_GATEWAY");
-  expect(serialized).not.toContain("TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT");
-  expect(serialized).not.toContain("workers_for_platforms");
-  expect(serialized).not.toContain("durable_objects");
-});
-
-test("Cloud-only extension catalog is a stable platform endpoint", async () => {
-  const url = new URL("https://app.takosumi.com/__takosumi/cloud/extensions");
-  expect(isPlatformCloudExtensionCatalogPath(url.pathname)).toBe(true);
-
-  const response = handlePlatformCloudExtensionCatalogRequest(
-    new Request(url),
-    url,
-    {} as never,
-  );
-  expect(response.status).toBe(200);
-  const body = await response.json();
-  expect(body.summary).toEqual({ total: 2, configured: 0, missing: 2 });
-  expect(JSON.stringify(body)).not.toContain("bindingName");
-});
-
-test("Cloud-only extension catalog HEAD returns headers without a body", async () => {
-  const url = new URL("https://app.takosumi.com/__takosumi/cloud/extensions");
-  const response = handlePlatformCloudExtensionCatalogRequest(
-    new Request(url, { method: "HEAD" }),
-    url,
-    {} as never,
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(await response.text()).toBe("");
-});
-
-test("Cloud-only extension registry is limited to AI Gateway and Cloudflare compatibility", async () => {
-  expect(PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => route.id)).toEqual([
-    "ai.openai_compatible.v1",
-    "provider.cloudflare.client_v4",
-  ]);
-  expect(
-    PLATFORM_CLOUD_EXTENSION_ROUTES.map((route) => route.basePath),
-  ).toEqual(["/gateway/ai/v1", "/compat/cloudflare/client/v4"]);
-  expect(
-    PLATFORM_CLOUD_EXTENSION_ROUTES.filter(
-      (route) => route.kind === "provider_compat",
-    ).map((route) => route.provider),
-  ).toEqual(["cloudflare"]);
-  const aiRoute = platformCloudExtensionRouteById("ai.openai_compatible.v1");
-  expect(aiRoute?.serviceAccess?.clientId).toBe(
-    "service-graph-service:takosumi.ai.gateway",
-  );
-  expect(
-    aiRoute?.serviceAccess?.rules.map((rule) => [
-      rule.method,
-      rule.path,
-      rule.scopes,
+test("cloud extension route matcher rejects near-prefixes", () => {
+  const routes = platformCloudExtensionRoutes({
+    TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+      { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
     ]),
-  ).toEqual([
-    ["GET", "/gateway/ai/v1/models", ["ai.model", "ai.models.read"]],
-    ["GET", "/gateway/ai/v1/__takosumi/status", ["ai.model", "ai.models.read"]],
-    ["POST", "/gateway/ai/v1/chat/completions", ["ai.model", "ai.chat"]],
-    ["POST", "/gateway/ai/v1/embeddings", ["ai.model", "ai.embeddings"]],
-  ]);
+  });
+  expect(matchPlatformCloudExtensionRoute("/gateway/ai/v1", routes)).toBeDefined();
   expect(
-    platformCloudExtensionRouteById("provider.cloudflare.client_v4")
-      ?.serviceAccess,
+    matchPlatformCloudExtensionRoute("/gateway/ai/v1/models", routes),
+  ).toBeDefined();
+  expect(
+    matchPlatformCloudExtensionRoute("/gateway/ai/v1-other", routes),
   ).toBeUndefined();
+  expect(matchPlatformCloudExtensionRoute("/gateway/ai", routes)).toBeUndefined();
+});
+
+test("cloud extension catalog reports configured extensions without binding names", async () => {
+  const env = {
+    TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/gateway/ai/v1",
+        bindingName: "TAKOSUMI_CLOUD_AI",
+        requiredScopes: ["ai.chat"],
+      },
+      { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+    ]),
+    TAKOSUMI_CLOUD_AI: { fetch: async () => new Response("") },
+  } as never;
+  const catalog = platformCloudExtensionCatalog(env, "https://app.takosumi.com");
+  expect(catalog.kind).toBe("takosumi.platform-cloud-extensions@v1");
+  expect(catalog.summary).toEqual({ total: 2, configured: 1, missing: 1 });
+  expect(catalog.extensions).toEqual([
+    {
+      basePath: "/gateway/ai/v1",
+      configured: true,
+      requiredScopes: ["ai.chat"],
+    },
+    { basePath: "/compat/x", configured: false },
+  ]);
+  // The catalog never leaks the underlying service-binding names.
+  expect(JSON.stringify(catalog)).not.toContain("TAKOSUMI_CLOUD_AI");
+});
+
+test("cloud extension catalog is a stable platform endpoint", async () => {
+  expect(isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions")).toBe(
+    true,
+  );
+  const response = handlePlatformCloudExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    {} as never,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    kind: "takosumi.platform-cloud-extensions@v1",
+    extensions: [],
+  });
+});
+
+test("handlePlatformCloudExtensionRequest returns undefined for unmatched paths", async () => {
+  const result = await handlePlatformCloudExtensionRequest(
+    new Request("https://app.takosumi.com/api/v1/workspaces"),
+    {} as never,
+  );
+  expect(result).toBeUndefined();
 });
 
 test("scheduled poll continues past a failing source", async () => {
