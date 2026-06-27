@@ -12,6 +12,7 @@ import {
   TAKOSUMI_ACCOUNTS_CONTROL_API_PERMISSIONS,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_SERVICES_PATH,
+  TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
   type TakosumiSubject,
   takosumiAccountsInstallationBillingUsageReportsPath,
   takosumiAccountsInstallationDeploymentPlanRunsPath,
@@ -33,6 +34,7 @@ import {
   customOidcOAuthProvider,
   type DeployControlOperations,
   InMemorySharedCellWarmPool,
+  TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER,
   TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
   TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER,
 } from "../../../../accounts/service/src/mod.ts";
@@ -4427,6 +4429,149 @@ test("accounts handler starts Stripe checkout sessions", async () => {
     "space_a",
   );
   expect(params.get("subscription_data[metadata][credits]")).toEqual("1000");
+});
+
+test("accounts handler syncs unexported billing usage to Stripe invoice items", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveBillingAccount({
+    billingAccountId: "bill_workers",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_workers",
+    status: "active",
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveBillingUsageRecord({
+    usageReportId: "usage_workers_a",
+    installationId: "inst_workers_a",
+    billingAccountId: "bill_workers",
+    meter: "cloudflare.workers_script",
+    quantity: 2,
+    unit: "requests",
+    periodStart: 1_800_000_000,
+    periodEnd: 1_800_086_400,
+    requestDigest: "sha256:workers-a",
+    metadata: { backend: "cloudflare.workers_for_platforms" },
+    reportedAt: 1_800_000_100,
+  });
+  store.saveBillingUsageRecord({
+    usageReportId: "usage_workers_b",
+    installationId: "inst_workers_b",
+    billingAccountId: "bill_workers",
+    meter: "cloudflare.workers_script",
+    quantity: 3,
+    unit: "requests",
+    periodStart: 1_800_000_000,
+    periodEnd: 1_800_086_400,
+    requestDigest: "sha256:workers-b",
+    metadata: { backend: "cloudflare.workers_for_platforms" },
+    reportedAt: 1_800_000_200,
+  });
+
+  const stripeBodies: string[] = [];
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      stripeApiBase: "https://api.stripe.test/v1",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        expect(request.url).toEqual("https://api.stripe.test/v1/invoiceitems");
+        expect(request.headers.get("authorization")).toEqual("Bearer sk_test");
+        stripeBodies.push(await request.text());
+        return Response.json({ id: "ii_workers" });
+      },
+    },
+    billingUsageSyncToken: "usage_sync_token",
+    stripeUsageInvoiceItemPrices: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        unitAmount: 4,
+        currency: "usd",
+      },
+    ],
+  });
+
+  const denied = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ billingAccountId: "bill_workers" }),
+      },
+    ),
+  );
+  expect(denied.status).toEqual(401);
+
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
+        },
+        body: JSON.stringify({
+          billingAccountId: "bill_workers",
+          windowStart: 1_800_000_000,
+          windowEnd: 1_800_086_400,
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  expect(await response.json()).toEqual({
+    billing_account_id: "bill_workers",
+    stripe_customer_id: "cus_workers",
+    exported: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        quantity: 5,
+        usage_report_count: 2,
+        usage_report_ids: ["usage_workers_a", "usage_workers_b"],
+        export_id:
+          "takosumi-usage:bill_workers:cloudflare.workers_script:requests:1800000000:1800086400:usage_workers_a.usage_workers_b",
+        invoice_item_id: "ii_workers",
+      },
+    ],
+  });
+  expect(stripeBodies.length).toEqual(1);
+  const invoiceParams = new URLSearchParams(stripeBodies[0]);
+  expect(invoiceParams.get("customer")).toEqual("cus_workers");
+  expect(invoiceParams.get("amount")).toEqual("20");
+  expect(invoiceParams.get("metadata[takosumi_usage_meter]")).toEqual(
+    "cloudflare.workers_script",
+  );
+  expect(
+    store.findBillingUsageRecord("usage_workers_a")?.billingExportReference,
+  ).toEqual("ii_workers");
+
+  const duplicate = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
+        },
+        body: JSON.stringify({ billingAccountId: "bill_workers" }),
+      },
+    ),
+  );
+  expect(duplicate.status).toEqual(200);
+  expect((await duplicate.json()).exported).toEqual([]);
+  expect(stripeBodies.length).toEqual(1);
 });
 
 test("checkout rejects an unknown planId (catalog is server-side)", async () => {

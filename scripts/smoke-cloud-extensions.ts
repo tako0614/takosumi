@@ -1217,13 +1217,15 @@ function cloudflareCompatUsageEventMatches(
   const kind = stringValue(event.kind);
   const resourceFamily = stringValue(event.resourceFamily);
   const meterId = stringValue(event.meterId) ?? "";
+  const familyMatches = resourceFamily
+    ? resourceFamily === "cloudflare.workers_script"
+    : meterId.startsWith("cloudflare:workers_script:");
   const eventInstallationId =
     stringValue(event.installationId) ?? stringValue(event.installation_id);
   return (
     stringValue(event.source) === "resource_meter" &&
     (kind === "gateway_compute" || kind === "gateway_storage_gb_hour") &&
-    (resourceFamily === "cloudflare.workers_script" ||
-      meterId.startsWith("cloudflare:workers_script:")) &&
+    familyMatches &&
     (!installationId || eventInstallationId === installationId)
   );
 }

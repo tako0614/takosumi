@@ -19,6 +19,7 @@ import {
   TAKOSUMI_ACCOUNTS_REVOKE_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_CHECKOUT_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_PORTAL_PATH,
+  TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH,
   TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_PATH,
   TAKOSUMI_ACCOUNTS_TOKEN_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
@@ -96,10 +97,12 @@ import {
 import {
   handleStripeBillingPortalRequest,
   handleStripeCheckoutRequest,
+  handleStripeUsageInvoiceItemsSyncRequest,
   handleStripeWebhookRequest,
   type StripeSpaceBillingReconciler,
   type StripeSpaceCreditReconciler,
 } from "./billing-routes.ts";
+import type { StripeUsageInvoiceItemPrice } from "./billing.ts";
 import type { BillingPlan } from "./billing-plans.ts";
 export {
   type BillingPlan,
@@ -263,6 +266,8 @@ export type AccountsHandler = (request: Request) => Promise<Response>;
 
 export const TAKOSUMI_BILLING_CHECKOUT_SMOKE_TOKEN_HEADER =
   "x-takosumi-billing-smoke-token";
+export const TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER =
+  "x-takosumi-billing-usage-sync-token";
 export const TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER =
   "x-takosumi-materialize-drill-token";
 export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
@@ -289,6 +294,8 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   billingReconciler?: StripeSpaceBillingReconciler;
   billingCreditReconciler?: StripeSpaceCreditReconciler;
+  stripeUsageInvoiceItemPrices?: readonly StripeUsageInvoiceItemPrice[];
+  billingUsageSyncToken?: string;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -358,6 +365,8 @@ export interface EphemeralAccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   billingReconciler?: StripeSpaceBillingReconciler;
   billingCreditReconciler?: StripeSpaceCreditReconciler;
+  stripeUsageInvoiceItemPrices?: readonly StripeUsageInvoiceItemPrice[];
+  billingUsageSyncToken?: string;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppInstallationMaterializeWorker;
@@ -626,6 +635,10 @@ export async function createEphemeralAccountsHandler(
     passkeys: options.passkeys,
     deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
+    billingReconciler: options.billingReconciler,
+    billingCreditReconciler: options.billingCreditReconciler,
+    stripeUsageInvoiceItemPrices: options.stripeUsageInvoiceItemPrices,
+    billingUsageSyncToken: options.billingUsageSyncToken,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -1056,6 +1069,22 @@ export function createAccountsHandler(
         stripe: options.stripeBilling,
         sessionSubject: session.subject,
         billingRedirectAllowlist: options.billingRedirectAllowlist,
+      });
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      if (!options.stripeBilling) return billingNotConfigured();
+      const billingUsageSyncAuth = requireBillingUsageSyncAccess({
+        request,
+        token: options.billingUsageSyncToken,
+      });
+      if (billingUsageSyncAuth) return billingUsageSyncAuth;
+      return await handleStripeUsageInvoiceItemsSyncRequest({
+        request,
+        store,
+        stripe: options.stripeBilling,
+        prices: options.stripeUsageInvoiceItemPrices ?? [],
       });
     }
 
@@ -1632,6 +1661,28 @@ function materializeDrillAccessAllowed(input: {
   const header =
     input.request.headers.get(TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER) ?? "";
   return constantTimeEqual(header, input.token);
+}
+
+function requireBillingUsageSyncAccess(input: {
+  request: Request;
+  token: string | undefined;
+}): Response | undefined {
+  if (!input.token) {
+    return errorJson(
+      "feature_unavailable",
+      "Billing usage sync is temporarily unavailable.",
+      503,
+    );
+  }
+  const header =
+    input.request.headers.get(TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER) ?? "";
+  if (constantTimeEqual(header, input.token)) return undefined;
+  return errorJson(
+    "unauthorized",
+    "billing usage sync token is required",
+    401,
+    undefined,
+  );
 }
 
 function requirePrivacyOperationsAccess(input: {

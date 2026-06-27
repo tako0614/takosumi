@@ -394,8 +394,6 @@ export async function createStripeUsageInvoiceItemsForBillingAccount(
     ...(input.policy ?? {}),
     billingAccountId: input.billingAccountId,
   });
-  const exported: StripeUsageInvoiceItemExport[] = [];
-  const exportedAt = input.now ?? Date.now();
   for (const rollup of rollups) {
     const price = priceByMeterUnit.get(stripeUsagePriceKey(rollup));
     if (!price) {
@@ -403,6 +401,12 @@ export async function createStripeUsageInvoiceItemsForBillingAccount(
         `Stripe usage price is not configured for ${rollup.meter} ${rollup.unit}`,
       );
     }
+  }
+  const exported: StripeUsageInvoiceItemExport[] = [];
+  const exportedAt = input.now ?? Date.now();
+  for (const rollup of rollups) {
+    const price = priceByMeterUnit.get(stripeUsagePriceKey(rollup));
+    if (!price) throw new TypeError("Stripe usage price preflight failed");
     const result = await createStripeUsageInvoiceItem({
       secretKey: input.secretKey,
       stripeCustomerId: billingAccount.stripeCustomerId,
@@ -441,6 +445,26 @@ export async function createStripeUsageInvoiceItemsForBillingAccount(
     stripeCustomerId: billingAccount.stripeCustomerId,
     exported,
   };
+}
+
+export function parseStripeUsageInvoiceItemPrices(
+  raw: string | undefined,
+): readonly StripeUsageInvoiceItemPrice[] {
+  if (!raw?.trim()) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new TypeError(
+      "Stripe usage invoice item prices must be a JSON array",
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new TypeError(
+      "Stripe usage invoice item prices must be a JSON array",
+    );
+  }
+  return parsed.map(stripeUsageInvoiceItemPriceFromValue);
 }
 
 export function stripeCheckoutSessionParams(
@@ -601,6 +625,77 @@ function stripeUsagePriceMap(
 
 function stripeUsagePriceKey(input: { meter: string; unit: string }): string {
   return `${input.meter}\u0000${input.unit}`;
+}
+
+function stripeUsageInvoiceItemPriceFromValue(
+  value: unknown,
+): StripeUsageInvoiceItemPrice {
+  if (!isRecord(value)) {
+    throw new TypeError("Stripe usage invoice item price must be an object");
+  }
+  const meter = stringField(value.meter, "meter");
+  const unit = stringField(value.unit, "unit");
+  const currency = stringField(value.currency, "currency").toLowerCase();
+  if (!/^[a-z]{3}$/u.test(currency)) {
+    throw new TypeError(
+      "Stripe usage invoice item price currency must be a 3-letter code",
+    );
+  }
+  const unitAmount = value.unitAmount;
+  if (
+    typeof unitAmount !== "number" ||
+    !Number.isSafeInteger(unitAmount) ||
+    !Number.isFinite(unitAmount) ||
+    unitAmount <= 0
+  ) {
+    throw new TypeError(
+      "Stripe usage invoice item price unitAmount must be a positive integer",
+    );
+  }
+  const descriptionPrefix =
+    value.descriptionPrefix === undefined
+      ? undefined
+      : stringField(value.descriptionPrefix, "descriptionPrefix");
+  const metadata =
+    value.metadata === undefined
+      ? undefined
+      : stripeStringMetadata(value.metadata, "metadata");
+  return {
+    meter,
+    unit,
+    unitAmount,
+    currency,
+    ...(descriptionPrefix === undefined ? {} : { descriptionPrefix }),
+    ...(metadata === undefined ? {} : { metadata }),
+  };
+}
+
+function stringField(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`Stripe usage invoice item price ${label} is required`);
+  }
+  return value.trim();
+}
+
+function stripeStringMetadata(
+  value: unknown,
+  label: string,
+): Record<string, string> {
+  if (!isRecord(value)) {
+    throw new TypeError(
+      `Stripe usage invoice item price ${label} must be an object`,
+    );
+  }
+  const output: Record<string, string> = {};
+  for (const [key, metadataValue] of Object.entries(value)) {
+    if (typeof metadataValue !== "string") {
+      throw new TypeError(
+        `Stripe usage invoice item price ${label} values must be strings`,
+      );
+    }
+    output[key] = metadataValue;
+  }
+  return output;
 }
 
 export async function verifyStripeWebhookSignature(input: {

@@ -305,6 +305,9 @@ test("AI Gateway emits billable usage headers for attributed successful requests
     {
       installationId: "inst_ai",
       meterId: "ai:deepseek-chat:chat.completions:request",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "deepseek/chat",
+      operation: "chat.completions",
       kind: "ai_request",
       quantity: 1,
       credits: 2,
@@ -838,6 +841,9 @@ test("AI Gateway emits usage headers for Workers AI binding requests", async () 
     {
       installationId: "inst_workers_ai",
       meterId: "ai:workers-ai-chat:chat.completions:request",
+      resourceFamily: "cloudflare.ai_gateway",
+      resourceId: "workers-ai/chat",
+      operation: "chat.completions",
       kind: "ai_request",
       quantity: 1,
       credits: 1,

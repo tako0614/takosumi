@@ -286,6 +286,12 @@ async function buildAccountsHandler(
       ? { serviceGraphMaterialResolver: config.serviceGraphMaterialResolver }
       : {}),
     ...(config.stripeBilling ? { stripeBilling: config.stripeBilling } : {}),
+    ...(config.stripeUsageInvoiceItemPrices
+      ? { stripeUsageInvoiceItemPrices: config.stripeUsageInvoiceItemPrices }
+      : {}),
+    ...(config.billingUsageSyncToken
+      ? { billingUsageSyncToken: config.billingUsageSyncToken }
+      : {}),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
       : {}),
@@ -455,7 +461,9 @@ function parsePreviousPublicJwks(
       );
     }
     if (kty !== "EC" || crv !== "P-256") {
-      throw new TypeError(`${label}.keys[${index}] must be an ES256 public JWK`);
+      throw new TypeError(
+        `${label}.keys[${index}] must be an ES256 public JWK`,
+      );
     }
     if (seen.has(kid)) {
       throw new TypeError(`${label}.keys[${index}] duplicates kid ${kid}`);

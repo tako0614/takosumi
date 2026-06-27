@@ -1284,6 +1284,20 @@ function platformCloudExtensionUsageMeterFromJson(
       "Cloud extension usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
     );
   }
+  if (resourceFamily && cloudExtensionUsageFamilyLeaksWfp(resourceFamily)) {
+    throw new TypeError(
+      "Cloud extension usage resourceFamily must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
+  }
+  if (
+    resourceFamily &&
+    meterId.startsWith("cloudflare:workers_script:") &&
+    resourceFamily !== "cloudflare.workers_script"
+  ) {
+    throw new TypeError(
+      "Cloud extension Workers Script usage must use resourceFamily cloudflare.workers_script",
+    );
+  }
   const resourceId = optionalCloudExtensionUsageString(
     record.resourceId,
     "resourceId",
@@ -1323,6 +1337,12 @@ function optionalCloudExtensionUsageString(
     );
   }
   return trimmed;
+}
+
+function cloudExtensionUsageFamilyLeaksWfp(resourceFamily: string): boolean {
+  return /(^|[_.:-])workers[-_:]?for[-_:]?platforms($|[_.:-])/u.test(
+    resourceFamily,
+  );
 }
 
 function cloudExtensionUsageResourceMetadata(

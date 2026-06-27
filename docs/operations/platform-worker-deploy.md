@@ -200,6 +200,12 @@ takosumi secrets apply \
 Stripe は Cloudflare platform worker では
 `TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET`、node-postgres profile では
 `TAKOSUMI_ACCOUNTS_STRIPE_API_KEY` / `TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET` を読む。
+usage invoice item 同期を有効にする場合は、非 secret の
+`TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` に meter / unit / unitAmount /
+currency の JSON 配列を設定し、operator-only secret の
+`TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN` を入れる。同期 route は
+`POST /v1/billing/stripe/usage-invoice-items` で、
+`x-takosumi-billing-usage-sync-token` が必要。
 
 Google sign-in is configured through `TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_*`.
 Production readiness probes must show the provider as enabled before GA.

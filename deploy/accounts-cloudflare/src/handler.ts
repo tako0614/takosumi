@@ -24,6 +24,7 @@ import {
   type OidcClientAuthMethod,
   type OidcClientRegistration,
   parseBillingPlans,
+  parseStripeUsageInvoiceItemPrices,
   registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
   signEs256Jwt,
@@ -69,6 +70,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_TOLERANCE_SECONDS?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
+  readonly TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN?: string;
+  readonly TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES?: string;
   /**
    * Operator billing plan catalog (spec §32): JSON array of
    * `{ id, kind: "subscription"|"pack", stripePriceId, credits,
@@ -471,6 +474,10 @@ async function buildAccountsHandler(
       env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
     ),
     billingCheckoutSmokeToken: billingCheckoutSmokeTokenFromEnv(env),
+    billingUsageSyncToken: billingUsageSyncTokenFromEnv(env),
+    stripeUsageInvoiceItemPrices: parseStripeUsageInvoiceItemPrices(
+      optionalString(env.TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES),
+    ),
     materializeDrillToken: materializeDrillTokenFromEnv(env),
     sharedCellRuntime: parseSharedCellRuntime(env),
     privacyOperationsToken: optionalString(
@@ -1205,30 +1212,29 @@ export function createR2InstallationExportWorker(options: {
       `${JSON.stringify(document, null, 2)}\n`,
     );
     const body = encrypted
-      ? await encryptR2ExportBody(clearBody, input.request.encryption.recipients)
+      ? await encryptR2ExportBody(
+          clearBody,
+          input.request.encryption.recipients,
+        )
       : clearBody;
     const archiveDigest = await sha256HexBytes(body);
-    await options.bucket.put(
-      objectKey,
-      body,
-      {
-        httpMetadata: {
-          contentType: encrypted
-            ? "application/vnd.age"
-            : "application/json; charset=utf-8",
-        },
-        customMetadata: {
-          installationId: input.installation.installationId,
-          accountId: input.installation.accountId,
-          spaceId: input.installation.spaceId,
-          operationId: input.operationId,
-          format: input.request.format,
-          encryption: input.request.encryption.method,
-          dataIncluded: "false",
-          archiveDigest,
-        },
+    await options.bucket.put(objectKey, body, {
+      httpMetadata: {
+        contentType: encrypted
+          ? "application/vnd.age"
+          : "application/json; charset=utf-8",
       },
-    );
+      customMetadata: {
+        installationId: input.installation.installationId,
+        accountId: input.installation.accountId,
+        spaceId: input.installation.spaceId,
+        operationId: input.operationId,
+        format: input.request.format,
+        encryption: input.request.encryption.method,
+        dataIncluded: "false",
+        archiveDigest,
+      },
+    });
     return {
       downloadUrl: await signedR2ExportDownloadUrl({
         baseUrl: downloadBaseUrl,
@@ -1502,6 +1508,15 @@ function billingCheckoutSmokeTokenFromEnv(
 ): string | undefined {
   return (
     optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN) ??
+    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
+  );
+}
+
+function billingUsageSyncTokenFromEnv(
+  env: CloudflareWorkerEnv,
+): string | undefined {
+  return (
+    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN) ??
     optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)
   );
 }
