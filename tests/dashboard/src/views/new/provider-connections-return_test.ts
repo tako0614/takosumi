@@ -64,6 +64,12 @@ const controlRoutesSource = readFileSync(
   resolve(here, "../../../../../accounts/service/src/control-routes.ts"),
   "utf8",
 );
+// The control-error mapping (typed `error.details` passthrough + `isRecord`
+// guard) lives in the shared control substrate after the P3 god-file split.
+const controlSharedSource = readFileSync(
+  resolve(here, "../../../../../accounts/service/src/control/shared.ts"),
+  "utf8",
+);
 
 describe("/new Provider Connections return context", () => {
   test("all /new Provider Connections links use the return-context href", () => {
@@ -294,8 +300,10 @@ describe("/new Provider Connections return context", () => {
       'reason: "duplicate_installation"',
     );
     expect(installationsServiceSource).toContain("installationId: existing.id");
-    expect(controlRoutesSource).toContain("error.details");
-    expect(controlRoutesSource).toContain("function isRecord");
+    expect(controlSharedSource).toContain("error.details");
+    expect(controlSharedSource).toContain("function isRecord");
+    // The thin shell still routes through the resource dispatch table.
+    expect(controlRoutesSource).toContain("RESOURCE_HANDLERS");
   });
 
   test("/new translates known compatibility diagnostics into user-facing copy", () => {
