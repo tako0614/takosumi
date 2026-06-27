@@ -150,18 +150,18 @@ finance review のための非 secret config です。
 
 ## Initial usage price book
 
-| family           | selector kind             | unit        | charge                    | estimated cost            |
-| ---------------- | ------------------------- | ----------- | ------------------------- | ------------------------- |
-| AI request       | `ai_request`              | request     | `$0.001` / request        | `$0.000` / request        |
-| AI input tokens  | `ai_input_token`          | token       | `$0.30` / 1M tokens       | `$0.15` / 1M tokens       |
-| AI output tokens | `ai_output_token`         | token       | `$1.00` / 1M tokens       | `$0.50` / 1M tokens       |
-| Workers Script   | `gateway_compute`         | operation   | `$0.001` / operation      | `$0.0001` / operation     |
-| KV / D1 / R2 ops | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
-| R2 storage       | `gateway_storage_gb_hour` | GB-hour     | `$0.10` / 1M GB-hours     | `$0.05` / 1M GB-hours     |
-| Workflows        | `gateway_compute`         | operation   | `$0.001` / operation      | `$0.0001` / operation     |
-| Containers       | `gateway_compute`         | vCPU-second | `$1.00` / 1M vCPU-seconds | `$0.50` / 1M vCPU-seconds |
-| Queues           | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
-| Durable Objects  | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
+| family               | selector kind             | unit        | charge                    | estimated cost            |
+| -------------------- | ------------------------- | ----------- | ------------------------- | ------------------------- |
+| AI request           | `ai_request`              | request     | `$0.001` / request        | `$0.000` / request        |
+| AI input tokens      | `ai_input_token`          | token       | `$0.30` / 1M tokens       | `$0.15` / 1M tokens       |
+| AI output tokens     | `ai_output_token`         | token       | `$1.00` / 1M tokens       | `$0.50` / 1M tokens       |
+| Workers Script       | `gateway_compute`         | operation   | `$0.001` / operation      | `$0.0001` / operation     |
+| KV / D1 / R2 ops     | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
+| KV / D1 / R2 storage | `gateway_storage_gb_hour` | GB-hour     | `$0.10` / 1M GB-hours     | `$0.05` / 1M GB-hours     |
+| Workflows            | `gateway_compute`         | operation   | `$0.001` / operation      | `$0.0001` / operation     |
+| Containers           | `gateway_compute`         | vCPU-second | `$1.00` / 1M vCPU-seconds | `$0.50` / 1M vCPU-seconds |
+| Queues               | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
+| Durable Objects      | `gateway_compute`         | operation   | `$0.0005` / operation     | `$0.0001` / operation     |
 
 この表は細かい USD micro-credit で引き落とします。表示上は USD に丸めても、
 ledger では `usdMicros` を正本にします。
