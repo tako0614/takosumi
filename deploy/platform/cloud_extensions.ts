@@ -98,6 +98,7 @@ export const PLATFORM_CLOUD_EXTENSION_ROUTES: readonly PlatformCloudExtensionRou
         "r2.buckets",
         "d1.databases",
         "queues",
+        "workflows",
       ],
       smokeChecks: [
         "cloudflareCompatVerifyAuth",

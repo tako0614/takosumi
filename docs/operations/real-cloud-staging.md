@@ -200,7 +200,7 @@ repo.
    connection, upload, deploy, run, and destroy. It does not require opening
    any edge-public internal route. The smoke output redacts token values and
    the Cloudflare account id. The `account-resources` preflight checks D1,
-   Workers KV, R2, and Queues read access before apply so an active but
+   Workers KV, R2, Queues, and Workflows read access before apply so an active but
    under-scoped token fails before OpenTofu can partially create resources; keep
    the raw transcript in
    `takosumi-private/evidence/platform-control-plane-smoke.md`.

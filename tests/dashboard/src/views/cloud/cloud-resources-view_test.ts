@@ -46,7 +46,7 @@ describe("Cloud resources view", () => {
   });
 
   test("only exposes currently materialized Cloudflare compat resource groups", () => {
-    for (const key of ["kv", "r2", "d1", "queues", "workers"]) {
+    for (const key of ["kv", "r2", "d1", "queues", "workflows", "workers"]) {
       expect(cloudResourcesViewSource).toContain(
         `t("cloudResources.inventory.${key}")`,
       );
@@ -57,7 +57,7 @@ describe("Cloud resources view", () => {
         ja[`cloudResources.inventory.${key}` as keyof typeof ja],
       ).toBeTruthy();
     }
-    for (const key of ["workflows", "containers", "durableObjects"]) {
+    for (const key of ["containers", "durableObjects"]) {
       expect(cloudResourcesViewSource).not.toContain(`inv.${key}`);
       expect(
         en[`cloudResources.inventory.${key}` as keyof typeof en],

@@ -821,6 +821,7 @@ cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
 cloudflare_d1_database
 cloudflare_queue
+cloudflare_workflow
 worker vars
 worker secrets
 worker bindings

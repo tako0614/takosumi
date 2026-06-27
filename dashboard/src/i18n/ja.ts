@@ -954,6 +954,7 @@ export const ja = {
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.queues": "Queues",
+  "cloudResources.inventory.workflows": "Workflows",
   "cloudResources.inventory.workers": "Workers",
   "cloudResources.inventory.names": "名前",
   "cloudResources.inventory.showAll": "{count} 件すべて表示",

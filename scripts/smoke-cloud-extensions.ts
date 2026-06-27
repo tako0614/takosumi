@@ -1660,6 +1660,7 @@ async function cloudflareCompatRestLifecycleCheck(
       await runCloudflareCompatD1DatabaseRestLifecycle(fetchImpl, options),
       await runCloudflareCompatR2BucketRestLifecycle(fetchImpl, options),
       await runCloudflareCompatQueueRestLifecycle(fetchImpl, options),
+      await runCloudflareCompatWorkflowRestLifecycle(fetchImpl, options),
       await runCloudflareCompatWorkerRouteRestLifecycle(fetchImpl, options),
       await runCloudflareCompatInvalidScopeRestCheck(fetchImpl, options),
     ];
@@ -1979,6 +1980,121 @@ async function runCloudflareCompatQueueRestLifecycle(
       { queueName },
       error,
       cleanup,
+    );
+  }
+}
+
+async function runCloudflareCompatWorkflowRestLifecycle(
+  fetchImpl: FetchLike,
+  options: CloudExtensionSmokeOptions,
+): Promise<CloudExtensionProviderResourceResult> {
+  const suffix = Date.now().toString(36);
+  const scriptName = `takosumi-rest-workflow-script-${suffix}`;
+  const workflowName = `takosumi-rest-workflow-${suffix}`;
+  const className = "DailyWorkflow";
+  const completedSteps: string[] = [];
+  let scriptCreated = false;
+  let workflowCreated = false;
+  try {
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+        method: "PUT",
+        bodyText: `import { WorkflowEntrypoint } from "cloudflare:workers";
+
+export class ${className} extends WorkflowEntrypoint {
+  async run() {}
+}
+
+export default { async fetch() { return new Response('takosumi workflow rest'); } };`,
+        contentType: "application/javascript",
+      }),
+      [201],
+    );
+    scriptCreated = true;
+    completedSteps.push("script-create");
+
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows/${encodeURIComponent(workflowName)}`,
+        method: "PUT",
+        body: { class_name: className, script_name: scriptName },
+      }),
+    );
+    workflowCreated = true;
+    completedSteps.push("workflow-create");
+
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows/${encodeURIComponent(workflowName)}`,
+      }),
+    );
+    completedSteps.push("workflow-read");
+
+    expectCloudflareListContains(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows?name=${encodeURIComponent(workflowName)}`,
+      }),
+      "workflow_name",
+      workflowName,
+    );
+    completedSteps.push("workflow-list-filter");
+
+    await expectCloudflareValidationError(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows/takosumi-invalid-workflow`,
+        method: "PUT",
+        body: {},
+      }),
+    );
+    completedSteps.push("workflow-validation");
+
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows/${encodeURIComponent(workflowName)}`,
+        method: "DELETE",
+      }),
+    );
+    workflowCreated = false;
+    completedSteps.push("workflow-delete");
+
+    await expectCloudflareOk(
+      await cloudflareCompatJson(fetchImpl, options, {
+        path: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(scriptName)}`,
+        method: "DELETE",
+      }),
+    );
+    scriptCreated = false;
+    completedSteps.push("script-delete");
+
+    return {
+      resource: "cloudflare_workflow_rest",
+      ok: true,
+      completedSteps,
+      summary: { workflowName, scriptName, className },
+    };
+  } catch (error) {
+    const workflowCleanup = workflowCreated
+      ? await cleanupCloudflareCompatCollectionResource(fetchImpl, options, {
+          collectionPath: `/accounts/${CLOUDFLARE_COMPAT_ACCOUNT_ID}/workflows`,
+          query: { name: workflowName },
+          idField: "workflow_name",
+          fallbackIdField: "id",
+        })
+      : undefined;
+    const scriptCleanup = scriptCreated
+      ? await cleanupCloudflareCompatWorkerScript(
+          fetchImpl,
+          options,
+          scriptName,
+        )
+      : undefined;
+    return restLifecycleFailure(
+      "cloudflare_workflow_rest",
+      completedSteps,
+      { workflowName, scriptName, className },
+      error,
+      { workflow: workflowCleanup, script: scriptCleanup },
     );
   }
 }

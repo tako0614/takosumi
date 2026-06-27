@@ -1975,6 +1975,7 @@ test("Cloud-only extension catalog reports configured public capabilities withou
     "r2.buckets",
     "d1.databases",
     "queues",
+    "workflows",
   ]);
   const serialized = JSON.stringify(catalog);
   expect(serialized).not.toContain("TAKOSUMI_CLOUD_AI_GATEWAY");

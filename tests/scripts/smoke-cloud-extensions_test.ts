@@ -1329,6 +1329,42 @@ function responseForImplementedCompat(
       { id: "queue_test", queue_name: searchParams.get("name") ?? "jobs" },
     ]);
   }
+  if (pathname.includes("/workflows")) {
+    if ((method === "PUT" || method === "PATCH") && bodyText.includes("{}")) {
+      return cloudflare(false, null, 400, [1002]);
+    }
+    if (method === "PUT" || method === "PATCH") {
+      return cloudflare(
+        true,
+        {
+          id: "workflow_test",
+          workflow_name: "daily-job",
+          class_name: "DailyWorkflow",
+          script_name: "api",
+        },
+        200,
+      );
+    }
+    if (method === "DELETE") {
+      return cloudflare(true, { id: "workflow_test", deleted: true });
+    }
+    if (pathname.endsWith("/workflow_test")) {
+      return cloudflare(true, {
+        id: "workflow_test",
+        workflow_name: "daily-job",
+        class_name: "DailyWorkflow",
+        script_name: "api",
+      });
+    }
+    return cloudflare(true, [
+      {
+        id: "workflow_test",
+        workflow_name: searchParams.get("name") ?? "daily-job",
+        class_name: "DailyWorkflow",
+        script_name: "api",
+      },
+    ]);
+  }
   if (pathname.includes("/workers/routes")) {
     if (method === "POST" && bodyText.includes("{}")) {
       return cloudflare(false, null, 400, [1002]);
@@ -1346,7 +1382,10 @@ function responseForImplementedCompat(
       { id: "route_test", pattern: searchParams.get("pattern") ?? "test/*" },
     ]);
   }
-  if (pathname.includes("/workers/scripts/takosumi-rest-worker-")) {
+  if (
+    pathname.includes("/workers/scripts/takosumi-rest-worker-") ||
+    pathname.includes("/workers/scripts/takosumi-rest-workflow-script-")
+  ) {
     if (method === "PUT") {
       return cloudflare(true, { id: "takosumi-rest-worker-test" }, 201);
     }

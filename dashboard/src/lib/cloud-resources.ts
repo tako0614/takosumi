@@ -119,6 +119,17 @@ export interface CloudflareCompatQueue {
   readonly modified_on?: string;
 }
 
+export interface CloudflareCompatWorkflow {
+  readonly id?: string;
+  readonly name?: string;
+  readonly workflow_name?: string;
+  readonly class_name?: string;
+  readonly script_name?: string;
+  readonly version_id?: string;
+  readonly created_on?: string;
+  readonly modified_on?: string;
+}
+
 export type CloudflareCompatWorkerScript = Readonly<Record<string, unknown>>;
 
 export interface CloudflareCompatInventory {
@@ -132,6 +143,9 @@ export interface CloudflareCompatInventory {
   >;
   readonly r2Buckets: CloudResourceResult<readonly CloudflareCompatR2Bucket[]>;
   readonly queues: CloudResourceResult<readonly CloudflareCompatQueue[]>;
+  readonly workflows: CloudResourceResult<
+    readonly CloudflareCompatWorkflow[]
+  >;
   readonly workerScripts: CloudResourceResult<
     readonly CloudflareCompatWorkerScript[]
   >;
@@ -220,6 +234,7 @@ async function getCloudflareCompatInventory(
       d1Databases: { ok: false, error: accounts.error },
       r2Buckets: { ok: false, error: accounts.error },
       queues: { ok: false, error: accounts.error },
+      workflows: { ok: false, error: accounts.error },
       workerScripts: { ok: false, error: accounts.error },
     };
   }
@@ -234,14 +249,21 @@ async function getCloudflareCompatInventory(
       d1Databases: { ok: true, data: [] },
       r2Buckets: { ok: true, data: [] },
       queues: { ok: true, data: [] },
+      workflows: { ok: true, data: [] },
       workerScripts: { ok: true, data: [] },
     };
   }
   const accountPath = `${route.basePath}/accounts/${encodeURIComponent(
     selectedAccountId,
   )}`;
-  const [kvNamespaces, d1Databases, r2Buckets, queues, workerScripts] =
-    await Promise.all([
+  const [
+    kvNamespaces,
+    d1Databases,
+    r2Buckets,
+    queues,
+    workflows,
+    workerScripts,
+  ] = await Promise.all([
       cloudflareListResult<CloudflareCompatKvNamespace>(
         `${accountPath}/storage/kv/namespaces`,
       ),
@@ -252,6 +274,9 @@ async function getCloudflareCompatInventory(
         `${accountPath}/r2/buckets`,
       ),
       cloudflareListResult<CloudflareCompatQueue>(`${accountPath}/queues`),
+      cloudflareListResult<CloudflareCompatWorkflow>(
+        `${accountPath}/workflows`,
+      ),
       cloudflareListResult<CloudflareCompatWorkerScript>(
         `${accountPath}/workers/scripts`,
       ),
@@ -263,6 +288,7 @@ async function getCloudflareCompatInventory(
     d1Databases,
     r2Buckets,
     queues,
+    workflows,
     workerScripts,
   };
 }
@@ -276,6 +302,7 @@ function emptyCloudflareCompatInventory(
     d1Databases: { ok: false, error },
     r2Buckets: { ok: false, error },
     queues: { ok: false, error },
+    workflows: { ok: false, error },
     workerScripts: { ok: false, error },
   };
 }
@@ -310,7 +337,13 @@ export async function revokeCloudApiKey(
 }
 
 /** The Cloudflare compatibility resources the Cloud screen can manage. */
-export type CloudflareResourceKind = "kv" | "r2" | "d1" | "queue" | "worker";
+export type CloudflareResourceKind =
+  | "kv"
+  | "r2"
+  | "d1"
+  | "queue"
+  | "workflow"
+  | "worker";
 
 /**
  * Compat-API path for a single managed resource. The compat gateway mirrors the
@@ -335,6 +368,8 @@ function cloudflareResourcePath(
       return `${account}/d1/database/${ref}`;
     case "queue":
       return `${account}/queues/${ref}`;
+    case "workflow":
+      return `${account}/workflows/${ref}`;
     case "worker":
       return `${account}/workers/scripts/${ref}`;
   }
