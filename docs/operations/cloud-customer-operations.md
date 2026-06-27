@@ -152,7 +152,7 @@ bun run check:takosumi-billing-readiness -- \
   --checkout-smoke \
   --out-file evidence/billing-readiness-production-sandbox.json
 
-bun run status:takosumi-completion -- \
+bun run ga:status -- \
   --probe-live \
   --require-complete \
   --billing-checkout-smoke \
@@ -163,7 +163,7 @@ This proves the production-equivalent billing path can create Stripe Checkout
 Sessions without opening paid enforcement. In this mode `complete: true` means
 the closed pre-GA runtime path is complete with sandbox billing. `launchReady:
 true` still requires accepted public launch evidence, and paid enforcement still
-requires live-mode Stripe secrets plus `status:takosumi-completion
+requires live-mode Stripe secrets plus `ga:status
 --require-billing-readiness`.
 
 `bootstrap:takosumi-stripe-billing` creates or reuses Stripe prices by stable

@@ -39,7 +39,7 @@ repo.
    export WRANGLER_DOCKER_BIN="$PWD/scripts/wrangler-docker-buildx-wrapper.sh"
    bun run check:cloudflare-deploy-host
    bun run check:takosumi-live-evidence-prereqs -- --environment both
-   bun run status:takosumi-completion -- --json
+   bun run ga:status -- --json
    bun run audit:takosumi-completion
 
    cd takosumi
@@ -92,7 +92,7 @@ repo.
    operator runs. Add `--print-private-layout` with the same scope to print
    the standard private paths and template commands before collecting evidence;
    it does not read secret values or write private evidence.
-   `status:takosumi-completion` aggregates the repo audit and private evidence
+   `ga:status` aggregates the repo audit and private evidence
    preflight into one `takosumi.completion-status@v1` JSON report. It parses
    JSON even when a child command exits non-zero, preserves structured
    `nextActionDetails`, and does not print secret values or child stdout/stderr.
@@ -239,7 +239,7 @@ repo.
 
     ```bash
     TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_PRIVATE/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN")" \
-      bun run status:takosumi-completion -- \
+      bun run ga:status -- \
         --json \
         --probe-live
     ```
@@ -250,7 +250,7 @@ repo.
 
     ```bash
     TAKOSUMI_DEPLOY_CONTROL_TOKEN="$(cat "$TAKOSUMI_PRIVATE/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN")" \
-      bun run status:takosumi-completion -- \
+      bun run ga:status -- \
         --json \
         --probe-live \
         --require-complete \
