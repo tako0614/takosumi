@@ -172,13 +172,16 @@ x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_reque
 ```
 
 Cloudflare Compatibility Gateway / managed resource backend は、ユーザー向けには
-Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1 /
-Workflows / Containers などとして見せます。Workers for Platforms は内部 backend
-であり、請求・画面・usage ledger の user-facing family には出しません。Worker
-script の使用量は `resourceFamily: "cloudflare.workers_script"` として
-`gateway_compute` または `gateway_storage_gb_hour` を報告します。`wfp` /
-`workers_for_platforms` は `meterId`、`resourceFamily`、Stripe meter では拒否し、
-内部実装の証跡として `resourceMetadata.backend` にだけ残せます。例:
+Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1
+として見せます。Workers for Platforms は Workers Script を実現する内部
+backend であり、請求・画面・usage ledger の user-facing family には出しません。
+Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
+`gateway_compute` または `gateway_storage_gb_hour` を報告します。Workflows /
+Containers / Queues / Durable Objects などの追加 family は、closed Gateway backend
+が lifecycle endpoint と usage smoke を通した後に catalog / 画面 / billing price
+へ追加します。`wfp` / `workers_for_platforms` は `meterId`、`resourceFamily`、
+Stripe meter では拒否し、内部実装の証跡として
+`resourceMetadata.backend` にだけ残せます。例:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]

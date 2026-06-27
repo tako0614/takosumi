@@ -530,6 +530,79 @@ test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers sc
   expect(invoiceBodies.length).toEqual(1);
 });
 
+test("createStripeUsageInvoiceItemsForBillingAccount exports managed Cloudflare resource families", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveBillingAccount({
+    billingAccountId: "bill_cloudflare",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_cloudflare",
+    status: "active",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  const meters = [
+    "cloudflare.kv",
+    "cloudflare.r2",
+    "cloudflare.d1",
+    "cloudflare.workflows",
+    "cloudflare.containers",
+    "cloudflare.queues",
+    "cloudflare.durable_objects",
+  ] as const;
+  meters.forEach((meter, index) => {
+    store.saveBillingUsageRecord({
+      usageReportId: `usage_${meter.replaceAll(".", "_")}`,
+      installationId: "inst_cloudflare",
+      billingAccountId: "bill_cloudflare",
+      meter,
+      quantity: index + 1,
+      unit: "operations",
+      requestDigest: `sha256:${meter}`,
+      metadata: {},
+      reportedAt: 1_800_000_000 + index,
+    });
+  });
+  const invoiceBodies: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    invoiceBodies.push(await request.text());
+    return Response.json({ id: `ii_cloudflare_${invoiceBodies.length}` });
+  };
+
+  const result = await createStripeUsageInvoiceItemsForBillingAccount({
+    store,
+    secretKey: "sk_test",
+    billingAccountId: "bill_cloudflare",
+    prices: meters.map((meter) => ({
+      meter,
+      unit: "operations",
+      unitAmount: 2,
+      currency: "usd",
+    })),
+    now: 1_800_000_500,
+    stripeApiBase: "https://api.stripe.test/v1",
+    fetch: fetchImpl,
+  });
+
+  expect(result.exported.map((item) => item.meter)).toEqual([...meters]);
+  expect(invoiceBodies.length).toEqual(meters.length);
+  const invoiceParams = invoiceBodies.map((body) => new URLSearchParams(body));
+  expect(
+    invoiceParams.map((params) => params.get("metadata[takosumi_usage_meter]")),
+  ).toEqual([...meters]);
+  expect(invoiceParams.map((params) => params.get("amount"))).toEqual([
+    "2",
+    "4",
+    "6",
+    "8",
+    "10",
+    "12",
+    "14",
+  ]);
+  expect(invoiceBodies.join("\n")).not.toContain("workers_for_platforms");
+});
+
 test("stripeInvoiceItemParams rejects invalid invoice item input", () => {
   assertThrows(
     () =>

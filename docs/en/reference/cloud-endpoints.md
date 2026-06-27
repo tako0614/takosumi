@@ -176,11 +176,14 @@ x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_reque
 
 The Cloudflare Compatibility Gateway / managed resource backend presents
 resources to users as Cloudflare provider `cloudflare_workers_script`, routes,
-KV, R2, D1, Workflows, Containers, and similar managed resources. Workers for
-Platforms is an internal backend and must not become the user-facing billing or
-usage-ledger family. Worker script usage is reported with
+KV, R2, and D1. Workers for Platforms is the internal backend that realizes
+Workers Script and must not become the user-facing billing or usage-ledger
+family. Worker script usage is reported with
 `resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
-`gateway_storage_gb_hour`. `wfp` / `workers_for_platforms` is rejected in
+`gateway_storage_gb_hour`. Additional families such as Workflows, Containers,
+Queues, and Durable Objects are added to the catalog, UI, and billing prices
+only after the closed Gateway backend proves lifecycle endpoints and usage
+smoke coverage for them. `wfp` / `workers_for_platforms` is rejected in
 `meterId`, `resourceFamily`, and Stripe meters; it may appear only as internal
 implementation evidence in `resourceMetadata.backend`. Example:
 

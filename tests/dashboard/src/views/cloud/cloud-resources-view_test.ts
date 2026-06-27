@@ -45,6 +45,29 @@ describe("Cloud resources view", () => {
     expect(ja["cloudResources.inventory.remaining"]).toContain("{count}");
   });
 
+  test("only exposes currently materialized Cloudflare compat resource groups", () => {
+    for (const key of ["kv", "r2", "d1", "workers"]) {
+      expect(cloudResourcesViewSource).toContain(
+        `t("cloudResources.inventory.${key}")`,
+      );
+      expect(
+        en[`cloudResources.inventory.${key}` as keyof typeof en],
+      ).toBeTruthy();
+      expect(
+        ja[`cloudResources.inventory.${key}` as keyof typeof ja],
+      ).toBeTruthy();
+    }
+    for (const key of ["workflows", "containers", "queues", "durableObjects"]) {
+      expect(cloudResourcesViewSource).not.toContain(`inv.${key}`);
+      expect(
+        en[`cloudResources.inventory.${key}` as keyof typeof en],
+      ).toBeUndefined();
+      expect(
+        ja[`cloudResources.inventory.${key}` as keyof typeof ja],
+      ).toBeUndefined();
+    }
+  });
+
   test("keeps compact resource controls responsive on mobile", () => {
     expect(appViewsCssSource).toContain(".av-cloud-res-group-title");
     expect(appViewsCssSource).toContain(".av-cloud-res-more");
