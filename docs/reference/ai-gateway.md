@@ -99,7 +99,7 @@ Example internal report:
 x-takosumi-cloud-usage-space-id: space_xxx
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":"ai_request","quantity":1,"usdMicros":250000}]
+x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":"ai_request","quantity":1}]
 ```
 
 If these headers are present but the ledger write fails, the platform route
