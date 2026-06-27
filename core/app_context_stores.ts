@@ -32,11 +32,6 @@ import {
   InMemoryEndpointServiceGrantStore,
   InMemoryServiceTrustRecordStore,
 } from "./domains/service-endpoints/mod.ts";
-import {
-  InMemoryServiceBindingStore,
-  InMemoryServiceExportStore,
-  InMemoryServiceGraphGrantStore,
-} from "./domains/service-graph/mod.ts";
 import type {
   StorageDriver,
   StorageTransaction,
@@ -101,17 +96,6 @@ export function createAppStores(
       grants:
         options.stores?.serviceEndpoints?.grants ??
         new InMemoryEndpointServiceGrantStore(),
-    },
-    serviceGraph: {
-      exports:
-        options.stores?.serviceGraph?.exports ??
-        new InMemoryServiceExportStore(),
-      bindings:
-        options.stores?.serviceGraph?.bindings ??
-        new InMemoryServiceBindingStore(),
-      grants:
-        options.stores?.serviceGraph?.grants ??
-        new InMemoryServiceGraphGrantStore(),
     },
   };
 }
@@ -196,17 +180,6 @@ function createStorageBackedAppStores(
       grants:
         options.stores?.serviceEndpoints?.grants ??
         storageBackedStore(driver, (tx) => tx.serviceEndpoints.grants),
-    },
-    serviceGraph: {
-      exports:
-        options.stores?.serviceGraph?.exports ??
-        storageBackedStore(driver, (tx) => tx.serviceGraph.exports),
-      bindings:
-        options.stores?.serviceGraph?.bindings ??
-        storageBackedStore(driver, (tx) => tx.serviceGraph.bindings),
-      grants:
-        options.stores?.serviceGraph?.grants ??
-        storageBackedStore(driver, (tx) => tx.serviceGraph.grants),
     },
   };
 }

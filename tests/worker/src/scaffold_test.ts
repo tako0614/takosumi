@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
 
 const repoRoot = new URL("../../../", import.meta.url);
@@ -94,7 +94,9 @@ test("Cloudflare scaffold docs describe internal plan/apply Run routing", async 
 
 test("OpenTofu runner image stays isolated from the Worker browser bundle", async () => {
   const dockerfile = await readText(new URL("Dockerfile", runnerImageRoot));
-  const server = await readText(new URL("entrypoint.ts", runnerImageRoot));
+  // entrypoint.ts now delegates to runner/lib/*; assert against the combined
+  // runner image source so the behaviors stay covered after the lib split.
+  const server = await readRunnerServerSource();
 
   assert.match(dockerfile, /FROM oven\/bun:1/);
   assert.match(dockerfile, /OPENTOFU_VERSION/);
@@ -172,4 +174,16 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
 
 async function readText(path: URL | string): Promise<string> {
   return readFile(path, "utf8");
+}
+
+async function readRunnerServerSource(): Promise<string> {
+  const parts = [await readText(new URL("entrypoint.ts", runnerImageRoot))];
+  const libRoot = new URL("lib/", runnerImageRoot);
+  const entries = await readdir(libRoot);
+  for (const entry of entries.sort()) {
+    if (entry.endsWith(".ts")) {
+      parts.push(await readText(new URL(entry, libRoot)));
+    }
+  }
+  return parts.join("\n");
 }

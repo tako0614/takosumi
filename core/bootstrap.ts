@@ -81,7 +81,6 @@ import {
   BackupsService,
   type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
-import { createStorageBackedServiceGraphService } from "./domains/service-graph/mod.ts";
 import {
   type OfficialCatalogSource,
   seedOfficialInstallConfigs,
@@ -879,9 +878,6 @@ export async function createTakosumiService(
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
-  const serviceGraphService = createStorageBackedServiceGraphService(
-    context.adapters.storage,
-  );
   // Seed the required shared InstallConfigs before the service is exposed. The
   // generic Capsule default powers the standard Git URL install flow, so a seed
   // failure is a boot/readiness failure rather than a deferred dashboard error.
@@ -927,7 +923,6 @@ export async function createTakosumiService(
       ? { billingEnforcement: options.billingEnforcement }
       : {}),
     ...(options.quotaPolicy ? { quotaPolicy: options.quotaPolicy } : {}),
-    serviceGraphService,
     observability: context.adapters.observability,
     metricTags,
   });
@@ -1002,7 +997,6 @@ export async function createTakosumiService(
       installationsService,
       connectionsService,
       dependenciesService,
-      serviceGraphService,
       outputSharesService,
       runGroupsService,
       activityService,

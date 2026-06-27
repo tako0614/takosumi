@@ -12,7 +12,6 @@ import type {
   ResourceStorageStores,
   RuntimeStorageStores,
   ServiceEndpointStorageStores,
-  ServiceGraphStorageStores,
   StorageDriver,
   StorageTransaction,
 } from "./driver.ts";
@@ -53,11 +52,6 @@ import {
   MemoryEndpointServiceGrantStore,
   MemoryServiceTrustRecordStore,
 } from "./memory/service_endpoint_stores.ts";
-import {
-  InMemoryServiceBindingStore,
-  InMemoryServiceExportStore,
-  InMemoryServiceGraphGrantStore,
-} from "../../domains/service-graph/mod.ts";
 
 export type { MemoryStorageSnapshot };
 
@@ -123,7 +117,6 @@ class MemoryStorageTransaction implements StorageTransaction {
   };
   readonly audit: { readonly events: AuditStore };
   readonly serviceEndpoints: ServiceEndpointStorageStores;
-  readonly serviceGraph: ServiceGraphStorageStores;
   readonly runtimeAgent: WorkLedger;
 
   constructor(state: MemoryStorageState) {
@@ -189,11 +182,6 @@ class MemoryStorageTransaction implements StorageTransaction {
       grants: new MemoryEndpointServiceGrantStore(
         state.serviceEndpoints.grants,
       ),
-    };
-    this.serviceGraph = {
-      exports: new InMemoryServiceExportStore(state.serviceGraph.exports),
-      bindings: new InMemoryServiceBindingStore(state.serviceGraph.bindings),
-      grants: new InMemoryServiceGraphGrantStore(state.serviceGraph.grants),
     };
     this.runtimeAgent = new MemoryRuntimeAgentLedgerStore(
       state.runtimeAgent.agents,

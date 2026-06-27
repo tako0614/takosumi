@@ -38,7 +38,6 @@ import type { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
-import type { ServiceGraphOperations } from "../domains/service-graph/mod.ts";
 import {
   OpenTofuControllerError,
   type OpenTofuControllerErrorCode,
@@ -376,13 +375,6 @@ export interface DeployControlInternalRouteDependencies {
    * Dependency routes return 501 after successful auth.
    */
   readonly dependenciesService?: DependenciesService;
-  /**
-   * Service Graph v1 domain service. This supports runtime ServiceExport /
-   * ServiceBinding / ServiceGrant records over OutputSnapshot,
-   * DependencySnapshot, and Accounts/Vault authority. When unset, Service Graph
-   * routes return 501 after auth.
-   */
-  readonly serviceGraphService?: ServiceGraphOperations;
   /**
    * OutputShares domain service (Core Specification §18). When unset, the
    * cross-Space OutputShare routes return 501 after successful auth.

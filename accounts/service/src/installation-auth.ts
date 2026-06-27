@@ -8,7 +8,6 @@ import {
   subjectCanAccessInstallation,
 } from "./installation-routes.ts";
 import type { AccountsStore } from "./store.ts";
-import { requireSameSpaceServiceGraphControlForInstallation } from "./service-graph-service-tokens.ts";
 import {
   errorJson,
   json,
@@ -116,27 +115,6 @@ export async function requireAppInstallationAccountAccess(input: {
   return undefined;
 }
 
-export async function requireAppInstallationAccountOrServiceGraphControlAccess(input: {
-  request: Request;
-  store: AccountsStore;
-  installationId: string;
-  scope: AccountsBearerRequiredScope;
-}): Promise<Response | undefined> {
-  const accountBlocked = await requireAppInstallationAccountAccess(input);
-  if (!accountBlocked) return undefined;
-  const serviceGraphControl =
-    await requireSameSpaceServiceGraphControlForInstallation({
-      request: input.request,
-      store: input.store,
-      targetInstallationId: input.installationId,
-    });
-  if (serviceGraphControl.ok) return undefined;
-  return preferredCompositeAuthResponse(
-    accountBlocked,
-    serviceGraphControl.response,
-  );
-}
-
 async function requireAccountCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
@@ -168,14 +146,4 @@ async function requireAccountCreateWriteAccess(input: {
     return errorJson("account_not_found", "account not found", 404);
   }
   return undefined;
-}
-
-function preferredCompositeAuthResponse(
-  accountResponse: Response,
-  serviceGraphResponse: Response,
-): Response {
-  if (accountResponse.status === 401 && serviceGraphResponse.status !== 401) {
-    return serviceGraphResponse;
-  }
-  return accountResponse;
 }
