@@ -73,6 +73,7 @@ import {
 import type { BackupRecord } from "takosumi-contract/backups";
 import type {
   BillingAccount,
+  BillingAutoRechargeAttempt,
   BillingPlan,
   CreditBalance,
   CreditReservation,
@@ -106,7 +107,11 @@ import type {
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
+  ClaimBillingAutoRechargeAttemptInput,
+  ClaimBillingAutoRechargeAttemptResult,
   CreditAmountInput,
+  SettleBillingAutoRechargeAttemptInput,
+  SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
 } from "./store.ts";
@@ -2519,6 +2524,224 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows.map(normalizeCreditReservation);
   }
 
+  async claimBillingAutoRechargeAttempt(
+    input: ClaimBillingAutoRechargeAttemptInput,
+  ): Promise<ClaimBillingAutoRechargeAttemptResult> {
+    const normalized = normalizeBillingAutoRechargeAttempt(input.attempt);
+    return await this.#client.transaction(async (transaction) => {
+      await transaction.query(
+        `select pg_advisory_xact_lock(hashtext($1::text))`,
+        [
+          `takosumi:auto_recharge:${normalized.spaceId}:${normalized.periodStart}`,
+        ],
+      );
+      const existing = await billingAutoRechargeAttemptByIdempotencyKeySql(
+        transaction,
+        normalized.idempotencyKey,
+      );
+      if (existing) {
+        return {
+          claimed: false,
+          attempt: existing,
+          skippedReason: "already_claimed",
+        };
+      }
+      const inserted = await transaction.query<{ json: unknown }>(
+        `insert into takosumi_billing_auto_recharge_attempts (
+           id, space_id, run_id, billing_account_id, idempotency_key,
+           period_start, period_end, requested_usd_micros,
+           monthly_limit_usd_micros, charged_usd_micros, status,
+           stripe_payment_intent_id, provider_status, failure_reason,
+           attempt_json, created_at, updated_at
+         )
+         select
+           $1::text, $2::text, $3::text, $4::text, $5::text,
+           $6::text, $7::text, $8::bigint,
+           $9::bigint, $10::bigint, $11::text,
+           $12::text, $13::text, $14::text,
+           $15::jsonb, $16::text, $17::text
+         where (
+           $18::bigint is null
+           or coalesce((
+             select sum(
+               case
+                 when status = 'succeeded'
+                   then coalesce(charged_usd_micros, requested_usd_micros)
+                 else requested_usd_micros
+               end
+             )
+             from takosumi_billing_auto_recharge_attempts
+             where space_id = $2::text
+               and period_start = $6::text
+               and status in ('pending', 'pending_unknown', 'succeeded')
+           ), 0) + $8::bigint <= $18::bigint
+         )
+         on conflict (idempotency_key) do nothing
+         returning attempt_json as json`,
+        billingAutoRechargeAttemptSqlParams(
+          normalized,
+          input.monthlyLimitUsdMicros,
+        ),
+      );
+      const row = inserted.rows[0];
+      if (row) {
+        return {
+          claimed: true,
+          attempt: normalizeBillingAutoRechargeAttempt(
+            parseJson(row.json) as BillingAutoRechargeAttempt,
+          ),
+        };
+      }
+      const raced = await billingAutoRechargeAttemptByIdempotencyKeySql(
+        transaction,
+        normalized.idempotencyKey,
+      );
+      if (raced) {
+        return {
+          claimed: false,
+          attempt: raced,
+          skippedReason: "already_claimed",
+        };
+      }
+      return {
+        claimed: false,
+        skippedReason: "monthly_limit_exceeded",
+      };
+    });
+  }
+
+  async settleBillingAutoRechargeAttempt(
+    input: SettleBillingAutoRechargeAttemptInput,
+  ): Promise<SettleBillingAutoRechargeAttemptResult> {
+    return await this.#client.transaction(
+      async (transaction: SqlTransaction) => {
+        const existingRows = await transaction.query<{ json: unknown }>(
+          `select attempt_json as json
+           from takosumi_billing_auto_recharge_attempts
+           where id = $1
+           for update`,
+          [input.attemptId],
+        );
+        const existing = existingRows.rows[0]
+          ? normalizeBillingAutoRechargeAttempt(
+              parseJson(
+                existingRows.rows[0].json,
+              ) as BillingAutoRechargeAttempt,
+            )
+          : undefined;
+        if (!existing) {
+          return {
+            settled: false,
+            skippedReason: "attempt_not_found",
+          };
+        }
+        if (existing.status === "succeeded") {
+          return {
+            settled: false,
+            attempt: existing,
+            balance: await billingCreditBalanceForSpace(
+              transaction,
+              existing.spaceId,
+            ),
+            skippedReason: "already_succeeded",
+          };
+        }
+        const next = normalizeBillingAutoRechargeAttempt({
+          ...existing,
+          status: input.status,
+          ...(input.chargedUsdMicros !== undefined
+            ? { chargedUsdMicros: input.chargedUsdMicros }
+            : {}),
+          ...(input.stripePaymentIntentId
+            ? { stripePaymentIntentId: input.stripePaymentIntentId }
+            : {}),
+          ...(input.providerStatus
+            ? { providerStatus: input.providerStatus }
+            : {}),
+          ...(input.failureReason
+            ? { failureReason: input.failureReason }
+            : {}),
+          updatedAt: input.updatedAt,
+        });
+        await transaction.query(
+          `update takosumi_billing_auto_recharge_attempts
+           set charged_usd_micros = $2,
+               status = $3,
+               stripe_payment_intent_id = $4,
+               provider_status = $5,
+               failure_reason = $6,
+               attempt_json = $7::jsonb,
+               updated_at = $8
+           where id = $1`,
+          [
+            next.id,
+            next.chargedUsdMicros ?? null,
+            next.status,
+            next.stripePaymentIntentId ?? null,
+            next.providerStatus ?? null,
+            next.failureReason ?? null,
+            JSON.stringify(next),
+            next.updatedAt,
+          ],
+        );
+        if (next.status !== "succeeded") {
+          return { settled: true, attempt: next };
+        }
+        const chargedUsdMicros =
+          next.chargedUsdMicros ?? next.requestedUsdMicros;
+        const legacyCredits =
+          legacyStorageCreditsFromUsdMicros(chargedUsdMicros);
+        await transaction.query(
+          `insert into takosumi_credit_balances
+             (space_id, available_usd_micros, reserved_usd_micros,
+              monthly_included_usd_micros, purchased_usd_micros,
+              available_credits, reserved_credits,
+              monthly_included_credits, purchased_credits, updated_at)
+           values ($1, 0, 0, 0, 0, 0, 0, 0, 0, $2)
+           on conflict (space_id) do nothing`,
+          [next.spaceId, input.updatedAt],
+        );
+        await transaction.query(
+          `update takosumi_credit_balances
+           set available_usd_micros = coalesce(available_usd_micros, available_credits * 1000000) + $2,
+               purchased_usd_micros = coalesce(purchased_usd_micros, purchased_credits * 1000000) + $2,
+               available_credits = available_credits + $3,
+               purchased_credits = purchased_credits + $3,
+               updated_at = $4
+           where space_id = $1`,
+          [next.spaceId, chargedUsdMicros, legacyCredits, input.updatedAt],
+        );
+        return {
+          settled: true,
+          attempt: next,
+          balance: await billingCreditBalanceForSpace(
+            transaction,
+            next.spaceId,
+          ),
+        };
+      },
+    );
+  }
+
+  async listBillingAutoRechargeAttempts(
+    spaceId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly BillingAutoRechargeAttempt[]> {
+    const rows = await this.#pgManyJson<BillingAutoRechargeAttempt>(
+      pgSchema.billingAutoRechargeAttempts,
+      pgSchema.billingAutoRechargeAttempts.attemptJson,
+      {
+        where: eq(pgSchema.billingAutoRechargeAttempts.spaceId, spaceId),
+        orderBy: [
+          desc(pgSchema.billingAutoRechargeAttempts.createdAt),
+          desc(pgSchema.billingAutoRechargeAttempts.id),
+        ],
+        limit: options.limit ?? 100,
+      },
+    );
+    return rows.map(normalizeBillingAutoRechargeAttempt);
+  }
+
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = await this.#usageEventByIdempotencyKey(
       event.idempotencyKey,
@@ -2853,6 +3076,147 @@ function normalizeCreditReservation(
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
   };
+}
+
+function normalizeBillingAutoRechargeAttempt(
+  attempt: BillingAutoRechargeAttempt,
+): BillingAutoRechargeAttempt {
+  if (
+    attempt.status !== "pending" &&
+    attempt.status !== "pending_unknown" &&
+    attempt.status !== "succeeded" &&
+    attempt.status !== "failed"
+  ) {
+    throw new TypeError("auto recharge status is invalid");
+  }
+  if (
+    !Number.isSafeInteger(attempt.requestedUsdMicros) ||
+    attempt.requestedUsdMicros <= 0
+  ) {
+    throw new TypeError("auto recharge requestedUsdMicros must be positive");
+  }
+  if (
+    attempt.monthlyLimitUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.monthlyLimitUsdMicros) ||
+      attempt.monthlyLimitUsdMicros <= 0)
+  ) {
+    throw new TypeError("auto recharge monthlyLimitUsdMicros must be positive");
+  }
+  if (
+    attempt.chargedUsdMicros !== undefined &&
+    (!Number.isSafeInteger(attempt.chargedUsdMicros) ||
+      attempt.chargedUsdMicros < 0)
+  ) {
+    throw new TypeError("auto recharge chargedUsdMicros must be non-negative");
+  }
+  return {
+    ...attempt,
+    ...(attempt.status === "succeeded"
+      ? {
+          chargedUsdMicros:
+            attempt.chargedUsdMicros ?? attempt.requestedUsdMicros,
+        }
+      : {}),
+  };
+}
+
+function billingAutoRechargeAttemptSqlParams(
+  attempt: BillingAutoRechargeAttempt,
+  monthlyLimitUsdMicros: number | undefined,
+): readonly (string | number | null)[] {
+  return [
+    attempt.id,
+    attempt.spaceId,
+    attempt.runId,
+    attempt.billingAccountId,
+    attempt.idempotencyKey,
+    attempt.periodStart,
+    attempt.periodEnd ?? null,
+    attempt.requestedUsdMicros,
+    attempt.monthlyLimitUsdMicros ?? null,
+    attempt.chargedUsdMicros ?? null,
+    attempt.status,
+    attempt.stripePaymentIntentId ?? null,
+    attempt.providerStatus ?? null,
+    attempt.failureReason ?? null,
+    JSON.stringify(attempt),
+    attempt.createdAt,
+    attempt.updatedAt,
+    monthlyLimitUsdMicros ?? null,
+  ];
+}
+
+async function billingCreditBalanceForSpace(
+  client: SqlTransaction,
+  spaceId: string,
+): Promise<CreditBalance | undefined> {
+  const rows = await client.query<{
+    spaceId: string;
+    availableUsdMicros: number | string | null;
+    reservedUsdMicros: number | string | null;
+    monthlyIncludedUsdMicros: number | string | null;
+    purchasedUsdMicros: number | string | null;
+    availableCredits: number | string;
+    reservedCredits: number | string;
+    monthlyIncludedCredits: number | string;
+    purchasedCredits: number | string;
+    updatedAt: string;
+  }>(
+    `select
+       space_id as "spaceId",
+       available_usd_micros as "availableUsdMicros",
+       reserved_usd_micros as "reservedUsdMicros",
+       monthly_included_usd_micros as "monthlyIncludedUsdMicros",
+       purchased_usd_micros as "purchasedUsdMicros",
+       available_credits as "availableCredits",
+       reserved_credits as "reservedCredits",
+       monthly_included_credits as "monthlyIncludedCredits",
+       purchased_credits as "purchasedCredits",
+       updated_at as "updatedAt"
+     from takosumi_credit_balances
+     where space_id = $1
+     limit 1`,
+    [spaceId],
+  );
+  const row = rows.rows[0];
+  if (!row) return undefined;
+  return creditBalanceFromRow({
+    spaceId: row.spaceId,
+    availableUsdMicros:
+      row.availableUsdMicros === null ? null : Number(row.availableUsdMicros),
+    reservedUsdMicros:
+      row.reservedUsdMicros === null ? null : Number(row.reservedUsdMicros),
+    monthlyIncludedUsdMicros:
+      row.monthlyIncludedUsdMicros === null
+        ? null
+        : Number(row.monthlyIncludedUsdMicros),
+    purchasedUsdMicros:
+      row.purchasedUsdMicros === null ? null : Number(row.purchasedUsdMicros),
+    availableCredits: Number(row.availableCredits),
+    reservedCredits: Number(row.reservedCredits),
+    monthlyIncludedCredits: Number(row.monthlyIncludedCredits),
+    purchasedCredits: Number(row.purchasedCredits),
+    updatedAt: row.updatedAt,
+  });
+}
+
+async function billingAutoRechargeAttemptByIdempotencyKeySql(
+  client: SqlTransaction,
+  idempotencyKey: string,
+): Promise<BillingAutoRechargeAttempt | undefined> {
+  const rows = await client.query<{ json: unknown }>(
+    `select attempt_json as json
+     from takosumi_billing_auto_recharge_attempts
+     where idempotency_key = $1
+     limit 1`,
+    [idempotencyKey],
+  );
+  const row = rows.rows[0];
+  return row
+    ? normalizeBillingAutoRechargeAttempt(
+        parseJson(row.json) as BillingAutoRechargeAttempt,
+      )
+    : undefined;
 }
 
 function normalizeUsageEvent(event: UsageEvent): UsageEvent {

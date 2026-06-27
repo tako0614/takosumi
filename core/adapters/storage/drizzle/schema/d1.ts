@@ -463,6 +463,40 @@ export const creditBalances = sqliteTable(names.creditBalances, {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const billingAutoRechargeAttempts = sqliteTable(
+  names.billingAutoRechargeAttempts,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    runId: text("run_id").notNull(),
+    billingAccountId: text("billing_account_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    periodStart: text("period_start").notNull(),
+    periodEnd: text("period_end"),
+    requestedUsdMicros: integer("requested_usd_micros").notNull(),
+    monthlyLimitUsdMicros: integer("monthly_limit_usd_micros"),
+    chargedUsdMicros: integer("charged_usd_micros"),
+    status: text("status").notNull(),
+    stripePaymentIntentId: text("stripe_payment_intent_id"),
+    providerStatus: text("provider_status"),
+    failureReason: text("failure_reason"),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("billing_auto_recharge_attempts_idempotency_unique").on(
+      table.idempotencyKey,
+    ),
+    index("billing_auto_recharge_attempts_space_period_status_idx").on(
+      table.spaceId,
+      table.periodStart,
+      table.status,
+    ),
+    index("billing_auto_recharge_attempts_run_idx").on(table.runId),
+  ],
+);
+
 export const usageEvents = sqliteTable(
   names.usageEvents,
   {

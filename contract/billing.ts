@@ -171,6 +171,32 @@ export interface CreditReservation {
   readonly expiresAt: string;
 }
 
+export type BillingAutoRechargeAttemptStatus =
+  | "pending"
+  | "pending_unknown"
+  | "succeeded"
+  | "failed";
+
+export interface BillingAutoRechargeAttempt {
+  readonly id: string;
+  readonly spaceId: string;
+  readonly runId: string;
+  readonly billingAccountId: string;
+  readonly idempotencyKey: string;
+  /** UTC calendar-month start used for monthly auto-recharge safety caps. */
+  readonly periodStart: string;
+  readonly periodEnd?: string;
+  readonly requestedUsdMicros: number;
+  readonly monthlyLimitUsdMicros?: number;
+  readonly chargedUsdMicros?: number;
+  readonly status: BillingAutoRechargeAttemptStatus;
+  readonly stripePaymentIntentId?: string;
+  readonly providerStatus?: string;
+  readonly failureReason?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export type UsageEventKind =
   | "runner_minute"
   | "gateway_compute"

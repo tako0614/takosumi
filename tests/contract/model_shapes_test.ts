@@ -28,6 +28,7 @@ import {
 } from "../../contract/provider-resolution.ts";
 import type {
   BillingAccount,
+  BillingAutoRechargeAttempt,
   BillingPlan,
   BillingSettings,
   CreditReservation,
@@ -332,11 +333,7 @@ test("Provider credential ownership normalizes legacy own_key to env", () => {
   expect(normalizeProviderCredentialOwnership("own_key")).toBe("env");
   expect(normalizeProviderCredentialOwnership("gateway")).toBeUndefined();
   expect(
-    normalizeProviderCredentialOwnershipOptions([
-      "own_key",
-      "env",
-      "gateway",
-    ]),
+    normalizeProviderCredentialOwnershipOptions(["own_key", "env", "gateway"]),
   ).toEqual(["env"]);
 });
 
@@ -588,6 +585,23 @@ test("Billing and security ledger shapes", () => {
     idempotencyKey: "run_1:runner",
     createdAt: "2026-06-07T00:00:00Z",
   };
+  const autoRechargeAttempt: BillingAutoRechargeAttempt = {
+    id: "takosumi-autorecharge:space_1:run_1",
+    spaceId: "space_1",
+    runId: "run_1",
+    billingAccountId: "ba_1",
+    idempotencyKey: "takosumi-autorecharge:space_1:run_1",
+    periodStart: "2026-06-01T00:00:00Z",
+    periodEnd: "2026-07-01T00:00:00Z",
+    requestedUsdMicros: 1_000_000,
+    monthlyLimitUsdMicros: 10_000_000,
+    chargedUsdMicros: 1_000_000,
+    status: "succeeded",
+    stripePaymentIntentId: "pi_123",
+    providerStatus: "succeeded",
+    createdAt: "2026-06-07T00:00:00Z",
+    updatedAt: "2026-06-07T00:00:01Z",
+  };
   const managedMeter: GatewayResourceUsageMeter = {
     installationId: "inst_talk",
     kind: "gateway_storage_gb_hour",
@@ -638,6 +652,7 @@ test("Billing and security ledger shapes", () => {
   expect(settings.mode).toBe("showback");
   expect(reservation.estimatedCredits).toBe(32);
   expect(usage.kind).toBe("runner_minute");
+  expect(autoRechargeAttempt.status).toBe("succeeded");
   expect(managedMeter.kind).toBe("gateway_storage_gb_hour");
   expect(invoiceReconciliation.adjustmentCredits).toBe(1);
   expect(mint.capabilities).toEqual(["cloudflare"]);

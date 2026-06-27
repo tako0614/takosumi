@@ -2823,6 +2823,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       id: "pro",
       name: "Pro",
       monthlyBasePrice: 2000,
+      includedUsdMicros: 100_000_000,
       includedCredits: 100,
       limits: {
         maxEstimatedCreditsPerRun: 10,
@@ -2835,6 +2836,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       id: "pro",
       name: "Pro",
       monthlyBasePrice: 2000,
+      includedUsdMicros: 100_000_000,
       includedCredits: 100,
       limits: {
         maxEstimatedCreditsPerRun: 10,
@@ -2897,6 +2899,10 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
     });
     expect(await store.getCreditBalance("space_1"), label).toEqual({
       spaceId: "space_1",
+      availableUsdMicros: 42_000_000,
+      reservedUsdMicros: 3_000_000,
+      monthlyIncludedUsdMicros: 10_000_000,
+      purchasedUsdMicros: 35_000_000,
       availableCredits: 42,
       reservedCredits: 3,
       monthlyIncludedCredits: 10,
@@ -2957,6 +2963,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       id: "creditres_1",
       spaceId: "space_1",
       runId: "plan_1",
+      estimatedUsdMicros: 5_000_000,
       estimatedCredits: 5,
       status: "reserved",
       mode: "enforce",
@@ -2973,6 +2980,100 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       ),
       label,
     ).toEqual(["creditres_2"]);
+
+    const attempt = {
+      id: "takosumi-autorecharge:space_1:plan_1",
+      spaceId: "space_1",
+      runId: "plan_1",
+      billingAccountId: "bill_space_1",
+      idempotencyKey: "takosumi-autorecharge:space_1:plan_1",
+      periodStart: "2026-06-01T00:00:00.000Z",
+      periodEnd: "2026-07-01T00:00:00.000Z",
+      requestedUsdMicros: 1_000_000,
+      monthlyLimitUsdMicros: 2_000_000,
+      status: "pending" as const,
+      createdAt: "2026-06-07T00:00:02.000Z",
+      updatedAt: "2026-06-07T00:00:02.000Z",
+    };
+    expect(
+      await store.claimBillingAutoRechargeAttempt({
+        attempt,
+        monthlyLimitUsdMicros: 2_000_000,
+      }),
+      label,
+    ).toMatchObject({ claimed: true, attempt });
+    expect(
+      await store.claimBillingAutoRechargeAttempt({
+        attempt: { ...attempt, id: "attempt_duplicate" },
+        monthlyLimitUsdMicros: 2_000_000,
+      }),
+      label,
+    ).toMatchObject({
+      claimed: false,
+      skippedReason: "already_claimed",
+      attempt,
+    });
+    expect(
+      await store.claimBillingAutoRechargeAttempt({
+        attempt: {
+          ...attempt,
+          id: "takosumi-autorecharge:space_1:plan_2",
+          runId: "plan_2",
+          idempotencyKey: "takosumi-autorecharge:space_1:plan_2",
+          requestedUsdMicros: 1_500_000,
+        },
+        monthlyLimitUsdMicros: 2_000_000,
+      }),
+      label,
+    ).toEqual({
+      claimed: false,
+      skippedReason: "monthly_limit_exceeded",
+    });
+    expect(
+      await store.settleBillingAutoRechargeAttempt({
+        attemptId: attempt.id,
+        status: "succeeded",
+        chargedUsdMicros: 1_000_000,
+        stripePaymentIntentId: "pi_1",
+        providerStatus: "succeeded",
+        updatedAt: "2026-06-07T00:00:03.000Z",
+      }),
+      label,
+    ).toMatchObject({
+      settled: true,
+      attempt: {
+        id: attempt.id,
+        status: "succeeded",
+        chargedUsdMicros: 1_000_000,
+        stripePaymentIntentId: "pi_1",
+      },
+      balance: {
+        availableUsdMicros: 38_000_000,
+        purchasedUsdMicros: 36_000_000,
+      },
+    });
+    expect(
+      await store.settleBillingAutoRechargeAttempt({
+        attemptId: attempt.id,
+        status: "succeeded",
+        chargedUsdMicros: 1_000_000,
+        updatedAt: "2026-06-07T00:00:04.000Z",
+      }),
+      label,
+    ).toMatchObject({
+      settled: false,
+      skippedReason: "already_succeeded",
+      balance: {
+        availableUsdMicros: 38_000_000,
+        purchasedUsdMicros: 36_000_000,
+      },
+    });
+    expect(
+      (await store.listBillingAutoRechargeAttempts("space_1")).map(
+        (row) => row.id,
+      ),
+      label,
+    ).toEqual([attempt.id]);
 
     await store.putUsageEvent({
       id: "usage_1",
@@ -3005,6 +3106,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
         runId: "apply_1",
         kind: "operation",
         quantity: 1,
+        usdMicros: 5_000_000,
         credits: 5,
         source: "runner",
         idempotencyKey: "apply_1:operation",
@@ -3012,6 +3114,47 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       },
     ]);
   }
+});
+
+test("Postgres auto recharge claim serializes monthly cap checks", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const store = new SqlOpenTofuDeploymentStore({ client: pgClient });
+  const attempt = (runId: string) => ({
+    id: `takosumi-autorecharge:space_pg:${runId}`,
+    spaceId: "space_pg",
+    runId,
+    billingAccountId: "bill_space_pg",
+    idempotencyKey: `takosumi-autorecharge:space_pg:${runId}`,
+    periodStart: "2026-06-01T00:00:00.000Z",
+    periodEnd: "2026-07-01T00:00:00.000Z",
+    requestedUsdMicros: 1_000_000,
+    monthlyLimitUsdMicros: 1_000_000,
+    status: "pending" as const,
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const results = await Promise.all([
+    store.claimBillingAutoRechargeAttempt({
+      attempt: attempt("plan_a"),
+      monthlyLimitUsdMicros: 1_000_000,
+    }),
+    store.claimBillingAutoRechargeAttempt({
+      attempt: attempt("plan_b"),
+      monthlyLimitUsdMicros: 1_000_000,
+    }),
+  ]);
+
+  expect(results.filter((result) => result.claimed)).toHaveLength(1);
+  expect(
+    results.filter(
+      (result) => result.skippedReason === "monthly_limit_exceeded",
+    ),
+  ).toHaveLength(1);
+  expect(await store.listBillingAutoRechargeAttempts("space_pg")).toHaveLength(
+    1,
+  );
 });
 
 test("Backup store: put/list newest-first, space-scoped, round-trips", async () => {

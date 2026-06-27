@@ -2854,6 +2854,62 @@ test("enforced Stripe billing auto-recharges before reserving USD balance", asyn
   });
 });
 
+test("enforced Stripe billing fails closed when monthly auto-recharge cap is exceeded", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    billingAutoRecharge: async (input) => {
+      expect(input.monthlyLimitUsdMicros).toEqual(1_500_000);
+      return { skippedReason: "monthly_limit_exceeded" };
+    },
+  });
+  const space = await store.getSpace("space_test");
+  await store.putSpace({
+    ...space!,
+    billingSettings: {
+      mode: "enforce",
+      provider: "stripe",
+      reservationRequired: true,
+      autoRecharge: {
+        enabled: true,
+        thresholdUsdMicros: 500_000,
+        rechargeUsdMicros: 2_000_000,
+        monthlyLimitUsdMicros: 1_500_000,
+      },
+    },
+  });
+  await store.putCreditBalance({
+    spaceId: "space_test",
+    availableUsdMicros: 0,
+    reservedUsdMicros: 0,
+    monthlyIncludedUsdMicros: 0,
+    purchasedUsdMicros: 0,
+    availableCredits: 0,
+    reservedCredits: 0,
+    monthlyIncludedCredits: 0,
+    purchasedCredits: 0,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("failed");
+  const policyAudit = planRun.auditEvents.find(
+    (event) => event.type === "plan.policy_evaluated" && event.data?.billing,
+  );
+  expect(policyAudit?.data?.billing).toMatchObject({
+    autoRecharge: {
+      status: "skipped",
+      reason: "monthly_limit_exceeded",
+    },
+  });
+  expect(planRun.policy.reasons.join("\n")).toContain(
+    "USD balance reservation failed",
+  );
+  expect(await store.getCreditReservationForRun(planRun.id)).toBeUndefined();
+});
+
 test("enforced billing plan limits block oversized plans before reservation", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner({

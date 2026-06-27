@@ -441,6 +441,23 @@ test("control bundle carries state-snapshot metadata + output projection only", 
     createdAt: TS,
     expiresAt: "2026-06-06T01:00:00.000Z",
   });
+  await store.claimBillingAutoRechargeAttempt({
+    attempt: {
+      id: "takosumi-autorecharge:space_1:run_1",
+      spaceId: "space_1",
+      runId: "run_1",
+      billingAccountId: "bill_space_1",
+      idempotencyKey: "takosumi-autorecharge:space_1:run_1",
+      periodStart: "2026-06-01T00:00:00.000Z",
+      periodEnd: "2026-07-01T00:00:00.000Z",
+      requestedUsdMicros: 1_000_000,
+      monthlyLimitUsdMicros: 10_000_000,
+      status: "pending",
+      createdAt: TS,
+      updatedAt: TS,
+    },
+    monthlyLimitUsdMicros: 10_000_000,
+  });
   await store.putUsageEvent({
     id: "usage_1",
     spaceId: "space_1",
@@ -523,6 +540,9 @@ test("control bundle carries state-snapshot metadata + output projection only", 
   expect(bundle.billing.creditReservations.map((row: any) => row.id)).toEqual([
     "cr_1",
   ]);
+  expect(bundle.billing.autoRechargeAttempts.map((row: any) => row.id)).toEqual(
+    ["takosumi-autorecharge:space_1:run_1"],
+  );
   expect(bundle.billing.usageEvents.map((row: any) => row.id)).toEqual([
     "usage_1",
   ]);

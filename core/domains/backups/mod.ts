@@ -419,6 +419,8 @@ export class BackupsService {
     const creditBalance = await this.#store.getCreditBalance(spaceId);
     const creditReservations =
       await this.#store.listCreditReservations(spaceId);
+    const autoRechargeAttempts =
+      await this.#store.listBillingAutoRechargeAttempts(spaceId);
     const usageEvents = await this.#store.listUsageEvents(spaceId);
     const backupRecords = await this.#store.listBackupRecords(spaceId);
 
@@ -576,6 +578,7 @@ export class BackupsService {
         subscription: spaceSubscription ?? null,
         creditBalance: creditBalance ?? null,
         creditReservations: [...creditReservations],
+        autoRechargeAttempts: [...autoRechargeAttempts],
         usageEvents: [...usageEvents],
       },
       backupRecords: [...backupRecords],
@@ -906,6 +909,7 @@ export interface ControlBackupBundle {
     readonly subscription: unknown;
     readonly creditBalance: unknown;
     readonly creditReservations: readonly unknown[];
+    readonly autoRechargeAttempts: readonly unknown[];
     readonly usageEvents: readonly unknown[];
   };
   readonly backupRecords: readonly unknown[];
