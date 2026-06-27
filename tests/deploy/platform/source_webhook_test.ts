@@ -1456,6 +1456,61 @@ test("Cloud extension usage rejects Workers for Platforms as a public resource f
   });
 });
 
+test("Cloud extension usage rejects WfP as a public meter id", async () => {
+  const route = platformCloudExtensionRouteById(
+    "provider.cloudflare.client_v4",
+  );
+  if (!route) throw new Error("Cloudflare compat route missing");
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/virtual/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT: {
+        fetch: async () =>
+          Response.json(
+            { success: true, result: { id: "api" }, errors: [], messages: [] },
+            {
+              headers: {
+                [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]:
+                  "space_cf_usage",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]:
+                  "2026-06-26T13:00:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]:
+                  "2026-06-26T13:01:00.000Z",
+                [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: JSON.stringify([
+                  {
+                    meterId: "cloudflare:wfp:deploy",
+                    installationId: "inst_cf_compat",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:api",
+                    operation: "deploy",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                    credits: 2,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    route,
+    async () => ({ authenticated: true, authKind: "personal-access-token" }),
+    {
+      recordGatewayResourceUsage: async () => ({
+        usageEvents: [{ id: "usage_unreachable" }],
+      }),
+    },
+  );
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({
+    error: "invalid usage metering report",
+    error_description: "Cloud extension returned a malformed usage report.",
+  });
+});
+
 test("Cloudflare Compatibility Gateway route records reported managed resource usage", async () => {
   const route = platformCloudExtensionRouteById(
     "provider.cloudflare.client_v4",

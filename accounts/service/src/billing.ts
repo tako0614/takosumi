@@ -1,4 +1,5 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
 
 import type { AccountsStore, BillingWebhookEventStatus } from "./store.ts";
 import {
@@ -352,6 +353,11 @@ export async function createStripeInvoiceItem(
 export async function createStripeUsageInvoiceItem(
   input: CreateStripeUsageInvoiceItemInput,
 ): Promise<StripeInvoiceItemResult> {
+  if (usageMeterNameLeaksInternalWorkersBackend(input.rollup.meter)) {
+    throw new TypeError(
+      "Stripe usage rollup meter must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
+  }
   const amount = stripeUsageRollupAmount(input.rollup, input.unitAmount);
   return await createStripeInvoiceItem({
     secretKey: input.secretKey,
@@ -634,6 +640,11 @@ function stripeUsageInvoiceItemPriceFromValue(
     throw new TypeError("Stripe usage invoice item price must be an object");
   }
   const meter = stringField(value.meter, "meter");
+  if (usageMeterNameLeaksInternalWorkersBackend(meter)) {
+    throw new TypeError(
+      "Stripe usage invoice item price meter must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
+  }
   const unit = stringField(value.unit, "unit");
   const currency = stringField(value.currency, "currency").toLowerCase();
   if (!/^[a-z]{3}$/u.test(currency)) {

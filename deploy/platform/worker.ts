@@ -51,6 +51,7 @@ import {
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
   TAKOSUMI_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  usageMeterNameLeaksInternalWorkersBackend,
 } from "takosumi-contract/billing";
 import {
   AI_GATEWAY_BASE_PATH,
@@ -1329,6 +1330,11 @@ function platformCloudExtensionUsageMeterFromJson(
     typeof record.meterId === "string" ? record.meterId.trim() : "";
   if (!meterId)
     throw new TypeError("Cloud extension usage meterId is required");
+  if (usageMeterNameLeaksInternalWorkersBackend(meterId)) {
+    throw new TypeError(
+      "Cloud extension usage meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
+  }
   const installationId =
     typeof record.installationId === "string" && record.installationId.trim()
       ? record.installationId.trim()
@@ -1342,7 +1348,10 @@ function platformCloudExtensionUsageMeterFromJson(
       "Cloud extension usage resourceFamily must use lowercase letters, numbers, dot, underscore, colon, or dash",
     );
   }
-  if (resourceFamily && cloudExtensionUsageFamilyLeaksWfp(resourceFamily)) {
+  if (
+    resourceFamily &&
+    usageMeterNameLeaksInternalWorkersBackend(resourceFamily)
+  ) {
     throw new TypeError(
       "Cloud extension usage resourceFamily must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
     );
@@ -1395,12 +1404,6 @@ function optionalCloudExtensionUsageString(
     );
   }
   return trimmed;
-}
-
-function cloudExtensionUsageFamilyLeaksWfp(resourceFamily: string): boolean {
-  return /(^|[_.:-])workers[-_:]?for[-_:]?platforms($|[_.:-])/u.test(
-    resourceFamily,
-  );
 }
 
 function cloudExtensionUsageResourceMetadata(

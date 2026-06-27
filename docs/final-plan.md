@@ -797,8 +797,15 @@ cloudflare/cloudflare provider
   -> base_url = https://app.takosumi.com/compat/cloudflare/client/v4
   -> Takosumi Cloudflare Compatibility Gateway
   -> Takosumi Managed Edge internal API
-  -> Cloudflare Workers for Platforms / R2 / D1 / KV
+  -> Takosumi Cloud internal Workers Script backend / R2 / D1 / KV
 ```
+
+The internal Workers Script backend is not the customer-facing product surface.
+Users keep using Cloudflare provider Workers resources such as
+`cloudflare_workers_script`; usage ledger and billing use
+`cloudflare.workers_script`. `wfp` / `workers_for_platforms` must not appear as
+a `meterId`, `resourceFamily`, or Stripe usage meter, except as internal audit
+metadata such as `resourceMetadata.backend`.
 
 Initial scope:
 
@@ -996,7 +1003,7 @@ OSS repo must not contain:
 
 ```text
 cloudflare-compat-gateway
-cloudflare-wfp-backend
+cloudflare-workers-script-backend
 r2-pool
 cloudrun-backend
 lambda-backend
@@ -1033,7 +1040,7 @@ takosumi-cloud/
     container/
 
   backends/
-    cloudflare-wfp/
+    cloudflare-workers-script/
     r2-pool/
     d1/
     cloudrun/
@@ -1284,7 +1291,7 @@ cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
 cloudflare_d1_database
 worker vars/secrets/bindings
-Workers for Platforms backend
+internal Workers Script backend for materialization
 compatibility report
 ```
 

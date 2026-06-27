@@ -19,6 +19,7 @@ import {
   takosumiAccountsInstallationServicesPath,
 } from "../accounts/contract/src/mod.ts";
 import { TAKOSUMI_AI_GATEWAY_STATUS_PATH } from "../contract/ai-gateway.ts";
+import { usageMeterNameLeaksInternalWorkersBackend } from "../contract/billing.ts";
 
 export const CLOUD_EXTENSION_SMOKE_KIND =
   "takosumi.cloud-extension-smoke@v1" as const;
@@ -1217,6 +1218,13 @@ function cloudflareCompatUsageEventMatches(
   const kind = stringValue(event.kind);
   const resourceFamily = stringValue(event.resourceFamily);
   const meterId = stringValue(event.meterId) ?? "";
+  if (
+    (resourceFamily &&
+      usageMeterNameLeaksInternalWorkersBackend(resourceFamily)) ||
+    (meterId && usageMeterNameLeaksInternalWorkersBackend(meterId))
+  ) {
+    return false;
+  }
   const familyMatches = resourceFamily
     ? resourceFamily === "cloudflare.workers_script"
     : meterId.startsWith("cloudflare:workers_script:");

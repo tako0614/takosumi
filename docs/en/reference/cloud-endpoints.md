@@ -180,7 +180,9 @@ KV, R2, D1, Workflows, Containers, and similar managed resources. Workers for
 Platforms is an internal backend and must not become the user-facing billing or
 usage-ledger family. Worker script usage is reported with
 `resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
-`gateway_storage_gb_hour`. Example:
+`gateway_storage_gb_hour`. `wfp` / `workers_for_platforms` is rejected in
+`meterId`, `resourceFamily`, and Stripe meters; it may appear only as internal
+implementation evidence in `resourceMetadata.backend`. Example:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
@@ -199,8 +201,9 @@ successful invoice item creation, the source usage reports are marked with
 `billingExportProvider: "stripe"`, the export id, the Stripe invoice item id,
 and the exported timestamp so the next sync does not charge the same reports
 again. For Cloudflare Workers compatibility, the billing name remains
-`cloudflare.workers_script`; `resourceMetadata.backend:
-"cloudflare.workers_for_platforms"` is internal implementation evidence only.
+`cloudflare.workers_script`; `wfp` / `workers_for_platforms` must not be used as
+the billing name. `resourceMetadata.backend: "cloudflare.workers_for_platforms"`
+is internal implementation evidence only.
 
 Operators trigger Stripe usage invoice item sync through the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only

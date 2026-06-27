@@ -2769,7 +2769,7 @@ drop index if exists takosumi_spaces_handle_unique;`,
       version: 52,
       domain: "deploy",
       description:
-        "Add open managed-resource meter metadata to usage events so Cloud-only gateways can bill Workers for Platforms, KV, R2, D1, Workflows, Containers, and future resource families without enum migrations.",
+        "Add open managed-resource meter metadata to usage events so Cloud-only gateways can bill customer-facing resources such as Workers Script, KV, R2, D1, Workflows, Containers, and future resource families without enum migrations.",
       sql: `alter table takosumi_usage_events
   add column if not exists meter_id text;
 alter table takosumi_usage_events
