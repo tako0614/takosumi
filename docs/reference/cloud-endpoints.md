@@ -176,7 +176,9 @@ Cloudflare provider の `cloudflare_workers_script` / route / KV / R2 / D1 /
 Workflows / Containers などとして見せます。Workers for Platforms は内部 backend
 であり、請求・画面・usage ledger の user-facing family には出しません。Worker
 script の使用量は `resourceFamily: "cloudflare.workers_script"` として
-`gateway_compute` または `gateway_storage_gb_hour` を報告します。例:
+`gateway_compute` または `gateway_storage_gb_hour` を報告します。`wfp` /
+`workers_for_platforms` は `meterId`、`resourceFamily`、Stripe meter では拒否し、
+内部実装の証跡として `resourceMetadata.backend` にだけ残せます。例:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
@@ -194,6 +196,7 @@ Stripe 連携では、billing account ごとの未 export usage report を meter
 には `billingExportProvider: "stripe"`、export id、Stripe invoice item id、
 exported timestamp を保存し、同じ report を次回同期で再請求しません。例えば
 Cloudflare Workers compat の請求名は `cloudflare.workers_script` のままで、
+`wfp` / `workers_for_platforms` を請求名にしてはいけません。
 `resourceMetadata.backend: "cloudflare.workers_for_platforms"` は内部実装の証跡に
 留めます。
 

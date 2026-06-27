@@ -14,6 +14,7 @@ import {
   createStripeUsageInvoiceItem,
   handleStripeWebhook,
   normalizeStripeBillingEvent,
+  parseStripeUsageInvoiceItemPrices,
   reconcileBillingEntitlements,
   STRIPE_API_VERSION,
   stripeInvoiceItemParams,
@@ -304,6 +305,48 @@ test("createStripeUsageInvoiceItem maps workers script rollups to Stripe invoice
   expect(idempotencyKey).toContain("cloudflare.workers_script");
   expect(idempotencyKey).toContain("usage_a.usage_b");
   expect(idempotencyKey.length).toBeLessThanOrEqual(255);
+});
+
+test("createStripeUsageInvoiceItem rejects internal Workers for Platforms meters", async () => {
+  await assertRejects(
+    () =>
+      createStripeUsageInvoiceItem({
+        secretKey: "sk_test",
+        stripeCustomerId: "cus_workers",
+        unitAmount: 3,
+        currency: "usd",
+        rollup: {
+          billingAccountId: "bill_1",
+          meter: "cloudflare.wfp",
+          unit: "requests",
+          quantity: 5,
+          usageReportCount: 1,
+          usageReportIds: ["usage_wfp"],
+          firstReportedAt: 1_800_000_100,
+          lastReportedAt: 1_800_000_100,
+        },
+      }),
+    TypeError,
+    "customer-facing managed resource",
+  );
+});
+
+test("parseStripeUsageInvoiceItemPrices rejects internal Workers for Platforms meters", () => {
+  assertThrows(
+    () =>
+      parseStripeUsageInvoiceItemPrices(
+        JSON.stringify([
+          {
+            meter: "cloudflare.workers_for_platforms",
+            unit: "requests",
+            unitAmount: 4,
+            currency: "usd",
+          },
+        ]),
+      ),
+    TypeError,
+    "customer-facing managed resource",
+  );
 });
 
 test("createStripeUsageInvoiceItemsForBillingAccount exports unbilled workers script usage", async () => {

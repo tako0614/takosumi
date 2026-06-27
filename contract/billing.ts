@@ -111,12 +111,21 @@ export type UsageEventSource =
  * Takosumi Cloud extensions should use stable user-facing dotted names such as
  * `cloudflare.workers_script`, `cloudflare.kv`, `cloudflare.r2`,
  * `cloudflare.d1`, `cloudflare.workflows`, or `cloudflare.containers`.
- * Internal implementation backends such as Workers for Platforms belong in
- * `resourceMetadata`, not in the user-facing family.
+ * Internal implementation backends such as Workers for Platforms/WfP belong in
+ * `resourceMetadata`, not in the user-facing family, meter id, or Stripe meter.
  * The contract intentionally keeps this open so new managed resources can be
  * metered without a public contract migration.
  */
 export type UsageResourceFamily = string;
+
+export function usageMeterNameLeaksInternalWorkersBackend(
+  value: string,
+): boolean {
+  const normalized = value.trim().toLowerCase();
+  return /(^|[_.:-])(?:wfp|workers[-_:]?for[-_:]?platforms)($|[_.:-])/u.test(
+    normalized,
+  );
+}
 
 export type UsageResourceMetadataValue = string | number | boolean | null;
 export type UsageResourceMetadata = Readonly<

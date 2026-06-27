@@ -213,6 +213,8 @@ separate sync token is desired. If it is omitted, the route falls back to
 token before GA. Workers for Platforms stays internal implementation evidence:
 bill users as `cloudflare.workers_script`, with
 `resourceMetadata.backend: "cloudflare.workers_for_platforms"` only for audit.
+Do not configure `wfp` / `workers_for_platforms` as a `meterId`,
+`resourceFamily`, or Stripe usage meter.
 
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers

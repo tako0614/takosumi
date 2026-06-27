@@ -2,7 +2,10 @@ import {
   canonicalJson,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import type { UsageEvent } from "takosumi-contract/billing";
+import {
+  type UsageEvent,
+  usageMeterNameLeaksInternalWorkersBackend,
+} from "takosumi-contract/billing";
 import {
   createStripeBillingPortalSession,
   createStripeCheckoutSession,
@@ -420,6 +423,19 @@ async function billingUsageRecordFromUsageEvent(
   }
   if (!event.resourceFamily) {
     throw new TypeError("usage event resourceFamily is required for billing");
+  }
+  if (usageMeterNameLeaksInternalWorkersBackend(event.resourceFamily)) {
+    throw new TypeError(
+      "usage event resourceFamily must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
+  }
+  if (
+    event.meterId &&
+    usageMeterNameLeaksInternalWorkersBackend(event.meterId)
+  ) {
+    throw new TypeError(
+      "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    );
   }
   const installation = await store.findAppInstallation(event.installationId);
   if (!installation) {

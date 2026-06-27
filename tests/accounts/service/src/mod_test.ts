@@ -4693,6 +4693,103 @@ test("accounts handler imports Cloud extension usage events before Stripe invoic
   expect(usageRecord?.billingExportReference).toEqual("ii_workers");
 });
 
+test("accounts handler rejects internal Workers for Platforms usage before Stripe invoice item sync", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = 1_800_000_000;
+  store.saveAccount({
+    subject: "tsub_account",
+    email: "user@example.test",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveBillingAccount({
+    billingAccountId: "bill_workers",
+    subject: "tsub_account",
+    provider: "stripe",
+    stripeCustomerId: "cus_workers",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAppInstallation({
+    installationId: "inst_workers",
+    accountId: "acct_1",
+    spaceId: "space_workers",
+    appId: "takosumi.cloudflare-compat",
+    sourceGitUrl: "https://github.com/example/app",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:manifest",
+    mode: "shared-cell",
+    billingAccountId: "bill_workers",
+    status: "ready",
+    createdBySubject: "tsub_account",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const handler = createAccountsHandler({
+    store,
+    stripeBilling: {
+      secretKey: "sk_test",
+      webhookSecret: "whsec_test",
+      fetch: async () => Response.json({ id: "ii_unreachable" }),
+    },
+    billingUsageSyncToken: "usage_sync_token",
+    stripeUsageInvoiceItemPrices: [
+      {
+        meter: "cloudflare.workers_script",
+        unit: "requests",
+        unitAmount: 4,
+        currency: "usd",
+      },
+    ],
+  });
+
+  const response = await handler(
+    new Request(
+      `https://accounts.example.test${TAKOSUMI_ACCOUNTS_STRIPE_USAGE_INVOICE_ITEMS_PATH}`,
+      {
+        method: "POST",
+        headers: {
+          [TAKOSUMI_BILLING_USAGE_SYNC_TOKEN_HEADER]: "usage_sync_token",
+        },
+        body: JSON.stringify({
+          usageEvents: [
+            {
+              id: "usage_evt_wfp_request",
+              spaceId: "space_workers",
+              installationId: "inst_workers",
+              meterId: "cloudflare:wfp:request",
+              resourceFamily: "cloudflare.workers_script",
+              resourceId: "script:api",
+              operation: "request",
+              kind: "gateway_compute",
+              quantity: 12,
+              credits: 3,
+              source: "resource_meter",
+              idempotencyKey: "provider-runtime:space_workers:window:wfp",
+              createdAt: "2026-06-26T13:01:00.000Z",
+            },
+          ],
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(400);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "invalid_request",
+      message:
+        "usage event meterId must describe the customer-facing managed resource, not the internal Workers for Platforms backend",
+    },
+  });
+  expect(store.listBillingUsageRecordsForInstallation("inst_workers")).toEqual(
+    [],
+  );
+});
+
 test("checkout rejects an unknown planId (catalog is server-side)", async () => {
   const store = new InMemoryAccountsStore();
   store.saveAccount({
