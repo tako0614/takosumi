@@ -221,11 +221,10 @@ non-secret JSON array, for example:
 Set `TAKOSUMI_ACCOUNTS_BILLING_USAGE_SYNC_TOKEN` as an operator secret when a
 separate sync token is desired. If it is omitted, the route falls back to
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN`; production should prefer the narrower dedicated
-token before GA. Workers for Platforms stays internal implementation evidence:
-bill users as `cloudflare.workers_script`, with
-`resourceMetadata.backend: "cloudflare.workers_for_platforms"` only for audit.
-Do not configure `wfp` / `workers_for_platforms` as a `meterId`,
-`resourceFamily`, or Stripe usage meter.
+token before GA. Workers for Platforms stays an internal implementation detail:
+bill users as `cloudflare.workers_script`. Do not configure or emit `wfp` /
+`workers_for_platforms` as a `meterId`, `resourceFamily`, Stripe usage meter, or
+public usage metadata.
 
 Cloud extensions should emit precise usage headers. The platform worker also
 records fallback operation usage for successful Gateway requests that have a

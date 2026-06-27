@@ -804,8 +804,7 @@ The internal Workers Script backend is not the customer-facing product surface.
 Users keep using Cloudflare provider Workers resources such as
 `cloudflare_workers_script`; usage ledger and billing use
 `cloudflare.workers_script`. `wfp` / `workers_for_platforms` must not appear as
-a `meterId`, `resourceFamily`, or Stripe usage meter, except as internal audit
-metadata such as `resourceMetadata.backend`.
+a `meterId`, `resourceFamily`, Stripe usage meter, or public usage metadata.
 
 Cloud extension usage headers are the authoritative metering path. Takosumi
 Cloud may also record fallback operation usage at the platform worker when a

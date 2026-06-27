@@ -184,11 +184,10 @@ family. Worker script usage is reported with
 Queues, and Durable Objects are added to the catalog, UI, and billing prices
 only after the closed Gateway backend proves lifecycle endpoints and usage
 smoke coverage for them. `wfp` / `workers_for_platforms` is rejected in
-`meterId`, `resourceFamily`, and Stripe meters; it may appear only as internal
-implementation evidence in `resourceMetadata.backend`. Example:
+`meterId`, `resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","resourceMetadata":{"backend":"cloudflare.workers_for_platforms"},"kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"credits":1,"installationId":"inst_xxx"}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.
@@ -204,8 +203,8 @@ Workspace context but no usage headers, the platform worker records minimal
 operation usage instead of letting the request succeed for free. This fallback
 is operation metering, not precise token or storage accounting. Cloudflare
 Workers compatibility fallback usage is still recorded as
-`cloudflare.workers_script`; Workers for Platforms remains only
-`resourceMetadata.backend`.
+`cloudflare.workers_script`; Workers for Platforms is not copied into usage
+events.
 
 The Stripe integration rolls up unexported usage reports by billing account,
 meter, and unit, then creates Stripe invoice items for those rollups. After a
@@ -214,8 +213,9 @@ successful invoice item creation, the source usage reports are marked with
 and the exported timestamp so the next sync does not charge the same reports
 again. For Cloudflare Workers compatibility, the billing name remains
 `cloudflare.workers_script`; `wfp` / `workers_for_platforms` must not be used as
-the billing name. `resourceMetadata.backend: "cloudflare.workers_for_platforms"`
-is internal implementation evidence only.
+the billing name. Internal implementation names such as
+`resourceMetadata.backend: "cloudflare.workers_for_platforms"` must not appear
+in public usage or billing payloads.
 
 Operators trigger Stripe usage invoice item sync through the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only
