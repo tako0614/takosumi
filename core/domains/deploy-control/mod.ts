@@ -269,7 +269,9 @@ export {
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
-export function publicInstallation(installation: Installation): PublicInstallation {
+export function publicInstallation(
+  installation: Installation,
+): PublicInstallation {
   const { installType: _installType, ...publicRecord } = installation;
   return publicRecord;
 }
@@ -440,10 +442,7 @@ export interface OpenTofuApplyResult {
 }
 
 export type ReleaseActivationStatus =
-  | "skipped"
-  | "pending"
-  | "succeeded"
-  | "failed";
+  "skipped" | "pending" | "succeeded" | "failed";
 
 export interface ReleaseActivationCommand {
   readonly id: string;
@@ -657,11 +656,18 @@ export const RUN_RENEWAL_INTERVAL_MS = Math.floor(
  * A run already in a terminal state is never re-terminalized (the fenced CAS
  * loses and the existing row stands).
  */
-export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["queued", "running"];
+export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
+  "queued",
+  "running",
+];
 
 export function providersRequiringProviderEnvBindings(
   providers: readonly string[],
+  runnerProfile?: Pick<RunnerProfile, "requireCredentialRefs">,
 ): readonly string[] {
+  if (runnerProfile && runnerProfile.requireCredentialRefs !== true) {
+    return [];
+  }
   return normalizeProviders(
     providers.filter((provider) => providerEnvRule(provider) !== undefined),
   );
@@ -1250,7 +1256,6 @@ export class OpenTofuDeploymentController {
     return await this.#billing.changeSpaceSubscription(spaceId, input);
   }
 
-
   // --- Run / installation lifecycle (delegated to the RunEngine collaborator) -
 
   createPlanRun(
@@ -1266,7 +1271,11 @@ export class OpenTofuDeploymentController {
     context: DeployControlActorContext = {},
     internal: CreateInstallationPlanInternal = {},
   ): Promise<PlanRunResponse> {
-    return this.#runEngine.createInstallationPlan(installationId, context, internal);
+    return this.#runEngine.createInstallationPlan(
+      installationId,
+      context,
+      internal,
+    );
   }
 
   createInstallationDestroyPlan(
@@ -1334,7 +1343,12 @@ export class OpenTofuDeploymentController {
     request: CreateRestoreRequest,
     context: DeployControlActorContext = {},
   ): Promise<Run> {
-    return this.#runEngine.createRestoreRun(spaceId, backupId, request, context);
+    return this.#runEngine.createRestoreRun(
+      spaceId,
+      backupId,
+      request,
+      context,
+    );
   }
 
   cancelRun(id: string): Promise<Run> {
@@ -1950,7 +1964,7 @@ export function syntheticUploadSource(
   return {
     id: `upload:${installation.id}`,
     workspaceId: installation.workspaceId,
-    spaceId: (installation.workspaceId ?? installation.spaceId),
+    spaceId: installation.workspaceId ?? installation.spaceId,
     name: `${installation.name}-upload`,
     url: snapshot.url,
     defaultRef: snapshot.ref,

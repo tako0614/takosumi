@@ -70,10 +70,7 @@ import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
 import type { TemplateRegistry } from "../../templates/mod.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
-import {
-  DeploymentQuery,
-  requireInstallation,
-} from "../deployment_query.ts";
+import { DeploymentQuery, requireInstallation } from "../deployment_query.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "../errors.ts";
 import {
   DEFAULT_INSTALLATION_LEASE_TTL_MS,
@@ -302,7 +299,8 @@ export class RunEngine {
     this.#releaseActivator = deps.releaseActivator;
     this.#observability = deps.observability;
     this.#metricTags = deps.metricTags;
-    this.#allowOperatorBackedProviderEnvs = deps.allowOperatorBackedProviderEnvs;
+    this.#allowOperatorBackedProviderEnvs =
+      deps.allowOperatorBackedProviderEnvs;
     this.#seededProfiles = deps.seededProfiles;
     this.#runQuery = deps.runQuery;
     this.#billing = deps.billing;
@@ -326,7 +324,10 @@ export class RunEngine {
     return this.#deployments.getApplyRun(id);
   }
 
-  shouldProcessRun(status: RunStatus, heartbeatAt: number | undefined): boolean {
+  shouldProcessRun(
+    status: RunStatus,
+    heartbeatAt: number | undefined,
+  ): boolean {
     return this.#shouldProcessRun(status, heartbeatAt);
   }
 
@@ -618,7 +619,7 @@ export class RunEngine {
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
-        spaceId: (planRun.workspaceId ?? planRun.spaceId),
+        spaceId: planRun.workspaceId ?? planRun.spaceId,
       });
       const dispatched = await this.#store.getPlanRun(planRun.id);
       return { planRun: publicPlanRun(dispatched ?? planRun) };
@@ -1405,7 +1406,7 @@ export class RunEngine {
       input.installation,
       input.installConfig,
       input.installConfig.installType,
-      providersRequiringProviderEnvBindings(requiredProviders),
+      providersRequiringProviderEnvBindings(requiredProviders, profile),
     );
     const bindingProviders = installTypePlan.requiredProvidersFromBindings;
     if (requiredProviders.length === 0 && bindingProviders.length > 0) {
@@ -1414,7 +1415,7 @@ export class RunEngine {
         input.installation,
         input.installConfig,
         input.installConfig.installType,
-        providersRequiringProviderEnvBindings(requiredProviders),
+        providersRequiringProviderEnvBindings(requiredProviders, profile),
       );
     }
     const variables = normalizeVariables(
@@ -1505,9 +1506,12 @@ export class RunEngine {
     const requiredProviders = normalizeProviders(
       request.requiredProviders ?? installConfig.policy.allowedProviders ?? [],
     );
+    const profile = await this.#requireRunnerProfile(
+      request.runnerProfileId ?? this.#defaultRunnerProfileId,
+    );
     const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
       installation,
-      providersRequiringProviderEnvBindings(requiredProviders),
+      providersRequiringProviderEnvBindings(requiredProviders, profile),
     );
     return await this.#genericRootDispatchForRequest(
       request,
@@ -1639,7 +1643,7 @@ export class RunEngine {
     }
     const restoredSource = (
       await this.#store.listStateSnapshots(
-        (snapshot.capsuleId ?? snapshot.installationId),
+        snapshot.capsuleId ?? snapshot.installationId,
         snapshot.environment,
       )
     ).find(
@@ -1787,7 +1791,7 @@ export class RunEngine {
     await this.#enqueueRun({
       action: "apply",
       runId: applyRun.id,
-      spaceId: (applyRun.workspaceId ?? applyRun.spaceId),
+      spaceId: applyRun.workspaceId ?? applyRun.spaceId,
     });
     const dispatched = await this.getApplyRun(applyRun.id);
     return dispatched;
@@ -2529,15 +2533,12 @@ export class RunEngine {
       Record<string, JsonValue>
     >;
     const generatedRoot = payload.generatedRoot as unknown as
-      | DispatchGeneratedRoot
-      | undefined;
+      DispatchGeneratedRoot | undefined;
     const outputAllowlist = payload.outputAllowlist as unknown as
-      | Readonly<Record<string, OutputAllowlistEntry>>
-      | undefined;
+      Readonly<Record<string, OutputAllowlistEntry>> | undefined;
     const build = payload.build as unknown as DispatchBuildSpec | undefined;
     const prebuiltArtifact = payload.prebuiltArtifact as unknown as
-      | DispatchPrebuiltArtifactSpec
-      | undefined;
+      DispatchPrebuiltArtifactSpec | undefined;
     return {
       planRunId,
       variables,
@@ -2630,14 +2631,14 @@ export class RunEngine {
     const snapshot: OutputSnapshot = {
       id: this.#newId("out"),
       workspaceId: input.installation.workspaceId,
-      spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
+      spaceId: input.installation.workspaceId ?? input.installation.spaceId,
       capsuleId: input.installation.id,
       installationId: input.installation.id,
       stateGeneration: input.stateGeneration,
       rawOutputArtifactKey:
         input.result.rawOutputsKey ??
         rawOutputArtifactKey({
-          spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
+          spaceId: input.installation.workspaceId ?? input.installation.spaceId,
           installationId: input.installation.id,
           runId: input.applyRun.id,
         }),
@@ -2676,7 +2677,7 @@ export class RunEngine {
     )
       return;
     const edges = await this.#store.listDependenciesBySpace(
-      (input.installation.workspaceId ?? input.installation.spaceId),
+      input.installation.workspaceId ?? input.installation.spaceId,
     );
     if (edges.length === 0) return;
     const changedOutputNames = changedOutputNamesBetween(
@@ -2746,7 +2747,11 @@ export class RunEngine {
     // the persisted ActivityEvent carries both so readers on either name resolve.
     const workspaceId = event.workspaceId ?? event.spaceId ?? "";
     try {
-      await this.#activity.record({ ...event, workspaceId, spaceId: workspaceId });
+      await this.#activity.record({
+        ...event,
+        workspaceId,
+        spaceId: workspaceId,
+      });
     } catch (error) {
       log.warn("service.deploy_control.activity_record_failed", {
         action: event.action,
@@ -2770,7 +2775,9 @@ export class RunEngine {
   ): Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined> {
     const ctx = planRun.installationContext;
     if (!ctx) return undefined;
-    const installation = await this.#store.getInstallation((ctx.capsuleId ?? ctx.installationId));
+    const installation = await this.#store.getInstallation(
+      ctx.capsuleId ?? ctx.installationId,
+    );
     if (!installation) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2781,12 +2788,13 @@ export class RunEngine {
       store: this.#store,
       allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
     });
+    const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     // Run-scoped: explicit Installation provider env bindings only. The same
     // resolution feeds rootgen, so the minted TF_VAR credentials line up with the
     // generated provider blocks.
     return await this.#connectionsService.resolveProviderEnvBindingsForRun(
       installation,
-      providersRequiringProviderEnvBindings(planRun.requiredProviders),
+      providersRequiringProviderEnvBindings(planRun.requiredProviders, profile),
     );
   }
 
@@ -3650,7 +3658,7 @@ export class RunEngine {
       );
       if (!persisted.won) return persisted.run;
       await this.#recordRunnerMinuteUsage({
-        spaceId: (updated.workspaceId ?? updated.spaceId),
+        spaceId: updated.workspaceId ?? updated.spaceId,
         runId: updated.id,
         installationId: updated.installationId,
         startedAt: running.startedAt,
@@ -4042,7 +4050,7 @@ export class RunEngine {
     runnerProfile?: RunnerProfile,
   ): Promise<PolicyConfig | undefined> {
     const [space, installConfig] = await Promise.all([
-      this.#store.getSpace((installation.workspaceId ?? installation.spaceId)),
+      this.#store.getSpace(installation.workspaceId ?? installation.spaceId),
       this.#store.getInstallConfig(installation.installConfigId),
     ]);
     return withDefaultProviderSupplyChainPolicy(
@@ -5421,5 +5429,4 @@ export class RunEngine {
     validatePlannedInstallationCurrent({ planRun, installation });
     return installation;
   }
-
 }
