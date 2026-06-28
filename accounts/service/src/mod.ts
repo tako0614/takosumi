@@ -542,6 +542,7 @@ export async function createEphemeralAccountsHandler(
     passkeys: options.passkeys,
     deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
+    publicBillingPlans: options.publicBillingPlans,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,

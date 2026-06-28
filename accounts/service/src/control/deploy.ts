@@ -75,10 +75,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -325,6 +322,7 @@ async function deployUploadedSnapshot(
   }
   const deployRequest: InternalDeployRequest = {
     workspaceId,
+    spaceId: workspaceId,
     name,
     ...(environment ? { environment } : {}),
     snapshotId,

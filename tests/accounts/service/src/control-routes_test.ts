@@ -1501,6 +1501,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
   expect(operations.calls.deployUpload).toEqual([
     {
       workspaceId: "space_a",
+      spaceId: "space_a",
       name: "hello",
       environment: "preview",
       snapshotId: "snap_upload",
@@ -1568,6 +1569,7 @@ test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBind
   expect(operations.calls.deployUpload).toEqual([
     {
       workspaceId: "space_a",
+      spaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
     },
@@ -1777,8 +1779,10 @@ test("GET /api/v1/billing/plans returns public plan projections", async () => {
         id: "starter",
         kind: "subscription",
         stripePriceId: "price_test_hidden",
+        estimatedNetRevenueUsdMicros: 4000000,
         usdMicros: 3000000,
         name: { en: "Starter", ja: "Starter" },
+        priceDisplay: { en: "$3 balance", ja: "$3 残高" },
       },
     ],
   });
@@ -1788,6 +1792,11 @@ test("GET /api/v1/billing/plans returns public plan projections", async () => {
   };
   expect(body.plans.map((plan) => plan.id)).toEqual(["starter"]);
   expect(body.plans[0]).not.toHaveProperty("stripePriceId");
+  expect(body.plans[0]).not.toHaveProperty("estimatedNetRevenueUsdMicros");
+  expect(body.plans[0]?.priceDisplay).toEqual({
+    en: "$3 balance",
+    ja: "$3 残高",
+  });
 });
 
 test("GET /api/v1/spaces/:id/usage returns usage events", async () => {

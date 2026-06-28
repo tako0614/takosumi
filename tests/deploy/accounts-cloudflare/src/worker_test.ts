@@ -173,6 +173,49 @@ test("Cloudflare Accounts Worker parses env clients without a sidecar container"
   assert.equal((await response.json()).issuer, "https://issuer.example");
 });
 
+test("Cloudflare Accounts Worker exposes public billing plans from env", async () => {
+  const d1 = new MemoryD1Database();
+  const store = new D1AccountsStore(d1);
+  registerSessionHashSaltConfig({ salt: "test-session-hash-salt" });
+  const sessionId = await seedD1AccountSession(store);
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () =>
+      ({}) as unknown as ControlPlaneOperations,
+  });
+  const response = await worker.fetch(
+    new Request("https://accounts.example/api/v1/billing/plans", {
+      headers: { authorization: `Bearer ${sessionId}` },
+    }),
+    createEnv(d1, {
+      TAKOSUMI_BILLING_PLANS: JSON.stringify([
+        {
+          id: "starter",
+          kind: "subscription",
+          stripePriceId: "price_test_hidden",
+          estimatedNetRevenueUsdMicros: 4000000,
+          usdMicros: 3000000,
+          name: { en: "Starter", ja: "Starter" },
+          priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+        },
+      ]),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as {
+    plans: readonly Record<string, unknown>[];
+  };
+  assert.deepEqual(body.plans, [
+    {
+      id: "starter",
+      kind: "subscription",
+      usdMicros: 3000000,
+      name: { en: "Starter", ja: "Starter" },
+      priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+    },
+  ]);
+});
+
 test("Cloudflare Accounts Worker enforces the pre-GA login allowlist for official Cloud", () => {
   const expected = {
     emails: ["shoutatomiyama0614@gmail.com"],

@@ -1032,8 +1032,13 @@ function parsePublicBillingPlans(
     if (!isRecord(entry)) {
       throw new TypeError(`TAKOSUMI_BILLING_PLANS[${index}] must be an object`);
     }
-    const { stripePriceId: _stripePriceId, ...publicPlan } = entry;
-    return publicPlan;
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      usdMicros: entry.usdMicros,
+      name: entry.name,
+      priceDisplay: entry.priceDisplay,
+    };
   });
 }
 
