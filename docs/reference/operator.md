@@ -30,6 +30,9 @@ ProviderConnection
 ```
 
 Operator OSS は provider-compatible Gateway endpoint を公開しません。
+Workers for Platforms は Takosumi Cloud の tenant/user Worker ingress
+boundary であり、OSS Operator の OpenTofu runner execution boundary では
+ありません。
 
 ## Cloud Boundary
 
