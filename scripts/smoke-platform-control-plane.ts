@@ -1006,17 +1006,13 @@ export async function runPlatformControlPlaneSmoke(
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
   let runCancellationStatus:
-    | "cancelled"
-    | "already_terminal"
-    | "failed"
-    | undefined;
+    "cancelled" | "already_terminal" | "failed" | undefined;
   let runCancellationError: string | undefined;
   let connectionRevokeSkippedReason: string | undefined;
   let failureCleanup: FailureCleanupResult | undefined;
   let failure: unknown;
   let cloudflareResourcePreflight:
-    | CloudflareResourcePreflightResult
-    | undefined;
+    CloudflareResourcePreflightResult | undefined;
 
   try {
     if (options.cloudflareConnectionMode !== "none") {
@@ -1371,9 +1367,7 @@ function failedResult(
     readonly connectionRevoked?: boolean;
     readonly timedOutRunId?: string;
     readonly runCancellationStatus?:
-      | "cancelled"
-      | "already_terminal"
-      | "failed";
+      "cancelled" | "already_terminal" | "failed";
     readonly runCancellationError?: string;
     readonly connectionRevokeSkippedReason?: string;
     readonly failureCleanup?: FailureCleanupResult;
