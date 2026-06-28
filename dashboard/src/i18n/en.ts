@@ -10,6 +10,7 @@ export const en: Record<keyof typeof ja, string> = {
   "common.appName": "Takosumi",
   "common.loading": "Loading...",
   "common.retry": "Retry",
+  "common.refresh": "Refresh",
   "common.cancel": "Cancel",
   "common.close": "Close",
   "common.save": "Save",
@@ -910,6 +911,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.resources.deleteMessage":
     "Delete “{name}”. This cannot be undone.",
   "cloudResources.resources.deleted": "Deleted “{name}”.",
+  "cloudResources.resources.copyId": "Copy ID",
   "cloudResources.notConfigured": "Not configured",
   "cloudResources.sessionExpired": "Session expired. Sign in again.",
   "cloudResources.copied": "Copied.",

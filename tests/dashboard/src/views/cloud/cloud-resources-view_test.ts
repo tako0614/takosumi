@@ -43,6 +43,18 @@ describe("Cloud resources view", () => {
     expect(en["cloudResources.inventory.remaining"]).toContain("{count}");
     expect(ja["cloudResources.inventory.showAll"]).toContain("{count}");
     expect(ja["cloudResources.inventory.remaining"]).toContain("{count}");
+    expect(en["common.refresh"]).toBe("Refresh");
+    expect(ja["common.refresh"]).toBe("更新");
+    expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
+    expect(ja["cloudResources.keys.title"]).toBe("APIキー");
+  });
+
+  test("keeps raw resource identifiers behind an explicit copy action", () => {
+    expect(cloudResourcesViewSource).toContain(
+      't("cloudResources.resources.copyId")',
+    );
+    expect(cloudResourcesViewSource).not.toContain("av-cloud-res-id");
+    expect(appViewsCssSource).not.toContain(".av-cloud-res-id");
   });
 
   test("only exposes currently materialized Cloudflare compat resource groups", () => {
