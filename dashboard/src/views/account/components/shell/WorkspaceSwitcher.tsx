@@ -31,6 +31,9 @@ import { Select } from "../../../../components/ui/Form.tsx";
 export default function WorkspaceSwitcher() {
   const [workspaces, { refetch }] = createResource(listWorkspaces);
   const loadedWorkspaces = createMemo(() => workspaces() ?? []);
+  const selectedWorkspaceId = createMemo(() =>
+    selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
+  );
 
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
   // the previous user's localStorage value, so never keep an id that is absent
@@ -52,7 +55,10 @@ export default function WorkspaceSwitcher() {
     const refreshWorkspaces = () => void refetch();
     window.addEventListener("takosumi:workspaces-changed", refreshWorkspaces);
     onCleanup(() =>
-      window.removeEventListener("takosumi:workspaces-changed", refreshWorkspaces),
+      window.removeEventListener(
+        "takosumi:workspaces-changed",
+        refreshWorkspaces,
+      ),
     );
   }
 
@@ -71,11 +77,18 @@ export default function WorkspaceSwitcher() {
           name="workspaceId"
           class="topbar-workspace-select"
           aria-label={t("workspace.label")}
-          value={currentWorkspaceId()}
+          value={selectedWorkspaceId()}
           onChange={(e) => setCurrentWorkspaceId(e.currentTarget.value)}
         >
           <For each={loadedWorkspaces()}>
-            {(s) => <option value={s.id}>{s.displayName || s.handle}</option>}
+            {(workspace) => (
+              <option
+                value={workspace.id}
+                selected={workspace.id === selectedWorkspaceId()}
+              >
+                {workspace.displayName || workspace.handle}
+              </option>
+            )}
           </For>
         </Select>
       </Show>

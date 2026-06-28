@@ -19,6 +19,9 @@ const topBarSource = read("views/account/components/shell/TopBar.tsx");
 const spaceSwitcherSource = read(
   "views/account/components/shell/WorkspaceSwitcher.tsx",
 );
+const workspaceSettingsSource = read(
+  "views/workspace/WorkspaceSettingsView.tsx",
+);
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
 const shellCssSource = read("styles/shell.css");
 
@@ -107,5 +110,23 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.workspaceSettings"]).toBeTruthy();
     expect(en["workspaceSettings.title"]).toBe("Team settings");
     expect(ja["workspaceSettings.title"]).toBe("チーム設定");
+  });
+
+  test("workspace switcher and settings tabs keep visible selection and loaded data aligned", () => {
+    expect(spaceSwitcherSource).toContain(
+      "const selectedWorkspaceId = createMemo",
+    );
+    expect(spaceSwitcherSource).toContain("value={selectedWorkspaceId()}");
+    expect(spaceSwitcherSource).toContain(
+      "selected={workspace.id === selectedWorkspaceId()}",
+    );
+    expect(workspaceSettingsSource).toContain("when={workspaceId()}");
+    expect(workspaceSettingsSource).toContain("keyed");
+    expect(workspaceSettingsSource).toContain(
+      "<BillingTab workspaceId={id} />",
+    );
+    expect(workspaceSettingsSource).not.toContain(
+      "<BillingTab workspaceId={id()} />",
+    );
   });
 });
