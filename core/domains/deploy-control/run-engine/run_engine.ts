@@ -766,11 +766,14 @@ export class RunEngine {
         );
       }
       const pinned = await this.#store.getSourceSnapshot(pinnedSnapshotId);
-      if (!pinned || pinned.spaceId !== installation.spaceId) {
+      const installationWorkspaceId =
+        installation.workspaceId ?? installation.spaceId;
+      const pinnedWorkspaceId = pinned?.workspaceId ?? pinned?.spaceId;
+      if (!pinned || pinnedWorkspaceId !== installationWorkspaceId) {
         throw new OpenTofuControllerError(
           "not_found",
           `upload SourceSnapshot ${pinnedSnapshotId} not found in ` +
-            `space ${installation.spaceId}`,
+            `workspace ${installationWorkspaceId}`,
         );
       }
       snapshot = pinned;

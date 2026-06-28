@@ -704,7 +704,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           updatedAt: values.updatedAt,
         },
       });
-    return installation;
+    return normalizeInstallationRecord(installation);
   }
 
   async getInstallation(id: string): Promise<Installation | undefined> {
@@ -713,7 +713,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .from(pgSchema.installations)
       .where(eq(pgSchema.installations.id, id))
       .limit(1);
-    return parseRow(rows[0]) as Installation | undefined;
+    return normalizeOptionalInstallationRecord(
+      parseRow(rows[0]) as Installation | undefined,
+    );
   }
 
   async getInstallationByName(
@@ -732,7 +734,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .limit(1);
-    return parseRow(rows[0]) as Installation | undefined;
+    return normalizeOptionalInstallationRecord(
+      parseRow(rows[0]) as Installation | undefined,
+    );
   }
 
   async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
@@ -748,7 +752,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       asc(pgSchema.installations.createdAt),
       asc(pgSchema.installations.id),
     );
-    return rows.map((row) => parseRow(row) as Installation);
+    return rows.map((row) =>
+      normalizeInstallationRecord(parseRow(row) as Installation),
+    );
   }
 
   async listInstallationsPage(
@@ -773,7 +779,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows, limit);
+    return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
   }
 
   async patchInstallation(
@@ -833,7 +839,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .returning({ json: pgSchema.installations.installationJson });
-    const patched = parseRow(rows[0]) as Installation | undefined;
+    const patched = normalizeOptionalInstallationRecord(
+      parseRow(rows[0]) as Installation | undefined,
+    );
     if (patched) return patched;
     const actual = await this.getInstallation(id);
     if (!actual) return undefined;
@@ -932,7 +940,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
             ),
           )
           .returning({ json: pgSchema.installations.installationJson });
-        const patched = parseRow(rows[0]) as Installation | undefined;
+        const patched = normalizeOptionalInstallationRecord(
+          parseRow(rows[0]) as Installation | undefined,
+        );
         if (patched) return { installation: patched };
         const actual = await this.#getInstallationOn(db, installationPatch.id);
         if (!actual) return { installation: undefined };
@@ -1055,7 +1065,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .returning({ json: pgSchema.installations.installationJson });
-    const patched = parseRow(rows[0]) as Installation | undefined;
+    const patched = normalizeOptionalInstallationRecord(
+      parseRow(rows[0]) as Installation | undefined,
+    );
     if (patched) return { installation: patched };
     const actual = await this.#getInstallationOn(db, installationPatch.id);
     if (!actual) return { installation: undefined };
@@ -1078,7 +1090,9 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .from(pgSchema.installations)
       .where(eq(pgSchema.installations.id, id))
       .limit(1);
-    return parseRow(rows[0]) as Installation | undefined;
+    return normalizeOptionalInstallationRecord(
+      parseRow(rows[0]) as Installation | undefined,
+    );
   }
 
   /**
@@ -1372,54 +1386,61 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
+    const normalized = normalizeSourceSnapshotRecord(snapshot);
     await this.#pgUpsert(pgSchema.sourceSnapshots, {
-      id: snapshot.id,
-      sourceId: snapshot.sourceId ?? null,
-      snapshotJson: snapshot,
-      fetchedAt: snapshot.fetchedAt,
+      id: normalized.id,
+      sourceId: normalized.sourceId ?? null,
+      snapshotJson: normalized,
+      fetchedAt: normalized.fetchedAt,
     });
-    return snapshot;
+    return normalized;
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
-    return await this.#pgFirstJson<SourceSnapshot>(
-      pgSchema.sourceSnapshots,
-      pgSchema.sourceSnapshots.snapshotJson,
-      eq(pgSchema.sourceSnapshots.id, id),
+    return normalizeOptionalSourceSnapshotRecord(
+      await this.#pgFirstJson<SourceSnapshot>(
+        pgSchema.sourceSnapshots,
+        pgSchema.sourceSnapshots.snapshotJson,
+        eq(pgSchema.sourceSnapshots.id, id),
+      ),
     );
   }
 
   async listSourceSnapshots(
     sourceId: string,
   ): Promise<readonly SourceSnapshot[]> {
-    return await this.#pgManyJson<SourceSnapshot>(
-      pgSchema.sourceSnapshots,
-      pgSchema.sourceSnapshots.snapshotJson,
-      {
-        where: eq(pgSchema.sourceSnapshots.sourceId, sourceId),
-        orderBy: [
-          asc(pgSchema.sourceSnapshots.fetchedAt),
-          asc(pgSchema.sourceSnapshots.id),
-        ],
-      },
-    );
+    return (
+      await this.#pgManyJson<SourceSnapshot>(
+        pgSchema.sourceSnapshots,
+        pgSchema.sourceSnapshots.snapshotJson,
+        {
+          where: eq(pgSchema.sourceSnapshots.sourceId, sourceId),
+          orderBy: [
+            asc(pgSchema.sourceSnapshots.fetchedAt),
+            asc(pgSchema.sourceSnapshots.id),
+          ],
+        },
+      )
+    ).map(normalizeSourceSnapshotRecord);
   }
 
   async listSourceSnapshotsBySourceIds(
     sourceIds: readonly string[],
   ): Promise<readonly SourceSnapshot[]> {
     if (sourceIds.length === 0) return [];
-    return await this.#pgManyJson<SourceSnapshot>(
-      pgSchema.sourceSnapshots,
-      pgSchema.sourceSnapshots.snapshotJson,
-      {
-        where: inArray(pgSchema.sourceSnapshots.sourceId, [...sourceIds]),
-        orderBy: [
-          asc(pgSchema.sourceSnapshots.fetchedAt),
-          asc(pgSchema.sourceSnapshots.id),
-        ],
-      },
-    );
+    return (
+      await this.#pgManyJson<SourceSnapshot>(
+        pgSchema.sourceSnapshots,
+        pgSchema.sourceSnapshots.snapshotJson,
+        {
+          where: inArray(pgSchema.sourceSnapshots.sourceId, [...sourceIds]),
+          orderBy: [
+            asc(pgSchema.sourceSnapshots.fetchedAt),
+            asc(pgSchema.sourceSnapshots.id),
+          ],
+        },
+      )
+    ).map(normalizeSourceSnapshotRecord);
   }
 
   async listSourceSnapshotsPage(
@@ -1444,10 +1465,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbeBy(rows, limit, (s) => ({
-      createdAt: s.fetchedAt,
-      id: s.id,
-    }));
+    return pageFromProbeBy(
+      rows.map(normalizeSourceSnapshotRecord),
+      limit,
+      (s) => ({
+        createdAt: s.fetchedAt,
+        id: s.id,
+      }),
+    );
   }
 
   async putCapsuleCompatibilityReport(
@@ -3392,18 +3417,51 @@ function artifactRecordFromRow(row: {
 }
 
 function installationValues(installation: Installation) {
+  const normalized = normalizeInstallationRecord(installation);
   return {
-    id: installation.id,
-    spaceId: installation.workspaceId ?? installation.spaceId,
-    name: installation.name,
-    environment: installation.environment,
-    sourceId: installation.sourceId ?? null,
-    installConfigId: installation.installConfigId,
-    currentDeploymentId: installation.currentDeploymentId ?? null,
-    status: installation.status,
-    installationJson: installation,
-    createdAt: installation.createdAt,
-    updatedAt: installation.updatedAt,
+    id: normalized.id,
+    spaceId: normalized.workspaceId,
+    name: normalized.name,
+    environment: normalized.environment,
+    sourceId: normalized.sourceId ?? null,
+    installConfigId: normalized.installConfigId,
+    currentDeploymentId: normalized.currentDeploymentId ?? null,
+    status: normalized.status,
+    installationJson: normalized,
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
+  };
+}
+
+function normalizeOptionalInstallationRecord(
+  installation: Installation | undefined,
+): Installation | undefined {
+  return installation ? normalizeInstallationRecord(installation) : undefined;
+}
+
+function normalizeInstallationRecord(installation: Installation): Installation {
+  const workspaceId = workspaceKeyOf(installation);
+  return {
+    ...installation,
+    workspaceId,
+    spaceId: workspaceId,
+  };
+}
+
+function normalizeOptionalSourceSnapshotRecord(
+  snapshot: SourceSnapshot | undefined,
+): SourceSnapshot | undefined {
+  return snapshot ? normalizeSourceSnapshotRecord(snapshot) : undefined;
+}
+
+function normalizeSourceSnapshotRecord(
+  snapshot: SourceSnapshot,
+): SourceSnapshot {
+  const workspaceId = workspaceKeyOf(snapshot);
+  return {
+    ...snapshot,
+    workspaceId,
+    spaceId: workspaceId,
   };
 }
 
@@ -3622,4 +3680,3 @@ function selectedDriverColumns(query: string): readonly string[] {
     return identifiers.at(-1)?.[1] ?? part.trim().replaceAll('"', "");
   });
 }
-

@@ -25,7 +25,7 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/installations";
-import type { SourceSyncRun } from "takosumi-contract/sources";
+import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type {
   Dependency,
   DependencySnapshot,
@@ -596,9 +596,11 @@ function providerConnection(over: Partial<Connection> = {}): Connection {
 }
 
 function installation(over: Partial<Installation> = {}): Installation {
+  const workspaceId = over.workspaceId ?? over.spaceId ?? "space_1";
   return {
     id: "inst_1",
-    spaceId: "space_1",
+    workspaceId,
+    spaceId: workspaceId,
     name: "shop",
     slug: "shop",
     sourceId: "src_1",
@@ -609,6 +611,27 @@ function installation(over: Partial<Installation> = {}): Installation {
     status: "pending",
     createdAt: TS,
     updatedAt: TS,
+    ...over,
+  };
+}
+
+function sourceSnapshot(over: Partial<SourceSnapshot> = {}): SourceSnapshot {
+  const workspaceId = over.workspaceId ?? over.spaceId ?? "space_1";
+  return {
+    id: "snap_1",
+    origin: "upload",
+    workspaceId,
+    spaceId: workspaceId,
+    url: `https://uploads.takosumi.com/${workspaceId}`,
+    ref: "upload",
+    resolvedCommit: "a".repeat(64),
+    path: ".",
+    archiveObjectKey: `spaces/${workspaceId}/uploads/snap_1/source.tar.zst`,
+    archiveDigest:
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    archiveSizeBytes: 512,
+    fetchedByRunId: "upload",
+    fetchedAt: TS,
     ...over,
   };
 }
@@ -1091,6 +1114,30 @@ test("Installation store: put/get/get-by-name/list/unique are symmetric", async 
       label,
     ).toEqual(["inst_a"]);
     expect((await store.listInstallations()).length, label).toBe(2);
+  }
+});
+
+test("Workspace mirror fields are restored for Capsules and SourceSnapshots", async () => {
+  for (const [label, store] of await forEachStore()) {
+    const {
+      spaceId: _legacySpaceId,
+      ...workspaceOnlyInstallation
+    } = installation({ id: "inst_workspace_only" });
+    await store.putInstallation(workspaceOnlyInstallation as Installation);
+    const rereadInstallation = await store.getInstallation(
+      "inst_workspace_only",
+    );
+    expect(rereadInstallation?.workspaceId, label).toBe("space_1");
+    expect(rereadInstallation?.spaceId, label).toBe("space_1");
+
+    const {
+      workspaceId: _canonicalWorkspaceId,
+      ...legacyOnlySnapshot
+    } = sourceSnapshot({ id: "snap_legacy_only", sourceId: "src_1" });
+    await store.putSourceSnapshot(legacyOnlySnapshot as SourceSnapshot);
+    const rereadSnapshot = await store.getSourceSnapshot("snap_legacy_only");
+    expect(rereadSnapshot?.workspaceId, label).toBe("space_1");
+    expect(rereadSnapshot?.spaceId, label).toBe("space_1");
   }
 });
 

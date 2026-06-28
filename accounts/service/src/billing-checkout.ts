@@ -13,12 +13,16 @@ import { requireWorkspaceAccess } from "./control/shared.ts";
 
 export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH =
   "/v1/billing/stripe/checkout";
+export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH =
+  "/v1/billing/stripe/portal";
 export const TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER =
   "x-takosumi-billing-smoke-token";
 
 const STRIPE_API_VERSION = "2026-02-25.clover";
 const STRIPE_CHECKOUT_SESSIONS_URL =
   "https://api.stripe.com/v1/checkout/sessions";
+const STRIPE_BILLING_PORTAL_SESSIONS_URL =
+  "https://api.stripe.com/v1/billing_portal/sessions";
 
 export interface StripeBillingCheckoutPlan {
   readonly id: string;
@@ -65,14 +69,14 @@ export async function handleStripeBillingCheckout(input: {
       input.request,
     );
   }
-  const workspaceId = stringValue(body.spaceId);
+  const workspaceId = stringValue(body.workspaceId) ?? stringValue(body.spaceId);
   const planId = stringValue(body.planId);
   const successUrl = stringValue(body.successUrl);
   const cancelUrl = stringValue(body.cancelUrl);
   if (!workspaceId || !planId || !successUrl || !cancelUrl) {
     return errorJson(
       "invalid_request",
-      "planId, spaceId, successUrl, and cancelUrl are required",
+      "planId, workspaceId, successUrl, and cancelUrl are required",
       400,
       input.request,
     );
@@ -203,6 +207,127 @@ export async function handleStripeBillingCheckout(input: {
   );
 }
 
+export async function handleStripeBillingPortal(input: {
+  readonly request: Request;
+  readonly store: AccountsStore;
+  readonly portal: StripeBillingCheckoutOptions;
+}): Promise<Response> {
+  const session = await requireAccountSession({
+    request: input.request,
+    store: input.store,
+  });
+  if (!session.ok) return session.response;
+
+  const body = await readJsonObject(input.request);
+  if (!body) {
+    return errorJson(
+      "invalid_request",
+      "request body must be a JSON object",
+      400,
+      input.request,
+    );
+  }
+
+  const subject = stringValue(body.subject) ?? session.subject;
+  if (subject !== session.subject) {
+    return errorJson(
+      "forbidden",
+      "portal subject must match the authenticated session",
+      403,
+      input.request,
+    );
+  }
+  const returnUrl = stringValue(body.returnUrl);
+  if (!returnUrl) {
+    return errorJson(
+      "invalid_request",
+      "returnUrl is required",
+      400,
+      input.request,
+    );
+  }
+  if (!redirectAllowed(returnUrl, input.portal.redirectAllowlist)) {
+    return errorJson(
+      "invalid_redirect",
+      "returnUrl is not in the billing redirect allowlist",
+      400,
+      input.request,
+    );
+  }
+
+  const existingBilling = await input.store.findBillingAccountForSubject(
+    subject as TakosumiSubject,
+  );
+  if (!existingBilling?.stripeCustomerId) {
+    return errorJson(
+      "billing_customer_required",
+      "Stripe customer is not available for this account yet",
+      409,
+      input.request,
+    );
+  }
+
+  const params = new URLSearchParams();
+  params.set("customer", existingBilling.stripeCustomerId);
+  params.set("return_url", returnUrl);
+
+  const stripeFetch = input.portal.fetch ?? fetch;
+  let stripeResponse: Response;
+  let stripeBodyText = "";
+  try {
+    stripeResponse = await stripeFetch(STRIPE_BILLING_PORTAL_SESSIONS_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.portal.stripeSecretKey}`,
+        "content-type": "application/x-www-form-urlencoded",
+        "stripe-version": STRIPE_API_VERSION,
+      },
+      body: params,
+    });
+    stripeBodyText = await stripeResponse.text();
+  } catch {
+    return errorJson(
+      "stripe_portal_failed",
+      "Stripe Billing Portal Session creation failed",
+      502,
+      input.request,
+    );
+  }
+
+  const stripeBody = parseJsonObject(stripeBodyText);
+  if (!stripeResponse.ok) {
+    return errorJson(
+      "stripe_portal_failed",
+      stripeErrorMessage(
+        stripeBody,
+        "Stripe Billing Portal Session creation was rejected",
+      ),
+      502,
+      input.request,
+      {},
+      stripeErrorDetails(stripeBody),
+    );
+  }
+  const sessionId = stringValue(stripeBody?.id);
+  const portalUrl = stringValue(stripeBody?.url);
+  if (!sessionId || !portalUrl) {
+    return errorJson(
+      "stripe_portal_failed",
+      "Stripe Billing Portal response did not include a Session id and URL",
+      502,
+      input.request,
+    );
+  }
+  return json(
+    {
+      session_id: sessionId,
+      url: portalUrl,
+    },
+    201,
+    { "cache-control": "no-store" },
+  );
+}
+
 function redirectAllowed(
   urlValue: string,
   allowlist: readonly string[],
@@ -238,12 +363,12 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-function stripeErrorMessage(body: Record<string, unknown> | null): string {
+function stripeErrorMessage(
+  body: Record<string, unknown> | null,
+  fallback = "Stripe Checkout Session creation was rejected",
+): string {
   const error = isRecord(body?.error) ? body.error : undefined;
-  return (
-    stringValue(error?.message) ??
-    "Stripe Checkout Session creation was rejected"
-  );
+  return stringValue(error?.message) ?? fallback;
 }
 
 function stripeErrorDetails(

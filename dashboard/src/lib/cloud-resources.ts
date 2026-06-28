@@ -13,14 +13,14 @@ export type CloudResourceResult<T> =
   | { readonly ok: false; readonly error: string };
 
 export interface CloudExtensionCatalogItem {
-  readonly id: string;
-  readonly kind: "ai_gateway" | "provider_compat" | string;
+  readonly id?: string;
+  readonly kind?: "ai_gateway" | "provider_compat" | string;
   readonly provider?: string;
-  readonly protocol: string;
+  readonly protocol?: string;
   readonly basePath: `/${string}`;
   readonly configured: boolean;
-  readonly capabilities: readonly string[];
-  readonly smokeChecks: readonly string[];
+  readonly capabilities?: readonly string[];
+  readonly smokeChecks?: readonly string[];
 }
 
 export interface CloudExtensionCatalog {
@@ -184,14 +184,8 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
   const catalog = await cloudFetch<CloudExtensionCatalog>(
     "/__takosumi/cloud/extensions",
   );
-  const aiRoute = catalog.extensions.find(
-    (extension) => extension.kind === "ai_gateway",
-  );
-  const compatRoute = catalog.extensions.find(
-    (extension) =>
-      extension.kind === "provider_compat" &&
-      extension.provider === "cloudflare",
-  );
+  const aiRoute = aiGatewayRoute(catalog);
+  const compatRoute = cloudflareCompatRoute(catalog);
   const [aiStatus, aiModels, compatToken, compatInventory, accountTokens] =
     await Promise.all([
       resultFor<AiGatewayStatus>(
@@ -216,6 +210,27 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     compatInventory,
     accountTokens,
   };
+}
+
+export function aiGatewayRoute(
+  catalog: CloudExtensionCatalog,
+): CloudExtensionCatalogItem | undefined {
+  return catalog.extensions.find(
+    (extension) =>
+      extension.kind === "ai_gateway" ||
+      extension.basePath === "/gateway/ai/v1",
+  );
+}
+
+export function cloudflareCompatRoute(
+  catalog: CloudExtensionCatalog,
+): CloudExtensionCatalogItem | undefined {
+  return catalog.extensions.find(
+    (extension) =>
+      (extension.kind === "provider_compat" &&
+        extension.provider === "cloudflare") ||
+      extension.basePath === "/compat/cloudflare/client/v4",
+  );
 }
 
 async function getCloudflareCompatInventory(

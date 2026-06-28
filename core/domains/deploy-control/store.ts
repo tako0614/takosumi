@@ -1536,8 +1536,9 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
-    this.#sourceSnapshots.set(snapshot.id, snapshot);
-    return Promise.resolve(snapshot);
+    const normalized = normalizeSourceSnapshot(snapshot);
+    this.#sourceSnapshots.set(normalized.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
@@ -2428,6 +2429,17 @@ export function normalizeInstallation(installation: Installation): Installation 
     spaceId: workspaceId,
     currentStateVersionId: installation.currentDeploymentId,
     currentOutputId: installation.currentOutputSnapshotId,
+  };
+}
+
+export function normalizeSourceSnapshot(
+  snapshot: SourceSnapshot,
+): SourceSnapshot {
+  const workspaceId = snapshot.workspaceId ?? snapshot.spaceId;
+  return {
+    ...snapshot,
+    workspaceId,
+    spaceId: workspaceId,
   };
 }
 

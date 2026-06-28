@@ -5182,7 +5182,7 @@ test("accounts handler creates Stripe Checkout Sessions without exposing price i
       headers: accountSessionHeaders(sessionId),
       body: JSON.stringify({
         subject: "tsub_billing_checkout",
-        spaceId: "space_billing",
+        workspaceId: "space_billing",
         planId: "starter",
         successUrl:
           "https://accounts.example.test/workspace/settings/billing?checkout=success",
@@ -5212,6 +5212,69 @@ test("accounts handler creates Stripe Checkout Sessions without exposing price i
   expect(params.get("metadata[takosumi_plan_id]")).toEqual("starter");
   expect(params.get("subscription_data[metadata][takosumi_plan_id]")).toEqual(
     "starter",
+  );
+});
+
+test("accounts handler creates Stripe Billing Portal Sessions for existing customers", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_billing_portal");
+  store.saveBillingAccount({
+    billingAccountId: "billing_portal",
+    subject: "tsub_billing_portal",
+    provider: "stripe",
+    stripeCustomerId: "cus_portal",
+    status: "active",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  const stripeRequests: URLSearchParams[] = [];
+  const handler = createAccountsHandler({
+    store,
+    billingCheckout: {
+      stripeSecretKey: "sk_test_checkout",
+      plans: [],
+      redirectAllowlist: ["https://accounts.example.test"],
+      fetch: async (url, init) => {
+        expect(String(url)).toEqual(
+          "https://api.stripe.com/v1/billing_portal/sessions",
+        );
+        stripeRequests.push(new URLSearchParams(String(init?.body ?? "")));
+        return new Response(
+          JSON.stringify({
+            id: "bps_test_portal",
+            url: "https://billing.stripe.com/p/session/bps_test_portal",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/portal", {
+      method: "POST",
+      headers: accountSessionHeaders(sessionId),
+      body: JSON.stringify({
+        subject: "tsub_billing_portal",
+        returnUrl: "https://accounts.example.test/billing?portal=return",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(201);
+  const body = await response.json();
+  expect(body.session_id).toEqual("bps_test_portal");
+  expect(body.url).toEqual(
+    "https://billing.stripe.com/p/session/bps_test_portal",
+  );
+  expect(stripeRequests.length).toEqual(1);
+  const params = stripeRequests[0]!;
+  expect(params.get("customer")).toEqual("cus_portal");
+  expect(params.get("return_url")).toEqual(
+    "https://accounts.example.test/billing?portal=return",
   );
 });
 
