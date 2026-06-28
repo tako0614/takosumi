@@ -23,6 +23,11 @@ export async function handleBilling(
 function publicBillingPlan(
   plan: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  const { stripePriceId: _stripePriceId, ...publicPlan } = plan;
-  return publicPlan;
+  return {
+    id: plan.id,
+    kind: plan.kind,
+    usdMicros: plan.usdMicros,
+    name: plan.name,
+    priceDisplay: plan.priceDisplay,
+  };
 }
