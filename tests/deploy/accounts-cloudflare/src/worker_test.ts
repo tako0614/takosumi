@@ -216,6 +216,90 @@ test("Cloudflare Accounts Worker exposes public billing plans from env", async (
   ]);
 });
 
+test("Cloudflare Accounts Worker wires Stripe checkout from billing env", async () => {
+  const d1 = new MemoryD1Database();
+  const store = new D1AccountsStore(d1);
+  registerSessionHashSaltConfig({ salt: "test-session-hash-salt" });
+  const sessionId = await seedD1AccountSession(store);
+  const stripeRequests: URLSearchParams[] = [];
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () =>
+      ({
+        spaces: {
+          getWorkspace: async (id: string) => ({
+            id,
+            handle: "route-export",
+            displayName: "Route export",
+            type: "personal" as const,
+            ownerUserId: "tsub_route_export",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          }),
+        },
+      }) as unknown as ControlPlaneOperations,
+    stripeFetch: async (_url, init) => {
+      stripeRequests.push(new URLSearchParams(String(init?.body ?? "")));
+      return new Response(
+        JSON.stringify({
+          id: "cs_test_worker",
+          url: "https://checkout.stripe.com/c/pay/cs_test_worker",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+  const response = await worker.fetch(
+    new Request("https://accounts.example/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "x-takosumi-billing-smoke-token": "smoke_test",
+      },
+      body: JSON.stringify({
+        subject: "tsub_route_export",
+        spaceId: "space_route_export",
+        planId: "starter",
+        successUrl:
+          "https://accounts.example/workspace/settings/billing?checkout=success",
+        cancelUrl:
+          "https://accounts.example/workspace/settings/billing?checkout=cancel",
+      }),
+    }),
+    createEnv(d1, {
+      TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test_worker",
+      TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN: "smoke_test",
+      TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST: "https://accounts.example",
+      TAKOSUMI_BILLING_PLANS: JSON.stringify([
+        {
+          id: "starter",
+          kind: "subscription",
+          stripePriceId: "price_test_worker_hidden",
+          usdMicros: 3000000,
+          name: { en: "Starter", ja: "Starter" },
+          priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+        },
+      ]),
+    }),
+  );
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(await response.json(), {
+    session_id: "cs_test_worker",
+    url: "https://checkout.stripe.com/c/pay/cs_test_worker",
+    mode: "subscription",
+    plan_id: "starter",
+    workspace_id: "space_route_export",
+  });
+  assert.equal(stripeRequests.length, 1);
+  assert.equal(
+    stripeRequests[0]?.get("line_items[0][price]"),
+    "price_test_worker_hidden",
+  );
+});
+
 test("Cloudflare Accounts Worker enforces the pre-GA login allowlist for official Cloud", () => {
   const expected = {
     emails: ["shoutatomiyama0614@gmail.com"],

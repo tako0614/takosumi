@@ -20,6 +20,7 @@ import {
   customOidcOAuthProvider,
   type DeployControlOperations,
   InMemorySharedCellWarmPool,
+  TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
   TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER,
 } from "../../../../accounts/service/src/mod.ts";
@@ -104,9 +105,7 @@ function deployControlOperationsStub(
     createApplyRun: reject(
       "createApplyRun",
     ) as DeployControlOperations["createApplyRun"],
-    getCapsule: reject(
-      "getCapsule",
-    ) as DeployControlOperations["getCapsule"],
+    getCapsule: reject("getCapsule") as DeployControlOperations["getCapsule"],
     listDeployments: reject(
       "listDeployments",
     ) as DeployControlOperations["listDeployments"],
@@ -160,11 +159,24 @@ function accountSessionHeaders(sessionId: string): HeadersInit {
   return { authorization: `Bearer ${sessionId}` };
 }
 
-/**
- * Minimal control-plane operations for the billing-checkout Workspace-ownership
- * gate: `canAccessWorkspace` calls `spaces.getWorkspace(id)` and short-circuits when
- * `space.ownerUserId === subject`. Only that one accessor is exercised here.
- */
+function billingCheckoutOperations(
+  subject: TakosumiSubject = "tsub_owner",
+): ControlPlaneOperations {
+  return {
+    spaces: {
+      getWorkspace: async (id: string) => ({
+        id,
+        handle: "owner",
+        displayName: "Owner",
+        type: "personal" as const,
+        ownerUserId: subject,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+    },
+  } as unknown as ControlPlaneOperations;
+}
+
 async function withTestAppCapsuleAuth(
   request: Request,
   store: AccountsStore,
@@ -1484,9 +1496,7 @@ test("accounts handler applies installation through space deployControl when con
     "dep_core_apply",
   );
   expect(
-    store
-      .listCapsuleEvents("inst_core_apply")
-      .map((event) => event.eventType),
+    store.listCapsuleEvents("inst_core_apply").map((event) => event.eventType),
   ).toEqual(["installation.created", "installation.activated-http-domain"]);
   // The facade reviews the reviewed PlanRun then applies it through the typed
   // operations facade (the in-process transport — no HTTP seam).
@@ -1499,7 +1509,12 @@ test("accounts handler applies installation through space deployControl when con
 
 test("accounts handler projects space-direct apply responses without deployment source fields", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedWorkspace(store, "tsub_space_direct", "acct_space_direct", "space_core");
+  seedOwnedWorkspace(
+    store,
+    "tsub_space_direct",
+    "acct_space_direct",
+    "space_core",
+  );
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
@@ -1791,9 +1806,7 @@ test("accounts handler applies local source through space deployControl with loc
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_local");
   expect(body.installation.status).toEqual("ready");
-  expect(store.findAppCapsule("inst_core_local")?.sourceRef).toEqual(
-    "local",
-  );
+  expect(store.findAppCapsule("inst_core_local")?.sourceRef).toEqual("local");
   expect(store.findAppCapsule("inst_core_local")?.sourceCommit).toEqual(
     "working-tree",
   );
@@ -1807,7 +1820,12 @@ test("accounts handler applies local source through space deployControl with loc
 test("raw accounts handler requires account bearer for installation PlanRun", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
-  seedOwnedWorkspace(store, "tsub_auth_owner", "acct_auth_dry_run", "space_auth");
+  seedOwnedWorkspace(
+    store,
+    "tsub_auth_owner",
+    "acct_auth_dry_run",
+    "space_auth",
+  );
   const ownerSession = seedAccountSession(
     store,
     "tsub_auth_owner",
@@ -4368,9 +4386,9 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
   expect(store.findLedgerAccount("acct_1")?.legalOwnerSubject).toEqual(
     "tsub_owner",
   );
-  expect(
-    store.listServiceBindingMaterialsForCapsule("inst_1").length,
-  ).toEqual(2);
+  expect(store.listServiceBindingMaterialsForCapsule("inst_1").length).toEqual(
+    2,
+  );
   expect(store.findOidcClientForCapsule("inst_1")?.issuerUrl).toEqual(
     "https://accounts.example.test",
   );
@@ -4391,10 +4409,9 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
   ]);
   const ownerSession = seedAccountSession(store, "tsub_owner");
   const initialEventsResponse = await handler(
-    new Request(
-      `${testIssuer}${takosumiAccountsCapsuleEventsPath("inst_1")}`,
-      { headers: accountSessionHeaders(ownerSession) },
-    ),
+    new Request(`${testIssuer}${takosumiAccountsCapsuleEventsPath("inst_1")}`, {
+      headers: accountSessionHeaders(ownerSession),
+    }),
   );
   expect(initialEventsResponse.status).toEqual(200);
   const initialEventsText = JSON.stringify(await initialEventsResponse.json());
@@ -4817,9 +4834,164 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
   expect(body.error.message).toEqual(
     "oidcClients entries use servicePath; serviceId/service_id are not accepted",
   );
-  expect(store.findAppCapsule("inst_oidc_alias_create")).toEqual(
-    undefined,
+  expect(store.findAppCapsule("inst_oidc_alias_create")).toEqual(undefined);
+});
+
+test("accounts handler creates Stripe Checkout Sessions without exposing price ids", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_billing_checkout");
+  seedOwnedWorkspace(
+    store,
+    "tsub_billing_checkout",
+    "acct_billing",
+    "space_billing",
   );
+  const stripeRequests: URLSearchParams[] = [];
+  const handler = createAccountsHandler({
+    store,
+    controlPlaneOperations: billingCheckoutOperations("tsub_billing_checkout"),
+    billingCheckout: {
+      stripeSecretKey: "sk_test_checkout",
+      plans: [
+        {
+          id: "starter",
+          kind: "subscription",
+          stripePriceId: "price_test_starter",
+        },
+      ],
+      redirectAllowlist: ["https://accounts.example.test"],
+      fetch: async (_url, init) => {
+        stripeRequests.push(new URLSearchParams(String(init?.body ?? "")));
+        return new Response(
+          JSON.stringify({
+            id: "cs_test_checkout",
+            url: "https://checkout.stripe.com/c/pay/cs_test_checkout",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: accountSessionHeaders(sessionId),
+      body: JSON.stringify({
+        subject: "tsub_billing_checkout",
+        spaceId: "space_billing",
+        planId: "starter",
+        successUrl:
+          "https://accounts.example.test/workspace/settings/billing?checkout=success",
+        cancelUrl:
+          "https://accounts.example.test/workspace/settings/billing?checkout=cancel",
+      }),
+    }),
+  );
+
+  expect(response.status).toEqual(201);
+  const body = await response.json();
+  expect(body.session_id).toEqual("cs_test_checkout");
+  expect(body.url).toEqual(
+    "https://checkout.stripe.com/c/pay/cs_test_checkout",
+  );
+  expect(body).not.toHaveProperty("stripePriceId");
+  expect(stripeRequests.length).toEqual(1);
+  const params = stripeRequests[0]!;
+  expect(params.get("mode")).toEqual("subscription");
+  expect(params.get("line_items[0][price]")).toEqual("price_test_starter");
+  expect(params.get("metadata[takosumi_subject]")).toEqual(
+    "tsub_billing_checkout",
+  );
+  expect(params.get("metadata[takosumi_workspace_id]")).toEqual(
+    "space_billing",
+  );
+  expect(params.get("metadata[takosumi_plan_id]")).toEqual("starter");
+  expect(params.get("subscription_data[metadata][takosumi_plan_id]")).toEqual(
+    "starter",
+  );
+});
+
+test("accounts handler lets billing checkout smoke bypass only launch readiness", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_billing_smoke");
+  seedOwnedWorkspace(store, "tsub_billing_smoke", "acct_smoke", "space_smoke");
+  let stripeRequestCount = 0;
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+    controlPlaneOperations: billingCheckoutOperations("tsub_billing_smoke"),
+    billingCheckout: {
+      stripeSecretKey: "sk_test_checkout",
+      smokeToken: "smoke_token",
+      plans: [
+        {
+          id: "usd_balance_5",
+          kind: "pack",
+          stripePriceId: "price_test_pack",
+        },
+      ],
+      redirectAllowlist: ["https://accounts.example.test"],
+      fetch: async (_url, init) => {
+        stripeRequestCount += 1;
+        const params = new URLSearchParams(String(init?.body ?? ""));
+        expect(params.get("mode")).toEqual("payment");
+        expect(params.get("customer_creation")).toEqual("always");
+        expect(
+          params.get("payment_intent_data[metadata][takosumi_plan_id]"),
+        ).toEqual("usd_balance_5");
+        return new Response(
+          JSON.stringify({
+            id: "cs_test_smoke",
+            url: "https://checkout.stripe.com/c/pay/cs_test_smoke",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    },
+  });
+  const requestBody = {
+    subject: "tsub_billing_smoke",
+    spaceId: "space_smoke",
+    planId: "usd_balance_5",
+    successUrl:
+      "https://accounts.example.test/workspace/settings/billing?checkout=success",
+    cancelUrl:
+      "https://accounts.example.test/workspace/settings/billing?checkout=cancel",
+  };
+
+  const blocked = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: accountSessionHeaders(sessionId),
+      body: JSON.stringify(requestBody),
+    }),
+  );
+  expect(blocked.status).toEqual(503);
+  expect((await blocked.json()).error.code).toEqual(
+    "launch_readiness_not_complete",
+  );
+  expect(stripeRequestCount).toEqual(0);
+
+  const allowed = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/checkout", {
+      method: "POST",
+      headers: {
+        ...accountSessionHeaders(sessionId),
+        [TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER]: "smoke_token",
+      },
+      body: JSON.stringify(requestBody),
+    }),
+  );
+  expect(allowed.status).toEqual(201);
+  expect((await allowed.json()).session_id).toEqual("cs_test_smoke");
+  expect(stripeRequestCount).toEqual(1);
 });
 
 test("accounts handler accepts billing usage reports from scoped installation tokens without ServiceGrantMaterial storage", async () => {
@@ -4925,9 +5097,9 @@ test("accounts handler accepts billing usage reports from scoped installation to
   const duplicateBody = await duplicate.json();
   expect(duplicateBody.duplicate).toEqual(true);
   expect(duplicateBody.usage_report.id).toEqual("usage_report_123");
-  expect(
-    store.listBillingUsageRecordsForCapsule("inst_usage").length,
-  ).toEqual(1);
+  expect(store.listBillingUsageRecordsForCapsule("inst_usage").length).toEqual(
+    1,
+  );
   expect(
     store.listCapsuleEvents("inst_usage").map((event) => event.eventType),
   ).toEqual(["billing.usage_reported"]);
@@ -4950,9 +5122,9 @@ test("accounts handler accepts billing usage reports from scoped installation to
   );
 
   expect(internalBackendMeter.status).toEqual(400);
-  expect(
-    store.listBillingUsageRecordsForCapsule("inst_usage").length,
-  ).toEqual(1);
+  expect(store.listBillingUsageRecordsForCapsule("inst_usage").length).toEqual(
+    1,
+  );
 
   const conflictingIdempotency = await handler(
     new Request(
@@ -5167,9 +5339,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
     store.findRuntimeBinding("rtb_inst_shared_auto_shared_cell")?.targetId,
   ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_auto");
   expect(
-    store
-      .listCapsuleEvents("inst_shared_auto")
-      .map((event) => event.eventType),
+    store.listCapsuleEvents("inst_shared_auto").map((event) => event.eventType),
   ).toEqual(["installation.created", "runtime_target.assigned"]);
 
   const exhausted = await handler(
@@ -6306,9 +6476,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
     ),
   );
   expect(pollResponse.status).toEqual(200);
-  expect(store.findAppCapsule("inst_control_export")?.status).toEqual(
-    "ready",
-  );
+  expect(store.findAppCapsule("inst_control_export")?.status).toEqual("ready");
 
   const exportResponse = await handler(
     new Request(
@@ -6383,8 +6551,7 @@ test("accounts handler does not launch-gate core OAuth and PAT issuance when pla
     const response = await handler(request);
     expect(response.status).toEqual(status);
     const body = (await response.json()) as
-      | { error: string }
-      | { error: { code: string } };
+      { error: string } | { error: { code: string } };
     if (envelope) {
       expect((body as { error: { code: string } }).error.code).toEqual(error);
     } else {
@@ -7396,15 +7563,14 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
   expect(body.event.type).toEqual("installation.materialize-failed");
   expect(body.event.payload.error).toEqual("materialize worker failed");
   expect(JSON.stringify(body)).not.toContain("copy failed");
-  expect(
-    store.findAppCapsule("inst_materialize_worker_failure")?.mode,
-  ).toEqual("shared-cell");
+  expect(store.findAppCapsule("inst_materialize_worker_failure")?.mode).toEqual(
+    "shared-cell",
+  );
   expect(
     store.findAppCapsule("inst_materialize_worker_failure")?.status,
   ).toEqual("ready");
   expect(
-    store.findAppCapsule("inst_materialize_worker_failure")
-      ?.runtimeBindingId,
+    store.findAppCapsule("inst_materialize_worker_failure")?.runtimeBindingId,
   ).toEqual("rtb_materialize_worker_failure_shared");
 });
 
@@ -7755,9 +7921,7 @@ test("accounts handler rejects data export without age encryption", async () => 
   expect(body.error.message).toEqual(
     "export includeData requires age encryption",
   );
-  expect(store.listCapsuleEvents("inst_export_plain_data").length).toEqual(
-    1,
-  );
+  expect(store.listCapsuleEvents("inst_export_plain_data").length).toEqual(1);
 });
 
 test("accounts handler rejects malformed export request fields", async () => {
@@ -7866,9 +8030,7 @@ test("accounts handler rejects malformed export request fields", async () => {
     expect(body.error.message).toEqual(testCase.message);
   }
 
-  expect(store.listCapsuleEvents("inst_export_malformed").length).toEqual(
-    1,
-  );
+  expect(store.listCapsuleEvents("inst_export_malformed").length).toEqual(1);
 });
 
 test("accounts handler runs configured export worker and closes operation", async () => {
@@ -8097,9 +8259,9 @@ test("accounts handler records configured export worker failures", async () => {
   expect(body.event.type).toEqual("installation.export-failed");
   expect(body.event.payload.error).toEqual("export worker failed");
   expect(JSON.stringify(body)).not.toContain("archive upload failed");
-  expect(
-    store.findAppCapsule("inst_export_worker_failure")?.status,
-  ).toEqual("failed");
+  expect(store.findAppCapsule("inst_export_worker_failure")?.status).toEqual(
+    "failed",
+  );
 
   const operationResponse = await handler(
     new Request(
@@ -8616,9 +8778,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
     },
   ]);
   expect(
-    store
-      .listCapsuleEvents("inst_shared_b")
-      .map((event) => event.eventType),
+    store.listCapsuleEvents("inst_shared_b").map((event) => event.eventType),
   ).toEqual([
     "installation.created",
     "runtime_target.assigned",
@@ -8841,12 +9001,8 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   );
   expect(first.service_binding_env.BLOB_BUCKET).toEqual("inst_iso_a-objects");
   expect(second.service_binding_env.BLOB_BUCKET).toEqual("inst_iso_b-objects");
-  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_a")).toEqual(
-    [],
-  );
-  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_b")).toEqual(
-    [],
-  );
+  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_a")).toEqual([]);
+  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_b")).toEqual([]);
 });
 
 test("accounts handler materializes configured provider env bindings", async () => {

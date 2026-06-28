@@ -100,6 +100,12 @@ import {
   readJsonObject,
   stringValue,
 } from "./http-helpers.ts";
+import {
+  handleStripeBillingCheckout,
+  TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
+  type StripeBillingCheckoutOptions,
+} from "./billing-checkout.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
   extractAccountSessionId,
@@ -169,6 +175,11 @@ export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
+export {
+  TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
+} from "./billing-checkout.ts";
+export type { StripeBillingCheckoutOptions } from "./billing-checkout.ts";
 export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
 export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
 export type {
@@ -252,6 +263,7 @@ export interface AccountsHandlerOptions {
    */
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
+  billingCheckout?: StripeBillingCheckoutOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -296,6 +308,7 @@ export interface EphemeralAccountsHandlerOptions {
   deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
+  billingCheckout?: StripeBillingCheckoutOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -543,6 +556,7 @@ export async function createEphemeralAccountsHandler(
     deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
     publicBillingPlans: options.publicBillingPlans,
+    billingCheckout: options.billingCheckout,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -752,6 +766,28 @@ export function createAccountsHandler(
         });
       }
       return methodNotAllowed("DELETE, GET");
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      if (!options.billingCheckout) {
+        return errorJson(
+          "feature_unavailable",
+          "Stripe billing checkout is not configured.",
+          503,
+          request,
+        );
+      }
+      if (!billingCheckoutSmokeAllowed(request, options.billingCheckout)) {
+        const blocked = platformAccessBlocked(options.platformAccess);
+        if (blocked) return blocked;
+      }
+      return await handleStripeBillingCheckout({
+        request,
+        store,
+        operations: options.controlPlaneOperations,
+        checkout: options.billingCheckout,
+      });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH) {
@@ -1152,6 +1188,18 @@ export function createAccountsHandler(
     const response = await inner(request);
     return withSecurityHeaders(response, isProductionIssuer);
   };
+}
+
+function billingCheckoutSmokeAllowed(
+  request: Request,
+  checkout: StripeBillingCheckoutOptions,
+): boolean {
+  const expected = checkout.smokeToken;
+  if (!expected) return false;
+  const presented = request.headers.get(
+    TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
+  );
+  return Boolean(presented && constantTimeEqual(presented, expected));
 }
 
 const HSTS_HEADER_VALUE = "max-age=31536000; includeSubDomains; preload";
