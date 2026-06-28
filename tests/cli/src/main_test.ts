@@ -1,9 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-} from "../../helpers/assert.ts";
+import { assert, assertEquals, assertRejects } from "../../helpers/assert.ts";
 import {
   access,
   mkdtemp,
@@ -20,10 +16,7 @@ import {
   applyD1AccountsMigrations,
   type D1ExecuteCommand,
 } from "../../../cli/src/cli-accounts-db.ts";
-import {
-  integerOption,
-  parseOptions,
-} from "../../../cli/src/cli-options.ts";
+import { integerOption, parseOptions } from "../../../cli/src/cli-options.ts";
 import { runPlatformSecrets } from "../../../cli/src/cli-platform-secrets-commands.ts";
 
 const textEncoder = new TextEncoder();
@@ -9807,7 +9800,7 @@ test("platform-secrets apply fails when configured Cloud extension client secret
     [
       "[vars]",
       'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
-      'TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION = "enabled"',
+      'TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION = "enabled"',
     ].join("\n"),
   );
   await writeTextFile(
@@ -9851,7 +9844,7 @@ test("platform-secrets apply pushes Cloud extension confidential client secret w
     [
       "[vars]",
       'TAKOSUMI_ACCOUNTS_CLIENT_ID = "takosumi-cloud-extensions"',
-      'TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION = "enabled"',
+      'TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION = "enabled"',
     ].join("\n"),
   );
   await writeTextFile(

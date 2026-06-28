@@ -101,7 +101,6 @@ export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_AGENT_RUNTIME =
 export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER =
   "automation.tool_provider";
 
-
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 
 export type TakosumiAccountsPatScope =
@@ -211,18 +210,14 @@ export function takosumiAccountsPrivacyRequestCompletePath(
   return `${takosumiAccountsPrivacyRequestPath(requestId)}/complete`;
 }
 
-export function takosumiAccountsCapsulePath(
-  capsuleId: string,
-): string {
+export function takosumiAccountsCapsulePath(capsuleId: string): string {
   return `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/${pathSegment(
     capsuleId,
     "capsuleId",
   )}`;
 }
 
-export function takosumiAccountsCapsuleStatusPath(
-  capsuleId: string,
-): string {
+export function takosumiAccountsCapsuleStatusPath(capsuleId: string): string {
   return `${takosumiAccountsCapsulePath(capsuleId)}/status`;
 }
 
@@ -235,14 +230,10 @@ export function takosumiAccountsCapsuleDeploymentsPath(
 export function takosumiAccountsCapsuleDeploymentPlanRunsPath(
   capsuleId: string,
 ): string {
-  return `${takosumiAccountsCapsuleDeploymentsPath(
-    capsuleId,
-  )}/plan-runs`;
+  return `${takosumiAccountsCapsuleDeploymentsPath(capsuleId)}/plan-runs`;
 }
 
-export function takosumiAccountsCapsuleRollbackPath(
-  capsuleId: string,
-): string {
+export function takosumiAccountsCapsuleRollbackPath(capsuleId: string): string {
   return `${takosumiAccountsCapsulePath(capsuleId)}/rollback`;
 }
 
@@ -252,9 +243,7 @@ export function takosumiAccountsCapsuleMaterializePath(
   return `${takosumiAccountsCapsulePath(capsuleId)}/materialize`;
 }
 
-export function takosumiAccountsCapsuleExportPath(
-  capsuleId: string,
-): string {
+export function takosumiAccountsCapsuleExportPath(capsuleId: string): string {
   return `${takosumiAccountsCapsulePath(capsuleId)}/export`;
 }
 
@@ -278,34 +267,33 @@ export function takosumiAccountsCapsuleExportDownloadPath(
   )}/download`;
 }
 
-export function takosumiAccountsCapsuleEventsPath(
-  capsuleId: string,
-): string {
+export function takosumiAccountsCapsuleEventsPath(capsuleId: string): string {
   return `${takosumiAccountsCapsulePath(capsuleId)}/events`;
 }
 
+export function takosumiAccountsCapsuleServiceRotateTokenPath(
+  capsuleId: string,
+  serviceId: string,
+): string {
+  return `${takosumiAccountsCapsulePath(capsuleId)}/services/${pathSegment(
+    serviceId,
+    "serviceId",
+  )}/rotate-token`;
+}
 
 export function takosumiAccountsCapsuleBillingUsageReportsPath(
   capsuleId: string,
 ): string {
-  return `${takosumiAccountsCapsulePath(
-    capsuleId,
-  )}/billing/usage-reports`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/billing/usage-reports`;
 }
 
 export type TakosumiSubject = `tsub_${string}`;
 
 export type TakosumiCapsuleProjectionStatus =
-  | "installing"
-  | "ready"
-  | "failed"
-  | "suspended"
-  | "exported";
+  "installing" | "ready" | "failed" | "suspended" | "exported";
 
 export type TakosumiCapsuleProjectionMode =
-  | "shared-cell"
-  | "dedicated"
-  | "self-hosted";
+  "shared-cell" | "dedicated" | "self-hosted";
 
 export interface TakosumiAccountsConfig {
   issuer?: string;

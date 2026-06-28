@@ -30,6 +30,7 @@ import {
   type UpstreamOAuthOptions,
   type ServiceGraphMaterialResolverHttpOptions,
   type LoginEmailAllowlist,
+  type RuntimeServiceTokenOptions,
   sharedCellRuntimeBinding,
   type SharedCellRuntimeAllocator,
   type StripeBillingCheckoutOptions,
@@ -55,7 +56,9 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
+  readonly TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION?: string;
+  readonly TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS?: string;
@@ -434,6 +437,7 @@ async function buildAccountsHandler(
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     publicBillingPlans: parsePublicBillingPlans(env),
     billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
+    runtimeServiceTokens: parseRuntimeServiceTokens(env, clients),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -768,6 +772,44 @@ function parseClients(
       tokenEndpointAuthMethod,
     },
   ];
+}
+
+function parseRuntimeServiceTokens(
+  env: CloudflareWorkerEnv,
+  clients: readonly OidcClientRegistration[] | undefined,
+): RuntimeServiceTokenOptions | undefined {
+  const enabled =
+    enabledEnvFlag(
+      env.TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION,
+    ) ||
+    enabledEnvFlag(
+      env.TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION,
+    );
+  if (!enabled) return undefined;
+  const clientId =
+    optionalString(env.TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID) ??
+    optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_ID);
+  if (!clientId) {
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID or TAKOSUMI_ACCOUNTS_CLIENT_ID must be set when runtime service token introspection is enabled",
+    );
+  }
+  const client = clients?.find((candidate) => candidate.clientId === clientId);
+  if (!client) {
+    throw new TypeError(
+      "runtime service token introspection client must be registered in TAKOSUMI_ACCOUNTS_CLIENTS or TAKOSUMI_ACCOUNTS_CLIENT_ID",
+    );
+  }
+  if (!client.clientSecret || client.tokenEndpointAuthMethod === "none") {
+    throw new TypeError(
+      "runtime service token introspection requires a confidential Accounts client",
+    );
+  }
+  return { introspectionClientId: clientId };
+}
+
+function enabledEnvFlag(value: string | undefined): boolean {
+  return optionalString(value)?.toLowerCase() === "enabled";
 }
 
 function parseClientRecord(value: unknown): OidcClientRegistration {

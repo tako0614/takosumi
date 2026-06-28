@@ -549,7 +549,12 @@ function isUsageEventKind(value: unknown): value is UsageEventKind {
     value === "artifact_storage_gb_hour" ||
     value === "backup_storage_gb_hour" ||
     value === "egress_gb" ||
-    value === "operation"
+    value === "operation" ||
+    value === "gateway_compute" ||
+    value === "gateway_storage_gb_hour" ||
+    value === "ai_request" ||
+    value === "ai_input_token" ||
+    value === "ai_output_token"
   );
 }
 

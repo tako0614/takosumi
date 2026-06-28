@@ -28,6 +28,7 @@ import {
   takosumiAccountsCapsuleMaterializePath,
   takosumiAccountsCapsulePath,
   takosumiAccountsCapsuleRollbackPath,
+  takosumiAccountsCapsuleServiceRotateTokenPath,
   takosumiAccountsCapsuleStatusPath,
 } from "../../../../accounts/contract/src/mod.ts";
 
@@ -143,14 +144,22 @@ test("Capsule projection path helpers expose the Accounts route surface", () => 
   expect(takosumiAccountsCapsuleExportPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/export",
   );
-  expect(
-    takosumiAccountsCapsuleExportOperationPath("inst_1", "op_1"),
-  ).toEqual("/v1/installation-projections/inst_1/exports/op_1");
-  expect(
-    takosumiAccountsCapsuleExportDownloadPath("inst_1", "op_1"),
-  ).toEqual("/v1/installation-projections/inst_1/exports/op_1/download");
+  expect(takosumiAccountsCapsuleExportOperationPath("inst_1", "op_1")).toEqual(
+    "/v1/installation-projections/inst_1/exports/op_1",
+  );
+  expect(takosumiAccountsCapsuleExportDownloadPath("inst_1", "op_1")).toEqual(
+    "/v1/installation-projections/inst_1/exports/op_1/download",
+  );
   expect(takosumiAccountsCapsuleEventsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/events",
+  );
+  expect(
+    takosumiAccountsCapsuleServiceRotateTokenPath(
+      "inst_1",
+      "takosumi.ai.gateway",
+    ),
+  ).toEqual(
+    "/v1/installation-projections/inst_1/services/takosumi.ai.gateway/rotate-token",
   );
   expect(takosumiAccountsCapsuleBillingUsageReportsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/billing/usage-reports",
@@ -165,6 +174,11 @@ test("Capsule projection path helpers expose the Accounts route surface", () => 
     takosumiAccountsCapsuleExportDownloadPath("inst/one", "op/one"),
   ).toEqual(
     "/v1/installation-projections/inst%2Fone/exports/op%2Fone/download",
+  );
+  expect(
+    takosumiAccountsCapsuleServiceRotateTokenPath("inst/one", "service/one"),
+  ).toEqual(
+    "/v1/installation-projections/inst%2Fone/services/service%2Fone/rotate-token",
   );
   assertThrows(
     () => takosumiAccountsCapsulePath(""),

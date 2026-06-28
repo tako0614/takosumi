@@ -223,7 +223,12 @@ export type UsageEventKind =
   | "artifact_storage_gb_hour"
   | "backup_storage_gb_hour"
   | "egress_gb"
-  | "operation";
+  | "operation"
+  | "gateway_compute"
+  | "gateway_storage_gb_hour"
+  | "ai_request"
+  | "ai_input_token"
+  | "ai_output_token";
 
 export type UsageEventSource =
   | "runner"
