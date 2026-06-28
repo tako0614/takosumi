@@ -14,6 +14,7 @@ import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
 import {
   prepareStrictProviderMirrorInit,
   providerPluginCacheForWorkspace,
+  withProviderPluginCacheInitLock,
 } from "../../runner/lib/providers.ts";
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 
@@ -989,6 +990,53 @@ test("provider plugin cache can be shared by runner container env", async () => 
       "utf8",
     );
     expect(config).toContain(`plugin_cache_dir = "${sharedCache}"`);
+  } finally {
+    if (previousCache === undefined) {
+      delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
+    } else {
+      Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = previousCache;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shared provider plugin cache serializes tofu init per cache path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-cache-lock-root-"));
+  const sharedCache = join(root, "shared-provider-cache");
+  const previousCache = Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
+  try {
+    Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = sharedCache;
+    const init = await prepareStrictProviderMirrorInit(
+      testWorkspace(join(root, "run")),
+      { env: {} },
+      ["registry.opentofu.org/cloudflare/cloudflare"],
+      { requireMirror: true },
+    );
+    expect(init?.sharedProviderCache).toBe(true);
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    let enteredFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
+    const first = withProviderPluginCacheInitLock(init, async () => {
+      events.push("first:start");
+      enteredFirst();
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      events.push("first:end");
+    });
+    await firstEntered;
+    const second = withProviderPluginCacheInitLock(init, async () => {
+      events.push("second:start");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["first:start"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first:start", "first:end", "second:start"]);
   } finally {
     if (previousCache === undefined) {
       delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;

@@ -809,6 +809,51 @@ test("installation plan treats sourceArchive as the selected module subtree", as
   expect("modulePath" in runner.planJobs[0]!.planRun.source).toBe(false);
 });
 
+test("installation plan resolves the latest SourceSnapshot for the Source ref and path", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  const modulePath = "deploy/opentofu";
+  const selectedArchiveKey =
+    "spaces/space_test/sources/src_fixture/snapshots/snap_module_path/source.tar.zst";
+  await store.putSource({
+    ...seeded.source,
+    defaultPath: modulePath,
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: "snap_module_path",
+    path: modulePath,
+    archiveObjectKey: selectedArchiveKey,
+    fetchedByRunId: "run_module_path_sync",
+    fetchedAt: "2026-06-06T00:00:01.000Z",
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: "snap_wrong_path_newer",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_test/sources/src_fixture/snapshots/snap_wrong_path_newer/source.tar.zst",
+    fetchedByRunId: "run_wrong_path_sync",
+    fetchedAt: "2026-06-06T00:00:02.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.sourceSnapshotId).toEqual("snap_module_path");
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.sourceArchive).toEqual({
+    objectKey: selectedArchiveKey,
+    digest: FIXTURE_ARCHIVE_DIGEST,
+  });
+});
+
 test("installation plan uses InstallConfig modulePath inside a repo-root SourceSnapshot", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
