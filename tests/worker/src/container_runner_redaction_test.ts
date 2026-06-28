@@ -77,6 +77,50 @@ test("container runner returns provider installation attestation from plan resul
   });
 });
 
+test("container runner threads phase timings into non-secret diagnostics", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_timing/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      phaseTimings: [
+        {
+          phase: "tofu_init",
+          startedAt: "2026-06-28T00:00:00.000Z",
+          finishedAt: "2026-06-28T00:00:00.120Z",
+          durationMs: 120.4,
+        },
+        {
+          phase: "tofu_plan",
+          startedAt: "2026-06-28T00:00:00.120Z",
+          finishedAt: "2026-06-28T00:00:00.420Z",
+          durationMs: 300,
+        },
+        {
+          phase: "bad phase with spaces",
+          durationMs: 999,
+        },
+      ],
+    }),
+  );
+
+  const result = await runner.plan({
+    planRun: { id: "plan_timing" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  expect(result.diagnostics).toContainEqual({
+    severity: "info",
+    message: "runner phase timings recorded",
+    detail: "tofu_init=120ms, tofu_plan=300ms",
+  });
+  expect(JSON.stringify(result.diagnostics)).not.toContain(
+    "bad phase with spaces",
+  );
+});
+
 test("container runner records active run and startup metrics", async () => {
   const observability = new InMemoryObservabilitySink();
   const runner = new CloudflareContainerOpenTofuRunner(

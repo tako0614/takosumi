@@ -12,12 +12,14 @@ import type {
   CommandContext,
   RunnerPolicyBeforeInitOptions,
   StrictProviderMirrorAttestation,
+  ProviderMirrorInit,
 } from "./types.ts";
 import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
   CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
   CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES,
   DEFAULT_PROVIDER_MIRROR_PATH,
+  PROVIDER_PLUGIN_CACHE_DIR_ENV,
 } from "./constants.ts";
 import {
   isRecord,
@@ -37,6 +39,15 @@ import {
   parseSource,
   parseRequiredProviders,
 } from "./parsing.ts";
+
+const DEFAULT_MIRRORED_PROVIDERS = [
+  "registry.opentofu.org/cloudflare/cloudflare",
+  "registry.opentofu.org/hashicorp/random",
+  "registry.opentofu.org/hashicorp/tls",
+  "registry.opentofu.org/hashicorp/aws",
+] as const;
+
+const providerCacheInitLocks = new Map<string, Promise<void>>();
 
 export function assertRunnerPolicyForRequest(
   request: unknown,
@@ -314,24 +325,27 @@ export async function prepareStrictProviderMirrorInit(
   context: CommandContext,
   providers: readonly string[],
   policy: { readonly requireMirror: boolean } | undefined,
-): Promise<
-  | {
-      readonly commandContext: CommandContext;
-      readonly attestation: StrictProviderMirrorAttestation;
-    }
-  | undefined
-> {
-  if (policy?.requireMirror !== true) return undefined;
+): Promise<ProviderMirrorInit | undefined> {
   const canonicalProviders = normalizedProviderList(providers);
-  if (canonicalProviders.length === 0) return undefined;
+  const strict = policy?.requireMirror === true && canonicalProviders.length > 0;
   const mirrorRoot =
     Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
-  const content = strictProviderMirrorCliConfig(canonicalProviders, mirrorRoot);
-  const cliConfigPath = join(workspace.root, "takosumi.strict-tofu.rc");
+  const providerCache = providerPluginCacheForWorkspace(workspace);
+  const content = strict
+    ? strictProviderMirrorCliConfig(
+        canonicalProviders,
+        mirrorRoot,
+        providerCache.path,
+      )
+    : defaultProviderMirrorCliConfig(mirrorRoot, providerCache.path);
+  const cliConfigPath = join(workspace.root, "takosumi.tofu.rc");
   await mkdir(workspace.root, { recursive: true });
+  await mkdir(providerCache.path, { recursive: true });
   await writeFile(cliConfigPath, content, { mode: 0o600 });
   const cliConfigDigest = await digestBytes(new TextEncoder().encode(content));
   return {
+    providerCacheDir: providerCache.path,
+    sharedProviderCache: providerCache.shared,
     commandContext: {
       ...context,
       env: {
@@ -339,22 +353,64 @@ export async function prepareStrictProviderMirrorInit(
         TF_CLI_CONFIG_FILE: cliConfigPath,
       },
     },
-    attestation: {
-      providers: canonicalProviders,
-      cliConfigPath,
-      cliConfigDigest,
-    },
+    ...(strict
+      ? {
+          attestation: {
+            providers: canonicalProviders,
+            cliConfigPath,
+            cliConfigDigest,
+          },
+        }
+      : {}),
   };
+}
+
+export function providerPluginCacheForWorkspace(
+  workspace: RunWorkspace,
+): { readonly path: string; readonly shared: boolean } {
+  const configured = Bun.env[PROVIDER_PLUGIN_CACHE_DIR_ENV]?.trim();
+  if (configured) {
+    return { path: configured, shared: true };
+  }
+  return { path: join(workspace.root, "provider-cache"), shared: false };
+}
+
+export async function withProviderPluginCacheInitLock<T>(
+  init: ProviderMirrorInit | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!init?.sharedProviderCache) return await run();
+  const key = init.providerCacheDir;
+  const previous = providerCacheInitLocks.get(key) ?? Promise.resolve();
+  const ready = previous.catch(() => {});
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = ready.then(() => current);
+  providerCacheInitLocks.set(key, tail);
+  await ready;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (providerCacheInitLocks.get(key) === tail) {
+      providerCacheInitLocks.delete(key);
+    }
+  }
 }
 
 export function strictProviderMirrorCliConfig(
   providers: readonly string[],
   mirrorRoot: string,
+  providerCache: string,
 ): string {
   const providerLines = providers
     .map((provider) => `      ${JSON.stringify(provider)}`)
     .join(",\n");
-  return `provider_installation {
+  return `plugin_cache_dir = ${JSON.stringify(providerCache)}
+
+provider_installation {
   filesystem_mirror {
     path = ${JSON.stringify(mirrorRoot)}
     include = [
@@ -364,6 +420,32 @@ ${providerLines}
 
   direct {
     exclude = ["*/*"]
+  }
+}
+`;
+}
+
+export function defaultProviderMirrorCliConfig(
+  mirrorRoot: string,
+  providerCache: string,
+): string {
+  const providerLines = DEFAULT_MIRRORED_PROVIDERS.map(
+    (provider) => `      ${JSON.stringify(provider)}`,
+  ).join(",\n");
+  return `plugin_cache_dir = ${JSON.stringify(providerCache)}
+
+provider_installation {
+  filesystem_mirror {
+    path = ${JSON.stringify(mirrorRoot)}
+    include = [
+${providerLines}
+    ]
+  }
+
+  direct {
+    exclude = [
+${providerLines}
+    ]
   }
 }
 `;

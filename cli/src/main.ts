@@ -33,7 +33,6 @@ import {
 } from "./cli-launch-readiness-commands.ts";
 import { runPlatformSecrets } from "./cli-platform-secrets-commands.ts";
 import {
-  runDeploy,
   runDeployLogs,
   runDeployStatus,
 } from "./cli-deploy-commands.ts";
@@ -68,21 +67,17 @@ export async function main(
     return await main(args.slice(1), io);
   }
 
-  // `takosumi deploy` — the wrangler-deploy-style local-directory upload helper
-  // and its read companions. The standard product flow is dashboard Git URL
-  // install; CLI upload exists for local working trees before they are pushed.
-  if (
-    args[0] === "deploy" ||
-    args[0] === "plan" ||
-    args[0] === "logs" ||
-    args[0] === "status"
-  ) {
+  if (args[0] === "deploy" || args[0] === "plan") {
+    io.stderr(
+      "`takosumi deploy` local upload is retired. Use the dashboard /install?git=... flow or create a Git URL Source/Capsule and run plan/apply.",
+    );
+    return 2;
+  }
+
+  // Public read companions for Run inspection remain available.
+  if (args[0] === "logs" || args[0] === "status") {
     try {
       switch (args[0]) {
-        case "deploy":
-          return await runDeploy(args.slice(1), io, { planOnly: false });
-        case "plan":
-          return await runDeploy(args.slice(1), io, { planOnly: true });
         case "logs":
           return await runDeployLogs(args.slice(1), io);
         case "status":
@@ -97,7 +92,7 @@ export async function main(
   const [domain, command, ...rest] = args;
   if (domain === "installations") {
     io.stderr(
-      "`takosumi installations` is not a public command. Use dashboard Git URL install or `takosumi deploy` for local Capsules. Internal account-plane projection helpers live under `takosumi internal installations ...`.",
+      "`takosumi installations` is not a public command. Use dashboard Git URL install or Source/Capsule plan/apply. Internal account-plane projection helpers live under `takosumi internal installations ...`.",
     );
     return 2;
   }

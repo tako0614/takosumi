@@ -30,9 +30,10 @@ RUN set -eux; \
 # Pre-mirror the provider set the bundled first-party modules need into a filesystem
 # mirror so `tofu init` resolves providers from disk with NO network round-trip
 # to registry.opentofu.org. The baked tofu.rc (TF_CLI_CONFIG_FILE) wires a
-# plugin_cache_dir + a provider_installation block whose filesystem_mirror is
-# authoritative for the mirrored providers and `direct { exclude=[...] }`
-# forbids reaching the network for exactly those providers.
+# provider_installation block whose filesystem_mirror is authoritative for the
+# mirrored providers and `direct { exclude=[...] }` forbids reaching the network
+# for exactly those providers. Runtime-generated per-run CLI configs add an
+# isolated plugin_cache_dir under the run workspace.
 #
 # Mirror list covers the providers the bundled first-party modules require:
 # cloudflare + random + tls for the Cloudflare modules, and aws for the
@@ -43,12 +44,11 @@ RUN set -eux; \
 # a strict mirror policy blocks the run.
 # ---------------------------------------------------------------------------
 ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
-ENV OPENTOFU_PROVIDER_CACHE=/opt/opentofu/provider-cache
 ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
 
-# The baked CLI config. plugin_cache_dir speeds warm re-inits; the
-# provider_installation filesystem_mirror serves the mirrored providers from
-# disk and `direct { exclude }` keeps tofu from going to the network for them.
+# The baked CLI config. The provider_installation filesystem_mirror serves the
+# mirrored providers from disk and `direct { exclude }` keeps tofu from going to
+# the network for them. Per-run generated configs add the plugin cache.
 COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 
 # Minimal build-time config that pins the provider set to mirror. Lives in its
@@ -56,7 +56,7 @@ COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 COPY runner/mirror-providers.tf /opt/opentofu/mirror-build/providers.tf
 
 RUN set -eux; \
-    mkdir -p "${OPENTOFU_PROVIDER_MIRROR}" "${OPENTOFU_PROVIDER_CACHE}"; \
+    mkdir -p "${OPENTOFU_PROVIDER_MIRROR}"; \
     # `tofu providers mirror` must NOT use the baked filesystem-mirror config
     # (it is what populates that mirror); run it with an empty CLI config so it
     # talks to the registry directly.
@@ -100,6 +100,7 @@ RUN chmod 0755 ./runner/start.sh
 
 ENV PORT=8080
 ENV TOFU_WORK_DIR=/workspace
+ENV TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR=/tmp/takosumi-provider-cache
 ENV TAKOSUMI_RUNNER_START_SERVER=1
 
 EXPOSE 8080

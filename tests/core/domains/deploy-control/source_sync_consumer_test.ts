@@ -112,6 +112,116 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
   expect(await store.listCredentialMintEventsForRun(run.id)).toEqual([]);
 });
 
+test("source_sync consumer reuses an unchanged SourceSnapshot archive", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  const previousArchiveKey =
+    "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst";
+  const previousDigest = "sha256:" + "b".repeat(64);
+  await store.putSourceSnapshot({
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: source.id,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "abc123def456",
+    path: ".",
+    archiveObjectKey: previousArchiveKey,
+    archiveDigest: previousDigest,
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toEqual({
+      id: "snap_prev",
+      resolvedCommit: "abc123def456",
+      archiveObjectKey: previousArchiveKey,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+    });
+    runner.result = {
+      resolvedCommit: job.reuseSnapshot!.resolvedCommit,
+      archiveDigest: job.reuseSnapshot!.archiveDigest,
+      archiveSizeBytes: job.reuseSnapshot!.archiveSizeBytes,
+      archiveObjectKey: job.reuseSnapshot!.archiveObjectKey,
+    };
+  };
+  const { run } = await controller.createSourceSync(source.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    spaceId: "space_1",
+  });
+
+  expect(runner.calls).toHaveLength(1);
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("succeeded");
+  expect(finished?.archiveDigest).toBe(previousDigest);
+  const snapshots = await store.listSourceSnapshots(source.id);
+  expect(snapshots).toHaveLength(2);
+  const reused = snapshots.find((snapshot) => snapshot.fetchedByRunId === run.id);
+  expect(reused?.archiveObjectKey).toBe(previousArchiveKey);
+  expect(reused?.archiveDigest).toBe(previousDigest);
+  expect(reused?.archiveSizeBytes).toBe(2048);
+});
+
+test("source_sync consumer rejects a reused archive outside the requested snapshot boundary", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  await store.putSourceSnapshot({
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: source.id,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "abc123def456",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+    archiveDigest: "sha256:" + "b".repeat(64),
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    runner.result = {
+      resolvedCommit: job.reuseSnapshot!.resolvedCommit,
+      archiveDigest: job.reuseSnapshot!.archiveDigest,
+      archiveSizeBytes: job.reuseSnapshot!.archiveSizeBytes,
+      archiveObjectKey:
+        "spaces/other_space/sources/src_bad/snapshots/snap_bad/source.tar.zst",
+    };
+  };
+  const { run } = await controller.createSourceSync(source.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    spaceId: "space_1",
+  });
+
+  const failed = await store.getSourceSyncRun(run.id);
+  expect(failed?.status).toBe("failed");
+  expect(failed?.error).toContain("SourceSnapshot boundary");
+  const snapshots = await store.listSourceSnapshots(source.id);
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.fetchedByRunId).toBe("ssr_prev");
+});
+
 test("source_sync consumer mints ONLY source-phase git creds for a private repo", async () => {
   const { store, sourcesService, vault, runner, controller } = build();
   const conn = await vault.register({

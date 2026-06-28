@@ -9,26 +9,17 @@ plan / apply.
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-takosumi deploy ./my-capsule \
-  --workspace @me \
-  --project photo-blog \
-  --capsule photo-blog \
-  --provider-binding cloudflare.default=conn_cf \
-  --var region=apac
+open 'https://app.takosumi.com/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main'
 
-takosumi plan ./my-capsule \
-  --workspace @me \
-  --project photo-blog \
-  --capsule photo-blog
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-The CLI does not run OpenTofu directly. It uploads a local Capsule and asks
-Takosumi to create Source / Capsule / Run records, pinning the Git commit /
-ref / path as the Run source identity. Execution happens in the runner sandbox,
-and credentials are injected at run time from ProviderConnections and
-CredentialRecipes.
+The CLI does not run OpenTofu directly. The normal creation flow is dashboard
+Git URL install, which creates Source / Capsule / Run records and pins the Git
+commit / ref / path as the Run source identity. Execution happens in the runner
+sandbox, and credentials are injected at run time from ProviderConnections and
+CredentialRecipes. `takosumi deploy` / `takosumi plan` local upload is retired.
 
 ## Connections
 

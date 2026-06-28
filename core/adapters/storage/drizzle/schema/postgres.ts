@@ -73,7 +73,7 @@ export const sourceSnapshots = pgTable(
   names.sourceSnapshots,
   {
     id: text("id").primaryKey(),
-    // Nullable: upload-origin snapshots (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin snapshots have no Git Source.
     sourceId: text("source_id"),
     snapshotJson: json("snapshot_json").notNull(),
     fetchedAt: text("fetched_at").notNull(),
@@ -151,7 +151,7 @@ export const installations = pgTable(
     projectId: text("project_id"),
     name: text("name").notNull(),
     environment: text("environment").notNull(),
-    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin capsules have no Git Source.
     sourceId: text("source_id"),
     installConfigId: text("install_config_id").notNull(),
     // current_deployment_id physically renamed to current_state_version_id

@@ -232,6 +232,7 @@ export class CloudflareContainerOpenTofuRunner
       runId: job.runId,
       source: job.source,
       archiveObjectKey: job.archiveObjectKey,
+      ...(job.reuseSnapshot ? { reuseSnapshot: job.reuseSnapshot } : {}),
       ...(job.credentials ? { credentials: job.credentials } : {}),
     });
     // The DO persists the archive to R2_SOURCE and rewrites `sourceArchive` to
@@ -249,12 +250,20 @@ export class CloudflareContainerOpenTofuRunner
         : archive && typeof archive.sizeBytes === "number"
           ? archive.sizeBytes
           : undefined;
+    const archiveObjectKey =
+      stringFromRecord(result, "archiveObjectKey") ??
+      (archive ? stringFromRecord(archive, "archiveObjectKey") : undefined);
     if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(
         `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
       );
     }
-    return { resolvedCommit, archiveDigest, archiveSizeBytes };
+    return {
+      resolvedCommit,
+      archiveDigest,
+      archiveSizeBytes,
+      ...(archiveObjectKey ? { archiveObjectKey } : {}),
+    };
   }
 
   async readCapsuleSourceFiles(
@@ -528,10 +537,47 @@ function runnerFailureDetail(
 function diagnosticsFromContainerResult(
   result: Record<string, unknown>,
 ): OpenTofuPlanResult["diagnostics"] {
+  const diagnostics: Array<
+    NonNullable<OpenTofuPlanResult["diagnostics"]>[number]
+  > = [];
   const stderr = stringFromRecord(result, "stderr");
-  return stderr && stderr.trim().length > 0
-    ? [{ severity: "warning", message: redactRunnerDiagnosticText(stderr) }]
-    : [];
+  if (stderr && stderr.trim().length > 0) {
+    diagnostics.push({
+      severity: "warning",
+      message: redactRunnerDiagnosticText(stderr),
+    });
+  }
+  const phaseTimingDetail = phaseTimingDetailFromContainerResult(result);
+  if (phaseTimingDetail) {
+    diagnostics.push({
+      severity: "info",
+      message: "runner phase timings recorded",
+      detail: phaseTimingDetail,
+    });
+  }
+  return diagnostics;
+}
+
+function phaseTimingDetailFromContainerResult(
+  result: Record<string, unknown>,
+): string | undefined {
+  const value = result.phaseTimings;
+  if (!Array.isArray(value)) return undefined;
+  const timings = value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const phase = stringFromRecord(entry, "phase");
+    const durationMs = entry.durationMs;
+    if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
+    if (
+      typeof durationMs !== "number" ||
+      !Number.isFinite(durationMs) ||
+      durationMs < 0
+    ) {
+      return [];
+    }
+    return [`${phase}=${Math.round(durationMs)}ms`];
+  });
+  return timings.length > 0 ? timings.join(", ") : undefined;
 }
 
 function planResourceChangesFromContainerResult(

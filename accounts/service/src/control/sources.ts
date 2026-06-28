@@ -427,6 +427,9 @@ async function createSource(
       ? { defaultPath: stringValue(body.defaultPath) }
       : {}),
     ...(authConnectionId ? { authConnectionId } : {}),
+    ...(body.autoSync !== undefined
+      ? { autoSync: booleanValue(body.autoSync) === true }
+      : {}),
   };
   return jsonStatus(await operations.createSource(requestBody), 201);
 }

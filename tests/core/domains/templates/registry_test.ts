@@ -14,6 +14,13 @@ test("built-in registry resolves first-party modules by id+version", () => {
   expect(r2.source.localModulePath).toEqual(
     "/app/templates/cloudflare-r2-storage/module",
   );
+});
+
+test("built-in registry resolves but does not list the legacy worker build module", () => {
+  const listedIds = defaultTemplateRegistry
+    .list()
+    .map((template) => template.id);
+  expect(listedIds).not.toContain("cloudflare-worker-service");
   const worker = defaultTemplateRegistry.require(
     "cloudflare-worker-service",
     "1.0.0",
@@ -56,8 +63,6 @@ const MODULE_DIRS: Readonly<Record<string, string>> = {
   "cloudflare-r2-storage": "providers/cloudflare/modules/cloudflare-r2-storage",
   "cloudflare-static-site":
     "providers/cloudflare/modules/cloudflare-static-site",
-  "cloudflare-worker-service":
-    "providers/cloudflare/modules/cloudflare-worker-service",
   "aws-s3-storage": "providers/aws/modules/aws-s3-storage",
 };
 
@@ -84,7 +89,7 @@ test("registry require throws not_found for an unknown id or version", () => {
     /not a built-in Capsule module/,
   );
   expect(() =>
-    defaultTemplateRegistry.require("cloudflare-r2-storage", "9.9.9")
+    defaultTemplateRegistry.require("cloudflare-r2-storage", "9.9.9"),
   ).toThrow(/not a built-in Capsule module/);
 });
 
@@ -114,7 +119,7 @@ test("validateTemplateInputs validates types, required, defaults, and unknown ke
   );
   // Wrong type.
   expect(() =>
-    validateTemplateInputs(template, { bucketName: 1, accountId: "a" })
+    validateTemplateInputs(template, { bucketName: 1, accountId: "a" }),
   ).toThrow(/bucketName must be a string/);
   // Unknown input.
   expect(() =>
@@ -122,7 +127,7 @@ test("validateTemplateInputs validates types, required, defaults, and unknown ke
       bucketName: "b",
       accountId: "a",
       bogus: "x",
-    })
+    }),
   ).toThrow(/unknown input bogus/);
   // Optional with default filled; required passed through.
   const normalized = validateTemplateInputs(template, {
@@ -140,6 +145,6 @@ test("validateTemplateInputs rejects non-finite numbers", () => {
     },
   };
   expect(() =>
-    validateTemplateInputs(template, { retentionDays: Infinity })
+    validateTemplateInputs(template, { retentionDays: Infinity }),
   ).toThrow(/finite number/);
 });

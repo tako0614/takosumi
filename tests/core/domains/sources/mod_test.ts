@@ -81,9 +81,9 @@ test("createSource validates URL policy and stores status active", async () => {
   expect(source.defaultRef).toBe("main");
   expect(source.defaultPath).toBe(".");
   expect(hookSecret).toBe("whk_fixed_secret_value");
-  // The public source must NOT carry the hook secret hash or internal fields.
+  // The public source must NOT carry the hook secret hash or private fields.
   expect(JSON.stringify(source)).not.toContain("hookSecretHash");
-  expect(JSON.stringify(source)).not.toContain("autoSync");
+  expect(source.autoSync).toBe(false);
   // The stored record carries the hash, not the plaintext secret.
   const stored = await store.getSource(source.id);
   expect(stored?.hookSecretHash).toBeDefined();
@@ -184,15 +184,18 @@ test("listSources / getSource project public records only", async () => {
     spaceId: "space_1",
     name: "a",
     url: "https://github.com/a/b",
+    autoSync: true,
   });
   const list = await service.listSources("space_1");
   expect(list.sources).toHaveLength(1);
   expect(JSON.stringify(list.sources)).not.toContain("hookSecretHash");
+  expect(list.sources[0]?.autoSync).toBe(true);
   const got = await service.getSource(list.sources[0].id);
   expect(got.source.id).toBe(list.sources[0].id);
+  expect(got.source.autoSync).toBe(true);
 });
 
-test("patchSource updates fields and clears authConnectionId with null", async () => {
+test("patchSource updates fields, autoSync, and clears authConnectionId with null", async () => {
   const { store, service } = makeService();
   await seedConnection(store, "conn_git1", "space_1");
   const { source } = await service.createSource({
@@ -205,11 +208,13 @@ test("patchSource updates fields and clears authConnectionId with null", async (
     name: "renamed",
     defaultRef: "release",
     status: "disabled",
+    autoSync: true,
     authConnectionId: null,
   });
   expect(patched.source.name).toBe("renamed");
   expect(patched.source.defaultRef).toBe("release");
   expect(patched.source.status).toBe("disabled");
+  expect(patched.source.autoSync).toBe(true);
   expect(patched.source.authConnectionId).toBeUndefined();
 });
 

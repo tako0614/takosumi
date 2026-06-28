@@ -6702,34 +6702,6 @@ test("accounts handler mirrors control deploy projection and exports after apply
         updatedAt: "2026-01-01T00:00:00Z",
       }),
     },
-    deployUpload: async () => ({
-      installation: {
-        id: "inst_control_export",
-        workspaceId: "space_control_export",
-        name: "hello",
-        slug: "hello",
-        installConfigId: "cfg_control_export",
-        environment: "production",
-        currentStateGeneration: 0,
-        status: "pending" as const,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      },
-      installConfigId: "cfg_control_export",
-      run: {
-        id: "plan_control_export",
-        workspaceId: "space_control_export",
-        capsuleId: "inst_control_export",
-        type: "plan" as const,
-        status: "succeeded" as const,
-        sourceSnapshotId: "snap_control_export",
-        planDigest: `sha256:${"d".repeat(64)}`,
-        createdBy: "test",
-        createdAt: "2026-01-01T00:00:00Z",
-      },
-      status: "planned" as const,
-      created: true,
-    }),
     getPlanRun: async () => ({
       planRun: {
         id: "plan_control_export",
@@ -6793,19 +6765,30 @@ test("accounts handler mirrors control deploy projection and exports after apply
     platformAccess: { status: "closed" },
     controlPlaneOperations: operations,
   });
-
-  const deployResponse = await handler(
-    new Request("https://accounts.example.test/api/v1/deploy", {
-      method: "POST",
-      headers: accountSessionHeaders(sessionId),
-      body: JSON.stringify({
-        workspaceId: "space_control_export",
-        name: "hello",
-        snapshotId: "snap_control_export",
-      }),
-    }),
-  );
-  expect(deployResponse.status).toEqual(200);
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_control_export",
+    accountId: "acct_control_export",
+    workspaceId: "space_control_export",
+    appId: "hello",
+    sourceGitUrl: "https://github.com/example/hello",
+    sourceRef: "main",
+    sourceCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    planDigest: `sha256:${"d".repeat(64)}`,
+    mode: "shared-cell",
+    status: "installing",
+    createdBySubject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.appendCapsuleEvent({
+    eventId: "evt_control_export_created",
+    capsuleId: "inst_control_export",
+    eventType: "installation.created",
+    payload: { createdBySubject: "tsub_owner" },
+    eventHash: `sha256:${"a".repeat(64)}`,
+    createdAt: now,
+  });
   expect(store.findAppCapsule("inst_control_export")?.status).toEqual(
     "installing",
   );

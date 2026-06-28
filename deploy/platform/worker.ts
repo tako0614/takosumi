@@ -45,7 +45,10 @@ import type {
   UsageResourceMetadataValue,
 } from "takosumi-contract/billing";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
-import type { RecordMeteredUsageInput } from "../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuControllerError,
+  type RecordMeteredUsageInput,
+} from "../../core/domains/deploy-control/mod.ts";
 import {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -969,9 +972,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
     spaceId,
     input,
   ) => {
-    await (
-      await takosumiOperationsFor(env)
-    ).recordMeteredUsage(spaceId, input);
+    await (await takosumiOperationsFor(env)).recordMeteredUsage(spaceId, input);
   },
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
@@ -983,6 +984,17 @@ export async function handlePlatformCloudExtensionRouteRequest(
     sessionVerifier,
   );
   if (!authContext.ok) return authContext.response;
+  if (
+    fallbackPlatformCloudUsageMeter(
+      authContext.request,
+      route,
+      authContext.session,
+    ) &&
+    !authContext.session.spaceId
+  ) {
+    return platformCloudExtensionUsageFailure("usage_workspace_id_missing")
+      .response;
+  }
   const upstreamResponse = await binding.fetch(authContext.request);
   return await responseForPlatformCloudExtensionClient(
     authContext.request,
@@ -1041,6 +1053,11 @@ const PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
 ] as const;
 
+const PLATFORM_CLOUD_EXTENSION_BILLING_CONTEXT_HEADERS = [
+  PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+  PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
+] as const;
+
 async function platformCloudExtensionAuthContext(
   request: Request,
   env: CloudflareWorkerEnv,
@@ -1060,6 +1077,9 @@ async function platformCloudExtensionAuthContext(
     headers.delete(header);
   }
   for (const header of PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
+    headers.delete(header);
+  }
+  for (const header of PLATFORM_CLOUD_EXTENSION_BILLING_CONTEXT_HEADERS) {
     headers.delete(header);
   }
   // Descriptor-level scope enforcement applies only to token-based auth
@@ -1089,42 +1109,212 @@ async function platformCloudExtensionAuthContext(
       session,
     };
   }
+  const verifiedSession = await platformCloudExtensionVerifiedBillingSession(
+    request,
+    env,
+    session,
+  );
+  if (!verifiedSession.ok) return verifiedSession;
+  const sessionContext = verifiedSession.session;
   headers.set(PLATFORM_CLOUD_EXTENSION_AUTHENTICATED_HEADER, "1");
-  if (session.authKind) {
+  if (sessionContext.authKind) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_AUTH_KIND_HEADER,
-      safeCloudExtensionHeaderValue(session.authKind),
+      safeCloudExtensionHeaderValue(sessionContext.authKind),
     );
   }
-  if (session.scopes && session.scopes.length > 0) {
+  if (sessionContext.scopes && sessionContext.scopes.length > 0) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER,
-      session.scopes.map(safeCloudExtensionHeaderValue).join(" "),
+      sessionContext.scopes.map(safeCloudExtensionHeaderValue).join(" "),
     );
   }
-  if (session.subject) {
+  if (sessionContext.subject) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SUBJECT_HEADER,
-      safeCloudExtensionHeaderValue(session.subject),
+      safeCloudExtensionHeaderValue(sessionContext.subject),
     );
   }
-  if (session.installationId) {
+  if (sessionContext.installationId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER,
-      safeCloudExtensionHeaderValue(session.installationId),
+      safeCloudExtensionHeaderValue(sessionContext.installationId),
+    );
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
+      safeCloudExtensionHeaderValue(sessionContext.installationId),
     );
   }
-  if (session.spaceId) {
+  if (sessionContext.spaceId) {
     headers.set(
       PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER,
-      safeCloudExtensionHeaderValue(session.spaceId),
+      safeCloudExtensionHeaderValue(sessionContext.spaceId),
+    );
+    headers.set(
+      PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+      safeCloudExtensionHeaderValue(sessionContext.spaceId),
     );
   }
   return {
     ok: true,
     request: clonePlatformCloudExtensionRequest(request, headers),
-    session,
+    session: sessionContext,
   };
+}
+
+async function platformCloudExtensionVerifiedBillingSession(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformCloudExtensionSessionContext,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly session: PlatformCloudExtensionSessionContext;
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const requested = platformCloudExtensionRequestedBillingContext(request);
+  let verifiedSpaceId = safePlatformCloudExtensionContextId(session.spaceId);
+  let verifiedInstallationId = safePlatformCloudExtensionContextId(
+    session.installationId,
+  );
+
+  if (requested.spaceId) {
+    if (verifiedSpaceId && requested.spaceId !== verifiedSpaceId) {
+      return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
+    }
+    if (!verifiedSpaceId) {
+      if (
+        session.authKind !== "session" ||
+        !(await platformCloudExtensionSessionCanAccessWorkspace(
+          request,
+          env,
+          requested.spaceId,
+        ))
+      ) {
+        return platformCloudExtensionUsageFailure(
+          "usage_workspace_id_mismatch",
+        );
+      }
+      verifiedSpaceId = requested.spaceId;
+    }
+  }
+
+  if (requested.installationId) {
+    if (
+      verifiedInstallationId &&
+      requested.installationId !== verifiedInstallationId
+    ) {
+      return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
+    }
+    if (!verifiedInstallationId) {
+      if (
+        !verifiedSpaceId ||
+        session.authKind !== "session" ||
+        !(await platformCloudExtensionSessionCanAccessInstallation(
+          request,
+          env,
+          requested.installationId,
+          verifiedSpaceId,
+        ))
+      ) {
+        return platformCloudExtensionUsageFailure(
+          "usage_workspace_id_mismatch",
+        );
+      }
+      verifiedInstallationId = requested.installationId;
+    }
+  }
+
+  const {
+    spaceId: _spaceId,
+    installationId: _installationId,
+    ...rest
+  } = session;
+  return {
+    ok: true,
+    session: {
+      ...rest,
+      ...(verifiedSpaceId ? { spaceId: verifiedSpaceId } : {}),
+      ...(verifiedInstallationId
+        ? { installationId: verifiedInstallationId }
+        : {}),
+    },
+  };
+}
+
+function platformCloudExtensionRequestedBillingContext(request: Request): {
+  readonly spaceId?: string;
+  readonly installationId?: string;
+} {
+  const spaceId = safePlatformCloudExtensionContextId(
+    request.headers.get(PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER),
+  );
+  const installationId = safePlatformCloudExtensionContextId(
+    request.headers.get(
+      PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
+    ),
+  );
+  return {
+    ...(spaceId ? { spaceId } : {}),
+    ...(installationId ? { installationId } : {}),
+  };
+}
+
+async function platformCloudExtensionSessionCanAccessWorkspace(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  workspaceId: string,
+): Promise<boolean> {
+  const headers = sessionMirrorHeaders(request);
+  if (!headers) return false;
+  try {
+    const response = await accountsWorker.fetch(
+      new Request(
+        new URL(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`,
+          request.url,
+        ),
+        { method: "GET", headers },
+      ),
+      env,
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function platformCloudExtensionSessionCanAccessInstallation(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  installationId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const headers = sessionMirrorHeaders(request);
+  if (!headers) return false;
+  try {
+    const response = await accountsWorker.fetch(
+      new Request(
+        new URL(
+          `/api/v1/installations/${encodeURIComponent(installationId)}`,
+          request.url,
+        ),
+        { method: "GET", headers },
+      ),
+      env,
+    );
+    if (!response.ok) return false;
+    const body = await response.json().catch(() => undefined);
+    const installation = objectRecord(objectRecord(body).installation);
+    const resolvedWorkspaceId = safePlatformCloudExtensionContextId(
+      valueString(installation.workspaceId) ??
+        valueString(installation.spaceId),
+    );
+    return resolvedWorkspaceId === workspaceId;
+  } catch {
+    return false;
+  }
 }
 
 function clonePlatformCloudExtensionRequest(
@@ -1171,6 +1361,11 @@ async function responseForPlatformCloudExtensionClient(
   });
 }
 
+// Cloud-extension response metering (intentional forward infra, NOT accidental complexity).
+// This is the Seam-A path that reads `x-takosumi-cloud-usage-*` headers off a bound Cloud
+// extension's response and writes the OSS showback usage ledger via recordMeteredUsage. It is
+// dormant in OSS standalone (no extension bound -> no emitter sends these headers), but it is
+// live-wired through `export default { fetch }`, so do not delete it as unreachable.
 const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
   "x-takosumi-cloud-usage-space-id";
 const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
@@ -1222,7 +1417,9 @@ async function recordPlatformCloudExtensionUsage(
   route: PlatformCloudExtensionRoute,
   session: PlatformCloudExtensionSessionContext,
   usageRecorder: PlatformCloudExtensionUsageRecorder,
-): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly response: Response }
+> {
   if (!response.ok) return { ok: true };
   const usage = platformCloudExtensionUsageEnvelope(
     request,
@@ -1238,7 +1435,11 @@ async function recordPlatformCloudExtensionUsage(
   if (session.spaceId && session.spaceId !== spaceId) {
     return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
   }
-  if (!periodStart || !periodEnd || Date.parse(periodEnd) < Date.parse(periodStart)) {
+  if (
+    !periodStart ||
+    !periodEnd ||
+    Date.parse(periodEnd) < Date.parse(periodStart)
+  ) {
     return platformCloudExtensionUsageFailure("usage_period_invalid");
   }
   const meters = parsePlatformCloudUsageMeters(rawMeters);
@@ -1260,9 +1461,7 @@ async function recordPlatformCloudExtensionUsage(
     const input: RecordMeteredUsageInput = {
       ...(meter.installationId ? { installationId: meter.installationId } : {}),
       meterId: meter.meterId,
-      ...(meter.resourceFamily
-        ? { resourceFamily: meter.resourceFamily }
-        : {}),
+      ...(meter.resourceFamily ? { resourceFamily: meter.resourceFamily } : {}),
       ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
       ...(meter.operation ? { operation: meter.operation } : {}),
       ...(meter.resourceMetadata
@@ -1286,8 +1485,10 @@ async function recordPlatformCloudExtensionUsage(
     };
     try {
       await usageRecorder(spaceId, input);
-    } catch {
-      return platformCloudExtensionUsageFailure("usage_record_failed");
+    } catch (error) {
+      return platformCloudExtensionUsageFailure(
+        platformCloudExtensionUsageRecordFailureReason(error),
+      );
     }
   }
   return { ok: true };
@@ -1314,7 +1515,9 @@ function platformCloudExtensionUsageEnvelope(
       rawMeters,
       spaceId: platformCloudExtensionUsageSpaceId(request, response, session),
       periodStart: isoHeaderValue(
-        response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER),
+        response.headers.get(
+          PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+        ),
       ),
       periodEnd: isoHeaderValue(
         response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER),
@@ -1330,7 +1533,9 @@ function platformCloudExtensionUsageEnvelope(
     spaceId:
       session.spaceId ??
       safePlatformCloudExtensionContextId(
-        request.headers.get(PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER),
+        request.headers.get(
+          PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+        ),
       ),
     periodStart: new Date(periodEndMs - 1).toISOString(),
     periodEnd: new Date(periodEndMs).toISOString(),
@@ -1370,8 +1575,7 @@ function fallbackPlatformCloudUsageMeter(
       rule.pathTemplate,
     );
     if (!match) continue;
-    const operation =
-      rule.operationByMethod?.[method] ?? method.toLowerCase();
+    const operation = rule.operationByMethod?.[method] ?? method.toLowerCase();
     const resourceIdParam = rule.resourceIdParam ?? "resourceId";
     const rawResourceId = match[resourceIdParam];
     const installationId =
@@ -1436,27 +1640,72 @@ function platformCloudExtensionClientHeaders(source: Headers): Headers {
   return headers;
 }
 
-function platformCloudExtensionUsageFailure(
-  reason: string,
-): { readonly ok: false; readonly response: Response } {
+function platformCloudExtensionUsageFailure(reason: string): {
+  readonly ok: false;
+  readonly response: Response;
+} {
+  const mapped = platformCloudExtensionUsageFailureResponse(reason);
   return {
     ok: false,
     response: Response.json(
       {
-        error: "cloud_extension_usage_metering_failed",
+        error: mapped.error,
         reason,
       },
-      { status: 502 },
+      { status: mapped.status },
     ),
   };
 }
 
-function parsePlatformCloudUsageMeters(
-  raw: string,
-): { readonly ok: true; readonly value: readonly PlatformCloudUsageMeter[] } | {
-  readonly ok: false;
+function platformCloudExtensionUsageFailureResponse(reason: string): {
   readonly error: string;
+  readonly status: number;
 } {
+  switch (reason) {
+    case "usage_workspace_id_missing":
+      return {
+        error: "cloud_extension_billing_context_required",
+        status: 402,
+      };
+    case "usage_workspace_id_mismatch":
+      return {
+        error: "cloud_extension_billing_context_mismatch",
+        status: 403,
+      };
+    case "insufficient_credits":
+      return {
+        error: "cloud_extension_insufficient_credits",
+        status: 402,
+      };
+    default:
+      return {
+        error: "cloud_extension_usage_metering_failed",
+        status: 502,
+      };
+  }
+}
+
+function platformCloudExtensionUsageRecordFailureReason(
+  error: unknown,
+): string {
+  if (error instanceof OpenTofuControllerError) {
+    const details = objectRecord(error.details);
+    if (
+      error.code === "failed_precondition" &&
+      details.reason === "insufficient_credits"
+    ) {
+      return "insufficient_credits";
+    }
+  }
+  return "usage_record_failed";
+}
+
+function parsePlatformCloudUsageMeters(raw: string):
+  | { readonly ok: true; readonly value: readonly PlatformCloudUsageMeter[] }
+  | {
+      readonly ok: false;
+      readonly error: string;
+    } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -1476,14 +1725,19 @@ function parsePlatformCloudUsageMeters(
       return { ok: false, error: "usage_meter_invalid" };
     }
     const resourceMetadata = usageMetadata(record.resourceMetadata);
-    if (resourceMetadata === undefined && record.resourceMetadata !== undefined) {
+    if (
+      resourceMetadata === undefined &&
+      record.resourceMetadata !== undefined
+    ) {
       return { ok: false, error: "usage_resource_metadata_invalid" };
     }
     const meter: PlatformCloudUsageMeter = {
       meterId,
       kind,
       quantity,
-      ...(safePlatformCloudExtensionContextId(valueString(record.installationId))
+      ...(safePlatformCloudExtensionContextId(
+        valueString(record.installationId),
+      )
         ? {
             installationId: safePlatformCloudExtensionContextId(
               valueString(record.installationId),
@@ -1512,12 +1766,12 @@ function parsePlatformCloudUsageMeters(
   return { ok: true, value: meters };
 }
 
-function parsePlatformCloudUsagePriceBook(
-  raw: unknown,
-): { readonly ok: true; readonly value: PlatformCloudUsagePriceBook } | {
-  readonly ok: false;
-  readonly error: string;
-} {
+function parsePlatformCloudUsagePriceBook(raw: unknown):
+  | { readonly ok: true; readonly value: PlatformCloudUsagePriceBook }
+  | {
+      readonly ok: false;
+      readonly error: string;
+    } {
   if (typeof raw !== "string" || !raw.trim()) {
     return { ok: false, error: "usage_price_book_missing" };
   }
@@ -1603,10 +1857,12 @@ function parsePlatformCloudUsagePriceBook(
 function pricePlatformCloudUsageMeter(
   meter: PlatformCloudUsageMeter,
   priceBook: PlatformCloudUsagePriceBook,
-): { readonly ok: true; readonly value: number } | {
-  readonly ok: false;
-  readonly error: string;
-} {
+):
+  | { readonly ok: true; readonly value: number }
+  | {
+      readonly ok: false;
+      readonly error: string;
+    } {
   const entry = priceBook.meters.find(
     (candidate) =>
       candidate.kind === meter.kind &&
@@ -1622,8 +1878,7 @@ function pricePlatformCloudUsageMeter(
           (meter.quantity * (entry.chargeUsdMicrosPerMillionUnits ?? 0)) /
             1_000_000,
         );
-  const minimum =
-    meter.quantity > 0 ? (entry.minimumChargeUsdMicros ?? 0) : 0;
+  const minimum = meter.quantity > 0 ? (entry.minimumChargeUsdMicros ?? 0) : 0;
   const usdMicros = Math.max(raw, minimum);
   if (!Number.isSafeInteger(usdMicros) || usdMicros < 0) {
     return { ok: false, error: "usage_price_invalid" };
@@ -1642,7 +1897,9 @@ function grossMarginAllowed(
   );
 }
 
-function platformCloudUsageEventKind(value: string): UsageEventKind | undefined {
+function platformCloudUsageEventKind(
+  value: string,
+): UsageEventKind | undefined {
   switch (value) {
     case "runner_minute":
     case "artifact_storage_gb_hour":
@@ -1713,7 +1970,9 @@ function valueString(value: unknown): string | undefined {
 }
 
 function numberValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function nonNegativeSafeInteger(value: unknown): boolean {
@@ -2189,8 +2448,10 @@ async function runScheduledSourcePoll(env: DeployControlEnv): Promise<void> {
 
 /**
  * Scheduled source polling seam. Scans active sources whose autoSync flag is set
- * and enqueues a deduped source_sync for each (the consumer ls-remotes and only
- * writes a new snapshot when the ref moved). Best-effort and capped.
+ * and enqueues a deduped source_sync for each. The runner resolves the ref with
+ * git ls-remote; when the ref still points at the latest SourceSnapshot commit,
+ * it reuses that immutable archive object instead of cloning/archiving again.
+ * Best-effort and capped.
  */
 export async function pollAutoSyncSources(
   operations: SourcePollOperations,

@@ -163,7 +163,7 @@ export class SourcesService {
       createdAt: nowIso,
       updatedAt: nowIso,
       hookSecretHash,
-      autoSync: false,
+      autoSync: request.autoSync === true,
     };
     await this.#store.putSource(stored);
     return { source: toPublicSource(stored), hookSecret };
@@ -189,7 +189,7 @@ export class SourcesService {
     return { source: toPublicSource(stored) };
   }
 
-  /** Internal: the stored source (with hook hash / autoSync). Not projected. */
+  /** Internal: the stored source includes hook hash and lastSeenCommit. */
   async getStoredSource(id: string): Promise<StoredSource> {
     return await this.#requireSource(id);
   }
@@ -227,6 +227,9 @@ export class SourcesService {
     }
     if (patch.status !== undefined) {
       (next as { status: StoredSource["status"] }).status = patch.status;
+    }
+    if (patch.autoSync !== undefined) {
+      (next as { autoSync: boolean }).autoSync = patch.autoSync === true;
     }
     (next as { updatedAt: string }).updatedAt = this.#now().toISOString();
     await this.#store.putSource(next);
@@ -533,10 +536,10 @@ export class SourcesService {
   }
 
   /**
-   * Records a digest-pinned prepared artifact as a SourceSnapshot. The artifact
-   * bytes are already verified and stored in R2_SOURCE by the API/facade route.
-   * This keeps source-side build output on the same immutable archive path as
-   * git-sync and local upload without requiring a Source row or runner build.
+   * Records a digest-pinned legacy prepared source archive as a SourceSnapshot.
+   * The archive bytes are already verified and stored in R2_SOURCE by the
+   * API/facade route. This is compatibility ingest for already-archived
+   * OpenTofu source bytes, not a deployable app artifact or build contract.
    */
   async recordArtifactSnapshot(input: {
     readonly spaceId: string;
@@ -848,7 +851,6 @@ export function toPublicSource(stored: StoredSource): Source {
   const {
     hookSecretHash: _hookSecretHash,
     lastSeenCommit: _lastSeenCommit,
-    autoSync: _autoSync,
     ...rest
   } = stored;
   return rest;
@@ -865,8 +867,8 @@ export function sourceArchiveObjectKey(
 
 /**
  * R2_SOURCE archive key layout for an upload-origin snapshot (no Source id).
- * `takosumi deploy` writes the local Capsule archive here before recording the
- * upload {@link SourceSnapshot}.
+ * Internal/operator upload-compat ingest writes the Capsule archive here before
+ * recording the upload {@link SourceSnapshot}.
  */
 export function uploadArchiveObjectKey(
   spaceId: string,

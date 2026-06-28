@@ -8875,84 +8875,16 @@ test("connections set-cloudflare-token rejects Workspace-owned connection flags"
   }
 });
 
-test("deploy resolves @handle space flags before upload and deploy", async () => {
+test("deploy local upload is retired before network access", async () => {
   const capsuleDir = await makeTempDir();
   await writeTextFile(pathJoin(capsuleDir, "main.tf"), "terraform {}\n");
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const requests: Array<{ request: Request; body: string }> = [];
+  const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input, init) => {
-    const request = new Request(input, init);
-    const body =
-      request.headers.get("content-type") === "application/json"
-        ? await request.clone().text()
-        : "<binary>";
-    requests.push({ request, body });
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/api/v1/spaces") {
-      return Response.json({
-        spaces: [
-          {
-            id: "space_me",
-            handle: "me",
-            displayName: "Me",
-            type: "personal",
-            ownerUserId: "tsub_me",
-            createdAt: "2026-06-14T00:00:00.000Z",
-            updatedAt: "2026-06-14T00:00:00.000Z",
-          },
-        ],
-      });
-    }
-    if (
-      request.method === "POST" &&
-      url.pathname === "/api/v1/spaces/space_me/uploads"
-    ) {
-      return Response.json({
-        snapshot: {
-          id: "snap_upload",
-          archiveDigest: "sha256:abc",
-          archiveSizeBytes: 123,
-        },
-      });
-    }
-    if (request.method === "POST" && url.pathname === "/api/v1/deploy") {
-      return Response.json({
-        installation: { id: "inst_1", name: "my-app" },
-        run: { id: "run_plan", status: "queued", type: "plan" },
-        planRun: { id: "run_plan", status: "queued", type: "plan" },
-        created: true,
-      });
-    }
-    if (request.method === "GET" && url.pathname === "/api/v1/runs/run_plan") {
-      return Response.json({
-        id: "run_plan",
-        status: "succeeded",
-        type: "plan",
-        policyStatus: "passed",
-      });
-    }
-    if (
-      request.method === "POST" &&
-      url.pathname === "/api/v1/runs/run_plan/apply"
-    ) {
-      return Response.json({
-        run: { id: "run_apply", status: "queued", type: "apply" },
-      });
-    }
-    if (request.method === "GET" && url.pathname === "/api/v1/runs/run_apply") {
-      return Response.json({
-        id: "run_apply",
-        status: "succeeded",
-        type: "apply",
-        policyStatus: "passed",
-      });
-    }
-    return Response.json(
-      { error: { message: "unexpected request" } },
-      { status: 404 },
-    );
+  globalThis.fetch = ((input, init) => {
+    requests.push(new Request(input, init));
+    throw new Error("fetch must not be called for retired deploy");
   }) as typeof fetch;
 
   try {
@@ -8975,85 +8907,26 @@ test("deploy resolves @handle space flags before upload and deploy", async () =>
       },
     );
 
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(
-      requests.map(
-        ({ request }) => `${request.method} ${new URL(request.url).pathname}`,
-      ),
-    ).toEqual([
-      "GET /api/v1/spaces",
-      "POST /api/v1/spaces/space_me/uploads",
-      "POST /api/v1/deploy",
-      "GET /api/v1/runs/run_plan",
-      "POST /api/v1/runs/run_plan/apply",
-      "GET /api/v1/runs/run_apply",
-    ]);
-    expect(
-      requests.every(
-        ({ request }) =>
-          request.headers.get("authorization") === "Bearer session-bearer",
-      ),
-    ).toEqual(true);
-    expect(JSON.parse(requests[2]!.body)).toMatchObject({
-      workspaceId: "space_me",
-      name: "my-app",
-      snapshotId: "snap_upload",
-      autoApprove: true,
-    });
-    expect(stdout.join("\n")).toContain("uploading");
-    expect(stdout.join("\n")).toContain("to @me");
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("local upload is retired");
+    expect(requests).toEqual([]);
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(capsuleDir, { recursive: true });
   }
 });
 
-test("deploy keeps raw space ids without handle resolution", async () => {
+test("plan local upload is retired before network access", async () => {
   const capsuleDir = await makeTempDir();
   await writeTextFile(pathJoin(capsuleDir, "main.tf"), "terraform {}\n");
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const requests: Array<{ request: Request; body: string }> = [];
+  const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input, init) => {
-    const request = new Request(input, init);
-    const body =
-      request.headers.get("content-type") === "application/json"
-        ? await request.clone().text()
-        : "<binary>";
-    requests.push({ request, body });
-    const url = new URL(request.url);
-    if (
-      request.method === "POST" &&
-      url.pathname === "/api/v1/spaces/space_direct/uploads"
-    ) {
-      return Response.json({
-        snapshot: {
-          id: "snap_direct",
-          archiveDigest: "sha256:def",
-          archiveSizeBytes: 123,
-        },
-      });
-    }
-    if (request.method === "POST" && url.pathname === "/api/v1/deploy") {
-      return Response.json({
-        installation: { id: "inst_1", name: "app" },
-        run: { id: "run_plan", status: "succeeded", type: "plan" },
-        created: false,
-      });
-    }
-    if (request.method === "GET" && url.pathname === "/api/v1/runs/run_plan") {
-      return Response.json({
-        id: "run_plan",
-        status: "waiting_approval",
-        type: "plan",
-      });
-    }
-    return Response.json(
-      { error: { message: "unexpected request" } },
-      { status: 404 },
-    );
+  globalThis.fetch = ((input, init) => {
+    requests.push(new Request(input, init));
+    throw new Error("fetch must not be called for retired plan");
   }) as typeof fetch;
 
   try {
@@ -9071,23 +8944,10 @@ test("deploy keeps raw space ids without handle resolution", async () => {
       },
     );
 
-    expect(code).toEqual(0);
-    expect(stderr).toEqual([]);
-    expect(
-      requests.map(
-        ({ request }) => `${request.method} ${new URL(request.url).pathname}`,
-      ),
-    ).toEqual([
-      "POST /api/v1/spaces/space_direct/uploads",
-      "POST /api/v1/deploy",
-      "GET /api/v1/runs/run_plan",
-    ]);
-    expect(JSON.parse(requests[1]!.body)).toMatchObject({
-      workspaceId: "space_direct",
-      name: "app",
-      snapshotId: "snap_direct",
-      planOnly: true,
-    });
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr.join("\n")).toContain("local upload is retired");
+    expect(requests).toEqual([]);
   } finally {
     globalThis.fetch = originalFetch;
     await removePath(capsuleDir, { recursive: true });

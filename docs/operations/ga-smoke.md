@@ -65,6 +65,8 @@ CLOUDFLARE_ACCOUNT_ID="$(
   bun run smoke:platform-control-plane -- \
     --url https://app-staging.takosumi.com \
     --workspace <scratch-workspace-id-or-handle> \
+    --source-git-url https://github.com/tako0614/takosumi.git \
+    --source-path providers/cloudflare/modules/cloudflare-hello-worker/module \
     --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
     --cloudflare-resource-preflight account-resources \
     --json
@@ -74,8 +76,8 @@ The command:
 
 1. uses the same signed-in account session surface as the dashboard and creates
    a temporary Workspace-scoped Cloudflare ProviderConnection;
-2. uploads the no-build `cloudflare-hello-worker` OpenTofu Capsule;
-3. plans and applies it with an explicit ProviderConnection binding;
+2. registers and syncs the Git Source that contains the no-build `cloudflare-hello-worker` OpenTofu Capsule;
+3. creates a Capsule, then plans and applies it with an explicit ProviderConnection binding;
 4. verifies the Worker script through the real Cloudflare API;
 5. starts the canonical destroy flow (`DELETE capsule` through the current compatibility route → approve
    destroy-plan → apply destroy-plan);

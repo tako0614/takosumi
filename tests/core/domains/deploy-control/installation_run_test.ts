@@ -616,6 +616,116 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
+test("requested scalar Cloudflare Capsule inputs can be filled from provider scope hints", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        cloudflare_account_id: null,
+        account_id: null,
+        untouched: null,
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
+  expect(mainTf).toContain('account_id = "acct_scope_123"');
+  expect(mainTf).toContain("untouched = null");
+  expect(mainTf).not.toContain("fixture-provider-token");
+});
+
+test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        image_ref: "registry.example.com/app@sha256:abc",
+        release_tag: "v1.2.3",
+        version: "1.2.3",
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const planJob = runner.planJobs[0]!;
+  const mainTf = planJob.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain(
+    'image_ref = "registry.example.com/app@sha256:abc"',
+  );
+  expect(mainTf).toContain('release_tag = "v1.2.3"');
+  expect(mainTf).toContain('version = "1.2.3"');
+  expect(planJob.build).toBeUndefined();
+  expect(planJob.prebuiltArtifact).toBeUndefined();
+});
+
 test("explicit Cloudflare Capsule variables override provider scope hint defaults", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();

@@ -163,3 +163,10 @@ export interface StrictProviderMirrorAttestation {
   readonly cliConfigPath: string;
   readonly cliConfigDigest: string;
 }
+
+export interface ProviderMirrorInit {
+  readonly commandContext: CommandContext;
+  readonly providerCacheDir: string;
+  readonly sharedProviderCache: boolean;
+  readonly attestation?: StrictProviderMirrorAttestation;
+}

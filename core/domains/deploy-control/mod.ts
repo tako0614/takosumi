@@ -1981,6 +1981,7 @@ export function syntheticUploadSource(
     defaultRef: snapshot.ref,
     defaultPath: snapshot.path,
     status: "active",
+    autoSync: false,
     createdAt: snapshot.fetchedAt,
     updatedAt: snapshot.fetchedAt,
   };

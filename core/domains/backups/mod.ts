@@ -13,7 +13,7 @@
  *
  * SECURITY (spec §9 / §16, invariants 11/12): the bundle NEVER contains secret
  * material. Specifically it strips / omits:
- *   - Source `hookSecretHash` / `lastSeenCommit` / `autoSync` (internal fields);
+ *   - Source `hookSecretHash` / `lastSeenCommit` (private fields);
  *   - Connection sealed blobs (only the PUBLIC Connection record is included —
  *     names / provider / scope / envNames, never values);
  *   - raw state bytes (only StateSnapshot METADATA — objectKey / digest / generation);
@@ -1057,10 +1057,10 @@ export interface BundleOutputSnapshot {
   readonly createdAt: string;
 }
 
-/** A Source with the internal hook-secret / sync bookkeeping fields removed. */
+/** A Source with private hook-secret / sync bookkeeping fields removed. */
 export type PublicSource = Omit<
   StoredSource,
-  "hookSecretHash" | "lastSeenCommit" | "autoSync"
+  "hookSecretHash" | "lastSeenCommit"
 >;
 
 /** Strips the internal {@link StoredSource} fields, keeping the public Source. */
@@ -1068,7 +1068,6 @@ function stripSource(source: StoredSource): PublicSource {
   const {
     hookSecretHash: _h,
     lastSeenCommit: _l,
-    autoSync: _a,
     ...rest
   } = source;
   return rest;

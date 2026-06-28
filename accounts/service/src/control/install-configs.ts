@@ -220,6 +220,8 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     sourceKind: _sourceKind,
     runnerId: _runnerId,
     internal: _internal,
+    build: _build,
+    prebuiltArtifact: _prebuiltArtifact,
     ...publicRecord
   } = config;
   return {

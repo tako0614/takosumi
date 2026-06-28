@@ -754,6 +754,9 @@ When a scheduled sync or webhook resolves the same Git ref/path to a commit
 already captured by a SourceSnapshot, the runner reuses the existing immutable
 archive object after `git ls-remote` instead of cloning, archiving, and writing
 the same bytes again.
+`Source.autoSync` is the public opt-in for scheduled Git-ref polling. It only
+keeps immutable SourceSnapshots fresh; it does not apply an update or bypass
+Plan / Apply approval.
 
 Takosumi does not fetch, build, or interpret deployable application artifacts.
 It does not know what `dist`, a container image, a Worker bundle, or a release
@@ -789,6 +792,22 @@ OpenTofu modules and release flows. Container builds, image publishing, bundle
 generation, image size, Docker layer cache, and app cold-start work belong in
 those app repos and their CI/release pipelines. Takosumi should not grow
 app-specific build or release logic to hide slow modules.
+
+Allowed Takosumi-side speed work is limited to the OpenTofu control plane:
+
+```text
+SourceSnapshot reuse
+provider filesystem mirror
+operator-configured provider plugin cache
+runner queue/warm-container tuning
+clear app-install progress states
+```
+
+The provider plugin cache stores provider binaries only. Provider credentials,
+credential files, generated roots, tfplans, tfstate, and outputs stay run-scoped
+or ledger-scoped as defined by the runner/state model. When a runner uses a
+shared OpenTofu plugin cache path, `tofu init` is serialized per cache path to
+avoid cache races; plan/apply execution remains parallel.
 
 ## 11. Runner
 
@@ -1684,7 +1703,7 @@ secrets are injected only into temporary runner environments
 secret values are redacted from logs
 each run uses a temporary workspace
 temporary credential files are deleted after run completion
-provider plugin cache is isolated
+provider plugin cache stores provider binaries only and is isolated/serialized by policy
 state is isolated by workspace/project/capsule
 apply approval is supported
 destroy protection is supported

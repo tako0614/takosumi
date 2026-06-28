@@ -1,7 +1,8 @@
 /**
- * Session-authed local-upload deploy (`POST /api/v1/deploy`) control route. The
- * request carries no credential material; provider access resolves from public
- * Provider Connection ids. Extracted from `control-routes.ts` (P3 split).
+ * Retired public local-upload deploy (`POST /api/v1/deploy`) control route.
+ * Upload/prepared-source deploy is an internal/operator compatibility seam; the
+ * public product path is Git URL + OpenTofu Capsule install. Extracted from
+ * `control-routes.ts` (P3 split).
  */
 import type {
   ApplyExpectedGuard,
@@ -188,17 +189,13 @@ export async function handleDeploy(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // POST /api/v1/deploy — local-directory deploy uploaded by the CLI. The
-  // request carries no credential material; provider access is resolved from
-  // public Provider Connection ids before the internal deploy-control dispatch.
   if (segments.length === 1 && segments[0] === "deploy") {
     if (method !== "POST") return methodNotAllowed("POST");
-    return await deployUploadedSnapshot(
+    return errorJson(
+      "gone",
+      "Public upload deploy is retired. Create a Git URL Source/Capsule and run plan/apply instead.",
+      410,
       request,
-      operations,
-      store,
-      ctx.session.subject,
-      ctx.sharedCellRuntime,
     );
   }
   return undefined;

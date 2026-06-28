@@ -24,14 +24,19 @@ import { coreTemplate } from "../../../opentofu-modules/core/template.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { assertValidTemplate } from "./validation.ts";
 
-/** Source-of-truth built-in module list. Add new first-party modules here. */
-const CATALOG: readonly TemplateDefinition[] = [
+/** Source-of-truth active built-in module list. Add new first-party modules here. */
+const ACTIVE_CATALOG: readonly TemplateDefinition[] = [
   coreTemplate,
   cloudflareHelloWorkerTemplate,
   cloudflareR2StorageTemplate,
-  cloudflareWorkerServiceTemplate,
   cloudflareStaticSiteTemplate,
   awsS3StorageTemplate,
+];
+
+// Legacy templates are still resolvable for stored pre-v1 rows, but are not
+// returned by list() and must not appear as a new install/catalog option.
+const LEGACY_CATALOG: readonly TemplateDefinition[] = [
+  cloudflareWorkerServiceTemplate,
 ];
 
 function registryKey(id: string, version: string): string {
@@ -56,20 +61,22 @@ function buildRegistry(
   return map;
 }
 
-const REGISTRY = buildRegistry(CATALOG);
+const REGISTRY = buildRegistry([...ACTIVE_CATALOG, ...LEGACY_CATALOG]);
 
 export class TemplateRegistry {
+  readonly #catalog: readonly TemplateDefinition[];
   readonly #byKey: ReadonlyMap<string, TemplateDefinition>;
 
   constructor(
-    catalog: readonly TemplateDefinition[] = CATALOG,
+    catalog: readonly TemplateDefinition[] = ACTIVE_CATALOG,
     prebuilt?: ReadonlyMap<string, TemplateDefinition>,
   ) {
+    this.#catalog = [...catalog];
     this.#byKey = prebuilt ?? buildRegistry(catalog);
   }
 
   list(): readonly TemplateDefinition[] {
-    return Array.from(this.#byKey.values());
+    return [...this.#catalog];
   }
 
   get(id: string, version: string): TemplateDefinition | undefined {
@@ -109,4 +116,7 @@ export class TemplateRegistry {
 }
 
 /** Shared default registry over the built-in first-party module set. */
-export const defaultTemplateRegistry = new TemplateRegistry(CATALOG, REGISTRY);
+export const defaultTemplateRegistry = new TemplateRegistry(
+  ACTIVE_CATALOG,
+  REGISTRY,
+);

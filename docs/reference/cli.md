@@ -8,24 +8,16 @@ plan / apply します。
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-takosumi deploy ./my-capsule \
-  --workspace @me \
-  --project photo-blog \
-  --capsule photo-blog \
-  --provider-binding cloudflare.default=conn_cf \
-  --var region=apac
+open 'https://app.takosumi.com/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main'
 
-takosumi plan ./my-capsule \
-  --workspace @me \
-  --project photo-blog \
-  --capsule photo-blog
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-CLI は OpenTofu を直接実行しません。ローカル Capsule を upload し、Takosumi に
-Source / Capsule / Run を作らせ、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
+CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で
+Source / Capsule / Run を作り、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
 credential は ProviderConnection と CredentialRecipe から run 時だけ env/file として注入されます。
+`takosumi deploy` / `takosumi plan` のローカル upload 経路は退役済みです。
 
 ## Connections
 

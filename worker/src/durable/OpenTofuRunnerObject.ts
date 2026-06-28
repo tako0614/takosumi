@@ -434,6 +434,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     bodyText: string,
   ): Promise<Response> {
     const url = new URL(request.url);
+    const envelope = parseRunEnvelope(bodyText);
+    const requestedArchiveObjectKey = sourceSyncArchiveObjectKey(
+      envelope.request,
+    );
+    const reuseSnapshot = parseReusableSourceSnapshot(envelope.request);
     const runnerResponse = await this.#containerFetch(
       new Request(request.url, {
         method: request.method,
@@ -444,11 +449,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!runnerResponse.ok) return runnerResponse;
     const payload = await readJsonObject(runnerResponse);
     const archive = recordField(payload, "sourceArchive");
+    if (archive && stringField(archive, "kind") === "object-storage") {
+      await this.#verifyReusedSourceArchive(payload, archive, reuseSnapshot);
+      return jsonResponse(payload, runnerResponse.status);
+    }
     if (!archive || stringField(archive, "kind") !== "runner-local") {
       return jsonResponse(payload, runnerResponse.status);
     }
     const archiveObjectKey = requiredStringField(archive, "archiveObjectKey");
     assertSafeSourceArchiveKey(archiveObjectKey);
+    if (archiveObjectKey !== requestedArchiveObjectKey) {
+      throw new Error("source archive object key does not match request");
+    }
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
       throw new Error(
@@ -490,6 +502,53 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
       runnerResponse.status,
     );
+  }
+
+  async #verifyReusedSourceArchive(
+    payload: Record<string, unknown>,
+    archive: Record<string, unknown>,
+    reuseSnapshot: ReusableSourceSnapshot | undefined,
+  ): Promise<void> {
+    if (!reuseSnapshot) {
+      throw new Error("source archive reuse requires reuseSnapshot");
+    }
+    const archiveObjectKey = requiredStringField(archive, "archiveObjectKey");
+    assertSafeSourceArchiveKey(archiveObjectKey);
+    const digest = requiredStringField(archive, "digest");
+    const sizeBytes = positiveIntegerField(archive, "sizeBytes");
+    const reusedFromSnapshotId = requiredStringField(
+      archive,
+      "reusedFromSnapshotId",
+    );
+    if (
+      reusedFromSnapshotId !== reuseSnapshot.id ||
+      archiveObjectKey !== reuseSnapshot.archiveObjectKey ||
+      digest !== reuseSnapshot.archiveDigest ||
+      sizeBytes !== reuseSnapshot.archiveSizeBytes ||
+      stringField(payload, "archiveDigest") !== reuseSnapshot.archiveDigest ||
+      positiveIntegerField(payload, "archiveSizeBytes") !==
+        reuseSnapshot.archiveSizeBytes
+    ) {
+      throw new Error("source archive reuse does not match reuseSnapshot");
+    }
+    const bucket = this.env.R2_SOURCE;
+    if (!bucket) {
+      throw new Error(
+        "R2_SOURCE binding is not configured for source archives",
+      );
+    }
+    const object = await bucket.get(archiveObjectKey);
+    if (!object) {
+      throw new Error(`source archive object not found: ${archiveObjectKey}`);
+    }
+    if (object.size !== reuseSnapshot.archiveSizeBytes) {
+      throw new Error("source archive reuse size mismatch");
+    }
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    const actualDigest = await digestBytes(bytes);
+    if (actualDigest !== reuseSnapshot.archiveDigest) {
+      throw new Error(`source archive reuse digest mismatch: ${actualDigest}`);
+    }
   }
 
   // M2: fetch the snapshotted source archive from R2_SOURCE, verify its digest,
@@ -1340,6 +1399,43 @@ function isSourceSyncEnvelope(envelope: {
   return isRecord(request) && stringField(request, "action") === "source_sync";
 }
 
+interface ReusableSourceSnapshot {
+  readonly id: string;
+  readonly archiveObjectKey: string;
+  readonly archiveDigest: string;
+  readonly archiveSizeBytes: number;
+}
+
+function parseReusableSourceSnapshot(
+  requestPayload: unknown,
+): ReusableSourceSnapshot | undefined {
+  const snapshot = recordField(requestPayload, "reuseSnapshot");
+  if (!snapshot) return undefined;
+  const archiveObjectKey = requiredStringField(snapshot, "archiveObjectKey");
+  assertSafeSourceArchiveKey(archiveObjectKey);
+  return {
+    id: requiredStringField(snapshot, "id"),
+    archiveObjectKey,
+    archiveDigest: requiredSha256DigestField(snapshot, "archiveDigest"),
+    archiveSizeBytes: positiveIntegerField(snapshot, "archiveSizeBytes"),
+  };
+}
+
+function sourceSyncArchiveObjectKey(requestPayload: unknown): string {
+  if (!isRecord(requestPayload)) {
+    throw new Error("source_sync request is required");
+  }
+  const source = recordField(requestPayload, "source");
+  const archiveObjectKey =
+    stringField(requestPayload, "archiveObjectKey") ??
+    (source ? stringField(source, "archiveObjectKey") : undefined);
+  if (!archiveObjectKey) {
+    throw new Error("source_sync archiveObjectKey is required");
+  }
+  assertSafeSourceArchiveKey(archiveObjectKey);
+  return archiveObjectKey;
+}
+
 // Re-assert the R2_SOURCE archive key (agreed layout
 // spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst) is
 // a safe, traversal-free relative key before writing to the bucket.
@@ -1354,6 +1450,32 @@ function assertSafeSourceArchiveKey(key: string): void {
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
   }
+}
+
+function requiredSha256DigestField(
+  value: Record<string, unknown>,
+  key: string,
+): `sha256:${string}` {
+  const digest = requiredStringField(value, key).toLowerCase();
+  if (!/^sha256:[0-9a-f]{64}$/u.test(digest)) {
+    throw new Error(`${key} must be a sha256 digest`);
+  }
+  return digest as `sha256:${string}`;
+}
+
+function positiveIntegerField(
+  value: Record<string, unknown>,
+  key: string,
+): number {
+  const field = value[key];
+  if (
+    typeof field !== "number" ||
+    !Number.isSafeInteger(field) ||
+    field <= 0
+  ) {
+    throw new Error(`${key} must be a positive integer`);
+  }
+  return field;
 }
 
 function planArtifactKey(runId: string, scope?: StateScope): string {

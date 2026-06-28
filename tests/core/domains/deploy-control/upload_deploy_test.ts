@@ -1,10 +1,9 @@
 /**
- * Upload deploy orchestration tests (`takosumi deploy` server side).
+ * Internal upload deploy compatibility tests.
  *
- * Proves the one capability the dashboard cannot offer: deploying a local
- * working directory. An upload {@link SourceSnapshot} (no git Source) flows
- * through create-or-resolve Installation + Capsule Gate + plan, and the runner
- * receives the upload archive — all without an `installation.sourceId`.
+ * Public local upload deploy is retired. The internal/operator seam may still
+ * plan upload/artifact SourceSnapshots, but only against existing legacy
+ * source-less Capsules.
  */
 
 import { expect, test } from "bun:test";
@@ -36,6 +35,7 @@ import {
 import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { deployUpload } from "../../../../core/domains/deploy-control/upload_deploy.ts";
 import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
+import type { InstallConfig } from "takosumi-contract/installations";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -265,6 +265,47 @@ async function setup(
   return { store, runner, sources, installations, controller };
 }
 
+async function seedLegacyUploadCapsule(
+  installations: CapsulesService,
+  input: {
+    readonly name: string;
+    readonly environment?: string;
+    readonly runnerId?: string;
+    readonly modulePath?: string;
+    readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+  },
+) {
+  const environment = input.environment ?? "preview";
+  const installConfigId = `cfg_${input.name.replace(/[^a-z0-9]+/g, "_")}`;
+  const now = "2026-06-09T00:00:00.000Z";
+  await installations.putInstallConfig({
+    id: installConfigId,
+    spaceId: "space_test",
+    workspaceId: "space_test",
+    name: `${input.name}-legacy-upload`,
+    installType: "opentofu_module",
+    trustLevel: "space",
+    normalization: {
+      allowBackendRewrite: true,
+      allowProviderLift: true,
+      allowAliasInjection: true,
+    },
+    ...(input.runnerId ? { runnerId: input.runnerId } : {}),
+    ...(input.modulePath ? { modulePath: input.modulePath } : {}),
+    variableMapping: {},
+    outputAllowlist: input.outputAllowlist ?? {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  });
+  return await installations.createCapsule({
+    workspaceId: "space_test",
+    name: input.name,
+    environment,
+    installConfigId,
+  });
+}
+
 async function applyUploadedDeploy(
   store: InMemoryOpenTofuDeploymentStore,
   controller: OpenTofuDeploymentController,
@@ -288,8 +329,8 @@ async function applyUploadedDeploy(
   return applied.applyRun;
 }
 
-test("deployUpload creates a source-less Installation and plans the upload snapshot", async () => {
-  const { store, runner, sources, installations, controller } = await setup();
+test("deployUpload rejects creating a new source-less Capsule from an upload snapshot", async () => {
+  const { runner, sources, installations, controller } = await setup();
   const snapshot = await sources.recordUploadSnapshot({
     spaceId: "space_test",
     snapshotId: "snap_up1",
@@ -301,60 +342,37 @@ test("deployUpload creates a source-less Installation and plans the upload snaps
   expect(snapshot.sourceId).toBeUndefined();
   expect(snapshot.resolvedCommit).toBe(UPLOAD_DIGEST.slice("sha256:".length));
 
-  const result = await deployUpload(
-    { installations, controller },
-    {
-      spaceId: "space_test",
-      name: "uploaded-app",
-      environment: "preview",
-      snapshotId: snapshot.id,
-      modulePath: "deploy/opentofu",
-      vars: { region: "ap-northeast-1" },
-      outputAllowlist: {
-        endpoint: { from: "url", type: "url", required: true },
-        worker_name: { from: "worker_name", type: "string" },
+  await expect(
+    deployUpload(
+      { installations, controller },
+      {
+        spaceId: "space_test",
+        name: "uploaded-app",
+        environment: "preview",
+        snapshotId: snapshot.id,
+        modulePath: "deploy/opentofu",
+        vars: { region: "ap-northeast-1" },
+        outputAllowlist: {
+          endpoint: { from: "url", type: "url", required: true },
+          worker_name: { from: "worker_name", type: "string" },
+        },
+        providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
       },
-      providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
-    },
-  );
-
-  expect(result.created).toBe(true);
-  expect(result.installation.sourceId).toBeUndefined();
-  expect(result.installation.status).toBe("pending");
-  expect(result.status).toBe("planned");
-  expect(result.run.type).toBe("plan");
-  expect(result.run.status).toBe("succeeded");
-  expect(result.applyRun).toBeUndefined();
-  const planRun = await store.getPlanRun((result.planRun ?? result.run).id);
-  expect(planRun?.requiredProviders).toEqual([CLOUDFLARE_PROVIDER]);
-
-  // The runner received the UPLOAD archive (no git clone).
-  expect(runner.planJobs).toHaveLength(1);
-  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
-    CLOUDFLARE_PROVIDER,
-  ]);
+    ),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    message: expect.stringContaining("existing source-less legacy Capsule"),
+  });
   expect(runner.applyJobs).toHaveLength(0);
-  expect(runner.planJobs[0]?.sourceArchive).toEqual({
-    objectKey: uploadArchiveObjectKey("space_test", "snap_up1"),
-    digest: UPLOAD_DIGEST,
-  });
-  expect(runner.planJobs[0]?.planRun.source.modulePath).toBe("deploy/opentofu");
-
-  // A Capsule Gate report was pinned to the upload installation.
-  const installation = await store.getInstallation(result.installation.id);
-  expect(installation?.sourceId).toBeUndefined();
-  expect(installation?.compatibilityReportId).toBeDefined();
-  const installConfig = await installations.getInstallConfig(
-    result.installConfigId,
-  );
-  expect(installConfig.modulePath).toBe("deploy/opentofu");
-  expect(installConfig.outputAllowlist).toEqual({
-    endpoint: { from: "url", type: "url", required: true },
-    worker_name: { from: "worker_name", type: "string" },
-  });
+  expect(runner.planJobs).toHaveLength(0);
+  expect(
+    (await installations.listInstallations("space_test")).some(
+      (installation) => installation.name === "uploaded-app",
+    ),
+  ).toBe(false);
 });
 
-test("deployUpload creates a source-less Installation and plans an artifact snapshot", async () => {
+test("deployUpload plans an artifact snapshot for an existing legacy Capsule", async () => {
   const { runner, sources, installations, controller } = await setup();
   const snapshot = await sources.recordArtifactSnapshot({
     spaceId: "space_test",
@@ -364,6 +382,7 @@ test("deployUpload creates a source-less Installation and plans an artifact snap
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
   });
+  await seedLegacyUploadCapsule(installations, { name: "artifact-app" });
 
   const result = await deployUpload(
     { installations, controller },
@@ -377,7 +396,7 @@ test("deployUpload creates a source-less Installation and plans an artifact snap
     },
   );
 
-  expect(result.created).toBe(true);
+  expect(result.created).toBe(false);
   expect(result.installation.sourceId).toBeUndefined();
   expect(result.run.status).toBe("succeeded");
   expect(runner.planJobs).toHaveLength(1);
@@ -417,6 +436,10 @@ test("deployUpload preflights explicit generic runner uploads before dispatch", 
     ),
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
+  });
+  await seedLegacyUploadCapsule(installations, {
+    name: "generic-profile-uploaded-app",
+    runnerId: genericProfile.id,
   });
 
   const result = await deployUpload(
@@ -476,6 +499,9 @@ test("deployUpload returns a queued plan before upload compatibility inspection 
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
   });
+  await seedLegacyUploadCapsule(installations, {
+    name: "queued-uploaded-app",
+  });
 
   const result = await deployUpload(
     { installations, controller },
@@ -488,7 +514,7 @@ test("deployUpload returns a queued plan before upload compatibility inspection 
     },
   );
 
-  expect(result.created).toBe(true);
+  expect(result.created).toBe(false);
   expect(result.run.type).toBe("plan");
   expect(result.run.status).toBe("queued");
   expect(enqueued).toEqual([
@@ -539,6 +565,9 @@ test("deployUpload queues providerless upload Capsules without Provider Connecti
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
   });
+  await seedLegacyUploadCapsule(installations, {
+    name: "providerless-uploaded-app",
+  });
 
   const result = await deployUpload(
     { installations, controller },
@@ -559,7 +588,7 @@ test("deployUpload queues providerless upload Capsules without Provider Connecti
   );
 
   const planRun = await store.getPlanRun(result.run.id);
-  expect(result.created).toBe(true);
+  expect(result.created).toBe(false);
   expect(result.run.type).toBe("plan");
   expect(result.run.status).toBe("queued");
   expect(enqueued).toEqual([
@@ -614,6 +643,9 @@ test("deployUpload can use an enabled generic profile for providerless upload Ca
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
   });
+  await seedLegacyUploadCapsule(installations, {
+    name: "providerless-generic-uploaded-app",
+  });
 
   const result = await deployUpload(
     { installations, controller },
@@ -650,7 +682,7 @@ test("deployUpload can use an enabled generic profile for providerless upload Ca
   expect(planRun?.compatibilityReportId).toBeUndefined();
 });
 
-test("deployUpload marks a new upload Installation error when orchestration throws", async () => {
+test("deployUpload leaves an existing legacy Capsule unchanged when orchestration throws", async () => {
   const { sources, installations, controller } = await setup();
   const snapshot = await sources.recordUploadSnapshot({
     spaceId: "space_test",
@@ -661,6 +693,9 @@ test("deployUpload marks a new upload Installation error when orchestration thro
     ),
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
+  });
+  const legacy = await seedLegacyUploadCapsule(installations, {
+    name: "timeout-app",
   });
   const failingController = {
     getSourceSnapshot: (id: string) => controller.getSourceSnapshot(id),
@@ -682,13 +717,14 @@ test("deployUpload marks a new upload Installation error when orchestration thro
     ),
   ).rejects.toThrow("runner timeout");
 
-  const created = (await installations.listInstallations("space_test")).find(
+  const updated = (await installations.listInstallations("space_test")).find(
     (installation) =>
       installation.name === "timeout-app" &&
       installation.environment === "preview",
   );
-  expect(created?.sourceId).toBeUndefined();
-  expect(created?.status).toBe("error");
+  expect(updated?.id).toBe(legacy.id);
+  expect(updated?.sourceId).toBeUndefined();
+  expect(updated?.status).toBe(legacy.status);
 });
 
 test("upload-origin Installation destroy-plan reuses the active Deployment SourceSnapshot", async () => {
@@ -702,6 +738,9 @@ test("upload-origin Installation destroy-plan reuses the active Deployment Sourc
     ),
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
+  });
+  await seedLegacyUploadCapsule(installations, {
+    name: "uploaded-destroy-app",
   });
   const deploy = await deployUpload(
     { installations, controller },
@@ -750,6 +789,9 @@ test("upload-origin restore keeps cleanup destroy-plan possible without a curren
     ),
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 512,
+  });
+  await seedLegacyUploadCapsule(installations, {
+    name: "uploaded-restore-destroy-app",
   });
   const deploy = await deployUpload(
     { installations, controller },
@@ -828,6 +870,7 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
     archiveDigest: UPLOAD_DIGEST,
     archiveSizeBytes: 256,
   });
+  await seedLegacyUploadCapsule(installations, { name: "iter" });
   const r1 = await deployUpload(
     { installations, controller },
     {
@@ -838,7 +881,7 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
       providerEnvBindings: UPLOAD_PROVIDER_CONNECTIONS,
     },
   );
-  expect(r1.created).toBe(true);
+  expect(r1.created).toBe(false);
 
   const second = await sources.recordUploadSnapshot({
     spaceId: "space_test",

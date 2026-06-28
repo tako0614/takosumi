@@ -110,12 +110,150 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
   assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
 });
 
+test("source_sync run reuses an object-storage source archive without re-persisting", async () => {
+  const calls: string[] = [];
+  const archiveDigest = await digestOf(ARCHIVE_BYTES);
+  const source = new FakeR2Bucket();
+  const artifacts = new FakeR2Bucket();
+  await source.put(ARCHIVE_KEY, ARCHIVE_BYTES, {
+    customMetadata: { "takosumi-digest": archiveDigest },
+  });
+  const runner = runnerWithContainer(artifacts, source, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (request.method === "GET" && path === "/healthz") {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/sync_reuse") {
+        return Response.json({
+          runId: "sync_reuse",
+          action: "source_sync",
+          status: "succeeded",
+          exitCode: 0,
+          resolvedCommit: RESOLVED_COMMIT,
+          archiveDigest,
+          archiveSizeBytes: ARCHIVE_BYTES.byteLength,
+          sourceArchive: {
+            kind: "object-storage",
+            archiveObjectKey: ARCHIVE_KEY,
+            digest: archiveDigest,
+            contentType: "application/zstd",
+            sizeBytes: ARCHIVE_BYTES.byteLength,
+            reusedFromSnapshotId: "snap_prev",
+          },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/sync_reuse", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "source_sync",
+        runId: "sync_reuse",
+        request: {
+          action: "source_sync",
+          source: {
+            url: "https://github.com/octocat/Hello-World.git",
+            ref: "main",
+          },
+          archiveObjectKey: ARCHIVE_KEY,
+          reuseSnapshot: {
+            id: "snap_prev",
+            resolvedCommit: RESOLVED_COMMIT,
+            archiveObjectKey: ARCHIVE_KEY,
+            archiveDigest,
+            archiveSizeBytes: ARCHIVE_BYTES.byteLength,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["GET /healthz", "POST /runs/sync_reuse"]);
+  const payload = (await response.json()) as Record<string, unknown>;
+  const archive = payload.sourceArchive as Record<string, unknown>;
+  assert.equal(archive.kind, "object-storage");
+  assert.equal(archive.archiveObjectKey, ARCHIVE_KEY);
+  assert.equal(archive.reusedFromSnapshotId, "snap_prev");
+  assert.deepEqual(source.body(ARCHIVE_KEY), ARCHIVE_BYTES);
+  assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
+});
+
+test("source_sync run rejects object-storage reuse without a matching reusable snapshot", async () => {
+  const archiveDigest = await digestOf(ARCHIVE_BYTES);
+  const source = new FakeR2Bucket();
+  const artifacts = new FakeR2Bucket();
+  await source.put(ARCHIVE_KEY, ARCHIVE_BYTES, {
+    customMetadata: { "takosumi-digest": archiveDigest },
+  });
+  const runner = runnerWithContainer(artifacts, source, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/healthz") {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/sync_reuse_bad") {
+        return Response.json({
+          runId: "sync_reuse_bad",
+          action: "source_sync",
+          status: "succeeded",
+          exitCode: 0,
+          resolvedCommit: RESOLVED_COMMIT,
+          archiveDigest,
+          archiveSizeBytes: ARCHIVE_BYTES.byteLength,
+          sourceArchive: {
+            kind: "object-storage",
+            archiveObjectKey: ARCHIVE_KEY,
+            digest: archiveDigest,
+            contentType: "application/zstd",
+            sizeBytes: ARCHIVE_BYTES.byteLength,
+            reusedFromSnapshotId: "snap_prev",
+          },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/sync_reuse_bad", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "source_sync",
+        runId: "sync_reuse_bad",
+        request: {
+          action: "source_sync",
+          source: {
+            url: "https://github.com/octocat/Hello-World.git",
+            ref: "main",
+          },
+          archiveObjectKey: ARCHIVE_KEY,
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+});
+
 test("source_sync run fails when the archive digest does not match", async () => {
   const source = new FakeR2Bucket();
   const artifacts = new FakeR2Bucket();
   const runner = runnerWithContainer(artifacts, source, {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/healthz") {
+        return Response.json({ ok: true });
+      }
       if (request.method === "POST" && path === "/runs/sync_2") {
         return Response.json({
           status: "succeeded",

@@ -27,6 +27,14 @@ control plane. The operator deploys one Cloudflare Worker at
 `app.takosumi.com`; realized Wrangler config and secret values live in
 `takosumi-private` / operator vault, outside the public repo.
 
+Capsule application artifacts are not Takosumi platform release artifacts. If a
+Git-hosted OpenTofu module needs a prebuilt Worker bundle, container image,
+object key, URL, digest, or version, that value is a normal module input owned
+by the app repository, CI/release pipeline, registry, or provider. Takosumi
+keeps the Git SourceSnapshot, provider cache/mirror evidence, plan/apply Run,
+StateVersion, Output, and audit trail; it does not fetch or interpret the
+deployable app artifact on behalf of the module.
+
 ## Required Gates
 
 Before production promotion:
@@ -88,7 +96,7 @@ operator config.
 
 Use the built-in runner activator only for `executor = "runner"` commands that
 can run without cloud provider credentials inside the restored source snapshot,
-for example source-local build metadata checks or artifact preparation. Commands
+for example source-local readiness or metadata checks. Commands
 that require a provider token, an operator checkout of the full repository, or
 publication outside the source snapshot should declare `executor = "operator"`
 and be handled by the configured release activator materializer.

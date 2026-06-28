@@ -55,6 +55,13 @@ function source(overrides: Partial<StoredSource> = {}): StoredSource {
 function snapshot(overrides: Partial<SourceSnapshot> = {}): SourceSnapshot {
   return {
     id: "snap_0000000000000001",
+    origin: "git",
+    // A SourceSnapshot always carries a populated Workspace identity (contract:
+    // workspaceId is required and "Always present (derived from the Source for
+    // git)"). The deprecated spaceId mirrors it, so both stores normalize this
+    // shape identically instead of one backfilling "" and the other undefined.
+    workspaceId: "space_1",
+    spaceId: "space_1",
     sourceId: "src_abcdef0123456789",
     url: "https://github.com/acme/repo.git",
     ref: "main",

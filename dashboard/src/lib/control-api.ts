@@ -693,6 +693,7 @@ export interface Source {
   readonly defaultPath: string;
   readonly authConnectionId?: string;
   readonly status: "active" | "disabled" | "error";
+  readonly autoSync: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -1262,6 +1263,7 @@ export async function checkCapsuleCompatibility(input: {
         url: input.gitUrl,
         defaultRef: input.ref,
         defaultPath: input.path,
+        autoSync: true,
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
           : {}),
@@ -1490,6 +1492,7 @@ export async function createSource(input: {
   readonly defaultRef?: string;
   readonly defaultPath?: string;
   readonly authConnectionId?: string;
+  readonly autoSync?: boolean;
 }): Promise<CreateSourceResult> {
   return await controlFetch<CreateSourceResult>(`${BASE}/sources`, {
     method: "POST",
@@ -1504,6 +1507,7 @@ export async function createSource(input: {
       ...(input.authConnectionId
         ? { authConnectionId: input.authConnectionId }
         : {}),
+      ...(input.autoSync !== undefined ? { autoSync: input.autoSync } : {}),
     },
   });
 }

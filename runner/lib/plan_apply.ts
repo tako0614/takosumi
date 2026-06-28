@@ -81,6 +81,7 @@ import {
   normalizedProviderList,
   providerInstallationEvidence,
   prepareStrictProviderMirrorInit,
+  withProviderPluginCacheInitLock,
   summaryFromPlanJson,
   resourceChangesFromPlanJson,
 } from "./providers.ts";
@@ -241,10 +242,12 @@ export async function initPlanAndBuildResponse(
   const commandContext =
     strictMirrorInit?.commandContext ?? options.commandContext;
   const init = await timer.measure("tofu_init", () =>
-    runCommand(["tofu", "init", "-input=false", "-no-color"], {
-      cwd: moduleDir,
-      context: commandContext,
-    }),
+    withProviderPluginCacheInitLock(strictMirrorInit, () =>
+      runCommand(["tofu", "init", "-input=false", "-no-color"], {
+        cwd: moduleDir,
+        context: commandContext,
+      }),
+    ),
   );
   if (init.exitCode !== 0) {
     return withPhaseTimings(
@@ -396,10 +399,12 @@ export async function runReviewedPlanApply(
       strictMirrorInit?.commandContext ?? preparedCredentials.context;
 
     const init = await timer.measure("tofu_init", () =>
-      runCommand(["tofu", "init", "-input=false", "-no-color"], {
-        cwd: moduleDir,
-        context: applyContext,
-      }),
+      withProviderPluginCacheInitLock(strictMirrorInit, () =>
+        runCommand(["tofu", "init", "-input=false", "-no-color"], {
+          cwd: moduleDir,
+          context: applyContext,
+        }),
+      ),
     );
     if (init.exitCode !== 0) {
       return withPhaseTimings(
@@ -565,10 +570,12 @@ export async function runCompatibilityCheck(
   );
   const commandContext = providerInit?.commandContext ?? context;
   const init = await timer.measure("tofu_init", () =>
-    runCommand(["tofu", "init", "-input=false", "-no-color"], {
-      cwd: moduleRoot,
-      context: commandContext,
-    }),
+    withProviderPluginCacheInitLock(providerInit, () =>
+      runCommand(["tofu", "init", "-input=false", "-no-color"], {
+        cwd: moduleRoot,
+        context: commandContext,
+      }),
+    ),
   );
   if (init.exitCode !== 0) {
     return withPhaseTimings(

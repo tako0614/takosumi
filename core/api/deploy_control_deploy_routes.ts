@@ -1,18 +1,18 @@
 /**
- * `takosumi deploy` routes: upload/artifact ingest + deploy.
+ * Internal upload/source-archive compatibility routes.
  *
  *   POST /internal/v1/spaces/:spaceId/uploads   binary tar(zstd) ingest ->
  *                                        R2_SOURCE -> upload SourceSnapshot
  *   POST /internal/v1/spaces/:spaceId/artifact-snapshots
- *                                        HTTPS tar.zst + sha256 ingest ->
- *                                        R2_SOURCE -> artifact SourceSnapshot
- *   POST /internal/v1/deploy             resolve/create Installation + plan the
- *                                        no-git snapshot (the `wrangler deploy`
- *                                        / CI artifact deploy equivalent)
+ *                                        legacy HTTPS source archive + sha256
+ *                                        ingest -> R2_SOURCE -> SourceSnapshot
+ *   POST /internal/v1/deploy             resolve an existing source-less legacy
+ *                                        Capsule and plan the no-git source
+ *                                        snapshot for the internal path
  *
  * The descriptor inventory models the upload body as `application/octet-stream`;
- * the control surface they expose is still the canonical Space / Installation /
- * Run vocabulary.
+ * the control surface they expose is still an internal compatibility surface;
+ * the public Takosumi model remains Git-hosted OpenTofu Capsules.
  */
 
 import type { InternalDeployRequest } from "@takosumi/internal/deploy-control-api";
@@ -80,7 +80,7 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
       method: "POST",
       path: SPACE_ARTIFACT_SNAPSHOTS_ROUTE,
       summary:
-        "Fetches a digest-pinned prepared Capsule archive and records an artifact SourceSnapshot.",
+        "Fetches a legacy digest-pinned prepared Capsule source archive and records a SourceSnapshot.",
       auth: "deploy-control-token",
       operationId: "createArtifactSourceSnapshot",
       openapi: {
@@ -89,7 +89,7 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
         okStatus: "201",
         okSchema: "ArtifactSnapshotResponse",
       },
-      notImplementedMessage: "artifact snapshot storage not wired",
+      notImplementedMessage: "prepared source archive storage not wired",
     },
     {
       method: "POST",
@@ -106,9 +106,9 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
     },
   ];
 
-/** 64 MiB cap on a single upload archive (mirrors the artifact-route posture). */
+/** 64 MiB cap on a single upload archive. */
 export const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
-/** 64 MiB cap on a prepared artifact archive. */
+/** 64 MiB cap on a legacy prepared source archive. */
 export const DEFAULT_ARTIFACT_SNAPSHOT_MAX_BYTES = DEFAULT_UPLOAD_MAX_BYTES;
 
 export interface RecordUploadArchiveInput {
@@ -152,29 +152,29 @@ export interface RecordArtifactSnapshotInput {
 export async function recordArtifactSnapshotFromUrl(
   input: RecordArtifactSnapshotInput,
 ): Promise<SourceSnapshot> {
-  const artifactUrl = validateArtifactUrl(input.request.url);
+  const sourceArchiveUrl = validateArtifactUrl(input.request.url);
   const expectedDigest = normalizeSha256Digest(input.request.digest);
   const format = input.request.format ?? "tar.zst";
   if (format !== "tar.zst") {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot format must be tar.zst",
+      "prepared source archive format must be tar.zst",
     );
   }
   const maxBytes = input.maxBytes ?? DEFAULT_ARTIFACT_SNAPSHOT_MAX_BYTES;
-  const response = await (input.fetcher ?? fetch)(artifactUrl.toString(), {
+  const response = await (input.fetcher ?? fetch)(sourceArchiveUrl.toString(), {
     redirect: "manual",
   });
   if (response.status >= 300 && response.status < 400) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot url redirects are not allowed",
+      "prepared source archive url redirects are not allowed",
     );
   }
   if (!response.ok) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `artifact snapshot fetch failed (${response.status})`,
+      `prepared source archive fetch failed (${response.status})`,
     );
   }
   const contentLength = response.headers.get("content-length");
@@ -183,7 +183,7 @@ export async function recordArtifactSnapshotFromUrl(
     if (Number.isFinite(parsedLength) && parsedLength > maxBytes) {
       throw new OpenTofuControllerError(
         "resource_exhausted",
-        "artifact snapshot archive too large",
+        "prepared source archive too large",
       );
     }
   }
@@ -191,20 +191,20 @@ export async function recordArtifactSnapshotFromUrl(
   if (bytes.byteLength === 0) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot body is empty",
+      "prepared source archive body is empty",
     );
   }
   if (bytes.byteLength > maxBytes) {
     throw new OpenTofuControllerError(
       "resource_exhausted",
-      "artifact snapshot archive too large",
+      "prepared source archive too large",
     );
   }
   const actualDigest = await sha256Digest(bytes);
   if (actualDigest !== expectedDigest) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot digest mismatch",
+      "prepared source archive digest mismatch",
     );
   }
   const snapshotId = `snap_${randomHex()}`;
@@ -212,7 +212,7 @@ export async function recordArtifactSnapshotFromUrl(
   await input.writeSourceArchive(archiveObjectKey, bytes);
   return await input.controller.recordArtifactSnapshot({
     spaceId: input.spaceId,
-    url: artifactUrl.toString(),
+    url: sourceArchiveUrl.toString(),
     snapshotId,
     archiveObjectKey,
     archiveDigest: actualDigest,
@@ -288,7 +288,7 @@ export function mountDeployControlDeployRoutes(
             errorEnvelope(
               c,
               "not_implemented",
-              "artifact snapshot storage (R2_SOURCE) is not configured",
+              "prepared source archive storage (R2_SOURCE) is not configured",
             ),
             501,
           );
@@ -348,14 +348,14 @@ function validateArtifactUrl(raw: string): URL {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot url is required",
+      "prepared source archive url is required",
     );
   }
   const policy = evaluateSourceUrl(raw);
   if (!policy.ok || policy.scheme !== "https") {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `artifact snapshot url is not allowed (${policy.ok ? "non_https" : policy.reason})`,
+      `prepared source archive url is not allowed (${policy.ok ? "non_https" : policy.reason})`,
     );
   }
   let url: URL;
@@ -364,13 +364,13 @@ function validateArtifactUrl(raw: string): URL {
   } catch {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot url is malformed",
+      "prepared source archive url is malformed",
     );
   }
   if (url.username || url.password) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot url must not contain embedded credentials",
+      "prepared source archive url must not contain embedded credentials",
     );
   }
   return url;
@@ -380,7 +380,7 @@ function normalizeSha256Digest(raw: string): `sha256:${string}` {
   if (typeof raw !== "string") {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot digest is required",
+      "prepared source archive digest is required",
     );
   }
   const value = raw.trim().toLowerCase();
@@ -390,7 +390,7 @@ function normalizeSha256Digest(raw: string): `sha256:${string}` {
   if (!/^[0-9a-f]{64}$/.test(hex)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "artifact snapshot digest must be sha256:<64 hex>",
+      "prepared source archive digest must be sha256:<64 hex>",
     );
   }
   return `sha256:${hex}`;
