@@ -145,6 +145,7 @@ export class SourceLifecycleService {
     }
 
     try {
+      const reuseSnapshot = await this.#latestReusableSourceSnapshot(running);
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -155,10 +156,26 @@ export class SourceLifecycleService {
             sourceId: run.sourceId,
             source: { url: run.url, ref: run.ref, path: run.path },
             archiveObjectKey: run.archiveObjectKey,
+            ...(reuseSnapshot
+              ? {
+                  reuseSnapshot: {
+                    id: reuseSnapshot.id,
+                    resolvedCommit: reuseSnapshot.resolvedCommit,
+                    archiveObjectKey: reuseSnapshot.archiveObjectKey,
+                    archiveDigest: reuseSnapshot.archiveDigest,
+                    archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
+                  },
+                }
+              : {}),
             ...(credentials ? { credentials } : {}),
           }),
       );
-      return await this.#succeedSourceSyncRun(running, leaseToken, result);
+      return await this.#succeedSourceSyncRun(
+        running,
+        leaseToken,
+        result,
+        reuseSnapshot,
+      );
     } catch (error) {
       await this.#failSourceSyncRun(running, leaseToken, error);
       return await this.#store.getSourceSyncRun(runId);
@@ -209,10 +226,16 @@ export class SourceLifecycleService {
     running: SourceSyncRun,
     leaseToken: string,
     result: OpenTofuSourceSyncResult,
+    reuseSnapshot: SourceSnapshot | undefined,
   ): Promise<SourceSyncRun> {
     const finishedAtMs = this.#now();
     const finishedAtIso = new Date(finishedAtMs).toISOString();
     const snapshotId = running.snapshotId ?? this.#newId("snap");
+    const archiveObjectKey = this.#verifiedSourceArchiveObjectKey(
+      running,
+      result,
+      reuseSnapshot,
+    );
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "git",
@@ -223,7 +246,7 @@ export class SourceLifecycleService {
       ref: running.ref,
       resolvedCommit: result.resolvedCommit,
       path: running.path,
-      archiveObjectKey: running.archiveObjectKey,
+      archiveObjectKey,
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
       fetchedByRunId: running.id,
@@ -259,6 +282,47 @@ export class SourceLifecycleService {
       });
     }
     return succeeded;
+  }
+
+  #verifiedSourceArchiveObjectKey(
+    running: SourceSyncRun,
+    result: OpenTofuSourceSyncResult,
+    reuseSnapshot: SourceSnapshot | undefined,
+  ): string {
+    const archiveObjectKey = result.archiveObjectKey ?? running.archiveObjectKey;
+    if (archiveObjectKey === running.archiveObjectKey) return archiveObjectKey;
+    if (
+      reuseSnapshot &&
+      archiveObjectKey === reuseSnapshot.archiveObjectKey &&
+      result.resolvedCommit === reuseSnapshot.resolvedCommit &&
+      result.archiveDigest === reuseSnapshot.archiveDigest &&
+      result.archiveSizeBytes === reuseSnapshot.archiveSizeBytes
+    ) {
+      return archiveObjectKey;
+    }
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "source_sync returned archive metadata outside the requested SourceSnapshot boundary",
+    );
+  }
+
+  async #latestReusableSourceSnapshot(
+    running: SourceSyncRun,
+  ): Promise<SourceSnapshot | undefined> {
+    const snapshots = await this.#store.listSourceSnapshots(running.sourceId);
+    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+      const snapshot = snapshots[index]!;
+      if (
+        snapshot.origin === "git" &&
+        snapshot.sourceId === running.sourceId &&
+        snapshot.url === running.url &&
+        snapshot.ref === running.ref &&
+        snapshot.path === running.path
+      ) {
+        return snapshot;
+      }
+    }
+    return undefined;
   }
 
   async #failSourceSyncRun(

@@ -176,9 +176,10 @@ repo.
 
 6. Run Layer 2 platform-control-plane smoke against staging. This is the real
    signed-in user path: a staging account session owns the scratch Workspace,
-   creates a Workspace-scoped Cloudflare ProviderConnection, uploads the
-   `cloudflare-hello-worker` Capsule, plans, applies, verifies through the
-   Cloudflare API, then destroys. Store the transcript only in private evidence.
+   creates a Workspace-scoped Cloudflare ProviderConnection, registers and syncs
+   the Git Source for the `cloudflare-hello-worker` Capsule, plans, applies,
+   verifies through the Cloudflare API, then destroys. Store the transcript only
+   in private evidence.
 
    ```bash
    cd takosumi
@@ -191,14 +192,17 @@ repo.
      bun run smoke:platform-control-plane -- \
        --url https://app-staging.takosumi.com \
        --workspace <scratch-workspace-id-or-handle> \
+       --source-git-url https://github.com/tako0614/takosumi.git \
+       --source-path providers/cloudflare/modules/cloudflare-hello-worker/module \
        --cloudflare-api-token-file "$TAKOSUMI_PRIVATE/.secrets/staging/CLOUDFLARE_API_TOKEN" \
        --cloudflare-resource-preflight account-resources \
        --json
    ```
 
    The command uses the public session-authenticated platform API for Workspace,
-   connection, upload, deploy, run, and destroy. It does not require opening
-   any edge-public internal route. The smoke output redacts token values and
+   connection, Git Source sync, Capsule creation, plan, apply, run inspection,
+   and destroy. It does not require opening any edge-public internal route.
+   The smoke output redacts token values and
    the Cloudflare account id. The `account-resources` preflight checks D1,
    Workers KV, R2, Queues, and Workflows read access before apply so an active but
    under-scoped token fails before OpenTofu can partially create resources; keep

@@ -72,7 +72,7 @@ export const sourceSnapshots = sqliteTable(
   names.sourceSnapshots,
   {
     id: text("id").primaryKey(),
-    // Nullable: upload-origin snapshots (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin snapshots have no Git Source.
     sourceId: text("source_id"),
     recordJson: jsonText("record_json").notNull(),
     fetchedAt: text("fetched_at").notNull(),
@@ -154,7 +154,7 @@ export const installations = sqliteTable(
     projectId: text("project_id"),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin capsules have no Git Source.
     sourceId: text("source_id"),
     installType: text("install_type").notNull(),
     installConfigId: text("install_config_id").notNull(),

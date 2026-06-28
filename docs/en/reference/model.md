@@ -12,7 +12,7 @@ ecosystem. It does not model compatibility gateways or managed cloud resources.
 | Workspace          | User/team isolation boundary for projects, state, secrets, runs, and audit |
 | Project            | One product, service, or infrastructure group                              |
 | Capsule            | One OpenTofu/Terraform module execution unit                               |
-| Source             | Git URL/ref/commit/path, tarball, template, or local upload                |
+| Source             | Git URL/ref/commit/path for a plain OpenTofu/Terraform module              |
 | ProviderConnection | Stored provider credential configuration                                   |
 | CredentialRecipe   | Provider-specific env/file/pre-run materialization recipe                  |
 | ProviderBinding    | Provider name/alias to ProviderConnection mapping                          |
@@ -24,6 +24,13 @@ ecosystem. It does not model compatibility gateways or managed cloud resources.
 | AuditEvent         | Actor/action/target/result evidence                                        |
 
 ## Provider Resolution
+
+Upload/prepared-source snapshots are internal/operator compatibility only. They
+are not a public Source kind and do not create new public Capsules.
+
+`Source.autoSync` enables scheduled Git-ref polling. It prepares newer immutable
+SourceSnapshots when the ref moves, but it does not automatically apply changes.
+Every infrastructure update still goes through Plan / Apply as a Run.
 
 Provider resolution has two OSS outcomes plus policy blocking:
 
@@ -74,6 +81,9 @@ Runner policy, provider allowlists, lockfile/mirror rules, resource limits, and
 network egress policy are internal control-plane safeguards. They decide where a
 Run may execute and which provider plugins/resources may be reached, but they
 are not public product nouns like ProviderConnection or ProviderBinding.
+Operators may configure a runner-local OpenTofu provider plugin cache to speed
+direct provider installs. It stores provider binaries only; credentials and
+generated run files remain per-run.
 
 ## Cloud-Only Concepts
 

@@ -53,8 +53,8 @@ export interface CreateCapsuleRequest {
   readonly name: string;
   readonly environment: string;
   /**
-   * Registered git Source. Omit for an upload-origin Capsule created by
-   * `takosumi deploy`, which deploys an upload SourceSnapshot directly.
+   * Registered git Source. Omit only for legacy source-less Capsules retained
+   * for internal/operator compatibility with retired upload/artifact snapshots.
    */
   readonly sourceId?: string;
   readonly installConfigId: string;
@@ -107,9 +107,8 @@ export class CapsulesService {
         `workspaceId ${request.workspaceId} does not exist`,
       );
     }
-    // A git Source is optional: upload/artifact-origin Capsules
-    // (takosumi deploy) have none. When supplied it must resolve in the same
-    // Workspace.
+    // A git Source is optional only for legacy upload/artifact-origin Capsules.
+    // When supplied it must resolve in the same Workspace.
     if (request.sourceId !== undefined) {
       requireNonEmptyString(request.sourceId, "sourceId");
       const source = await this.#store.getSource(request.sourceId);
@@ -270,6 +269,12 @@ export class CapsulesService {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "InstallConfig build and prebuiltArtifact are mutually exclusive",
+      );
+    }
+    if (hasLegacyArtifactConfig(config)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "build/prebuiltArtifact are legacy artifact compatibility fields; new InstallConfigs must use Git-hosted OpenTofu modules with ordinary variables instead",
       );
     }
     if (config.prebuiltArtifact) {
@@ -463,6 +468,10 @@ function assertSafeInstallConfigPath(value: string, field: string): void {
       `${field} must be a safe relative path inside the SourceSnapshot`,
     );
   }
+}
+
+function hasLegacyArtifactConfig(config: InstallConfig): boolean {
+  return config.build !== undefined || config.prebuiltArtifact !== undefined;
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {

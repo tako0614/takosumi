@@ -78,11 +78,10 @@ export interface Capsule {
   readonly name: string;
   readonly slug: string;
   /**
-   * Registered git {@link Source} this Capsule tracks. Absent for no-git
-   * Capsules created by `takosumi deploy`, which deploy an upload/artifact
-   * SourceSnapshot directly with no Source. A git Source is an optional
-   * attachment (the `wrangler deploy` vs Workers-Builds relationship), not a
-   * precondition for a Capsule to exist.
+   * Registered git {@link Source} this Capsule tracks. Absent only for legacy
+   * source-less Capsules kept for internal/operator compatibility with retired
+   * upload/artifact SourceSnapshots. New public Capsules should be backed by a
+   * Git Source.
    */
   readonly sourceId?: string;
   readonly installType: InstallType;

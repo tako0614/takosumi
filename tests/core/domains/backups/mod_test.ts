@@ -257,10 +257,10 @@ test("control bundle strips the Source internal hook-secret + sync fields", asyn
   expect(serialized).not.toContain("TOP-SECRET-HASH");
   expect(serialized).not.toContain("hookSecretHash");
   expect(serialized).not.toContain("lastSeenCommit");
-  expect(serialized).not.toContain("autoSync");
   // The public Source fields survive.
   expect(bundle.sources[0]!.id).toBe("src_secret");
   expect(bundle.sources[0]!.url).toBe("https://git.example.com/a/b.git");
+  expect(bundle.sources[0]!.autoSync).toBe(true);
 });
 
 test("control bundle includes PUBLIC connection records, never blobs", async () => {

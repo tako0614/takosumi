@@ -834,6 +834,7 @@ function fakeOperations(
           defaultRef: "main",
           defaultPath: ".",
           status: "active",
+          autoSync: false,
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
@@ -855,6 +856,7 @@ function fakeOperations(
               ? {}
               : { authConnectionId: patch.authConnectionId }),
           status: patch.status ?? "active",
+          autoSync: patch.autoSync ?? false,
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
@@ -1374,7 +1376,7 @@ test("GET /api/v1/spaces returns spaces for a session", async () => {
   expect(operations.calls.listWorkspaces).toBeUndefined();
 });
 
-test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Workspace", async () => {
+test("POST /api/v1/spaces/:id/uploads returns gone on the public facade", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1393,15 +1395,13 @@ test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Wo
     store,
     operations,
   });
-  expect(response?.status).toEqual(201);
-  const body = (await response!.json()) as { snapshot: { id: string } };
-  expect(body.snapshot.id).toEqual("snap_upload");
-  expect(operations.calls.recordUploadArchive).toEqual([
-    { workspaceId: "space_a", bytes: [1, 2, 3], path: "deploy" },
-  ]);
+  expect(response?.status).toEqual(410);
+  const raw = await response!.text();
+  expect(raw).toContain("Public upload ingest is retired");
+  expect(operations.calls.recordUploadArchive).toBeUndefined();
 });
 
-test("POST /api/v1/spaces/:id/artifact-snapshots records a prepared artifact snapshot", async () => {
+test("POST /api/v1/spaces/:id/artifact-snapshots returns gone on the public facade", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1424,26 +1424,13 @@ test("POST /api/v1/spaces/:id/artifact-snapshots records a prepared artifact sna
     store,
     operations,
   });
-  expect(response?.status).toEqual(201);
-  const body = (await response!.json()) as {
-    snapshot: { id: string; origin: string };
-  };
-  expect(body.snapshot).toMatchObject({
-    id: "snap_artifact",
-    origin: "artifact",
-  });
-  expect(operations.calls.recordArtifactSnapshot).toEqual([
-    {
-      workspaceId: "space_a",
-      url: "https://artifacts.example.com/app/source.tar.zst",
-      digest:
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      path: "infra",
-    },
-  ]);
+  expect(response?.status).toEqual(410);
+  const raw = await response!.text();
+  expect(raw).toContain("Public prepared-source archive ingest is retired");
+  expect(operations.calls.recordArtifactSnapshot).toBeUndefined();
 });
 
-test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade", async () => {
+test("POST /api/v1/deploy returns gone on the public facade", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
@@ -1495,48 +1482,14 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
     store,
     operations,
   });
-  expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as { installation: { id: string } };
-  expect(body.installation.id).toEqual("inst_upload");
-  expect(operations.calls.deployUpload).toEqual([
-    {
-      workspaceId: "space_a",
-      spaceId: "space_a",
-      name: "hello",
-      environment: "preview",
-      snapshotId: "snap_upload",
-      modulePath: "takos/deploy/opentofu",
-      vars: { greeting: "hi" },
-      outputAllowlist: {
-        url: { from: "url", type: "url", required: true },
-        worker_name: { from: "worker_name", type: "string" },
-      },
-      providerEnvBindings: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          connectionId: "conn_cf",
-        },
-      ],
-      autoApprove: true,
-    },
-  ]);
-  const projection = await store.findAppCapsule("inst_upload");
-  expect(projection?.status).toEqual("installing");
-  expect(projection?.workspaceId).toEqual("space_a");
-  expect(projection?.createdBySubject).toEqual("tsub_ctrl");
-  expect(projection?.sourceGitUrl).toEqual("upload://space_a");
-  expect(projection?.sourceRef).toEqual("upload");
-  expect(projection?.sourceCommit).toEqual(
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  );
-  const events = await store.listCapsuleEvents("inst_upload");
-  expect(events.map((event) => event.eventType)).toEqual([
-    "installation.created",
-  ]);
+  expect(response?.status).toEqual(410);
+  const raw = await response!.text();
+  expect(raw).toContain("Public upload deploy is retired");
+  expect(operations.calls.deployUpload).toBeUndefined();
+  expect(await store.findAppCapsule("inst_upload")).toBeUndefined();
 });
 
-test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBinding", async () => {
+test("POST /api/v1/deploy does not create public shared-cell projections", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1565,29 +1518,38 @@ test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBind
     }),
   });
 
-  expect(response?.status).toEqual(200);
-  expect(operations.calls.deployUpload).toEqual([
-    {
-      workspaceId: "space_a",
-      spaceId: "space_a",
-      name: "hello",
-      snapshotId: "snap_upload",
-    },
-  ]);
-  const projection = await store.findAppCapsule("inst_upload");
-  expect(projection?.mode).toEqual("shared-cell");
-  expect(projection?.runtimeBindingId).toEqual("rtb_inst_upload_shared_cell");
-  const runtimeBinding = projection?.runtimeBindingId
-    ? await store.findRuntimeBinding(projection.runtimeBindingId)
-    : undefined;
-  expect(runtimeBinding?.targetId).toEqual(
-    "shared-cell://tokyo-cell-01/namespaces/inst_upload",
-  );
+  expect(response?.status).toEqual(410);
+  expect(operations.calls.deployUpload).toBeUndefined();
+  expect(await store.findAppCapsule("inst_upload")).toBeUndefined();
 });
 
 test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projection", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_upload",
+    accountId: "acct_upload",
+    workspaceId: "space_a",
+    appId: "hello",
+    sourceGitUrl: "https://github.com/example/hello",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"d".repeat(64)}`,
+    mode: "shared-cell",
+    status: "installing",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.appendCapsuleEvent({
+    eventId: "evt_inst_upload_created",
+    capsuleId: "inst_upload",
+    eventType: "installation.created",
+    payload: { createdBySubject: "tsub_ctrl" },
+    eventHash: `sha256:${"a".repeat(64)}`,
+    createdAt: now,
+  });
   const operations = fakeOperations({
     getRun: async (id) =>
       ({
@@ -1601,21 +1563,6 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
         createdAt: "2026-01-01T00:00:00Z",
       }) as unknown as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>,
   });
-  const deploy = request("POST", "/api/v1/deploy", {
-    cookie,
-    body: {
-      workspaceId: "space_a",
-      name: "hello",
-      snapshotId: "snap_upload",
-    },
-  });
-  const deployResponse = await handleControlRoute({
-    request: deploy.request,
-    url: deploy.url,
-    store,
-    operations,
-  });
-  expect(deployResponse?.status).toEqual(200);
   expect((await store.findAppCapsule("inst_upload"))?.status).toEqual(
     "installing",
   );
@@ -1662,9 +1609,9 @@ test("POST /api/v1/deploy rejects internal resolver bindings", async () => {
     store,
     operations,
   });
-  expect(response?.status).toEqual(400);
+  expect(response?.status).toEqual(410);
   const raw = await response!.text();
-  expect(raw).toContain("providerConnections");
+  expect(raw).toContain("Public upload deploy is retired");
   expect(operations.calls.deployUpload).toBeUndefined();
 });
 
@@ -3491,7 +3438,7 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
     },
     createCapsuleDestroyPlan: async () => {
       const error = new Error(
-        "installation inst_upload_pending is upload-origin; a plan requires a pinned upload SourceSnapshot (deploy a new upload via takosumi deploy)",
+        "installation inst_upload_pending is upload-origin; a plan requires a pinned upload SourceSnapshot through the internal upload-compat seam",
       ) as Error & { code: string };
       error.code = "failed_precondition";
       throw error;
@@ -3954,6 +3901,7 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
     body: {
       name: "renamed",
       defaultRef: "release",
+      autoSync: true,
       authConnectionId: null,
     },
   });
@@ -3969,6 +3917,7 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
     {
       name: "renamed",
       defaultRef: "release",
+      autoSync: true,
       authConnectionId: null,
     },
   ]);
@@ -3980,6 +3929,7 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
       name: "repo",
       url: "https://example.test/r.git",
       authConnectionId: "conn_git",
+      autoSync: true,
     },
   });
   const createResp = await handleControlRoute({
@@ -3999,6 +3949,9 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
     (operations.calls.createSource?.[0] as { authConnectionId?: string })
       .authConnectionId,
   ).toEqual("conn_git");
+  expect(
+    (operations.calls.createSource?.[0] as { autoSync?: boolean }).autoSync,
+  ).toBe(true);
 
   const sync = request("POST", "/api/v1/sources/src_x/sync", { cookie });
   const syncResp = await handleControlRoute({

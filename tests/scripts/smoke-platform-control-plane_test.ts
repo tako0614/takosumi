@@ -32,11 +32,13 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(result.kind).toBe(PLATFORM_CONTROL_PLANE_SMOKE_KIND);
   expect(result.status).toBe("dry_run");
   expect(result.environment).toBe("staging-smoke");
-  expect(result.capsuleModule).toBe("cloudflare-hello-worker");
+  expect(result.capsuleModule).toBe("git-opentofu-capsule");
   expect(result.credentialPath).toBe("space_scoped_provider_connection");
   expect(result.steps).toEqual([
     "spaceScopedProviderConnection",
     "connectionVerified",
+    "sourceRegistered",
+    "sourceSynced",
     "scratchInstall",
     "plan",
     "apply",
@@ -234,6 +236,8 @@ test("platform control-plane smoke can include backup restore rehearsal in dry-r
   expect(result.steps).toEqual([
     "spaceScopedProviderConnection",
     "connectionVerified",
+    "sourceRegistered",
+    "sourceSynced",
     "scratchInstall",
     "plan",
     "apply",
@@ -320,7 +324,7 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
 
   const result = dryRunResult(options);
 
-  expect(result.capsuleModule).toBe("opentofu-basic");
+  expect(result.capsuleModule).toBe("git-opentofu-capsule");
   expect(result.providerConnectionMode).toBe("none");
   expect(result.credentialPath).toBe("none");
   expect(result.inputs.runnerProfileId).toBe("generic-opentofu-provider");
@@ -333,6 +337,8 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
   });
   expect(result.steps).toEqual([
     "providerConnectionNotRequired",
+    "sourceRegistered",
+    "sourceSynced",
     "scratchInstall",
     "plan",
     "apply",
@@ -382,6 +388,8 @@ test("platform control-plane smoke can require public URL checks for generic Ope
   ]);
   expect(result.steps).toEqual([
     "providerConnectionNotRequired",
+    "sourceRegistered",
+    "sourceSynced",
     "scratchInstall",
     "plan",
     "apply",

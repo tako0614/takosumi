@@ -2,7 +2,7 @@
 
 > このページでわかること: 実運用 (operator 向け) で頻出する failure シナリオと
 > その対処手順。 Run の `status` / `errorCode` と runner phase
-> (source / build / plan / apply / destroy) を起点に、 原因切り分け → 暫定復旧 →
+> (source / plan / apply / destroy) を起点に、 原因切り分け → 暫定復旧 →
 > 恒久対策の順に確認する。
 
 正本 model は [`../core-spec.md`](../core-spec.md)。 Run の確認は dashboard の Activity か
@@ -27,8 +27,8 @@
 1. **Run を特定する**: dashboard の Activity か `GET /api/v1/runs/:runId` で
    `status` / `errorCode` / `policyStatus` を確認する。
 2. **phase を特定する**: logs (`GET /api/v1/runs/:runId/logs`) で
-   source / build / plan / apply のどの phase で失敗したかを見る。 phase ごとに
-   渡る credential が異なる (source → git のみ、 build → なし、 plan/apply →
+   source / plan / apply のどの phase で失敗したかを見る。 phase ごとに
+   渡る credential が異なる (source → git のみ、 plan/apply →
    provider のみ) ので、 credential 系エラーは phase で原因が絞れる。
 3. **検証エラーは再 plan**: apply は saved plan のみを実行し、 plan digest /
    source snapshot / dependency snapshot / state generation を検証する。 検証

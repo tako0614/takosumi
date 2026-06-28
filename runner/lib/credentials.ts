@@ -260,14 +260,10 @@ export function allKnownCredentialEnvNames(): ReadonlySet<string> {
 }
 
 /**
- * Builds the env for the BUILD phase. The build phase runs user-supplied
- * commands against the user source checkout and MUST NOT see any cloud
- * credential: it is the only phase that runs untrusted commands, and it runs
- * BEFORE the credentialed tofu phases. We start from {@link baseCommandEnv}
- * (which carries only PATH/HOME/TLS-CA/TF_CLI_CONFIG_FILE etc., never
- * credentials) and additionally assert that no known credential env name leaked
- * in. The minted payload credentials live only on the dispatch payload and are
- * never written into the process env, so they cannot reach here regardless.
+ * Builds the env for the legacy first-party BUILD phase. That compatibility
+ * phase may run user-supplied commands against the source checkout and MUST
+ * NOT see any cloud credential. Standard Git OpenTofu Capsules should put app
+ * build/release work in their own repo or CI, not in Takosumi dispatch.
  */
 export function buildPhaseEnv(): Record<string, string> {
   const env = baseCommandEnv();

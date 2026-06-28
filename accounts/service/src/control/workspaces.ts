@@ -1,8 +1,9 @@
 /**
  * Session-authed Workspace (`/api/v1/workspaces`, legacy `/api/v1/spaces`)
- * control routes: workspace CRUD, members, uploads, capsule create/list, graph,
- * runs/activity, backups, billing reads, plan-update / drift-check. Extracted
- * from `control-routes.ts` (P3 god-file split).
+ * control routes: workspace CRUD, members, capsule create/list, graph,
+ * runs/activity, backups, billing reads, plan-update / drift-check. Public
+ * upload/prepared-source ingest is retired; upload compatibility remains
+ * internal/operator-only. Extracted from `control-routes.ts` (P3 god-file split).
  */
 import type {
   ApplyExpectedGuard,
@@ -274,11 +275,21 @@ export async function handleWorkspaces(
     }
     if (leaf === "uploads" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await uploadWorkspaceArchive(request, url, operations, workspaceId);
+      return errorJson(
+        "gone",
+        "Public upload ingest is retired. Register a Git URL Source and create a Capsule instead.",
+        410,
+        request,
+      );
     }
     if (leaf === "artifact-snapshots" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await createWorkspaceArtifactSnapshot(request, operations, workspaceId);
+      return errorJson(
+        "gone",
+        "Public prepared-source archive ingest is retired. Register a Git URL Source and create a Capsule instead.",
+        410,
+        request,
+      );
     }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
@@ -1180,7 +1191,7 @@ async function uploadWorkspaceArchive(
   return jsonStatus({ snapshot }, 201);
 }
 
-async function createWorkspaceArtifactSnapshot(
+async function createWorkspacePreparedSourceSnapshot(
   request: Request,
   operations: ControlPlaneOperations,
   workspaceId: string,
@@ -1189,10 +1200,10 @@ async function createWorkspaceArtifactSnapshot(
   if (!body) {
     return errorJson("invalid_argument", "invalid request", 400, request);
   }
-  const artifactUrl = stringValue(body.url);
+  const sourceArchiveUrl = stringValue(body.url);
   const digest = stringValue(body.digest);
   const format = stringValue(body.format);
-  if (!artifactUrl || !digest) {
+  if (!sourceArchiveUrl || !digest) {
     return errorJson(
       "invalid_argument",
       "url and digest are required",
@@ -1209,17 +1220,17 @@ async function createWorkspaceArtifactSnapshot(
     );
   }
   const path = stringValue(body.path);
-  const artifactRequest: ArtifactSnapshotRequest = {
-    url: artifactUrl,
+  const sourceArchiveRequest: ArtifactSnapshotRequest = {
+    url: sourceArchiveUrl,
     digest,
     ...(format ? { format } : {}),
     ...(path ? { path } : {}),
   };
   const snapshot = await operations.recordArtifactSnapshot({
     workspaceId,
-    url: artifactRequest.url,
-    digest: artifactRequest.digest,
-    ...(artifactRequest.path ? { path: artifactRequest.path } : {}),
+    url: sourceArchiveRequest.url,
+    digest: sourceArchiveRequest.digest,
+    ...(sourceArchiveRequest.path ? { path: sourceArchiveRequest.path } : {}),
   });
   return jsonStatus({ snapshot }, 201);
 }

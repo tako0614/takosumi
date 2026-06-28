@@ -349,7 +349,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly enqueueSourceSync?: EnqueueSourceSync;
   /**
-   * Raw R2_SOURCE writer for `takosumi deploy` upload archives (Phase: deploy).
+   * Raw R2_SOURCE writer for internal/operator upload-compat archives.
    * The Workers adapter injects `env.R2_SOURCE.put`; when omitted the upload +
    * deploy routes report not_implemented.
    */

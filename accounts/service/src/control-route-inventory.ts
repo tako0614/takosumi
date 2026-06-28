@@ -39,12 +39,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
-      method: "POST",
-      path: "/api/v1/deploy",
-      summary: "Deploy an uploaded local OpenTofu snapshot",
-      auth: "account-session",
-    },
-    {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}",
       summary: "Read a Workspace",
@@ -78,12 +72,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "DELETE",
       path: "/api/v1/workspaces/{workspaceId}/members/{subject}",
       summary: "Remove a Workspace member",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/workspaces/{workspaceId}/uploads",
-      summary: "Upload a Workspace archive",
       auth: "account-session",
     },
     {

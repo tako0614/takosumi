@@ -13,7 +13,9 @@
 //
 // Descriptors are intentionally generic: `{ basePath, bindingName,
 // requiredScopes?, fallbackUsage? }`. The OSS seam records priced usage from the
-// generic descriptor shape, but never names a concrete Cloud feature.
+// generic descriptor shape and treats a matching fallbackUsage rule as a
+// preflight billing-context requirement, but never names a concrete Cloud
+// feature.
 
 export interface PlatformCloudExtensionRoute {
   /** Path prefix this descriptor matches (and proxies to its binding). */
@@ -28,8 +30,9 @@ export interface PlatformCloudExtensionRoute {
   /**
    * Optional generic metering fallback for closed Cloud extensions that have not
    * yet emitted platform usage headers. The rule describes path/method matching
-   * and customer-facing meter names; it does not encode any provider-specific
-   * behavior in OSS code.
+   * and customer-facing meter names. A request matching a rule must resolve a
+   * verified Workspace billing context before the bound service is called. The
+   * rule does not encode any provider-specific behavior in OSS code.
    */
   readonly fallbackUsage?: readonly PlatformCloudExtensionFallbackUsageRule[];
 }

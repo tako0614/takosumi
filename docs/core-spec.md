@@ -116,6 +116,9 @@ For webhook or scheduled source polling, the runner still resolves the ref with
 Git. If the resolved commit matches an existing SourceSnapshot for the same
 Source/ref/path, Takosumi reuses the existing archive object rather than
 cloning, archiving, and storing duplicate bytes.
+`Source.autoSync` is the public opt-in for scheduled Git-ref polling. It only
+prepares a newer immutable SourceSnapshot; it does not apply changes by itself.
+Updates still go through the normal Plan / Apply approval boundary.
 
 Takosumi does not fetch, build, or interpret deployable application artifacts.
 If an OpenTofu module needs an image reference, version, release tag, object key,
@@ -127,6 +130,36 @@ Legacy `build` / `prebuiltArtifact` fields remain compatibility-only for stored
 pre-v1 / first-party row readability and are not the final public Capsule
 contract. New generated-root dispatch does not run them or pass them to the
 runner.
+
+## Performance Model
+
+Takosumi should feel closer to an app install flow than a visible CI console,
+without leaving the OpenTofu-native model:
+
+```text
+Git ref resolution -> SourceSnapshot reuse -> provider init -> plan -> apply
+```
+
+The allowed performance mechanisms are:
+
+- Reuse immutable SourceSnapshot archive bytes when the same Source/ref/path
+  resolves to the same commit.
+- Bake a filesystem provider mirror into the runner image for first-party and
+  operator-approved providers, and record provider installation evidence.
+- Use an operator-configured OpenTofu provider plugin cache inside the runner
+  container for direct provider installs. The cache stores provider binaries
+  only; provider credentials and generated files remain per-run and are deleted
+  after the run. `tofu init` is serialized per shared cache path to avoid cache
+  corruption while keeping plan/apply execution parallel.
+- Keep app/container/bundle build optimization in the app repository, release
+  pipeline, registry, or OpenTofu module. A module may accept a URL, digest,
+  image tag, or object key as a normal variable, and may verify it with ordinary
+  provider/data-source logic, but Takosumi does not decide what that artifact
+  means.
+
+UI progress should show user-level phases such as preparing, checking access,
+planning, installing, finishing, and ready. OpenTofu logs, plan JSON, provider
+bindings, state, and audit evidence remain available in details/advanced views.
 
 ## Provider Connections
 
@@ -396,7 +429,7 @@ provider credentials are injected only into the run sandbox
 logs are redacted before persistence
 runs use a temporary workspace
 temporary credential files are removed after the run
-provider plugin cache is isolated by policy
+provider plugin cache stores provider binaries only and is isolated/serialized by policy
 state is isolated per Workspace/Capsule
 apply approval is supported
 destroy protection is supported

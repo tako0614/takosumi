@@ -399,11 +399,11 @@ export interface DeployControlInternalRouteDependencies {
    */
   readonly backupsService?: BackupsService;
   /**
-   * Raw writer for upload source archives into R2_SOURCE. `takosumi deploy`
-   * POSTs a tar archive of the local Capsule; the upload route streams it here
-   * at the SAME raw key the OpenTofu runner restores from (no logical-bucket
-   * prefix). When unset, the upload + deploy routes return 501. Runtime-neutral
-   * by design: the worker wires `env.R2_SOURCE.put`.
+   * Raw writer for internal/operator upload-compat source archives into
+   * R2_SOURCE. The internal upload route streams bytes here at the SAME raw key
+   * the OpenTofu runner restores from (no logical-bucket prefix). When unset,
+   * the upload + deploy compatibility routes return 501. Runtime-neutral by
+   * design: the worker wires `env.R2_SOURCE.put`.
    */
   readonly writeSourceArchive?: SourceArchiveWriter;
 }

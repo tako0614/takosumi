@@ -255,7 +255,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nullable("project_id"),
     nn("name"),
     nn("slug"),
-    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin capsules have no Git Source.
     nullable("source_id"),
     nn("install_type"),
     nn("install_config_id"),
@@ -1038,7 +1038,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nullable("project_id"),
     nn("name"),
     nn("environment"),
-    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
+    // Nullable: legacy upload-origin capsules have no Git Source.
     nullable("source_id"),
     nn("install_config_id"),
     nullable("current_state_version_id"),

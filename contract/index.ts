@@ -38,7 +38,6 @@ export type {
   DeployRequest,
   PublicDeployResponse as DeployResponse,
 } from "./deploy.ts";
-export { DEPLOY_PATH } from "./deploy.ts";
 export type {
   Capsule,
   CapsuleStatus,

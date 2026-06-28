@@ -1,18 +1,10 @@
 /**
- * Deploy contract (`POST /api/v1/deploy`).
+ * Retired public deploy contract (`POST /api/v1/deploy`).
  *
- * The `takosumi deploy` (`wrangler deploy`-style) entry point. Given an
- * already-ingested upload or prepared-artifact {@link SourceSnapshot} (see
- * `SPACE_UPLOADS_PATH` / `SPACE_ARTIFACT_SNAPSHOTS_PATH`), the control plane
- * locates or creates the target Capsule `@space/name`, synthesizes a
- * default InstallConfig when one is not supplied, and starts the deploy pipeline
- * (compatibility_check -> plan -> [approve -> apply]) against that snapshot. The
- * CLI then polls the returned plan Run and, on success, reads the Output.
- *
- * This is the one thing the dashboard cannot do: deploy the operator's local
- * working directory. The heavy work (normalize / gate / plan / apply) still runs
- * server-side inside the Runner Container with vault-minted, per-phase
- * credentials; the deploy request never carries credential material.
+ * The public handler now returns `410 gone`. New clients should register a Git
+ * URL Source, create a Capsule, and run plan/apply against the Git-pinned
+ * SourceSnapshot. Upload/prepared-source deploy survives only as an internal
+ * operator compatibility seam under `/internal/v1`.
  */
 
 import type {
@@ -24,11 +16,16 @@ import type { CapsuleProviderConnectionBindings } from "./connections.ts";
 import type { PublicRun, Run } from "./runs.ts";
 import { API_V1_PREFIX } from "./api-surface.ts";
 
-/** Edge-public deploy path used by dashboard/API clients and the CLI. */
+/**
+ * Retired edge-public deploy path. The handler returns `410 gone`; do not use
+ * this for new dashboard/API/CLI clients.
+ *
+ * @deprecated Use Git URL Source/Capsule plan/apply routes.
+ */
 export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
 
 /**
- * Body of `POST {@link DEPLOY_PATH}`.
+ * Legacy body of retired `POST {@link DEPLOY_PATH}`.
  *
  * `snapshotId` is an upload- or artifact-origin {@link SourceSnapshot}
  * previously created via `SPACE_UPLOADS_PATH` or
@@ -67,7 +64,7 @@ export interface DeployRequest {
 }
 
 /**
- * Response of `POST {@link DEPLOY_PATH}`: the resolved Capsule and the
+ * Legacy response of retired `POST {@link DEPLOY_PATH}`: the resolved Capsule and the
  * plan Run the deploy started. Older responses may include `applyRun` when a
  * host explicitly chains the reviewed apply server-side; current public clients
  * should treat `planRun ?? run` as the authoritative follow-up Run.

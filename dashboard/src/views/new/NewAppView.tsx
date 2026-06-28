@@ -375,16 +375,65 @@ function catalogDefaultInputValue(
   }
 }
 
-function isTakosOpenTofuCapsule(git: string, modulePath: string): boolean {
-  const normalizedPath = modulePath.trim().replace(/^\/+|\/+$/gu, "") || ".";
-  if (normalizedPath !== "deploy/opentofu") return false;
-  try {
-    const url = new URL(git.trim());
-    const repo = url.pathname.replace(/\.git$/iu, "").toLowerCase();
-    return url.hostname === "github.com" && repo.endsWith("/takos");
-  } catch {
-    return false;
+function catalogVariablePath(name: string): readonly string[] | undefined {
+  const path = name.split(".").map((part) => part.trim());
+  if (path.length === 0) return undefined;
+  return path.every(isSafeCatalogVariablePathSegment) ? path : undefined;
+}
+
+function isSafeCatalogVariablePathSegment(value: string): boolean {
+  return (
+    /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) &&
+    value !== "__proto__" &&
+    value !== "constructor" &&
+    value !== "prototype"
+  );
+}
+
+function catalogInputJsonValue(
+  field: CatalogInputField,
+  raw: string,
+): JsonValue | undefined {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (field.type === "boolean") {
+    const normalized = value.toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
   }
+  if (field.type === "number") {
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue)) return numberValue;
+  }
+  return value;
+}
+
+function setCatalogJsonVariable(
+  target: Record<string, JsonValue>,
+  name: string,
+  value: JsonValue,
+): void {
+  const path = catalogVariablePath(name);
+  if (!path) return;
+  let cursor = target;
+  for (const segment of path.slice(0, -1)) {
+    const existing = cursor[segment];
+    const next = isJsonRecord(existing) ? { ...existing } : {};
+    cursor[segment] = next;
+    cursor = next;
+  }
+  cursor[path[path.length - 1]!] = value;
+}
+
+function isJsonRecord(
+  value: JsonValue | undefined,
+): value is Record<string, JsonValue> {
+  return (
+    value !== undefined &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }
 
 function inputVariableRowsFromPrefill(
@@ -650,19 +699,44 @@ function Inner() {
   const selectedCatalogVariables = () => {
     const entry = selectedCatalogEntry();
     if (!entry) return {};
+    const variables: Record<string, JsonValue> = {};
+    for (const field of entry.inputs) {
+      const value = catalogInputJsonValue(field, catalogInputValue(entry, field));
+      if (value !== undefined) {
+        setCatalogJsonVariable(variables, field.name, value);
+      }
+    }
+    return variables;
+  };
+  const selectedCatalogReturnVariables = (): Readonly<
+    Record<string, string>
+  > => {
+    const entry = selectedCatalogEntry();
+    if (!entry) return {};
     const variables: Record<string, string> = {};
     for (const field of entry.inputs) {
+      if (!isSafeInstallVariableName(field.name)) continue;
       const value = catalogInputValue(entry, field).trim();
       if (value) variables[field.name] = value;
     }
     return variables;
   };
-  const selectedCatalogVariableNames = () =>
-    new Set(Object.keys(selectedCatalogVariables()));
+  const selectedCatalogVariableNames = () => {
+    const entry = selectedCatalogEntry();
+    if (!entry) return new Set<string>();
+    return new Set(
+      entry.inputs
+        .map((field) => catalogVariablePath(field.name)?.[0])
+        .filter((name): name is string => name !== undefined),
+    );
+  };
   const catalogInputError = (): string | null => {
     const entry = selectedCatalogEntry();
     if (!entry) return null;
     for (const field of entry.inputs) {
+      if (!catalogVariablePath(field.name)) {
+        return t("new.vars.errorUnsafeName", { name: field.name });
+      }
       const value = catalogInputValue(entry, field).trim();
       if (field.required && !value) {
         if (isConnectionScopedCatalogInput(entry, field)) {
@@ -794,11 +868,7 @@ function Inner() {
     currentInstallPrefill()?.path || path().trim() || ".";
   const prefilledProjectName = () =>
     currentInstallPrefill()?.vars?.project_name;
-  const supportsProjectNameInput = () =>
-    isTakosOpenTofuCapsule(sourceGitUrl(), sourcePath()) ||
-    prefilledProjectName() !== undefined;
-  const supportsCloudflareScopeInput = () =>
-    isTakosOpenTofuCapsule(sourceGitUrl(), sourcePath());
+  const supportsProjectNameInput = () => prefilledProjectName() !== undefined;
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     const suffix = workspaceSuffix(workspaceId());
@@ -866,7 +936,7 @@ function Inner() {
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
-    Object.assign(variables, selectedCatalogVariables());
+    Object.assign(variables, selectedCatalogReturnVariables());
     Object.assign(variables, normalizedInputVariables());
     return variables;
   };
@@ -880,9 +950,6 @@ function Inner() {
     };
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
-    }
-    if (supportsCloudflareScopeInput()) {
-      variables.cloudflare = {};
     }
     return Object.keys(variables).length > 0 ? variables : undefined;
   };
@@ -1466,6 +1533,7 @@ function Inner() {
           url: flowInput.gitUrl,
           defaultRef: flowInput.ref,
           defaultPath: flowInput.path,
+          autoSync: true,
           authConnectionId: flowInput.authConnectionId,
         });
         throwIfStaleFlow(flow);

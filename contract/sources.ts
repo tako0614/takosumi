@@ -52,6 +52,11 @@ export interface Source {
   /** References a `source_git_*` Connection. Absent for a public repo. */
   readonly authConnectionId?: string;
   readonly status: SourceStatus;
+  /**
+   * Enables operator-scheduled polling of the default Git ref. Webhooks can
+   * still trigger source_sync independently; this flag is the polling opt-in.
+   */
+  readonly autoSync: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -61,18 +66,12 @@ export interface Source {
  *
  *   - `git`    — fetched from a registered {@link Source} by a `source_sync`
  *                run in the Runner Container (the historical default).
- *   - `upload` — uploaded directly from a local working directory by
- *                `takosumi deploy` (the `wrangler deploy`-style path). There is
- *                no {@link Source} row and no git clone; the worker archives the
- *                uploaded bytes and records the snapshot. Downstream (Capsule
- *                Gate / plan / apply / Deployment / Output / DAG) is
- *                origin-agnostic because it only consumes the digest-pinned
- *                archive artifact, never git directly.
- *   - `artifact` — fetched from a user-supplied HTTPS artifact URL, digest
- *                  verified, stored in R2_SOURCE, and recorded as an immutable
- *                  snapshot. This lets CI/source-side builds hand Takosumi an
- *                  already-prepared Capsule archive without paying for runner
- *                  git clone/build work on the first deploy.
+ *   - `upload` — retired public upload, retained for internal/operator
+ *                compatibility with existing source-less Capsules. This is not
+ *                the standard app-install product path.
+ *   - `artifact` — legacy/operator HTTPS ingest of a prepared Capsule source
+ *                  archive with digest verification. Despite the wire name, it
+ *                  is not a deployable app artifact contract.
  */
 export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
 
@@ -81,19 +80,25 @@ export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
  *
  * For `origin: "git"` it is produced by a `source_sync` run in the Runner
  * Container (the worker only records the result) and `sourceId` references the
- * registered {@link Source}. For `origin: "upload"` it is produced by a direct
- * `takosumi deploy` upload: `sourceId` is absent and `url`/`ref`/`resolvedCommit`
- * carry self-describing upload identity (`url` under the Takosumi upload
- * namespace, `ref = "upload"`, `resolvedCommit = archiveDigest`) so existing
- * readers that treat these as descriptive strings keep working unchanged. For
- * `origin: "artifact"` the snapshot was fetched from a supplied HTTPS artifact
- * URL; `ref = "artifact"` and `resolvedCommit = archiveDigest`.
+ * registered {@link Source}. For `origin: "upload"` it was produced by the
+ * retired public upload flow or the internal/operator compatibility seam:
+ * `sourceId` is absent and `url`/`ref`/`resolvedCommit` carry self-describing
+ * upload identity (`url` under the Takosumi upload namespace, `ref = "upload"`,
+ * `resolvedCommit = archiveDigest`) so existing readers that treat these as
+ * descriptive strings keep working unchanged. For `origin: "artifact"` the
+ * snapshot was fetched from a supplied HTTPS prepared source archive URL;
+ * `ref = "artifact"` and `resolvedCommit = archiveDigest`.
  *
- * The archive bytes live in R2_SOURCE under
- * `spaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`
- * for git, `spaces/{workspaceId}/uploads/{snapshotId}/source.tar.zst` for upload,
- * and `spaces/{workspaceId}/artifact-snapshots/{snapshotId}/source.tar.zst` for
- * externally prepared artifacts.
+ * `archiveObjectKey` is the canonical R2_SOURCE pointer for the bytes. New git
+ * syncs normally write to
+ * `spaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`,
+ * uploads normally write to `spaces/{workspaceId}/uploads/{snapshotId}/source.tar.zst`,
+ * and legacy externally prepared source archives normally write to
+ * `spaces/{workspaceId}/artifact-snapshots/{snapshotId}/source.tar.zst`.
+ * A later git SourceSnapshot for the same resolved commit may deliberately
+ * point at an earlier snapshot's object key to reuse the immutable archive
+ * bytes; consumers must trust `archiveObjectKey` rather than reconstructing it
+ * from this snapshot's id.
  */
 export interface SourceSnapshot {
   readonly id: string;
@@ -250,10 +255,11 @@ export const SOURCE_HOOK_PATH = (id: string): string =>
   `/hooks/sources/${encodeURIComponent(id)}`;
 
 /**
- * Direct upload ingest for `takosumi deploy`. The CLI POSTs a `tar` (zstd)
- * archive of the local Capsule directory; the worker archives the bytes to
- * R2_SOURCE, computes the digest, and records a `SourceSnapshot(origin=upload)`.
- * No Source row and no Runner git clone are involved.
+ * Retired public direct-upload ingest path. The public accounts handler returns
+ * `410 gone`; upload ingest remains available only on the internal/operator
+ * compatibility seam.
+ *
+ * @deprecated Use a Git URL Source and Capsule plan/apply.
  */
 export const SPACE_UPLOADS_PATH = (workspaceId: string): string =>
   `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
@@ -263,10 +269,16 @@ export const INTERNAL_SPACE_UPLOADS_PATH = (workspaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
 
 /**
- * Digest-pinned prepared artifact ingest for CI/source-side build pipelines.
- * The request body is JSON containing an HTTPS `url` plus the expected
- * `sha256:` digest; Takosumi fetches the artifact, verifies the digest, stores
- * it as a SourceSnapshot archive, and records `origin = "artifact"`.
+ * Retired public ingest for a digest-pinned prepared Capsule source archive.
+ * The public accounts handler returns `410 gone`; prepared-source ingest remains
+ * available only on the internal/operator compatibility seam.
+ *
+ * Legacy/operator ingest body is JSON containing an HTTPS `url` plus the
+ * expected `sha256:` digest; Takosumi fetches the archive, verifies the digest,
+ * stores it as a SourceSnapshot archive, and records `origin = "artifact"`.
+ * This is not a deployable app artifact fetch path.
+ *
+ * @deprecated Use a Git URL Source and Capsule plan/apply.
  */
 export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (workspaceId: string): string =>
   `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/artifact-snapshots`;
@@ -290,6 +302,8 @@ export interface CreateSourceRequest {
   /** Defaults to `"."` when omitted. */
   readonly defaultPath?: string;
   readonly authConnectionId?: string;
+  /** Enables operator-scheduled Git-ref polling for automatic Source updates. */
+  readonly autoSync?: boolean;
 }
 
 /**
@@ -321,6 +335,7 @@ export interface PatchSourceRequest {
   readonly defaultPath?: string;
   readonly authConnectionId?: string | null;
   readonly status?: SourceStatus;
+  readonly autoSync?: boolean;
 }
 
 export interface CreateSourceSyncResponse {
@@ -354,9 +369,10 @@ export interface UploadSnapshotResponse {
 export type ArtifactSnapshotFormat = "tar.zst";
 
 /**
- * Metadata for digest-pinned prepared artifact ingest. `url` must be an HTTPS
- * artifact URL with no embedded credentials. `digest` must be the expected
- * SHA-256 digest (`sha256:<64 lowercase hex>` accepted case-insensitively).
+ * Metadata for legacy digest-pinned prepared source archive ingest. `url` must
+ * be an HTTPS source archive URL with no embedded credentials. `digest` must be
+ * the expected SHA-256 digest (`sha256:<64 lowercase hex>` accepted
+ * case-insensitively).
  */
 export interface ArtifactSnapshotRequest {
   readonly url: string;

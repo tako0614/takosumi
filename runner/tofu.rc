@@ -1,8 +1,5 @@
 # Baked OpenTofu CLI config for the runner container (TF_CLI_CONFIG_FILE).
 #
-# plugin_cache_dir: shared on-disk plugin cache so repeated inits in the same
-#   image reuse already-extracted provider binaries.
-#
 # provider_installation:
 #   filesystem_mirror is authoritative for the providers pre-mirrored into the
 #   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls,
@@ -12,9 +9,9 @@
 #   `--network none`. aws is mirrored so the first-party `aws-s3-storage` Capsule
 #   no longer fail-closes under offline init. Any provider NOT in these lists
 #   (e.g. google, not yet mirrored for size) falls through to `direct` and is
-#   fetched from the registry as usual.
-
-plugin_cache_dir = "/opt/opentofu/provider-cache"
+#   fetched from the registry as usual. Runtime-generated per-run CLI configs add
+#   an isolated plugin_cache_dir under the run workspace; this baked fallback
+#   deliberately has no shared mutable plugin cache.
 
 provider_installation {
   filesystem_mirror {

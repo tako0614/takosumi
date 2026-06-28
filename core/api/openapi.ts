@@ -894,25 +894,6 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
           },
           additionalProperties: false,
         },
-        build: {
-          type: "object",
-          required: ["enabled", "commands"],
-          properties: {
-            enabled: { type: "boolean" },
-            workingDirectory: { type: "string" },
-            commands: { type: "array", items: { type: "string" } },
-            artifactPath: { type: "string" },
-          },
-          additionalProperties: false,
-        },
-        prebuiltArtifact: {
-          type: "object",
-          required: ["path"],
-          properties: {
-            path: { type: "string" },
-          },
-          additionalProperties: false,
-        },
         variableMapping: { type: "object", additionalProperties: true },
         outputAllowlist: {
           type: "object",
@@ -1706,6 +1687,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         "defaultRef",
         "defaultPath",
         "status",
+        "autoSync",
         "createdAt",
         "updatedAt",
       ],
@@ -1718,6 +1700,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         defaultPath: { type: "string" },
         authConnectionId: { type: "string" },
         status: { enum: ["active", "disabled", "error"] },
+        autoSync: { type: "boolean" },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
       },
@@ -1803,6 +1786,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         defaultRef: { type: "string" },
         defaultPath: { type: "string" },
         authConnectionId: { type: "string" },
+        autoSync: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -1839,6 +1823,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         defaultPath: { type: "string" },
         authConnectionId: { type: ["string", "null"] },
         status: { enum: ["active", "disabled", "error"] },
+        autoSync: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -1865,9 +1850,18 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
     ArtifactSnapshotRequest: {
       type: "object",
       required: ["url", "digest"],
+      description:
+        "Legacy/operator prepared Capsule source archive ingest. Despite the route name, this is not a deployable app artifact fetch path.",
       properties: {
-        url: { type: "string", format: "uri" },
-        digest: { type: "string" },
+        url: {
+          type: "string",
+          format: "uri",
+          description: "HTTPS URL of a prepared source.tar.zst archive.",
+        },
+        digest: {
+          type: "string",
+          description: "sha256 digest of the prepared source archive bytes.",
+        },
         format: { enum: ["tar.zst"] },
         path: { type: "string" },
       },

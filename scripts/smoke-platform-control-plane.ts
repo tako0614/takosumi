@@ -3,7 +3,7 @@
  * Hosted Takosumi Layer-2 smoke.
  *
  * This proves the product control-plane loop, not only the raw provider/module:
- * signed-in Account session -> Workspace ProviderConnection -> upload Capsule ->
+ * signed-in Account session -> Workspace ProviderConnection -> Git Source/Capsule ->
  * plan/apply -> Run / StateVersion / Output ledger ->
  * Cloudflare verification -> destroy-plan/approval/destroy-apply.
  *
@@ -16,7 +16,6 @@ import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import process from "node:process";
 import {
-  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -193,7 +192,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly space: string;
   readonly appName: string;
   readonly environment: string;
-  readonly sourceMode: "upload" | "git";
+  readonly sourceMode: "git";
   readonly capsuleDir: string;
   readonly verificationMode: SmokeVerificationMode;
   readonly vars: Readonly<Record<string, JsonSmokeValue>>;
@@ -281,7 +280,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
     readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
     readonly runnerProfileId?: string;
-    readonly sourceMode: "upload" | "git";
+    readonly sourceMode: "git";
     readonly verificationMode: SmokeVerificationMode;
     readonly varsDigest: string;
     readonly outputAllowlistNames: readonly string[];
@@ -677,7 +676,16 @@ export async function resolveOptions(
       })
     : ({ value: "", source: "not_required" } as const);
   const rawSourceGitUrl =
-    args.sourceGitUrl ?? env.TAKOSUMI_SMOKE_SOURCE_GIT_URL;
+    args.sourceGitUrl ??
+    env.TAKOSUMI_SMOKE_SOURCE_GIT_URL ??
+    (args.dryRun === true
+      ? "https://github.example/takosumi/smoke-fixture.git"
+      : undefined);
+  if (!rawSourceGitUrl) {
+    throw new Error(
+      "--source-git-url is required. Platform smoke uses Git URL Source/Capsule; public upload deploy is retired.",
+    );
+  }
   const sourceGitUrl =
     rawSourceGitUrl !== undefined
       ? normalizeSmokeSourceGitUrl(rawSourceGitUrl)
@@ -687,16 +695,13 @@ export async function resolveOptions(
   const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
-  const sourceMode = sourceGitUrl ? "git" : "upload";
+  const sourceMode = "git" as const;
   const capsuleDir = resolve(
     args.capsuleDir ??
       (providerlessOpenTofuSmoke
         ? DEFAULT_PROVIDERLESS_CAPSULE_DIR
         : DEFAULT_CAPSULE_DIR),
   );
-  if (args.dryRun !== true && sourceMode === "upload") {
-    await access(capsuleDir);
-  }
   const resolvedAppName = args.appName ?? defaultAppName();
   const vars = await readJsonRecordInput({
     inline: args.varsJson ?? env.TAKOSUMI_SMOKE_VARS_JSON,
@@ -1055,31 +1060,21 @@ export async function runPlatformControlPlaneSmoke(
         await assertCloudflareResourcePreflight(options);
       completeStep("cloudflareResourcePreflight");
     }
-    if (options.sourceMode === "git") {
-      beginStep("sourceRegistered");
-      beginStep("sourceSynced");
-    }
+    beginStep("sourceRegistered");
+    beginStep("sourceSynced");
     beginStep("scratchInstall");
     beginStep("plan");
-    const deploy =
-      options.sourceMode === "git"
-        ? await deployGitSourceCapsule(options, {
-            spaceId,
-            ...(providerConnectionId ? { providerConnectionId } : {}),
-          })
-        : await deployUploadedCapsule(options, {
-            spaceId,
-            ...(providerConnectionId ? { providerConnectionId } : {}),
-          });
+    const deploy = await deployGitSourceCapsule(options, {
+      spaceId,
+      ...(providerConnectionId ? { providerConnectionId } : {}),
+    });
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
     sourceSnapshotId = deploy.sourceSnapshotId;
     installationId = deploy.installation.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
-    if (options.sourceMode === "git") {
-      completeStep("sourceRegistered");
-      completeStep("sourceSynced");
-    }
+    completeStep("sourceRegistered");
+    completeStep("sourceSynced");
     completeStep("scratchInstall");
     capsuleGateStatus = "passed";
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
@@ -1488,9 +1483,9 @@ function failedNextAction(input: {
   if (
     input.error instanceof RequestTimeoutError &&
     input.error.method === "POST" &&
-    input.error.path === `${API_PREFIX}/deploy`
+    /\/installations\/[^/]+\/plan$/u.test(input.error.path)
   ) {
-    return "The deploy request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the compatibility check or plan creation step that did not return.";
+    return "The Capsule plan request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the source sync, compatibility check, or plan creation step that did not return.";
   }
   if (input.connectionRevokeSkippedReason !== undefined) {
     return "Inspect the failed cleanup run, destroy the recorded Capsule after fixing the blocker, then revoke the retained ProviderConnection and rerun the smoke.";
@@ -1726,45 +1721,6 @@ export function isSmokeProviderConnectionMatch(
     canonicalProviderSource(connection.providerSource) ===
       canonicalProviderSource(expected.provider)
   );
-}
-
-async function uploadCapsule(
-  options: PlatformControlPlaneSmokeOptions,
-  spaceId: string,
-): Promise<{ readonly id: string }> {
-  const archive = await tarZstd(options.capsuleDir);
-  const response = await requestJson<{
-    readonly snapshot?: { readonly id?: string };
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`,
-    binary: archive,
-  });
-  const id = response.snapshot?.id;
-  if (!id) throw new Error("upload response did not include snapshot.id");
-  return { id };
-}
-
-async function deployUploadedCapsule(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly spaceId: string;
-    readonly providerConnectionId?: string;
-  },
-): Promise<
-  DeployResponse & {
-    readonly sourceSnapshotId: string;
-  }
-> {
-  const snapshot = await uploadCapsule(options, input.spaceId);
-  const deploy = await deploySnapshot(options, {
-    spaceId: input.spaceId,
-    snapshotId: snapshot.id,
-    providerConnectionId: input.providerConnectionId,
-  });
-  return { ...deploy, sourceSnapshotId: snapshot.id };
 }
 
 async function deployGitSourceCapsule(
@@ -2061,47 +2017,6 @@ async function destroySmokeInstallation(
     destroyPlanRun: reviewedDestroyPlan,
     destroyApplyRun: completedDestroy,
   };
-}
-
-async function deploySnapshot(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly spaceId: string;
-    readonly snapshotId: string;
-    readonly providerConnectionId?: string;
-  },
-): Promise<DeployResponse> {
-  return await requestJson<DeployResponse>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/deploy`,
-    timeoutMs: options.deployTimeoutSeconds * 1000,
-    body: {
-      workspaceId: input.spaceId,
-      name: options.appName,
-      environment: options.environment,
-      snapshotId: input.snapshotId,
-      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-      ...(options.runnerProfileId
-        ? { runnerProfileId: options.runnerProfileId }
-        : {}),
-      vars: options.vars,
-      outputAllowlist: options.outputAllowlist,
-      ...(input.providerConnectionId
-        ? {
-            providerConnections: [
-              {
-                provider: "cloudflare",
-                alias: "main",
-                connectionId: input.providerConnectionId,
-              },
-            ],
-          }
-        : {}),
-      autoApprove: true,
-    },
-  });
 }
 
 export function shouldMarkPendingSmokeInstallationError(
@@ -3280,47 +3195,6 @@ function assertNever(value: never): never {
   throw new Error(`unexpected value: ${String(value)}`);
 }
 
-function tarZstd(dir: string): Promise<Uint8Array> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(
-      "tar",
-      [
-        "--zstd",
-        "--exclude=.git",
-        "--exclude=.terraform",
-        "--exclude=.wrangler",
-        "--exclude=node_modules",
-        "-cf",
-        "-",
-        "-C",
-        dir,
-        ".",
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(
-            `tar --zstd failed (exit ${code}): ${Buffer.concat(stderr)
-              .toString()
-              .trim()}`,
-          ),
-        );
-        return;
-      }
-      resolvePromise(new Uint8Array(Buffer.concat(stdout)));
-    });
-  });
-}
-
 function parseArgs(argv: readonly string[]): CliArgs {
   const args: Record<string, string | boolean> = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -3789,14 +3663,8 @@ function defaultAppName(): string {
 }
 
 function capsuleLabel(options: PlatformControlPlaneSmokeOptions): string {
-  if (options.sourceMode === "git") return "git-opentofu-capsule";
-  if (options.capsuleDir === DEFAULT_CAPSULE_DIR) {
-    return "cloudflare-hello-worker";
-  }
-  if (options.capsuleDir === DEFAULT_PROVIDERLESS_CAPSULE_DIR) {
-    return "opentofu-basic";
-  }
-  return "uploaded-opentofu-capsule";
+  void options;
+  return "git-opentofu-capsule";
 }
 
 function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
@@ -3809,7 +3677,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
-  readonly sourceMode: "upload" | "git";
+  readonly sourceMode: "git";
   readonly verificationMode: SmokeVerificationMode;
   readonly varsDigest: string;
   readonly outputAllowlistNames: readonly string[];
@@ -3839,13 +3707,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
-    ...(options.sourceMode === "upload"
-      ? {
-          capsuleDir: options.capsuleDir,
-          ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-        }
-      : {}),
-    ...(options.sourceMode === "git" && options.sourceGitUrl
+    ...(options.sourceGitUrl
       ? {
           sourceGitUrlDigest: sha256(options.sourceGitUrl),
           sourceRef: options.sourceRef ?? "main",
@@ -4050,8 +3912,8 @@ async function runSelfTest(): Promise<void> {
   if (serialized.includes("acc_selftest")) {
     throw new Error("self-test leaked Cloudflare account id");
   }
-  if (result.sourceMode !== "upload") {
-    throw new Error("self-test default source mode is not upload");
+  if (result.sourceMode !== "git") {
+    throw new Error("self-test default source mode is not git");
   }
   if (result.providerConnectionMode !== "guided") {
     throw new Error("self-test default Provider Connection mode is not guided");
@@ -4337,13 +4199,17 @@ async function runSelfTest(): Promise<void> {
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
     connectionRevoked: true,
-    error: new RequestTimeoutError("POST", `${API_PREFIX}/deploy`, 1),
+    error: new RequestTimeoutError(
+      "POST",
+      `${API_PREFIX}/installations/inst_selftest/plan`,
+      1,
+    ),
   });
   if (
     deployTimeout.status !== "failed" ||
     deployTimeout.installationId !== undefined ||
     deployTimeout.planRunId !== undefined ||
-    !deployTimeout.nextAction?.includes("before returning a plan run id")
+    !deployTimeout.nextAction?.includes("Capsule plan request timed out")
   ) {
     throw new Error("self-test deploy timeout failed result shape is wrong");
   }
@@ -4385,7 +4251,7 @@ async function runSelfTest(): Promise<void> {
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/deploy`,
+      path: `${API_PREFIX}/installations/inst_selftest/plan`,
       timeoutMs: 1,
       body: {},
     });
@@ -4405,7 +4271,7 @@ async function runSelfTest(): Promise<void> {
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/deploy`,
+      path: `${API_PREFIX}/installations/inst_selftest/plan`,
       timeoutMs: 1,
       body: {},
       transport: "native",
@@ -4414,7 +4280,7 @@ async function runSelfTest(): Promise<void> {
   } catch (error) {
     if (
       !(error instanceof RequestTimeoutError) ||
-      error.path !== `${API_PREFIX}/deploy`
+      error.path !== `${API_PREFIX}/installations/inst_selftest/plan`
     ) {
       throw error;
     }
@@ -4451,10 +4317,9 @@ Options:
   --cloudflare-connection-mode <guided|generic-env|none> default guided; none verifies keyless OpenTofu Capsules with --verification-mode opentofu
   --cloudflare-resource-preflight <account-resources|d1|none>
                                                    verify the Cloudflare token can read account resources before resource-creating applies; account-resources checks D1, KV, R2, Queues, and Workflows
-  --runner-profile-id <id>                         request an enabled runner profile for upload deploys; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
+  --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
   --auth-token-kind <session|pat>                 explicit bearer kind for validation; inferred from --pat-token-file when omitted
-  --capsule-dir <path>                            default cloudflare-hello-worker module
-  --source-git-url <url>                          use Git Source sync instead of upload archive (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
+  --source-git-url <url>                          Git Source URL to sync; required outside dry-run (or TAKOSUMI_SMOKE_SOURCE_GIT_URL)
   --source-ref <ref>                              Git ref for --source-git-url, default main
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive

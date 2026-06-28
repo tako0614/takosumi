@@ -150,12 +150,56 @@ export function parseSourceCredentials(request: unknown): SourceCredentials {
   return { env, files };
 }
 
+interface ReusableSourceSnapshot {
+  readonly id: string;
+  readonly resolvedCommit: string;
+  readonly archiveObjectKey: string;
+  readonly archiveDigest: string;
+  readonly archiveSizeBytes: number;
+}
+
+function parseReusableSourceSnapshot(
+  request: unknown,
+): ReusableSourceSnapshot | undefined {
+  const snapshot = recordField(request, "reuseSnapshot");
+  if (!isRecord(snapshot)) return undefined;
+  const id = requiredStringField(snapshot, "id");
+  const resolvedCommit = requiredStringField(snapshot, "resolvedCommit");
+  const archiveObjectKey = requiredStringField(snapshot, "archiveObjectKey");
+  const archiveDigest = requiredStringField(snapshot, "archiveDigest");
+  const archiveSizeBytes = snapshot.archiveSizeBytes;
+  assertSafeArchiveObjectKey(archiveObjectKey);
+  if (!/^[0-9a-f]{7,64}$/iu.test(resolvedCommit)) {
+    throw new Error(
+      "reuseSnapshot.resolvedCommit must be a hex git object prefix",
+    );
+  }
+  if (!/^sha256:[0-9a-f]{64}$/iu.test(archiveDigest)) {
+    throw new Error("reuseSnapshot.archiveDigest must be a sha256 digest");
+  }
+  if (
+    typeof archiveSizeBytes !== "number" ||
+    !Number.isSafeInteger(archiveSizeBytes) ||
+    archiveSizeBytes <= 0
+  ) {
+    throw new Error("reuseSnapshot.archiveSizeBytes must be a positive integer");
+  }
+  return {
+    id,
+    resolvedCommit: resolvedCommit.toLowerCase(),
+    archiveObjectKey,
+    archiveDigest: archiveDigest.toLowerCase(),
+    archiveSizeBytes,
+  };
+}
+
 export async function runSourceSync(
   runId: string,
   request: unknown,
 ): Promise<JsonRecord> {
   const source = parseSourceSyncSource(request);
   const credentials = parseSourceCredentials(request);
+  const reuseSnapshot = parseReusableSourceSnapshot(request);
   const runnerProfile = parseRunnerProfile(request);
   // archiveObjectKey may sit at the request root or alongside source; accept
   // either so the service lane can place it wherever the run record holds it.
@@ -190,6 +234,25 @@ export async function runSourceSync(
       credentialDir,
     );
     const resolvedCommit = await resolveSourceCommit(source, gitContext);
+    if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
+      return {
+        runId,
+        action: "source_sync",
+        status: "succeeded",
+        exitCode: 0,
+        resolvedCommit,
+        archiveDigest: reuseSnapshot.archiveDigest,
+        archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
+        sourceArchive: {
+          kind: "object-storage",
+          archiveObjectKey: reuseSnapshot.archiveObjectKey,
+          digest: reuseSnapshot.archiveDigest,
+          contentType: "application/zstd",
+          sizeBytes: reuseSnapshot.archiveSizeBytes,
+          reusedFromSnapshotId: reuseSnapshot.id,
+        },
+      };
+    }
     await shallowCloneAtCommit(
       source,
       resolvedCommit,

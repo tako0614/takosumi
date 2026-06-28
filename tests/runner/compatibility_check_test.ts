@@ -11,8 +11,28 @@ import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
 
 import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
+import {
+  prepareStrictProviderMirrorInit,
+  providerPluginCacheForWorkspace,
+} from "../../runner/lib/providers.ts";
+import type { RunWorkspace } from "../../runner/lib/types.ts";
 
 const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+
+function testWorkspace(root: string): RunWorkspace {
+  return {
+    root,
+    sourceRoot: join(root, "source"),
+    moduleDir: join(root, "module"),
+    planPath: join(root, "tfplan"),
+    restoredStatePath: join(root, "terraform.tfstate"),
+    moduleInfoPath: join(root, "module-info.json"),
+    generatedRootDir: join(root, "generated-root"),
+    templateModuleDir: join(root, "generated-root", "template-module"),
+    artifactDir: join(root, "artifact"),
+    depsDir: join(root, "deps"),
+  };
+}
 
 async function digestBytes(bytes: Uint8Array): Promise<string> {
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -122,6 +142,16 @@ esac
       exitCode: 0,
       stdout: "module init ok\n",
     });
+    expect(
+      Array.isArray(body.phaseTimings) &&
+        body.phaseTimings.some(
+          (entry: unknown) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as { phase?: unknown }).phase === "tofu_init" &&
+            typeof (entry as { durationMs?: unknown }).durationMs === "number",
+        ),
+    ).toBe(true);
     expect(body.files).toEqual([
       {
         path: ".terraform.lock.hcl",
@@ -789,6 +819,7 @@ test("plan with mirror-required policy forces tofu init through a strict filesys
   );
   const previousPath = Bun.env.PATH;
   const previousMirror = Bun.env.OPENTOFU_PROVIDER_MIRROR;
+  const providerCache = join(root, "provider-cache");
   try {
     await mkdir(providerPath, { recursive: true });
     await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
@@ -905,6 +936,7 @@ esac
       join(root, "generated-root", "strict-tofu.rc.seen"),
       "utf8",
     );
+    expect(seenConfig).toContain(`plugin_cache_dir = "${providerCache}"`);
     expect(seenConfig).toContain(`path = "${mirrorRoot}"`);
     expect(seenConfig).toContain(
       '"registry.opentofu.org/cloudflare/cloudflare"',
@@ -929,6 +961,41 @@ esac
     await rm(sourceRoot, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
     await rm(mirrorRoot, { recursive: true, force: true });
+  }
+});
+
+test("provider plugin cache can be shared by runner container env", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-cache-root-"));
+  const sharedCache = join(root, "shared-provider-cache");
+  const previousCache = Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
+  try {
+    const workspace = testWorkspace(join(root, "run"));
+    expect(providerPluginCacheForWorkspace(workspace)).toEqual({
+      path: join(workspace.root, "provider-cache"),
+      shared: false,
+    });
+
+    Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = sharedCache;
+    const init = await prepareStrictProviderMirrorInit(
+      workspace,
+      { env: {} },
+      ["registry.opentofu.org/cloudflare/cloudflare"],
+      { requireMirror: true },
+    );
+    expect(init?.providerCacheDir).toBe(sharedCache);
+    expect(init?.sharedProviderCache).toBe(true);
+    const config = await readFile(
+      join(workspace.root, "takosumi.tofu.rc"),
+      "utf8",
+    );
+    expect(config).toContain(`plugin_cache_dir = "${sharedCache}"`);
+  } finally {
+    if (previousCache === undefined) {
+      delete Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR;
+    } else {
+      Bun.env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = previousCache;
+    }
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -216,6 +216,10 @@ describe("/new flow guidance", () => {
   test("selected catalog services use friendly setup fields instead of raw variables", () => {
     expect(newAppViewSource).toContain("selectedCatalogEntry");
     expect(newAppViewSource).toContain("selectedCatalogVariables");
+    expect(newAppViewSource).toContain("selectedCatalogReturnVariables");
+    expect(newAppViewSource).toContain("catalogInputJsonValue");
+    expect(newAppViewSource).toContain("setCatalogJsonVariable");
+    expect(newAppViewSource).toContain("catalogVariablePath");
     expect(newAppViewSource).toContain("catalogInputError");
     expect(newAppViewSource).toContain(
       "setInstallConfigId(entry.installConfigId)",
@@ -234,6 +238,12 @@ describe("/new flow guidance", () => {
     expect(en["new.catalogInput.subtitle"]).toContain("minimum fields");
     expect(ja).not.toHaveProperty("new.catalogInput.body");
     expect(ja["new.catalogInput.subtitle"]).toContain("最小限");
+  });
+
+  test("does not hard-code Takos repo behavior into the add flow", () => {
+    expect(newAppViewSource).not.toContain("isTakosOpenTofuCapsule");
+    expect(newAppViewSource).not.toContain("supportsCloudflareScopeInput");
+    expect(newAppViewSource).not.toContain("repo.endsWith(\"/takos\")");
   });
 
   test("selected catalog services can use safe cloud-account hints instead of duplicate setup input", () => {
@@ -318,6 +328,19 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('stepSource() !== "idle"');
     expect(en["new.progress.details"]).toBe("Detailed progress");
     expect(ja["new.progress.details"]).toBe("詳しい進行状況");
+  });
+
+  test("keeps install progress copy app-oriented instead of OpenTofu-oriented", () => {
+    const forbiddenRawTerms =
+      /\b(Terraform|OpenTofu|tofu|init|plan|apply|module|provider|variable)\b/iu;
+    const progressEntries = [
+      ...Object.entries(en),
+      ...Object.entries(ja),
+    ].filter(([key]) => /^new\.(install|progress|step)\./u.test(key));
+    expect(progressEntries.length).toBeGreaterThan(0);
+    for (const [, value] of progressEntries) {
+      expect(value).not.toMatch(forbiddenRawTerms);
+    }
   });
 
   test("uses neutral compatibility summaries for unknown backend diagnostics", () => {

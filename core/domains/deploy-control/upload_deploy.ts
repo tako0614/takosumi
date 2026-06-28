@@ -1,18 +1,17 @@
 /**
- * Upload deploy orchestration (`POST /api/deploy`).
+ * Internal upload deploy compatibility orchestration (`POST /internal/v1/deploy`).
  *
- * Composes the no-git deploy pipeline the way the dashboard cannot: it takes a
- * previously-ingested upload or prepared-artifact {@link SourceSnapshot},
- * resolves or creates the target Installation `@space/name` (synthesizing a
- * default InstallConfig when the Installation is new), and returns the plan Run
- * pinned to that snapshot. Callers apply that reviewed plan through the normal
- * apply route.
+ * Takes a previously-ingested upload or prepared-artifact {@link SourceSnapshot},
+ * resolves an existing source-less legacy Capsule `@workspace/name`, and
+ * returns the plan Run pinned to that snapshot. Callers apply that reviewed
+ * plan through the normal apply route.
  * Everything heavy (Capsule Gate / generated root / plan) runs in the existing
- * controller pipeline; this only wires the create-or-update + plan steps.
+ * controller pipeline; this only wires the update + plan steps.
  *
- * This is `takosumi deploy`'s server side. It never touches credential material:
- * providers bind through Connections inside the runner, per the per-phase mint
- * policy.
+ * Public local upload deploy is retired. This seam is kept for operator
+ * compatibility with existing source-less Capsules and never creates new public
+ * Capsules. It never touches credential material: providers bind through
+ * Connections inside the runner, per the per-phase mint policy.
  */
 
 import type { DeployResponse } from "takosumi-contract/deploy";
@@ -28,7 +27,6 @@ import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { CapsulesService } from "../capsules/mod.ts";
-import { defaultCapsuleOutputAllowlist } from "../capsules/official_seed.ts";
 import { validateInstallationProviderEnvBindings } from "../connections/mod.ts";
 
 const DEFAULT_ENVIRONMENT = "production";
@@ -76,12 +74,11 @@ export async function deployUpload(
     );
   }
 
-  // 2. Resolve or create the Installation @space/name.
+  // 2. Resolve the existing source-less legacy Capsule @workspace/name.
   const existingForSpace = await deps.installations.listCapsules(workspaceId);
   let installation = existingForSpace.find(
     (row) => row.name === request.name && row.environment === environment,
   );
-  let created = false;
   let installConfigId: string;
   let effectiveRunnerProfileId: string | undefined = request.runnerProfileId;
   if (installation) {
@@ -105,80 +102,56 @@ export async function deployUpload(
     );
     effectiveRunnerProfileId = refreshed.runnerId;
   } else {
-    const config = buildDefaultInstallConfig({
-      id: newId("icfg"),
-      spaceId: workspaceId,
-      name: request.name,
-      vars: request.vars,
-      outputAllowlist: request.outputAllowlist,
-      runnerProfileId: request.runnerProfileId,
-      modulePath,
-      now,
-    });
-    await deps.installations.putInstallConfig(config);
-    installation = await deps.installations.createCapsule({
-      workspaceId,
-      name: request.name,
-      environment,
-      installConfigId: config.id,
-    });
-    installConfigId = config.id;
-    created = true;
-    effectiveRunnerProfileId = config.runnerId;
-  }
-  try {
-    if (providerEnvBindings !== undefined) {
-      await putProviderConnections({
-        deps,
-        installation,
-        connections: providerEnvBindings,
-        id: newId("ipcset"),
-        now,
-      });
-    }
-
-    // 3. Plan Run pinned to the upload snapshot. The controller's installation
-    //    plan path is upload-aware (synthesizes an in-memory Source from the
-    //    snapshot) and gates the Capsule before the run.
-    const shouldDeferCompatibilityReport =
-      effectiveRunnerProfileId === undefined ||
-      deps.controller.usesExternalRunQueue();
-    const planResponse = await deps.controller.createInstallationPlan(
-      installation.id,
-      context,
-      {
-        sourceSnapshotId: snapshot.id,
-        ...(shouldDeferCompatibilityReport
-          ? { deferCompatibilityReport: true as const }
-          : {}),
-        ...(effectiveRunnerProfileId
-          ? { runnerProfileId: effectiveRunnerProfileId }
-          : {}),
-      },
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `upload deploy can only update an existing source-less legacy Capsule @${workspaceId}/${request.name}; create a Git URL Source/Capsule and run plan/apply instead`,
     );
-    const run = await deps.controller.getRun(planResponse.planRun.id);
-    const status = deployStatus(run);
-    installation = await reconcileUploadInstallationStatus({
+  }
+  if (providerEnvBindings !== undefined) {
+    await putProviderConnections({
       deps,
       installation,
-      created,
-      status,
+      connections: providerEnvBindings,
+      id: newId("ipcset"),
+      now,
     });
-
-    return {
-      installation: toPublicInstallation(installation),
-      installConfigId,
-      run,
-      planRun: run,
-      status,
-      created,
-    };
-  } catch (error) {
-    if (created) {
-      await markCreatedUploadInstallationError(deps, installation);
-    }
-    throw error;
   }
+
+  // 3. Plan Run pinned to the upload snapshot. The controller's installation
+  //    plan path is upload-aware (synthesizes an in-memory Source from the
+  //    snapshot) and gates the Capsule before the run.
+  const shouldDeferCompatibilityReport =
+    effectiveRunnerProfileId === undefined ||
+    deps.controller.usesExternalRunQueue();
+  const planResponse = await deps.controller.createInstallationPlan(
+    installation.id,
+    context,
+    {
+      sourceSnapshotId: snapshot.id,
+      ...(shouldDeferCompatibilityReport
+        ? { deferCompatibilityReport: true as const }
+        : {}),
+      ...(effectiveRunnerProfileId
+        ? { runnerProfileId: effectiveRunnerProfileId }
+        : {}),
+    },
+  );
+  const run = await deps.controller.getRun(planResponse.planRun.id);
+  const status = deployStatus(run);
+  installation = await reconcileUploadInstallationStatus({
+    deps,
+    installation,
+    status,
+  });
+
+  return {
+    installation: toPublicInstallation(installation),
+    installConfigId,
+    run,
+    planRun: run,
+    status,
+    created: false,
+  };
 }
 
 async function putProviderConnections(input: {
@@ -213,28 +186,11 @@ function deployStatus(
 async function reconcileUploadInstallationStatus(input: {
   readonly deps: DeployUploadDependencies;
   readonly installation: Installation;
-  readonly created: boolean;
   readonly status: NonNullable<DeployResponse["status"]>;
 }): Promise<Installation> {
-  if (input.created && input.status === "failed") {
-    return await input.deps.installations.patchCapsuleStatus(
-      input.installation.id,
-      "error",
-    );
-  }
+  void input.deps;
+  void input.status;
   return input.installation;
-}
-
-async function markCreatedUploadInstallationError(
-  deps: DeployUploadDependencies,
-  installation: Installation,
-): Promise<void> {
-  try {
-    await deps.installations.patchCapsuleStatus(installation.id, "error");
-  } catch {
-    // Preserve the original deploy failure. A later status probe can still see
-    // the failed run or the pending orphan that triggered this best-effort path.
-  }
 }
 
 async function refreshInstallConfigVars(
@@ -262,50 +218,7 @@ function refreshedOutputAllowlist(
   outputAllowlist: InternalDeployRequest["outputAllowlist"] | undefined,
 ): InstallConfig["outputAllowlist"] {
   if (outputAllowlist !== undefined) return outputAllowlist;
-  if (
-    existing.sourceKind === "generic_capsule" &&
-    Object.keys(existing.outputAllowlist).length === 0
-  ) {
-    return defaultCapsuleOutputAllowlist();
-  }
   return existing.outputAllowlist;
-}
-
-function buildDefaultInstallConfig(input: {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly name: string;
-  readonly vars: Readonly<Record<string, JsonValue>> | undefined;
-  readonly outputAllowlist:
-    InternalDeployRequest["outputAllowlist"] | undefined;
-  readonly runnerProfileId: string | undefined;
-  readonly modulePath: string | undefined;
-  readonly now: () => Date;
-}): InstallConfig {
-  const nowIso = input.now().toISOString();
-  return {
-    id: input.id,
-    spaceId: input.spaceId,
-    name: `${input.name}-upload`,
-    // Generic OpenTofu Capsule (no template binding): the upload archive is the
-    // child module copied under the Takosumi generated root.
-    installType: "opentofu_module",
-    trustLevel: "space",
-    normalization: {
-      allowBackendRewrite: true,
-      allowProviderLift: true,
-      allowAliasInjection: true,
-    },
-    ...(input.runnerProfileId !== undefined
-      ? { runnerId: input.runnerProfileId }
-      : {}),
-    ...(input.modulePath !== undefined ? { modulePath: input.modulePath } : {}),
-    variableMapping: { ...(input.vars ?? {}) },
-    outputAllowlist: input.outputAllowlist ?? defaultCapsuleOutputAllowlist(),
-    policy: {},
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  };
 }
 
 function toPublicInstallation(installation: Installation): PublicInstallation {

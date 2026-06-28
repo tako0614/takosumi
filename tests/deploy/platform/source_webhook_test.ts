@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/registry.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/mod.ts";
 import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
@@ -930,6 +931,7 @@ test("cloud extension route injects verified session context and strips raw cred
     authenticated: string | null;
     subject: string | null;
     spaceId: string | null;
+    billingWorkspaceId: string | null;
   }[] = [];
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/models", {
@@ -950,6 +952,9 @@ test("cloud extension route injects verified session context and strips raw cred
             ),
             subject: request.headers.get("x-takosumi-cloud-subject"),
             spaceId: request.headers.get("x-takosumi-cloud-space-id"),
+            billingWorkspaceId: request.headers.get(
+              "x-takosumi-cloud-billing-workspace-id",
+            ),
           });
           return Response.json({ object: "list", data: [] });
         },
@@ -971,8 +976,43 @@ test("cloud extension route injects verified session context and strips raw cred
       authenticated: "1",
       subject: "tsub_cloud",
       spaceId: "space_cloud",
+      billingWorkspaceId: "space_cloud",
     },
   ]);
+});
+
+test("cloud extension route rejects spoofed billing Workspace context", async () => {
+  let forwarded = false;
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "x-takosumi-cloud-billing-workspace-id": "space_attacker",
+      },
+    }),
+    {
+      TAKOSUMI_CLOUD_AI: {
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ ok: true });
+        },
+      },
+    } as never,
+    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+    }),
+  );
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_billing_context_mismatch",
+    reason: "usage_workspace_id_mismatch",
+  });
+  expect(forwarded).toBe(false);
 });
 
 test("cloud extension requiredScopes gate token auth", async () => {
@@ -1274,13 +1314,7 @@ test("cloud extension fallback usage records successful extension calls without 
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      {
-        method: "PUT",
-        headers: {
-          "x-takosumi-cloud-billing-workspace-id": "space_cloud",
-          "x-takosumi-cloud-billing-installation-id": "inst_cloud",
-        },
-      },
+      { method: "PUT" },
     ),
     {
       TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
@@ -1314,6 +1348,8 @@ test("cloud extension fallback usage records successful extension calls without 
       authenticated: true,
       authKind: "session",
       subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
     }),
     async (spaceId, input) => {
       recorded.push({ spaceId, input });
@@ -1341,17 +1377,62 @@ test("cloud extension fallback usage records successful extension calls without 
   ]);
 });
 
+test("cloud extension fallback usage requires billing Workspace context for billable writes", async () => {
+  let forwarded = false;
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 201 });
+        },
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "deploy" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+    }),
+    async () => {
+      throw new Error("must not record without workspace context");
+    },
+  );
+
+  expect(response.status).toBe(402);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_billing_context_required",
+    reason: "usage_workspace_id_missing",
+  });
+  expect(forwarded).toBe(false);
+});
+
 test("cloud extension usage spend failure fails closed", async () => {
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
-      {
-        method: "PUT",
-        headers: {
-          "x-takosumi-cloud-billing-workspace-id": "space_cloud",
-          "x-takosumi-cloud-billing-installation-id": "inst_cloud",
-        },
-      },
+      { method: "PUT" },
     ),
     {
       TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
@@ -1380,6 +1461,8 @@ test("cloud extension usage spend failure fails closed", async () => {
       authenticated: true,
       authKind: "session",
       subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
     }),
     async () => {
       throw new Error("insufficient credits");
@@ -1390,6 +1473,62 @@ test("cloud extension usage spend failure fails closed", async () => {
   expect(await response.json()).toEqual({
     error: "cloud_extension_usage_metering_failed",
     reason: "usage_record_failed",
+  });
+});
+
+test("cloud extension usage spend failure maps insufficient balance to payment required", async () => {
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => Response.json({ success: true }, { status: 201 }),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "deploy" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async () => {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: "space_cloud",
+          usdMicros: 1_000,
+        },
+      );
+    },
+  );
+
+  expect(response.status).toBe(402);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_insufficient_credits",
+    reason: "insufficient_credits",
   });
 });
 
@@ -1410,8 +1549,7 @@ test("cloud extension usage metering fails closed for unknown meters", async () 
                 "x-takosumi-cloud-usage-space-id": "space_cloud",
                 "x-takosumi-cloud-usage-period-start":
                   "2026-06-28T10:00:00.000Z",
-                "x-takosumi-cloud-usage-period-end":
-                  "2026-06-28T10:00:01.000Z",
+                "x-takosumi-cloud-usage-period-end": "2026-06-28T10:00:01.000Z",
                 "x-takosumi-cloud-usage-meters": JSON.stringify([
                   {
                     meterId: "unknown:meter",

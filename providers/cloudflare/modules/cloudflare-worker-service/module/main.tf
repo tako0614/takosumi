@@ -18,7 +18,7 @@ variable "accountId" {
 
 variable "artifactPath" {
   type        = string
-  description = "Path to the bundled Worker module JS produced by the build phase (copied to /work/artifact by the runner)."
+  description = "Legacy first-party path to a bundled Worker module JS file."
   default     = "/work/artifact"
 }
 

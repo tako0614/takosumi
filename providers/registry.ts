@@ -43,11 +43,7 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       mode: "egress-allowlist",
       allowedHosts: [OPENTOFU, "api.cloudflare.com"],
     },
-    capsuleModuleIds: [
-      "cloudflare-r2-storage",
-      "cloudflare-static-site",
-      "cloudflare-worker-service",
-    ],
+    capsuleModuleIds: ["cloudflare-r2-storage", "cloudflare-static-site"],
     runnerProfileId: "cloudflare-default",
   },
   {

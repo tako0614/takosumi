@@ -1372,10 +1372,13 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
     env,
   );
 
-  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.status, 410, await response.clone().text());
+  assert.match(
+    await response.clone().text(),
+    /Public upload deploy is retired/,
+  );
   const installation = await store.findAppCapsule("inst_upload");
-  assert.equal(installation?.mode, "shared-cell");
-  assert.equal(installation?.runtimeBindingId, "rtb_inst_upload_shared_cell");
+  assert.equal(installation, undefined);
 });
 
 test("platform-readiness 'open' refuses an invalid issuer URL", async () => {

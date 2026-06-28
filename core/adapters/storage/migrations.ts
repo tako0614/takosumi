@@ -6,6 +6,11 @@ type StorageDomain =
   | "registry"
   | "audit"
   | "service-endpoints"
+  // `service-graph` and `custom-domain` tag retired product surfaces, but they are NOT
+  // dead union members: immutable, already-applied migration-ledger rows still carry them
+  // (e.g. `custom_domain_reservations` create v16, and the `service_graph.records.rename_aside`
+  // v55 retirement migration that renames tables aside to `*_retired` with a `down`). Migration
+  // history is frozen and append-only, so these tags must stay even though no new code emits them.
   | "service-graph"
   | "custom-domain"
   | "internal-auth";
@@ -1601,7 +1606,7 @@ drop table if exists takosumi_connections;`,
       version: 32,
       domain: "deploy",
       description:
-        "Create the Source / SourceSnapshot / SourceSyncRun ledger (Core Specification §6). source_json carries the public Source plus internal hook-secret hash / lastSeenCommit / autoSync; the hook-secret plaintext and any git credential value never land in the database.",
+        "Create the Source / SourceSnapshot / SourceSyncRun ledger (Core Specification §6). source_json carries the public Source plus private hook-secret hash / lastSeenCommit; the hook-secret plaintext and any git credential value never land in the database.",
       sql: `create table if not exists takosumi_sources (
   id          text   primary key,
   space_id    text   not null,
@@ -2386,7 +2391,7 @@ drop table if exists takosumi_provider_templates_entries;`,
       version: 46,
       domain: "deploy",
       description:
-        "Promote the single Run ledger's status / lease coordination fields to indexed columns: add status (mirroring the D1 ledger, backfilled from run_json), plus the lease_token / heartbeat_at columns and the (kind, status) index used by run-lease claim/heartbeat sweeps. Also create the takosumi_artifacts and takosumi_provider_templates ledgers that the deploy-control store has written but which no prior Postgres migration ever materialized (the D1 store and Drizzle schema already define them), and relax the source_id columns on takosumi_source_snapshots / takosumi_opentofu_installations to nullable so upload-origin (takosumi deploy) snapshots and installations — which have no Source — match the Drizzle schema. Additive and idempotent: each column add uses `if not exists`, the backfill reads run_json before status is enforced NOT NULL, the table / index creates are `if not exists`, and `drop not null` is a no-op when already nullable.",
+        "Promote the single Run ledger's status / lease coordination fields to indexed columns: add status (mirroring the D1 ledger, backfilled from run_json), plus the lease_token / heartbeat_at columns and the (kind, status) index used by run-lease claim/heartbeat sweeps. Also create the takosumi_artifacts and takosumi_provider_templates ledgers that the deploy-control store has written but which no prior Postgres migration ever materialized (the D1 store and Drizzle schema already define them), and relax the source_id columns on takosumi_source_snapshots / takosumi_opentofu_installations to nullable so legacy upload-origin snapshots and installations — which have no Source — match the Drizzle schema. Additive and idempotent: each column add uses `if not exists`, the backfill reads run_json before status is enforced NOT NULL, the table / index creates are `if not exists`, and `drop not null` is a no-op when already nullable.",
       sql: `alter table takosumi_runs add column if not exists status text;
 alter table takosumi_runs add column if not exists lease_token text;
 alter table takosumi_runs add column if not exists heartbeat_at bigint;
