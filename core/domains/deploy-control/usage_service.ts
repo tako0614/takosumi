@@ -67,6 +67,12 @@ export interface RecordMeteredUsageInput {
   /** @deprecated Use usdMicros. Legacy credits are interpreted as USD amounts. */
   readonly credits?: number;
   readonly source: Exclude<UsageEventSource, "runner">;
+  /**
+   * Cloud-only metering paths set this when a successful resource operation must
+   * atomically debit the Workspace USD balance. OSS/operator showback callers
+   * leave it unset so usage stays observational.
+   */
+  readonly spendRequired?: boolean;
   readonly idempotencyKey: string;
   readonly createdAt?: string;
 }
@@ -188,15 +194,39 @@ export class UsageReportingService {
         "usage event source must be resource_meter or manual_adjustment",
       );
     }
-    const usageEvent = await this.#store.putUsageEvent(
-      normalizeMeteredUsageEvent(
-        spaceId,
-        input,
-        () => this.#newId("usage"),
-        () => new Date(this.#now()).toISOString(),
-      ),
+    const usageEvent = normalizeMeteredUsageEvent(
+      spaceId,
+      input,
+      () => this.#newId("usage"),
+      () => new Date(this.#now()).toISOString(),
     );
-    return { usageEvent };
+    if (input.spendRequired === true) {
+      const usdMicros = usageEventUsdMicros(usageEvent);
+      if (usdMicros > 0) {
+        const result = await this.#store.putUsageEventAndSpendCredits(
+          usageEvent,
+          {
+            usdMicros,
+            credits: usageEvent.credits,
+            updatedAt: new Date(this.#now()).toISOString(),
+          },
+        );
+        if (!result) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "metered usage spend failed: insufficient USD balance",
+            {
+              reason: "insufficient_credits",
+              workspaceId: spaceId,
+              usdMicros,
+            },
+          );
+        }
+        return { usageEvent: result.usageEvent };
+      }
+    }
+    const recorded = await this.#store.putUsageEvent(usageEvent);
+    return { usageEvent: recorded };
   }
 
   async #recordBillingReconciliationUsage(

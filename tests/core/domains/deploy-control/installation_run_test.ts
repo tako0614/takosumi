@@ -3000,6 +3000,81 @@ test("resource meter usage reconciliation is idempotent and rejects runner sourc
   ).rejects.toThrow("usage event source must be resource_meter");
 });
 
+test("metered usage can atomically spend Workspace USD balance when required", async () => {
+  const { store, controller } = await seededController();
+  await store.addCredits("space_test", {
+    usdMicros: 1_000_000,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  const first = await controller.recordMeteredUsage("space_test", {
+    installationId: "inst_fixture",
+    meterId: "cloudflare:workers_script:deploy",
+    resourceFamily: "cloudflare.workers_script",
+    resourceId: "script:api",
+    operation: "deploy",
+    kind: "gateway_compute",
+    quantity: 1,
+    usdMicros: 250_000,
+    source: "resource_meter",
+    spendRequired: true,
+    idempotencyKey: "cloud-extension:/compat:space_test:deploy:1",
+    createdAt: "2026-06-07T00:01:00.000Z",
+  });
+  const retry = await controller.recordMeteredUsage("space_test", {
+    installationId: "inst_fixture",
+    meterId: "cloudflare:workers_script:deploy",
+    resourceFamily: "cloudflare.workers_script",
+    resourceId: "script:api",
+    operation: "deploy",
+    kind: "gateway_compute",
+    quantity: 1,
+    usdMicros: 250_000,
+    source: "resource_meter",
+    spendRequired: true,
+    idempotencyKey: "cloud-extension:/compat:space_test:deploy:1",
+    createdAt: "2026-06-07T00:01:01.000Z",
+  });
+
+  expect(retry.usageEvent.id).toBe(first.usageEvent.id);
+  expect(await store.listUsageEvents("space_test")).toHaveLength(1);
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 750_000,
+  });
+});
+
+test("metered usage spend fails closed without inserting usage on short balance", async () => {
+  const { store, controller } = await seededController();
+  await store.addCredits("space_test", {
+    usdMicros: 100_000,
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.recordMeteredUsage("space_test", {
+      installationId: "inst_fixture",
+      meterId: "cloudflare:workers_script:deploy",
+      resourceFamily: "cloudflare.workers_script",
+      resourceId: "script:api",
+      operation: "deploy",
+      kind: "gateway_compute",
+      quantity: 1,
+      usdMicros: 250_000,
+      source: "resource_meter",
+      spendRequired: true,
+      idempotencyKey: "cloud-extension:/compat:space_test:deploy:short",
+      createdAt: "2026-06-07T00:01:00.000Z",
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: expect.objectContaining({ reason: "insufficient_credits" }),
+  });
+  expect(await store.listUsageEvents("space_test")).toHaveLength(0);
+  expect(await store.getCreditBalance("space_test")).toMatchObject({
+    availableUsdMicros: 100_000,
+  });
+});
+
 test("invoice usage reconciliation records billing adjustment idempotently", async () => {
   const { store, controller } = await seededController();
   await store.putUsageEvent({
