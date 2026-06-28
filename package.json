@@ -30,8 +30,6 @@
     "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
-    "smoke:cloud-extensions": "bun scripts/smoke-cloud-extensions.ts",
-    "cleanup:cloud-extension-test-resources": "bun scripts/cleanup-cloud-extension-test-resources.ts",
     "smoke:platform-control-plane": "bun scripts/smoke-platform-control-plane.ts",
     "probe:accounts-rate-limit": "bun scripts/probe-accounts-rate-limit.ts",
     "release-activation:evidence": "bun scripts/validate-release-activation-evidence.ts",

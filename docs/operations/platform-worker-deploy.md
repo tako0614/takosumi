@@ -353,7 +353,7 @@ ledger を読み、`resource_meter` / `gateway_compute` または
 `--require-cloudflare-compat-usage-ledger` で必須化する。
 
 ```bash
-cd takosumi
+cd takosumi-cloud
 
 # mounted Cloud-only extension smoke: deploy 後の reachability/auth/AI/compat-list 確認
 bun run smoke:cloud-extensions -- \
