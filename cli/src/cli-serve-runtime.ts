@@ -15,7 +15,7 @@ import {
   type ServiceGraphMaterialResolverHttpOptions,
   exportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
-import type { CapsuleExportArchiveDataFile } from "../../service/src/export-archive.ts";
+import type { CapsuleExportArchiveDataFile } from "../../accounts/service/src/export-archive.ts";
 import {
   optionalEnvString,
   optionalIntegerOption,

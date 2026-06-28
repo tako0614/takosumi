@@ -498,7 +498,7 @@ interface SchemaMigrationRow {
 //
 // The table name + column shape MUST match the runner's
 // `takosumi_accounts_schema_migrations` ledger (see
-// `accounts/cli/src/cli-accounts-db.ts`'s `D1_SCHEMA_MIGRATIONS_TABLE_SQL`).
+// `cli/src/cli-accounts-db.ts`'s `D1_SCHEMA_MIGRATIONS_TABLE_SQL`).
 // The runner records `(version, name, applied_at)` rows; this Worker reads
 // only `version` from that same table so a `migrate-d1` run is visible to
 // the version gate. Keeping the names in lockstep is what makes the

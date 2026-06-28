@@ -9,7 +9,7 @@ import {
   InMemoryAccountsStore,
   InMemorySharedCellWarmPool,
 } from "@takosjp/takosumi-accounts-service";
-import { createMetadataOnlyCapsuleExportWorker } from "../../service/src/export-archive.ts";
+import { createMetadataOnlyCapsuleExportWorker } from "../../accounts/service/src/export-archive.ts";
 import {
   accountsLaunchTokensCleanupHelpText,
   accountsMigrateD1HelpText,

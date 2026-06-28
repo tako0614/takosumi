@@ -1,14 +1,15 @@
 # Phase 1 — Takosumi integration test bed on top of Phase 0 ingress.
 #
-# Scope: Takosumi 製品群のみ (service + Accounts + cloud worker +
-# dashboard SPA + takosumi-worker)。 Takos product (takos-app /
+# Scope: Takosumi 製品群のみ (cloud Bun service + the single composed platform
+# worker (deploy/platform/worker.ts) + dashboard SPA)。 Takos product (takos-app /
 # takos-git) と yurucommu の direct service は外してある。 各 product
 # の動作確認は各 repo 内の test に委ねる。
 #
 # Profiles:
-#   postgres   Takosumi service (Bun + Postgres + MinIO) + Accounts
-#              + cloud worker + service worker (Miniflare mirror)
-#   workers    Takosumi service (workerd / Miniflare + D1 + R2) + 同上
+#   postgres   Takosumi cloud (Bun + Postgres + MinIO) serving app.takosumi.test
+#              + the composed platform worker (Miniflare mirror)
+#   workers    The composed platform worker (workerd / Miniflare + D1 + R2 + DO
+#              + queue) as the primary Worker-backed code path
 #
 # Source mount + Bun command pattern を採用 (image build 不要)。 production
 # image でないのは「test bed」 のために意図的。 ファイル変更が即反映される。
@@ -124,7 +125,7 @@ services:
         set -e
         DATABASE_URL="$$TAKOSUMI_ACCOUNTS_DATABASE_URL" \
         bun core/scripts/db-migrate.ts --env=production
-        bun accounts/cli/src/main.ts accounts migrate \
+        bun cli/src/main.ts accounts migrate \
           --database-url "$$TAKOSUMI_ACCOUNTS_DATABASE_URL"
         bun deploy/local-substrate/scripts/seed-dev-session.ts
     env_file:
@@ -260,12 +261,14 @@ services:
         aliases:
           - cloud
 
-  # ---- Takosumi service (Cloudflare Worker profile) ----
-  # Builds and runs takosumi/deploy/cloudflare's Worker-first scaffold under
-  # Miniflare with D1/R2 bindings. The postgres profile also starts a mirror
-  # at service-worker.takosumi.test so default smoke can verify the Worker code
-  # path without replacing the Bun+Postgres service used by the Takos product
-  # stack.
+  # ---- Takosumi platform worker (Cloudflare Worker profile) ----
+  # Builds and runs the SINGLE composed platform worker (deploy/platform/worker.ts
+  # — the same entry the operator deploys at app.takosumi.com) under Miniflare
+  # with D1/R2/DO/queue bindings. This ends the old dev/prod divergence where the
+  # substrate built two separate control-plane-only worker bundles. The postgres profile
+  # also starts it as a mirror at service-worker.takosumi.test so default smoke can
+  # verify the Worker code path without replacing the Bun+Postgres `cloud` service
+  # used by the Takos product stack.
   takosumi-service-worker-build:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
@@ -275,13 +278,13 @@ services:
       - sh
       - -c
       - |
-        mkdir -p deploy/cloudflare/.wrangler/dist
+        mkdir -p deploy/platform/.wrangler/dist
         bun build \
           --target browser \
           --format esm \
           --external cloudflare:workers \
-          worker/src/index.ts \
-          --outfile deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs
+          deploy/platform/worker.ts \
+          --outfile deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs
     volumes:
       - ../../../takosumi:/work
 
@@ -289,11 +292,13 @@ services:
     profiles: ["postgres", "workers"]
     build:
       context: .
-      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
+      dockerfile: wrappers/Dockerfile.miniflare
     restart: unless-stopped
     depends_on:
       takosumi-service-worker-build:
         condition: service_completed_successfully
+      oauth-mock:
+        condition: service_started
     working_dir: /app
     command: ["node", "/app/runner.mjs"]
     ports:
@@ -301,8 +306,8 @@ services:
     env_file:
       - ./env/takosumi-service-worker.env
     volumes:
-      - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-service-worker-runner.mjs:/app/runner.mjs:ro
+      - ../../../takosumi/deploy/platform/.wrangler/dist:/worker:ro
+      - ./wrappers/takosumi-platform-worker-runner.mjs:/app/runner.mjs:ro
       - takosumi-service-worker-data:/data
     healthcheck:
       test:
@@ -460,54 +465,6 @@ services:
     volumes:
       - ../../../takosumi:/work
 
-  # ---- takosumi Worker (mirrors app.takosumi.com on Cloudflare Workers) ----
-  takosumi-worker-build:
-    profiles: ["postgres", "workers"]
-    image: oven/bun:1
-    restart: "no"
-    working_dir: /work
-    command:
-      - sh
-      - -c
-      - |
-        mkdir -p deploy/cloudflare/.wrangler/dist
-        bun build \
-          --target browser \
-          --format esm \
-          --external cloudflare:workers \
-          worker/src/index.ts \
-          --outfile deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs
-    volumes:
-      - ../../../takosumi:/work
-
-  takosumi-worker:
-    profiles: ["postgres", "workers"]
-    build:
-      context: .
-      dockerfile: wrappers/Dockerfile.takosumi-accounts-worker
-    restart: unless-stopped
-    depends_on:
-      takosumi-worker-build:
-        condition: service_completed_successfully
-      takosumi-service-worker:
-        condition: service_healthy
-      oauth-mock:
-        condition: service_started
-    working_dir: /app
-    command: ["node", "/app/runner.mjs"]
-    # Accounts Worker env vars live in env/takosumi-accounts-worker.env so the
-    # compose service block stays readable. Inline-only deltas would go here.
-    env_file:
-      - ./env/takosumi-accounts-worker.env
-    volumes:
-      - ../../../takosumi/deploy/cloudflare/.wrangler/dist:/worker:ro
-      - ./wrappers/takosumi-accounts-worker-runner.mjs:/app/runner.mjs:ro
-      - takosumi-worker-data:/data
-    networks:
-      takos-local-internal:
-        aliases:
-          - takosumi-worker
-
   # ---- Phase 3 route registrar ----
   # Maintains the dynamic route partition in Caddy admin. The v1 public
   # deploy control surface does not expose deployment route listings, so dynamic
@@ -556,7 +513,6 @@ volumes:
   substrate-postgres-data:
   substrate-redis-data:
   substrate-minio-data:
-  takosumi-worker-data:
   takosumi-service-worker-data:
 
 networks:

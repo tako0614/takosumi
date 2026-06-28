@@ -197,8 +197,8 @@ test("workspace packages stay private source modules", async () => {
     "package.json",
     "accounts/contract/package.json",
     "accounts/service/package.json",
-    "accounts/cli/package.json",
     "accounts/platform-services/package.json",
+    "cli/package.json",
     "deploy/node-postgres/package.json",
   ]) {
     const manifest = JSON.parse(await readText(new URL(path, ROOT))) as {

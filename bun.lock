@@ -23,15 +23,6 @@
         "wrangler": "^4.101.0",
       },
     },
-    "accounts/cli": {
-      "name": "@takosjp/takosumi-accounts-cli",
-      "version": "0.0.1",
-      "dependencies": {
-        "@takosjp/takosumi-accounts-contract": "workspace:*",
-        "@takosjp/takosumi-accounts-service": "workspace:*",
-        "pg": "^8.11.0",
-      },
-    },
     "accounts/contract": {
       "name": "@takosjp/takosumi-accounts-contract",
       "version": "0.0.1",
@@ -48,6 +39,15 @@
       "version": "0.0.1",
       "dependencies": {
         "@takosjp/takosumi-accounts-contract": "workspace:*",
+      },
+    },
+    "cli": {
+      "name": "@takosjp/takosumi-cli",
+      "version": "0.0.1",
+      "dependencies": {
+        "@takosjp/takosumi-accounts-contract": "workspace:*",
+        "@takosjp/takosumi-accounts-service": "workspace:*",
+        "pg": "^8.11.0",
       },
     },
     "deploy/node-postgres": {
@@ -222,13 +222,13 @@
 
     "@speed-highlight/core": ["@speed-highlight/core@1.2.15", "", {}, "sha512-BMq1K3DsElxDWawkX6eLg9+CKJrTVGCBAWVuHXVUV2u0s2711qiChLSId6ikYPfxhdYocLNt3wWwSvDiTvFabw=="],
 
-    "@takosjp/takosumi-accounts-cli": ["@takosjp/takosumi-accounts-cli@workspace:accounts/cli"],
-
     "@takosjp/takosumi-accounts-contract": ["@takosjp/takosumi-accounts-contract@workspace:accounts/contract"],
 
     "@takosjp/takosumi-accounts-node-postgres": ["@takosjp/takosumi-accounts-node-postgres@workspace:deploy/node-postgres"],
 
     "@takosjp/takosumi-accounts-service": ["@takosjp/takosumi-accounts-service@workspace:accounts/service"],
+
+    "@takosjp/takosumi-cli": ["@takosjp/takosumi-cli@workspace:cli"],
 
     "@takosjp/takosumi-platform-services": ["@takosjp/takosumi-platform-services@workspace:accounts/platform-services"],
 

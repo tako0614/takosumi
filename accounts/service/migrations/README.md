@@ -11,7 +11,7 @@ applied_at)`.
   file. The runner refuses to re-apply if the file is later edited.
 - **Concurrency guard**: the runner takes a Postgres advisory lock keyed by
   `hashtext('takosumi_accounts_migrations')` before reading the ledger.
-- **Runner source**: `takosumi/accounts/cli/src/cli-accounts-db.ts`
+- **Runner source**: `takosumi/cli/src/cli-accounts-db.ts`
   (`loadAccountsMigrations`, `applyAccountsMigrations`).
 
 ## Naming convention

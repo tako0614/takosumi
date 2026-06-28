@@ -108,7 +108,6 @@ assert_mocks_not_host_published() {
 		jaeger
 		otel-collector
 		minio
-		takosumi-worker
 		takosumi-service-worker
 	)
 	for svc in "${services[@]}"; do

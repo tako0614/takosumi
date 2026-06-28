@@ -35,7 +35,7 @@ cd takosumi/deploy/local-substrate
 sha256sum docs/launch-readiness/p0-local-evidence.md
 # → <hash>  docs/launch-readiness/p0-local-evidence.md
 # Then update TAKOSUMI_ACCOUNTS_PLATFORM_READINESS_DIGEST and the
-# local hardening *_EVIDENCE_DIGEST values in env/takosumi-accounts-worker.env
+# local hardening *_EVIDENCE_DIGEST values in env/takosumi-service-worker.env
 # with `sha256:<hash>`.
 ```
 
