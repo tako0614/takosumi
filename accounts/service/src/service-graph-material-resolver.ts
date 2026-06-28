@@ -4,7 +4,7 @@ import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   normalizeIssuer,
-  takosumiAccountsInstallationBillingUsageReportsPath,
+  takosumiAccountsCapsuleBillingUsageReportsPath,
 } from "@takosjp/takosumi-accounts-contract";
 import { sha256Text } from "./encoding.ts";
 import { isRecord } from "./http-helpers.ts";
@@ -34,6 +34,7 @@ export interface ServiceGraphMaterialResolveContext {
   /** Compatibility alias while the accounts ledger still stores installation ids. */
   readonly installationId?: string;
   readonly workspaceId?: string;
+  /** Compatibility alias for the pre-rename ledger workspace key. */
   readonly spaceId?: string;
   readonly appId?: string;
   readonly componentName?: string;
@@ -81,7 +82,7 @@ export interface TakosumiServiceGraphMaterialResolverOptions {
         context: ServiceGraphMaterialResolveContext,
       ) => string | undefined | Promise<string | undefined>);
   readonly now?: () => number;
-  readonly allowDeployControlInstallations?: boolean;
+  readonly allowDeployControlCapsules?: boolean;
   readonly billingPortalUrl?:
     | string
     | ((
@@ -154,12 +155,12 @@ async function resolveOidcPlatformService(
     readonly context: ServiceGraphMaterialResolveContext;
   },
 ): Promise<ServiceGraphMaterial> {
-  if (input.allowDeployControlInstallations) {
-    await ensureDeployControlInstallationProjection(input);
+  if (input.allowDeployControlCapsules) {
+    await ensureDeployControlCapsuleProjection(input);
   }
   const issuerUrl = normalizeIssuer(input.issuer);
   const capsuleId = contextCapsuleId(input.context);
-  const existing = await input.store.findOidcClientForInstallation(
+  const existing = await input.store.findOidcClientForCapsule(
     capsuleId,
   );
   const client = existing
@@ -174,7 +175,7 @@ async function resolveOidcPlatformService(
       });
   // This resolver only ever materializes public (PKCE, `none`) clients. A
   // confidential client requires one-time plaintext-secret delivery to the
-  // caller, which the per-Installation create/import path implements (it
+  // caller, which the per-Capsule create/import path implements (it
   // returns `oidc_client_secret` once at issuance). The resolve path has no
   // such delivery channel — there is no secret store keyed by a secretRef in
   // this package — so emitting a `clientSecretRef` here would advertise a
@@ -247,7 +248,7 @@ async function createOidcClient(
   // deliver a confidential client's plaintext secret, so we never mint one here.
   const client = {
     clientId: `toc_${crypto.randomUUID()}`,
-    installationId: contextCapsuleId(input.context),
+    capsuleId: contextCapsuleId(input.context),
     namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     issuerUrl: input.issuerUrl,
     redirectUris: redirectUrisFromContext(input.context, input.issuerUrl),
@@ -262,12 +263,12 @@ async function createOidcClient(
   return client;
 }
 
-async function ensureDeployControlInstallationProjection(
+async function ensureDeployControlCapsuleProjection(
   input: TakosumiServiceGraphMaterialResolverOptions & {
     readonly context: ServiceGraphMaterialResolveContext;
   },
 ): Promise<void> {
-  const existing = await input.store.findAppInstallation(
+  const existing = await input.store.findAppCapsule(
     contextCapsuleId(input.context),
   );
   if (existing) return;
@@ -276,31 +277,31 @@ async function ensureDeployControlInstallationProjection(
   // System-owned compatibility projection used when the embedded deploy-control
   // surface asks Accounts for service material before a user-owned projection
   // row exists. These synthetic ids must never be rendered as customer-owned
-  // account, Space, or Installation objects in product UI.
+  // account, Workspace, or Capsule objects in product UI.
   const ownerSubject = "tsub_direct_deployControl" as const;
   const capsuleId = contextCapsuleId(input.context);
-  const spaceId =
+  const workspaceId =
     contextWorkspaceId(input.context) ?? "space_direct_deployControl";
-  const existingSpace = await input.store.findSpace(spaceId);
-  const accountId = existingSpace?.accountId ?? "acct_direct_deployControl";
+  const existingWorkspace = await input.store.findWorkspace(workspaceId);
+  const accountId = existingWorkspace?.accountId ?? "acct_direct_deployControl";
   const appId = input.context.appId ?? "unknown.app";
   const sourceFingerprint = await sha256Text(
     JSON.stringify({
       capsuleId,
-      spaceId,
+      workspaceId,
       appId,
     }),
   );
 
-  if (!existingSpace) {
+  if (!existingWorkspace) {
     await input.store.saveLedgerAccount({
       accountId,
       legalOwnerSubject: ownerSubject,
       createdAt: now,
       updatedAt: now,
     });
-    await input.store.saveSpace({
-      spaceId,
+    await input.store.saveWorkspace({
+      workspaceId,
       accountId,
       kind: "personal",
       displayName: "Deploy Control",
@@ -308,10 +309,10 @@ async function ensureDeployControlInstallationProjection(
       updatedAt: now,
     });
   }
-  await input.store.saveAppInstallation({
-    installationId: capsuleId,
+  await input.store.saveAppCapsule({
+    capsuleId: capsuleId,
     accountId,
-    spaceId,
+    workspaceId,
     appId,
     sourceGitUrl: "deploy-control://local",
     sourceRef: "direct",
@@ -332,12 +333,12 @@ async function resolveBillingPlatformService(
 ): Promise<ServiceGraphMaterial | undefined> {
   const issuer = normalizeIssuer(input.issuer);
   const capsuleId = contextCapsuleId(input.context);
-  const installation = await input.store.findAppInstallation(
+  const installation = await input.store.findAppCapsule(
     capsuleId,
   );
-  const spaceId = installation?.spaceId ?? contextWorkspaceId(input.context);
-  if (!spaceId) return undefined;
-  const space = await input.store.findSpace(spaceId);
+  const workspaceId = installation?.workspaceId ?? contextWorkspaceId(input.context);
+  if (!workspaceId) return undefined;
+  const space = await input.store.findWorkspace(workspaceId);
   const accountId = installation?.accountId ?? space?.accountId;
   if (!accountId) return undefined;
   const account = await input.store.findLedgerAccount(accountId);
@@ -355,7 +356,7 @@ async function resolveBillingPlatformService(
     capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE,
     ...(portalUrl ? { portalUrl } : {}),
     usageReportEndpoint: new URL(
-      takosumiAccountsInstallationBillingUsageReportsPath(
+      takosumiAccountsCapsuleBillingUsageReportsPath(
         capsuleId,
       ),
       issuer,

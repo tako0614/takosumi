@@ -1,5 +1,5 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import type { AppInstallationStatus } from "./ledger.ts";
+import type { AppCapsuleStatus } from "./ledger.ts";
 
 export function json(
   body: unknown,
@@ -175,9 +175,9 @@ export function bearerChallenge(error: string): Response {
   });
 }
 
-export function appInstallationStatusValue(
+export function appCapsuleStatusValue(
   value: unknown,
-): AppInstallationStatus | undefined {
+): AppCapsuleStatus | undefined {
   return value === "installing" ||
     value === "ready" ||
     value === "failed" ||

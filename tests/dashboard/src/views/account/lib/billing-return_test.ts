@@ -9,17 +9,17 @@ test("buildBillingReturnUrl pins checkout result to the paid Workspace", () => {
     buildBillingReturnUrl({
       origin: "https://app.takosumi.com",
       checkout: "success",
-      spaceId: "space_133669ab2c4c450c",
+      workspaceId: "workspace_133669ab2c4c450c",
     }),
   ).toEqual(
-    "https://app.takosumi.com/billing?checkout=success&spaceId=space_133669ab2c4c450c",
+    "https://app.takosumi.com/billing?checkout=success&workspaceId=workspace_133669ab2c4c450c",
   );
 
   expect(
     buildBillingReturnUrl({
       origin: "https://app.takosumi.com",
       checkout: "cancelled",
-      spaceId: "not-a-space-id",
+      workspaceId: "not-a-space-id",
     }),
   ).toEqual("https://app.takosumi.com/billing?checkout=cancelled");
 });
@@ -27,20 +27,20 @@ test("buildBillingReturnUrl pins checkout result to the paid Workspace", () => {
 test("consumeBillingReturnSearch restores the Workspace once and strips transient params", () => {
   expect(
     consumeBillingReturnSearch(
-      "?checkout=success&spaceId=space_133669ab2c4c450c&tab=billing",
+      "?checkout=success&workspaceId=workspace_133669ab2c4c450c&tab=billing",
     ),
   ).toEqual({
     checkoutNotice: "success",
-    spaceId: "space_133669ab2c4c450c",
+    workspaceId: "workspace_133669ab2c4c450c",
     nextSearch: "tab=billing",
     changed: true,
   });
 
   expect(
-    consumeBillingReturnSearch("?checkout=success&spaceId=javascript:alert(1)"),
+    consumeBillingReturnSearch("?checkout=success&workspaceId=javascript:alert(1)"),
   ).toEqual({
     checkoutNotice: "success",
-    spaceId: null,
+    workspaceId: null,
     nextSearch: "",
     changed: true,
   });

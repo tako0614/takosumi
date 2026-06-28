@@ -3,10 +3,10 @@ import { assertEquals, assertThrows } from "../../../helpers/assert.ts";
 import {
   assertValidServiceBindingMaterialRecord,
   assertValidServiceGrantMaterialRecord,
-  buildInstallationEvent,
-  transitionAppInstallationStatus,
+  buildCapsuleEvent,
+  transitionAppCapsuleStatus,
   validateServiceBindingMaterialDeclaration,
-  verifyInstallationEventHashChain,
+  verifyCapsuleEventHashChain,
 } from "../../../../accounts/service/src/ledger.ts";
 
 test("validateServiceBindingMaterialDeclaration accepts the v1 binding kinds", () => {
@@ -86,7 +86,7 @@ test("validateServiceBindingMaterialDeclaration rejects unknown kinds and unsafe
 test("assertValidServiceBindingMaterialRecord keeps config and secret references only", () => {
   assertValidServiceBindingMaterialRecord({
     bindingId: "bind_auth",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     name: "auth",
     kind: "identity.oidc",
     configRef: "config://inst_1/auth",
@@ -99,7 +99,7 @@ test("assertValidServiceBindingMaterialRecord keeps config and secret references
     () =>
       assertValidServiceBindingMaterialRecord({
         bindingId: "bind_bootstrap",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         name: "bootstrap",
         kind: "auth.bootstrap_token",
         configRef: "config://inst_1/bootstrap",
@@ -115,7 +115,7 @@ test("assertValidServiceBindingMaterialRecord keeps config and secret references
     () => {
       const record = {
         bindingId: "bind_account_auth",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         name: "account-auth",
         kind: "service.import@v1",
         configRef: "config://inst_1/account-auth",
@@ -133,7 +133,7 @@ test("assertValidServiceBindingMaterialRecord keeps config and secret references
 test("assertValidServiceGrantMaterialRecord keeps capabilities in the v1 catalog", () => {
   assertValidServiceGrantMaterialRecord({
     grantId: "grant_files",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     capability: "files:read",
     scope: { pathPrefix: "documents/" },
     grantedAt: 1000,
@@ -143,7 +143,7 @@ test("assertValidServiceGrantMaterialRecord keeps capabilities in the v1 catalog
     () =>
       assertValidServiceGrantMaterialRecord({
         grantId: "grant_unsafe",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         capability: "unsafe.scope",
         scope: {},
         grantedAt: 1000,
@@ -153,11 +153,11 @@ test("assertValidServiceGrantMaterialRecord keeps capabilities in the v1 catalog
   );
 });
 
-test("transitionAppInstallationStatus enforces the ledger state machine", () => {
+test("transitionAppCapsuleStatus enforces the ledger state machine", () => {
   const installation = {
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     sourceGitUrl: "https://github.com/takos/takos",
     sourceRef: "v1.2.3",
@@ -172,35 +172,35 @@ test("transitionAppInstallationStatus enforces the ledger state machine", () => 
   };
 
   expect(
-    transitionAppInstallationStatus(installation, "ready", 2000).status,
+    transitionAppCapsuleStatus(installation, "ready", 2000).status,
   ).toEqual("ready");
   assertThrows(
-    () => transitionAppInstallationStatus(installation, "exported", 2000),
+    () => transitionAppCapsuleStatus(installation, "exported", 2000),
     TypeError,
     "installing -> exported",
   );
 });
 
-test("InstallationEvent hash chain detects tampering", async () => {
-  const first = await buildInstallationEvent({
+test("CapsuleEvent hash chain detects tampering", async () => {
+  const first = await buildCapsuleEvent({
     eventId: "evt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.created",
     payload: { status: "installing" },
     createdAt: 1000,
   });
-  const second = await buildInstallationEvent({
+  const second = await buildCapsuleEvent({
     eventId: "evt_2",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.status_changed",
     payload: { from: "installing", to: "ready" },
     previousEventHash: first.eventHash,
     createdAt: 2000,
   });
 
-  expect(await verifyInstallationEventHashChain([first, second])).toEqual(true);
+  expect(await verifyCapsuleEventHashChain([first, second])).toEqual(true);
   expect(
-    await verifyInstallationEventHashChain([
+    await verifyCapsuleEventHashChain([
       first,
       { ...second, payload: { from: "installing", to: "failed" } },
     ]),

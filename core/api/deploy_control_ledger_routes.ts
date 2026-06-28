@@ -202,7 +202,7 @@ export function mountDeployControlLedgerRoutes(
       param: { id: "installationId" },
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
         return c.json(await controller.listDeploymentOutputs(id), 200);
       },
     }),

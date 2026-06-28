@@ -155,7 +155,7 @@ export interface CloudflareCompatInventory {
  * Material for the Cloud screen (`/cloud`): Cloud API keys, the AI gateway
  * endpoint, and the Cloudflare compatibility endpoint + its managed-resource
  * inventory. Usage/billing is intentionally NOT part of this snapshot — it
- * lives on the Billing (支払い) tab via `getSpaceBilling` / `listSpaceUsage`.
+ * lives on the Billing (支払い) tab via `getWorkspaceBilling` / `listWorkspaceUsage`.
  */
 export interface CloudResourcesSnapshot {
   readonly catalog: CloudExtensionCatalog;

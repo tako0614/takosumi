@@ -1,17 +1,17 @@
 import {
-  takosumiAccountsInstallationEventsPath,
+  takosumiAccountsCapsuleEventsPath,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
-  type InstallationRecord,
-  verifyInstallationEventHashChain,
+  type CapsuleRecord,
+  verifyCapsuleEventHashChain,
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import {
   activatedHttpDomainProjectionFromEvents,
   installationEnvelope,
-  serializeAppInstallation,
-  serializeInstallationEvent,
+  serializeAppCapsule,
+  serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import { errorJson, json } from "./http-helpers.ts";
 import { requireAccountsBearer } from "./account-session.ts";
@@ -20,8 +20,8 @@ import { requireAccountsBearer } from "./account-session.ts";
  * Pagination guard constants for the list endpoints in this file and the
  * peer pagination helpers in `pat-routes.ts`.
  *
- * The same defaults apply to `handleListAppInstallations`,
- * `handleListInstallationEvents`, and `handleListPersonalAccessTokens`.
+ * The same defaults apply to `handleListAppCapsules`,
+ * `handleListCapsuleEvents`, and `handleListPersonalAccessTokens`.
  * Cursor values are opaque to the caller: base64-encoded JSON containing a
  * `{ lastId }` field.
  */
@@ -106,7 +106,7 @@ export function paginateById<T>(
 }
 
 /**
- * List AppInstallations for a space.
+ * List AppCapsules for a space.
  *
  * Authentication: accepts either an Account session (Cookie / header) OR a
  * personal access token (PAT) with `read` scope (parity with the other
@@ -119,7 +119,7 @@ export function paginateById<T>(
  * non-paginated shape is preserved by including `installations`
  * unchanged; callers that ignore `next_cursor` still see the first page.
  */
-export async function handleListAppInstallations(input: {
+export async function handleListAppCapsules(input: {
   request: Request;
   url: URL;
   store: AccountsStore;
@@ -129,10 +129,10 @@ export async function handleListAppInstallations(input: {
     store: input.store,
     scope: "read",
   });
-  const spaceId =
+  const workspaceId =
     input.url.searchParams.get("space_id") ??
-    input.url.searchParams.get("spaceId");
-  if (!spaceId) {
+    input.url.searchParams.get("workspaceId");
+  if (!workspaceId) {
     if (!bearer.ok) return bearer.response;
     return errorJson("invalid_request", "space_id is required", 400);
   }
@@ -149,7 +149,7 @@ export async function handleListAppInstallations(input: {
   if (afterId === "invalid") {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
-  const space = await input.store.findSpace(spaceId);
+  const space = await input.store.findWorkspace(workspaceId);
   if (!space) return errorJson("space_not_found", "space not found", 404);
   if (
     !(await subjectCanAccessAccount(
@@ -160,20 +160,20 @@ export async function handleListAppInstallations(input: {
   ) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
-  const installations = await input.store.listAppInstallationsForSpace(spaceId);
+  const installations = await input.store.listAppCapsulesForWorkspace(workspaceId);
   const page = paginateById(installations, {
-    getId: (installation) => installation.installationId,
+    getId: (installation) => installation.capsuleId,
     limit,
     afterId,
   });
   return json({
-    installations: page.items.map(serializeAppInstallation),
+    installations: page.items.map(serializeAppCapsule),
     next_cursor: page.nextCursor,
   });
 }
 
-export async function handleGetAppInstallation(input: {
-  installationId: string;
+export async function handleGetAppCapsule(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
@@ -183,13 +183,13 @@ export async function handleGetAppInstallation(input: {
     scope: "read",
   });
   if (!bearer.ok) return bearer.response;
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (
-    !(await subjectCanAccessInstallation(
+    !(await subjectCanAccessCapsule(
       input.store,
       bearer.auth.subject,
       installation,
@@ -201,22 +201,22 @@ export async function handleGetAppInstallation(input: {
   // public API surface, so we do not surface them in this account-facing
   // envelope. They are NOT, however, removed from storage: the entities
   // remain `@internal` ledger records, the store interface still defines
-  // their accessors, and the export path (`collectInstallationExportBundle`)
-  // still reads them via `listServiceBindingMaterialsForInstallation` /
-  // `listServiceGrantMaterialsForInstallation`. Here we deliberately load only the OIDC
+  // their accessors, and the export path (`collectCapsuleExportBundle`)
+  // still reads them via `listServiceBindingMaterialsForCapsule` /
+  // `listServiceGrantMaterialsForCapsule`. Here we deliberately load only the OIDC
   // client, which is the sole binding-like entity surfaced on this route.
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installationId,
+  const oidcClient = await input.store.findOidcClientForCapsule(
+    input.capsuleId,
   );
-  const events = await input.store.listInstallationEvents(
-    input.installationId,
+  const events = await input.store.listCapsuleEvents(
+    input.capsuleId,
   );
   return json(
     installationEnvelope({
       installation,
       oidcClient,
       activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
-      eventsUrl: takosumiAccountsInstallationEventsPath(input.installationId),
+      eventsUrl: takosumiAccountsCapsuleEventsPath(input.capsuleId),
     }),
   );
 }
@@ -231,10 +231,10 @@ export async function handleGetAppInstallation(input: {
  * (lifecycle handlers, dashboard routes, events list) MUST resolve through
  * this function and not assume that being the creator is sufficient.
  */
-export async function subjectCanAccessInstallation(
+export async function subjectCanAccessCapsule(
   store: AccountsStore,
   subject: TakosumiSubject,
-  installation: InstallationRecord,
+  installation: CapsuleRecord,
 ): Promise<boolean> {
   return await subjectCanAccessAccount(store, subject, installation.accountId);
 }
@@ -249,12 +249,12 @@ export async function subjectCanAccessAccount(
 }
 
 /**
- * List InstallationEvent rows for one installation.
+ * List CapsuleEvent rows for one installation.
  *
  * Authentication: accepts an Account session OR a PAT with `read` scope.
  * Authorization: subject MUST be the current `legalOwnerSubject` of the
- * Installation's LedgerAccount (the `createdBySubject` fallback was
- * removed; see `subjectCanAccessInstallation`).
+ * Capsule's LedgerAccount (the `createdBySubject` fallback was
+ * removed; see `subjectCanAccessCapsule`).
  *
  * Pagination: `?limit` (default 50, max 200) and `?cursor`
  * (base64url(JSON({ lastId }))). `next_cursor` is `null` on the final
@@ -262,8 +262,8 @@ export async function subjectCanAccessAccount(
  * for the installation, not just the current page, because verifying a
  * prefix would create a misleading attestation.
  */
-export async function handleListInstallationEvents(input: {
-  installationId: string;
+export async function handleListCapsuleEvents(input: {
+  capsuleId: string;
   request: Request;
   url: URL;
   store: AccountsStore;
@@ -273,8 +273,8 @@ export async function handleListInstallationEvents(input: {
   // of the handler cannot read another tenant's event chain. Either an
   // Account session OR a personal access token (read scope) is acceptable,
   // but the authenticated subject MUST be the legalOwnerSubject of the
-  // LedgerAccount that owns the Installation; the broader createdBySubject
-  // creator-fallback path that `subjectCanAccessInstallation` would allow
+  // LedgerAccount that owns the Capsule; the broader createdBySubject
+  // creator-fallback path that `subjectCanAccessCapsule` would allow
   // is intentionally excluded here.
   const bearer = await requireAccountsBearer({
     request: input.request,
@@ -294,8 +294,8 @@ export async function handleListInstallationEvents(input: {
   if (afterId === "invalid") {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
@@ -308,8 +308,8 @@ export async function handleListInstallationEvents(input: {
   ) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
-  const allEvents = await input.store.listInstallationEvents(
-    input.installationId,
+  const allEvents = await input.store.listCapsuleEvents(
+    input.capsuleId,
   );
   const typeFilter = installationEventTypeFilter(
     input.url.searchParams.get("types"),
@@ -323,9 +323,9 @@ export async function handleListInstallationEvents(input: {
     afterId,
   });
   return json({
-    events: page.items.map(serializeInstallationEvent),
+    events: page.items.map(serializeCapsuleEvent),
     next_cursor: page.nextCursor,
-    hash_chain_valid: await verifyInstallationEventHashChain(allEvents),
+    hash_chain_valid: await verifyCapsuleEventHashChain(allEvents),
   });
 }
 

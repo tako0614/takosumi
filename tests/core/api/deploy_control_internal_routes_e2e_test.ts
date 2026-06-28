@@ -11,9 +11,9 @@ import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
-import type { Space } from "takosumi-contract/spaces";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type {
   OpenTofuRunner,
   ReleaseActivationInput,

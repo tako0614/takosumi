@@ -6,7 +6,7 @@ import {
   installConfigIdForTemplate,
   officialInstallConfigs,
   seedOfficialInstallConfigs,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../../core/domains/templates/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 

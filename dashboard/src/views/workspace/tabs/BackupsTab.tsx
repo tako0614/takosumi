@@ -10,8 +10,8 @@ import {
   type BackupRecord,
   createBackupRestore,
   type ControlApiError,
-  createSpaceBackup,
-  listSpaceBackups,
+  createWorkspaceBackup,
+  listWorkspaceBackups,
 } from "../../../lib/control-api.ts";
 import { createAction } from "../../account/lib/action.tsx";
 import { formatDateTime, t } from "../../../i18n/index.ts";
@@ -25,15 +25,15 @@ import {
   Spinner,
 } from "../../../components/ui/index.ts";
 
-export default function BackupsTab(props: { readonly spaceId: string }) {
+export default function BackupsTab(props: { readonly workspaceId: string }) {
   const navigate = useNavigate();
   const [backups, { refetch }] = createResource(
-    () => props.spaceId,
-    listSpaceBackups,
+    () => props.workspaceId,
+    listWorkspaceBackups,
   );
 
   const create = createAction(async () => {
-    await createSpaceBackup(props.spaceId);
+    await createWorkspaceBackup(props.workspaceId);
     await refetch();
   });
   const restore = createAction(async (record: BackupRecord) => {
@@ -41,8 +41,8 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
     if (!target) {
       throw new Error(t("backups.restoreUnavailable"));
     }
-    const run = await createBackupRestore(props.spaceId, record.id, {
-      installationId: target.installationId,
+    const run = await createBackupRestore(props.workspaceId, record.id, {
+      capsuleId: target.capsuleId,
       environment: target.environment,
       stateGeneration: target.stateGeneration,
       expectedBackupDigest: record.digest,
@@ -104,7 +104,7 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
     <div class="wb-stack">
       <Card>
         <CardHeader
-          title={t("spaceSettings.tab.backups")}
+          title={t("workspaceSettings.tab.backups")}
           subtitle={t("backups.subtitle")}
           actions={
             <Button
@@ -136,7 +136,7 @@ export default function BackupsTab(props: { readonly spaceId: string }) {
           <Match when={backups.error}>
             <EmptyState
               icon={<Archive size={28} />}
-              title={t("spaceSettings.tab.backups")}
+              title={t("workspaceSettings.tab.backups")}
               message={t("common.fetchFailed", {
                 message: (backups.error as ControlApiError).message,
               })}

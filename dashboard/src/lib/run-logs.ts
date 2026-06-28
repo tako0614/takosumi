@@ -1,6 +1,6 @@
 /**
  * Best-effort extraction of human-relevant facts from Run logs / audit events.
- * Moved out of the run view so the Installation detail's recent-runs strip can reuse it.
+ * Moved out of the run view so the Capsule detail's recent-runs strip can reuse it.
  * All of this is display-only: it reads whatever shape the backend recorded
  * and degrades to "nothing detected" rather than guessing.
  */

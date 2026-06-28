@@ -5,12 +5,12 @@ import type {
 import type {
   ServiceBindingMaterialRecord,
   ServiceGrantMaterialRecord,
-  AppInstallationLedgerStore,
-  InstallationEventRecord,
-  InstallationRecord,
+  AppCapsuleLedgerStore,
+  CapsuleEventRecord,
+  CapsuleRecord,
   LedgerAccountRecord,
   RuntimeBindingRecord,
-  SpaceRecord,
+  WorkspaceRecord,
 } from "./ledger.ts";
 import {
   assertValidServiceBindingMaterialRecord,
@@ -23,9 +23,9 @@ export interface AuthorizationCodeRecord {
   scope: string;
   subject: string;
   takosumiSubject?: TakosumiSubject;
-  installationId?: string;
+  capsuleId?: string;
   appId?: string;
-  spaceId?: string;
+  workspaceId?: string;
   role?: string;
   nonce?: string;
   codeChallenge?: string;
@@ -38,9 +38,9 @@ export interface TokenRecord {
   scope: string;
   subject: string;
   takosumiSubject?: TakosumiSubject;
-  installationId?: string;
+  capsuleId?: string;
   appId?: string;
-  spaceId?: string;
+  workspaceId?: string;
   role?: string;
   expiresAt: number;
 }
@@ -109,7 +109,7 @@ export interface AccountSessionRecord {
 
 export interface LaunchTokenConsumptionRecord {
   jti: string;
-  installationId: string;
+  capsuleId: string;
   subject: TakosumiSubject;
   audience: string;
   expiresAt: number;
@@ -119,9 +119,9 @@ export interface LaunchTokenConsumptionRecord {
 export interface LaunchTokenRecord {
   tokenHash: string;
   jti: string;
-  installationId: string;
+  capsuleId: string;
   accountId: string;
-  spaceId: string;
+  workspaceId: string;
   appId: string;
   subject: TakosumiSubject;
   redirectUri: string;
@@ -202,7 +202,7 @@ export type OidcClientAuthMethod =
 
 export interface OidcClientRecord {
   clientId: string;
-  installationId: string;
+  capsuleId: string;
   namespacePath: string;
   issuerUrl: string;
   redirectUris: readonly string[];
@@ -329,7 +329,7 @@ export type BillingWebhookEventClaimResult =
 
 export interface BillingUsageRecord {
   usageReportId: string;
-  installationId: string;
+  capsuleId: string;
   billingAccountId: string;
   meter: string;
   quantity: number;
@@ -379,7 +379,7 @@ export interface PrivacyRequestRecord {
   updatedAt: number;
 }
 
-export interface AccountsStore extends AppInstallationLedgerStore {
+export interface AccountsStore extends AppCapsuleLedgerStore {
   saveAccount(record: TakosumiAccountRecord): void | Promise<void>;
   findAccount(
     subject: TakosumiSubject,
@@ -490,8 +490,8 @@ export interface AccountsStore extends AppInstallationLedgerStore {
   findBillingUsageRecord(
     usageReportId: string,
   ): BillingUsageRecord | undefined | Promise<BillingUsageRecord | undefined>;
-  listBillingUsageRecordsForInstallation(
-    installationId: string,
+  listBillingUsageRecordsForCapsule(
+    capsuleId: string,
   ): readonly BillingUsageRecord[] | Promise<readonly BillingUsageRecord[]>;
   listBillingUsageRecordsForBillingAccount(
     billingAccountId: string,
@@ -561,7 +561,7 @@ export interface AccountsStore extends AppInstallationLedgerStore {
   saveLaunchToken(record: LaunchTokenRecord): void | Promise<void>;
   consumeLaunchToken(input: {
     tokenHash: string;
-    installationId: string;
+    capsuleId: string;
     redirectUri: string;
     consumedAt: number;
   }): LaunchTokenConsumeResult | Promise<LaunchTokenConsumeResult>;
@@ -573,8 +573,8 @@ export interface AccountsStore extends AppInstallationLedgerStore {
   findOidcClient(
     clientId: string,
   ): OidcClientRecord | undefined | Promise<OidcClientRecord | undefined>;
-  findOidcClientForInstallation(
-    installationId: string,
+  findOidcClientForCapsule(
+    capsuleId: string,
   ): OidcClientRecord | undefined | Promise<OidcClientRecord | undefined>;
   /**
    * F30 fix: persistent refresh-token rotation chain links. The OIDC
@@ -736,14 +736,14 @@ export interface AccountsStore extends AppInstallationLedgerStore {
 export class InMemoryAccountsStore implements AccountsStore {
   readonly #accounts = new Map<TakosumiSubject, TakosumiAccountRecord>();
   readonly #ledgerAccounts = new Map<string, LedgerAccountRecord>();
-  readonly #spaces = new Map<string, SpaceRecord>();
-  readonly #installations = new Map<string, InstallationRecord>();
+  readonly #spaces = new Map<string, WorkspaceRecord>();
+  readonly #installations = new Map<string, CapsuleRecord>();
   readonly #runtimeBindings = new Map<string, RuntimeBindingRecord>();
   readonly #serviceBindingMaterials = new Map<
     string,
     ServiceBindingMaterialRecord
   >();
-  readonly #installationEvents = new Map<string, InstallationEventRecord[]>();
+  readonly #installationEvents = new Map<string, CapsuleEventRecord[]>();
   readonly #upstreamIdentities = new Map<string, UpstreamIdentityRecord>();
   readonly #passkeyCredentials = new Map<string, PasskeyCredentialRecord>();
   readonly #accountSessions = new Map<string, AccountSessionRecord>();
@@ -765,7 +765,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   >();
   readonly #launchTokens = new Map<string, LaunchTokenRecord>();
   readonly #oidcClients = new Map<string, OidcClientRecord>();
-  readonly #oidcClientsByInstallation = new Map<string, string>();
+  readonly #oidcClientsByCapsule = new Map<string, string>();
   // F30: persistent refresh-token rotation chain state. Each Map / Set
   // is the in-memory analogue of the corresponding accounts_v1 table the
   // production migration adds (refresh_chain_links / revoked_refresh_roots
@@ -843,21 +843,21 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#ledgerAccounts.get(accountId);
   }
 
-  saveSpace(record: SpaceRecord): void {
-    this.#spaces.set(record.spaceId, record);
+  saveWorkspace(record: WorkspaceRecord): void {
+    this.#spaces.set(record.workspaceId, record);
   }
 
-  findSpace(spaceId: string): SpaceRecord | undefined {
-    return this.#spaces.get(spaceId);
+  findWorkspace(workspaceId: string): WorkspaceRecord | undefined {
+    return this.#spaces.get(workspaceId);
   }
 
-  listSpacesForAccount(accountId: string): readonly SpaceRecord[] {
+  listWorkspacesForAccount(accountId: string): readonly WorkspaceRecord[] {
     return [...this.#spaces.values()].filter(
       (space) => space.accountId === accountId,
     );
   }
 
-  listSpacesForOwner(subject: TakosumiSubject): readonly SpaceRecord[] {
+  listWorkspacesForOwner(subject: TakosumiSubject): readonly WorkspaceRecord[] {
     const ownedAccountIds = new Set<string>();
     for (const account of this.#ledgerAccounts.values()) {
       if (account.legalOwnerSubject === subject) {
@@ -869,23 +869,23 @@ export class InMemoryAccountsStore implements AccountsStore {
     );
   }
 
-  saveAppInstallation(record: InstallationRecord): void {
-    this.#installations.set(record.installationId, record);
+  saveAppCapsule(record: CapsuleRecord): void {
+    this.#installations.set(record.capsuleId, record);
   }
 
-  findAppInstallation(installationId: string): InstallationRecord | undefined {
-    return this.#installations.get(installationId);
+  findAppCapsule(capsuleId: string): CapsuleRecord | undefined {
+    return this.#installations.get(capsuleId);
   }
 
-  listAppInstallationsForSpace(spaceId: string): readonly InstallationRecord[] {
+  listAppCapsulesForWorkspace(workspaceId: string): readonly CapsuleRecord[] {
     return [...this.#installations.values()].filter(
-      (installation) => installation.spaceId === spaceId,
+      (installation) => installation.workspaceId === workspaceId,
     );
   }
 
-  listAppInstallationsForBillingAccount(
+  listAppCapsulesForBillingAccount(
     billingAccountId: string,
-  ): readonly InstallationRecord[] {
+  ): readonly CapsuleRecord[] {
     return [...this.#installations.values()].filter(
       (installation) => installation.billingAccountId === billingAccountId,
     );
@@ -906,11 +906,11 @@ export class InMemoryAccountsStore implements AccountsStore {
     this.#serviceBindingMaterials.set(record.bindingId, record);
   }
 
-  listServiceBindingMaterialsForInstallation(
-    installationId: string,
+  listServiceBindingMaterialsForCapsule(
+    capsuleId: string,
   ): readonly ServiceBindingMaterialRecord[] {
     return [...this.#serviceBindingMaterials.values()].filter(
-      (binding) => binding.installationId === installationId,
+      (binding) => binding.capsuleId === capsuleId,
     );
   }
 
@@ -926,22 +926,22 @@ export class InMemoryAccountsStore implements AccountsStore {
     return undefined;
   }
 
-  listServiceGrantMaterialsForInstallation(
-    installationId: string,
+  listServiceGrantMaterialsForCapsule(
+    capsuleId: string,
   ): readonly ServiceGrantMaterialRecord[] {
-    void installationId;
+    void capsuleId;
     return [];
   }
 
-  appendInstallationEvent(record: InstallationEventRecord): void {
-    const events = this.#installationEvents.get(record.installationId) ?? [];
-    this.#installationEvents.set(record.installationId, [...events, record]);
+  appendCapsuleEvent(record: CapsuleEventRecord): void {
+    const events = this.#installationEvents.get(record.capsuleId) ?? [];
+    this.#installationEvents.set(record.capsuleId, [...events, record]);
   }
 
-  listInstallationEvents(
-    installationId: string,
-  ): readonly InstallationEventRecord[] {
-    return this.#installationEvents.get(installationId) ?? [];
+  listCapsuleEvents(
+    capsuleId: string,
+  ): readonly CapsuleEventRecord[] {
+    return this.#installationEvents.get(capsuleId) ?? [];
   }
 
   linkUpstreamIdentity(record: UpstreamIdentityRecord): void {
@@ -1076,12 +1076,12 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#billingUsageRecords.get(usageReportId);
   }
 
-  listBillingUsageRecordsForInstallation(
-    installationId: string,
+  listBillingUsageRecordsForCapsule(
+    capsuleId: string,
   ): readonly BillingUsageRecord[] {
     return billingUsageRecordsSorted(
       [...this.#billingUsageRecords.values()].filter(
-        (record) => record.installationId === installationId,
+        (record) => record.capsuleId === capsuleId,
       ),
     );
   }
@@ -1244,7 +1244,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   saveLaunchToken(record: LaunchTokenRecord): void {
     for (const [tokenHash, existing] of this.#launchTokens) {
       if (
-        existing.installationId === record.installationId &&
+        existing.capsuleId === record.capsuleId &&
         existing.usedAt === undefined &&
         existing.expiresAt > record.createdAt
       ) {
@@ -1259,12 +1259,12 @@ export class InMemoryAccountsStore implements AccountsStore {
 
   consumeLaunchToken(input: {
     tokenHash: string;
-    installationId: string;
+    capsuleId: string;
     redirectUri: string;
     consumedAt: number;
   }): LaunchTokenConsumeResult {
     const record = this.#launchTokens.get(input.tokenHash);
-    if (!record || record.installationId !== input.installationId) {
+    if (!record || record.capsuleId !== input.capsuleId) {
       return { ok: false, reason: "not_found" };
     }
     if (record.redirectUri !== input.redirectUri) {
@@ -1304,20 +1304,20 @@ export class InMemoryAccountsStore implements AccountsStore {
   saveOidcClient(record: OidcClientRecord): void {
     const existing = this.#oidcClients.get(record.clientId);
     if (existing) {
-      this.#oidcClientsByInstallation.delete(existing.installationId);
+      this.#oidcClientsByCapsule.delete(existing.capsuleId);
     }
     this.#oidcClients.set(record.clientId, record);
-    this.#oidcClientsByInstallation.set(record.installationId, record.clientId);
+    this.#oidcClientsByCapsule.set(record.capsuleId, record.clientId);
   }
 
   findOidcClient(clientId: string): OidcClientRecord | undefined {
     return this.#oidcClients.get(clientId);
   }
 
-  findOidcClientForInstallation(
-    installationId: string,
+  findOidcClientForCapsule(
+    capsuleId: string,
   ): OidcClientRecord | undefined {
-    const clientId = this.#oidcClientsByInstallation.get(installationId);
+    const clientId = this.#oidcClientsByCapsule.get(capsuleId);
     return clientId ? this.#oidcClients.get(clientId) : undefined;
   }
 

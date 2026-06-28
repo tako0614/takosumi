@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { SpacesService } from "../../../../core/domains/spaces/mod.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 
 function build() {
@@ -8,7 +8,7 @@ function build() {
   let counter = 0;
   const newId = (prefix: string) =>
     `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
-  const service = new SpacesService({
+  const service = new WorkspacesService({
     store,
     newId,
     now: () => new Date("2026-06-06T00:00:00.000Z"),

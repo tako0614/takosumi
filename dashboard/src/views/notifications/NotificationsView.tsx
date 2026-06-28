@@ -1,6 +1,6 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
- * person, aggregated across every Space they belong to (the friendly
+ * person, aggregated across every Workspace they belong to (the friendly
  * counterpart of the raw Activity view).
  *
  * Honesty contract: every sentence renders ONLY values the backend already
@@ -16,7 +16,7 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   type ActivityEvent,
   type ControlApiError,
-  listSpaces,
+  listWorkspaces,
 } from "../../lib/control-api.ts";
 import {
   type FeedEntry,
@@ -205,7 +205,7 @@ function NotificationRow(props: { entry: FeedEntry }) {
           {(detail) => <p class="wc-notif-detail">{detail()}</p>}
         </Show>
         <p class="wc-notif-foot">
-          <span>@{props.entry.spaceHandle}</span>
+          <span>@{props.entry.workspaceHandle}</span>
           <Show when={props.entry.event.createdAt}>
             <span aria-hidden="true">·</span>
             <time datetime={props.entry.event.createdAt}>
@@ -222,15 +222,15 @@ export default function NotificationsView() {
   return (
     <Page title={t("notif.title")}>
       {() => {
-        const [spaces] = createResource(listSpaces);
+        const [workspaces] = createResource(listWorkspaces);
         const [feed] = createResource(
-          () => spaces(),
+          () => workspaces(),
           (list) => loadNotificationFeed(list),
         );
-        const loading = () => spaces.loading || feed.loading;
+        const loading = () => workspaces.loading || feed.loading;
         const error = createMemo(
           () =>
-            (spaces.error as ControlApiError | undefined) ??
+            (workspaces.error as ControlApiError | undefined) ??
             (feed.error as ControlApiError | undefined),
         );
         const failureCount = () =>

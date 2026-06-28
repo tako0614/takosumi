@@ -5,23 +5,23 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "../../../helpers/assert.ts";
-import { TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND } from "@takosjp/takosumi-accounts-contract";
+import { TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND } from "@takosjp/takosumi-accounts-contract";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as nodeJoin } from "node:path";
 import {
-  buildInstallationExportArchiveFiles,
-  createMetadataOnlyInstallationExportWorker,
-  writeInstallationExportTarZst,
+  buildCapsuleExportArchiveFiles,
+  createMetadataOnlyCapsuleExportWorker,
+  writeCapsuleExportTarZst,
 } from "../../../../accounts/service/src/export-archive.ts";
 import { signExportDownloadUrl } from "../../../../accounts/service/src/export-download-url.ts";
 import {
-  buildInstallationExportBundle,
-  parseAccountsInstallationExportBundle,
-  parseAccountsInstallationExportBundleInput,
-  planInstallationImport,
+  buildCapsuleExportBundle,
+  parseAccountsCapsuleExportBundle,
+  parseAccountsCapsuleExportBundleInput,
+  planCapsuleImport,
 } from "../../../../accounts/service/src/export-bundle.ts";
 
 type CommandOutput = {
@@ -92,7 +92,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
   const bundle = sampleExportBundle(sourceIssuer);
 
   expect(bundle.kind).toEqual(
-    TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
   );
   expect(bundle.source.commit).toEqual(
     "0123456789abcdef0123456789abcdef01234567",
@@ -114,18 +114,18 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
     "grant_threads",
   ]);
 
-  const plan = planInstallationImport({
+  const plan = planCapsuleImport({
     bundle,
     targetIssuer,
     targetAccountId: "acct_target",
-    targetSpaceId: "space_target",
-    targetInstallationId: "inst_target",
+    targetWorkspaceId: "space_target",
+    targetCapsuleId: "inst_target",
     createdBySubject: "tsub_target",
   });
   const request = plan.request as {
-    installationId?: string;
+    capsuleId?: string;
     accountId: string;
-    spaceId: string;
+    workspaceId: string;
     source: {
       url: string;
       gitUrl: string;
@@ -145,9 +145,9 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
 
   expect(plan.sourceIssuer).toEqual(sourceIssuer);
   expect(plan.targetIssuer).toEqual(targetIssuer);
-  expect(plan.target?.requestedInstallationId).toEqual("inst_target");
+  expect(plan.target?.requestedCapsuleId).toEqual("inst_target");
   expect(plan.deployControlPlanRequest).toEqual({
-    spaceId: "space_target",
+    workspaceId: "space_target",
     source: {
       kind: "git",
       url: "https://github.com/takos/takos",
@@ -156,9 +156,9 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
       path: "deploy/opentofu",
     },
   });
-  expect(request.installationId).toEqual(undefined);
+  expect(request.capsuleId).toEqual(undefined);
   expect(request.accountId).toEqual("acct_target");
-  expect(request.spaceId).toEqual("space_target");
+  expect(request.workspaceId).toEqual("space_target");
   expect(request.source.url).toEqual("https://github.com/takos/takos");
   expect(request.source.gitUrl).toEqual("https://github.com/takos/takos");
   expect(request.source.path).toEqual("deploy/opentofu");
@@ -221,12 +221,12 @@ test("installation export bundle import plan rewrites only the exact source orig
     },
   };
 
-  const plan = planInstallationImport({
+  const plan = planCapsuleImport({
     bundle: bundleWithRedirects,
     targetIssuer,
     targetAccountId: "acct_target",
-    targetSpaceId: "space_target",
-    targetInstallationId: "inst_target",
+    targetWorkspaceId: "space_target",
+    targetCapsuleId: "inst_target",
     createdBySubject: "tsub_target",
   });
   const request = plan.request as {
@@ -245,11 +245,11 @@ test("installation export bundle import plan can target shared-cell", () => {
   const targetIssuer = "https://accounts.target.test";
   const bundle = sampleExportBundle("https://accounts.source.test");
 
-  const plan = planInstallationImport({
+  const plan = planCapsuleImport({
     bundle,
     targetIssuer,
     targetAccountId: "acct_target",
-    targetSpaceId: "space_target",
+    targetWorkspaceId: "space_target",
     createdBySubject: "tsub_target",
     mode: "shared-cell",
   });
@@ -266,7 +266,7 @@ test("installation export bundle parser accepts stored OIDC namespacePath", () =
   oidcClient.namespacePath = oidcClient.servicePath;
   delete oidcClient.servicePath;
 
-  const parsed = parseAccountsInstallationExportBundle(stored);
+  const parsed = parseAccountsCapsuleExportBundle(stored);
 
   expect(parsed.oidcClient?.servicePath).toEqual("takosumi.identity.oidc");
   expect(parsed.oidcClient?.namespacePath).toEqual("takosumi.identity.oidc");
@@ -274,8 +274,8 @@ test("installation export bundle parser accepts stored OIDC namespacePath", () =
 
 test("installation export bundle input parser accepts Cloudflare R2 export documents", () => {
   const bundle = sampleExportBundle("https://accounts.source.test");
-  const parsed = parseAccountsInstallationExportBundleInput({
-    kind: "takosumi.accounts.cloudflare-r2-installation-export@v1",
+  const parsed = parseAccountsCapsuleExportBundleInput({
+    kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1",
     version: "v1",
     exportedAt: "2026-06-23T22:30:00.000Z",
     operationId: "op_r2_export",
@@ -289,10 +289,10 @@ test("installation export bundle input parser accepts Cloudflare R2 export docum
   });
 
   expect(parsed.kind).toEqual(
-    TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
   );
-  expect(parsed.installation.installationId).toEqual(
-    bundle.installation.installationId,
+  expect(parsed.installation.capsuleId).toEqual(
+    bundle.installation.capsuleId,
   );
   expect(parsed.source.commit).toEqual(bundle.source.commit);
 });
@@ -303,14 +303,14 @@ test("installation export import plan drops legacy secretRefs", () => {
   stored.serviceBindings[0].template.secretRefs = [
     `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/secrets/client-secret`,
   ];
-  const bundle = parseAccountsInstallationExportBundle(stored);
+  const bundle = parseAccountsCapsuleExportBundle(stored);
 
-  const plan = planInstallationImport({
+  const plan = planCapsuleImport({
     bundle,
     targetIssuer: "https://accounts.target.test",
     targetAccountId: "acct_target",
-    targetSpaceId: "space_target",
-    targetInstallationId: "inst_target",
+    targetWorkspaceId: "space_target",
+    targetCapsuleId: "inst_target",
     createdBySubject: "tsub_target",
   });
 
@@ -321,7 +321,7 @@ test("installation export import plan drops legacy secretRefs", () => {
 test("installation export archive writer emits canonical bundle payload", async () => {
   const sourceIssuer = "https://accounts.source.test";
   const bundle = sampleExportBundle(sourceIssuer);
-  const files = await buildInstallationExportArchiveFiles(bundle);
+  const files = await buildCapsuleExportArchiveFiles(bundle);
 
   expect(files.map((file) => file.path)).toEqual([
     "takos-export/bundle.json",
@@ -334,7 +334,7 @@ test("installation export archive writer emits canonical bundle payload", async 
     "takos-export/docs/restore.md",
   ]);
   expect(files[0].content as string).toContain(
-    TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
   );
   expect(files.at(-1)?.content as string).toContain(
     "Takosumi deploy-control restore/apply flow",
@@ -346,7 +346,7 @@ test("installation export archive writer emits canonical bundle payload", async 
   expect(JSON.parse(oidcTemplate.content as string)).toEqual({
     kind: "takosumi.accounts.oidc-service-binding-template@v1",
     version: "v1",
-    installationId: "inst_source",
+    capsuleId: "inst_source",
     sourceIssuer,
     oidcClient: {
       serviceBinding: "auth",
@@ -368,7 +368,7 @@ test("installation export archive writer emits canonical bundle payload", async 
   });
   try {
     const outputPath = join(root, "takos-export.tar.zst");
-    await writeInstallationExportTarZst({ bundle, outputPath });
+    await writeCapsuleExportTarZst({ bundle, outputPath });
 
     const list = await commandOutputText(
       command("tar", {
@@ -390,7 +390,7 @@ test("installation export archive writer emits canonical bundle payload", async 
     );
     const parsed = JSON.parse(bundleJson);
     expect(parsed.kind).toEqual(
-      TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+      TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
     );
     expect(parsed.source.commit).toEqual(
       "0123456789abcdef0123456789abcdef01234567",
@@ -402,7 +402,7 @@ test("installation export archive writer emits canonical bundle payload", async 
 
 test("installation export archive writer embeds artifact descriptor content", async () => {
   const bundle = sampleExportBundle("https://accounts.source.test");
-  const files = await buildInstallationExportArchiveFiles(bundle, [], {
+  const files = await buildCapsuleExportArchiveFiles(bundle, [], {
     artifactDescriptorContent: [
       "apiVersion: v1",
       "kind: SourceArtifactDescriptor",
@@ -432,7 +432,7 @@ test("installation export archive writer embeds artifact descriptor content", as
 test("installation export archive writer includes deterministic provider data files", async () => {
   const sourceIssuer = "https://accounts.source.test";
   const bundle = sampleExportBundle(sourceIssuer);
-  const files = await buildInstallationExportArchiveFiles(bundle, [
+  const files = await buildCapsuleExportArchiveFiles(bundle, [
     {
       path: "postgres/dump.sql",
       mediaType: "application/sql",
@@ -464,7 +464,7 @@ test("installation export archive writer includes deterministic provider data fi
   expect(typeof manifest.content).toEqual("string");
   const parsedManifest = JSON.parse(manifest.content as string);
   expect(parsedManifest.kind).toEqual(
-    "takosumi.accounts.installation-export-data-manifest@v1",
+    "takosumi.accounts.capsule-export-data-manifest@v1",
   );
   expect(parsedManifest.files).toEqual([
     {
@@ -488,7 +488,7 @@ test("installation export archive writer includes deterministic provider data fi
   });
   try {
     const outputPath = join(root, "takos-export.tar.zst");
-    await writeInstallationExportTarZst({
+    await writeCapsuleExportTarZst({
       bundle,
       outputPath,
       dataFiles: [
@@ -528,7 +528,7 @@ test("installation export archive rejects unsafe provider data paths", async () 
 
   await assertRejects(
     () =>
-      buildInstallationExportArchiveFiles(bundle, [
+      buildCapsuleExportArchiveFiles(bundle, [
         {
           path: "../secret.txt",
           content: "secret\n",
@@ -539,7 +539,7 @@ test("installation export archive rejects unsafe provider data paths", async () 
   );
   await assertRejects(
     () =>
-      buildInstallationExportArchiveFiles(bundle, [
+      buildCapsuleExportArchiveFiles(bundle, [
         {
           path: "takos-export/bundle.json",
           content: "overwrite\n",
@@ -550,7 +550,7 @@ test("installation export archive rejects unsafe provider data paths", async () 
   );
   await assertRejects(
     () =>
-      buildInstallationExportArchiveFiles(bundle, [
+      buildCapsuleExportArchiveFiles(bundle, [
         {
           path: "takos-export/data/manifest.json",
           content: "{}\n",
@@ -567,7 +567,7 @@ test("metadata-only export worker writes archive and returns download URL", asyn
     prefix: "takosumi-accounts-export-worker-",
   });
   try {
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test/accounts/exports",
       ttlMs: 60_000,
@@ -575,9 +575,9 @@ test("metadata-only export worker writes archive and returns download URL", asyn
     });
     const result = await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -653,7 +653,7 @@ test("export download URLs require HTTPS except loopback HTTP", async () => {
     "embedded credentials",
   );
   expect(() =>
-    createMetadataOnlyInstallationExportWorker({
+    createMetadataOnlyCapsuleExportWorker({
       outputDirectory: "/tmp/takosumi-exports",
       downloadBaseUrl: "http://downloads.example.test/accounts/exports",
     }),
@@ -668,7 +668,7 @@ test("metadata-only export worker attaches provider data when requested", async 
   let providerIncludeData: boolean | undefined;
   try {
     const ageExecutable = await writeFakeAgeExecutable(root);
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test/accounts/exports",
       ttlMs: 60_000,
@@ -687,9 +687,9 @@ test("metadata-only export worker attaches provider data when requested", async 
     });
     await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -738,7 +738,7 @@ test("metadata-only export worker rejects data export without age encryption", a
     prefix: "takosumi-accounts-export-worker-plain-data-",
   });
   try {
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test/accounts/exports",
       dataProvider: () => [
@@ -754,9 +754,9 @@ test("metadata-only export worker rejects data export without age encryption", a
       () =>
         worker({
           installation: {
-            installationId: "inst_source",
+            capsuleId: "inst_source",
             accountId: "acct_source",
-            spaceId: "space_source",
+            workspaceId: "space_source",
             appId: "takos.chat",
             sourceGitUrl: "https://github.com/takos/takos",
             sourceRef: "v1.2.3",
@@ -793,7 +793,7 @@ test("metadata-only export worker attaches artifact descriptor when configured",
   });
   let providerOperationId: string | undefined;
   try {
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test/accounts/exports",
       ttlMs: 60_000,
@@ -811,9 +811,9 @@ test("metadata-only export worker attaches artifact descriptor when configured",
     });
     await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -860,7 +860,7 @@ test("metadata-only export worker keeps prefixed static archive paths readable",
     prefix: "takosumi-accounts-export-worker-static-prefix-",
   });
   try {
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test",
       objectKeyPrefix: "accounts/exports",
@@ -869,9 +869,9 @@ test("metadata-only export worker keeps prefixed static archive paths readable",
     });
     const result = await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -929,7 +929,7 @@ test("metadata-only export worker uploads archive through injectable object-stor
   }[] = [];
   try {
     const ageExecutable = await writeFakeAgeExecutable(root);
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       objectKeyPrefix: "accounts/exports",
       ttlMs: 60_000,
@@ -952,9 +952,9 @@ test("metadata-only export worker uploads archive through injectable object-stor
     });
     const result = await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -992,9 +992,9 @@ test("metadata-only export worker uploads archive through injectable object-stor
     expect(uploads[0].contentEncoding).toEqual("age");
     expect(uploads[0].downloadExpiresAt).toEqual("2026-05-09T00:01:00.000Z");
     expect(uploads[0].metadata).toEqual({
-      installationId: "inst_source",
+      capsuleId: "inst_source",
       accountId: "acct_source",
-      spaceId: "space_source",
+      workspaceId: "space_source",
       operationId: "op_upload",
       format: "bundle",
       encryption: "age",
@@ -1029,7 +1029,7 @@ test("metadata-only export worker encrypts archive with age recipients", async (
   });
   try {
     const ageExecutable = await writeFakeAgeExecutable(root);
-    const worker = createMetadataOnlyInstallationExportWorker({
+    const worker = createMetadataOnlyCapsuleExportWorker({
       outputDirectory: root,
       downloadBaseUrl: "https://downloads.example.test/accounts/exports",
       ttlMs: 60_000,
@@ -1038,9 +1038,9 @@ test("metadata-only export worker encrypts archive with age recipients", async (
     });
     const result = await worker({
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         sourceGitUrl: "https://github.com/takos/takos",
         sourceRef: "v1.2.3",
@@ -1082,12 +1082,12 @@ test("metadata-only export worker encrypts archive with age recipients", async (
 });
 
 function sampleExportBundle(sourceIssuer: string) {
-  return buildInstallationExportBundle({
+  return buildCapsuleExportBundle({
     exportedAt: "2026-05-09T00:00:00.000Z",
     installation: {
-      installationId: "inst_source",
+      capsuleId: "inst_source",
       accountId: "acct_source",
-      spaceId: "space_source",
+      workspaceId: "space_source",
       appId: "takos.chat",
       billingAccountId: "billing_source",
       sourceGitUrl: "https://github.com/takos/takos",
@@ -1104,7 +1104,7 @@ function sampleExportBundle(sourceIssuer: string) {
     },
     runtimeBinding: {
       runtimeBindingId: "rtb_source",
-      installationId: "inst_source",
+      capsuleId: "inst_source",
       mode: "dedicated",
       targetType: "dedicated",
       targetId: "dedicated://source/runtime",
@@ -1113,7 +1113,7 @@ function sampleExportBundle(sourceIssuer: string) {
     },
     oidcClient: {
       clientId: "toc_source",
-      installationId: "inst_source",
+      capsuleId: "inst_source",
       namespacePath: "takosumi.identity.oidc",
       issuerUrl: sourceIssuer,
       redirectUris: ["https://takos.example.test/auth/oidc/callback"],
@@ -1126,7 +1126,7 @@ function sampleExportBundle(sourceIssuer: string) {
     bindings: [
       {
         bindingId: "bind_auth",
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         name: "auth",
         kind: "identity.oidc",
         configRef: `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
@@ -1138,7 +1138,7 @@ function sampleExportBundle(sourceIssuer: string) {
       },
       {
         bindingId: "bind_domain",
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         name: "domain",
         kind: "protocol.http.api",
         configRef: "takosumi-accounts://installations/inst_source/domain/main",
@@ -1150,7 +1150,7 @@ function sampleExportBundle(sourceIssuer: string) {
     grants: [
       {
         grantId: "grant_threads",
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         capability: "threads:read",
         scope: {
           pathPrefix: "threads/",
@@ -1162,7 +1162,7 @@ function sampleExportBundle(sourceIssuer: string) {
       },
       {
         grantId: "grant_logs",
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         capability: "logs.read.own",
         scope: {},
         grantedAt: 1778284800000,
@@ -1172,7 +1172,7 @@ function sampleExportBundle(sourceIssuer: string) {
     events: [
       {
         eventId: "evt_create",
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         eventType: "installation.created",
         payload: {},
         eventHash: "sha256:event",

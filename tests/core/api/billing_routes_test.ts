@@ -118,6 +118,7 @@ test("GET /internal/v1/spaces/:spaceId/billing returns settings and balance", as
     billing: {
       settings: { mode: "showback", provider: "none" },
       balance: {
+        workspaceId: "space_12345678",
         spaceId: "space_12345678",
         availableUsdMicros: 702_000_000,
         reservedUsdMicros: 2_000_000,

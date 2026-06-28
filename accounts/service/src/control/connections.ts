@@ -47,15 +47,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -66,11 +66,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -80,7 +80,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -105,19 +105,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -130,7 +130,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -141,10 +141,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -163,8 +163,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -173,12 +173,12 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleConnections(
   ctx: ControlDispatchContext,
@@ -187,7 +187,7 @@ export async function handleConnections(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/connections?workspaceId=  (GET list / POST create)
-  // (legacy-compatible: ?spaceId=)
+  // (legacy-compatible: ?workspaceId=)
   if (segments.length === 1 && segments[0] === "connections") {
     if (method === "GET") {
       return await listControlConnections(
@@ -260,42 +260,42 @@ async function listControlConnections(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId =
+  const workspaceId =
     stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   // The accounts plane has no admin notion distinct from a normal session, so
   // a Workspace id is REQUIRED here; operator-scoped Connection listing stays on
   // the operator-bearer §30 surface. (If/when the accounts plane grows an admin
   // role, this can branch to listOperatorConnections.)
-  if (!spaceId) {
+  if (!workspaceId) {
     return errorJson(
       "invalid_request",
       "workspaceId query parameter is required",
       400,
     );
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  return json(await operations.listConnections(spaceId, page.params));
+  return json(await operations.listConnections(workspaceId, page.params));
 }
 
 /**
- * Registers a Space-owned provider/source helper Connection from the dashboard
+ * Registers a Workspace-owned provider/source helper Connection from the dashboard
  * session. This is the credential-helper write path
  * the §31 connections screen calls same-origin: the guided-token paste and the
  * raw-token "詳細設定" fallback both POST here.
  *
  * Invariants enforced here (independent of any client coercion):
- *   - the session subject must own the target Space (space-permission gate);
+ *   - the session subject must own the target Workspace (space-permission gate);
  *   - the created Connection is ALWAYS `scope: "space"`; Gateway/global
  *     internal resolver records stay on the bearer-gated §30 surface, so we force
  *     `scope` server-side;
@@ -312,14 +312,14 @@ async function createControlConnection(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const spaceId = stringValue(body.spaceId) ?? stringValue(body.space_id);
-  if (!spaceId) {
-    return errorJson("invalid_request", "spaceId is required", 400);
+  const workspaceId = stringValue(body.workspaceId) ?? stringValue(body.space_id);
+  if (!workspaceId) {
+    return errorJson("invalid_request", "workspaceId is required", 400);
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
@@ -367,7 +367,7 @@ async function createControlConnection(
     body.scopeHints,
   );
   const createRequest: CreateConnectionRequest = {
-    spaceId,
+    workspaceId,
     provider: normalizedProvider,
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.
@@ -380,7 +380,7 @@ async function createControlConnection(
           : normalizedProvider === "google"
             ? "gcp_service_account_json"
             : "generic_env_provider",
-    // Force Space scope: the dashboard session surface never mints an operator
+    // Force Workspace scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
     scope: "space",
     ...(stringValue(body.displayName)
@@ -402,9 +402,9 @@ async function createControlConnection(
  *
  * The request only names the connection id, so space ownership is enforced by
  * first reading the Connection (a non-secret projection — the public Connection
- * type carries no values) to learn its `spaceId`, then checking the session
- * subject owns that Space. To prevent cross-tenant probing of connection ids, a
- * missing connection, an absent `spaceId`, and a space-ownership failure all
+ * type carries no values) to learn its `workspaceId`, then checking the session
+ * subject owns that Workspace. To prevent cross-tenant probing of connection ids, a
+ * missing connection, an absent `workspaceId`, and a space-ownership failure all
  * answer a non-disclosing `connection_not_found` (404).
  */
 async function connectionItemOp(
@@ -417,7 +417,7 @@ async function connectionItemOp(
   if (!connectionId) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
-  // Resolve the Connection's owning Space for the ownership gate. A missing
+  // Resolve the Connection's owning Workspace for the ownership gate. A missing
   // connection (typed `not_found`) is mapped to the same non-disclosing 404.
   const target = await resolveConnectionItemTarget(
     operations,
@@ -428,17 +428,17 @@ async function connectionItemOp(
     return errorJson("connection_not_found", "connection not found", 404);
   }
   const { connection, rawConnectionId } = target;
-  const spaceId = connection.spaceId;
-  if (!spaceId) {
+  const workspaceId = connection.workspaceId;
+  if (!workspaceId) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
   // Both test (re-verify) and revoke (delete the sealed blob) are write-scoped
   // mutations; the ownership failure must not disclose the connection's
   // existence, so a 403 from the gate is surfaced as a 404 here.
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) {
@@ -488,17 +488,17 @@ async function startCloudflareOAuth(
   const helper = operations.connectionOAuth?.cloudflare;
   if (!helper) return connectionOAuthUnavailable();
   const body = (await readJsonObject(request)) ?? {};
-  const spaceId =
-    stringValue(body.spaceId) ??
+  const workspaceId =
+    stringValue(body.workspaceId) ??
     stringValue(body.space_id) ??
-    stringValue(url.searchParams.get("spaceId") ?? undefined);
-  if (!spaceId) {
-    return errorJson("invalid_request", "spaceId is required", 400);
+    stringValue(url.searchParams.get("workspaceId") ?? undefined);
+  if (!workspaceId) {
+    return errorJson("invalid_request", "workspaceId is required", 400);
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
@@ -506,7 +506,7 @@ async function startCloudflareOAuth(
     // Bind the OAuth state to the authenticated subject so the cross-site
     // callback can authorize without the SameSite=Strict session cookie.
     subject: sessionSubject,
-    spaceId,
+    workspaceId,
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
@@ -521,7 +521,7 @@ async function startCloudflareOAuth(
  * `SameSite=Strict`) no session cookie either. This handler therefore does NOT
  * call `requireAccountSession`; it authorizes from the authenticated subject
  * that the cookie-gated `start` signed INTO the HMAC OAuth state. It exchanges
- * the code, registers the resulting Space-owned `generic_env_provider` Connection,
+ * the code, registers the resulting Workspace-owned `generic_env_provider` Connection,
  * and then REDIRECTS the browser back to the dashboard `/connections` screen
  * with a result query (never a JSON body, never the token). No new SPA route is
  * introduced — the dashboard owns `/connections` already and reads the
@@ -556,27 +556,27 @@ export async function completeCloudflareOAuth(
     return redirectToConnections(url, { error: "oauth_failed" });
   }
   const createRequest = completed.request;
-  const spaceId = createRequest.spaceId;
+  const workspaceId = createRequest.workspaceId;
   // The subject is the account that initiated `start` (signed into the state).
   // Its absence means an unsigned/legacy state we will not trust for a mint.
   const subject = completed.subject;
-  if (!spaceId || !subject) {
+  if (!workspaceId || !subject) {
     return redirectToConnections(url, { error: "oauth_failed" });
   }
-  // Re-check Space ownership against the SIGNED state's subject + spaceId so a
-  // stolen or forged callback cannot mint a Connection into a Space the
+  // Re-check Workspace ownership against the SIGNED state's subject + workspaceId so a
+  // stolen or forged callback cannot mint a Connection into a Workspace the
   // authenticated initiator does not own. This is the callback's only authz —
   // there is no session cookie on a cross-site redirect.
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject,
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
   let created: ConnectionResponse;
   try {
-    // Force Space scope regardless of what the helper produced.
+    // Force Workspace scope regardless of what the helper produced.
     created = await operations.createConnection({
       ...createRequest,
       scope: "space",
@@ -592,7 +592,7 @@ export async function completeCloudflareOAuth(
     connectionStatus = "pending";
   }
   return redirectToConnections(url, {
-    connected: spaceId,
+    connected: workspaceId,
     connectionId: created.connection.id,
     connectionStatus,
   });

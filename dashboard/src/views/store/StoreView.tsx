@@ -10,11 +10,11 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { locale, t } from "../../i18n/index.ts";
 import {
-  currentSpaceId,
-  selectAvailableSpaceId,
-  setCurrentSpaceId,
-} from "../../lib/space-state.ts";
-import { listSpaces } from "../../lib/control-api.ts";
+  currentWorkspaceId,
+  selectAvailableWorkspaceId,
+  setCurrentWorkspaceId,
+} from "../../lib/workspace-state.ts";
+import { listWorkspaces } from "../../lib/control-api.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
@@ -23,11 +23,11 @@ function Inner() {
   const navigate = useNavigate();
 
   onMount(async () => {
-    if (currentSpaceId()) return;
+    if (currentWorkspaceId()) return;
     try {
-      const spaces = await listSpaces();
-      const chosen = selectAvailableSpaceId(currentSpaceId(), spaces);
-      if (chosen) setCurrentSpaceId(chosen);
+      const workspaces = await listWorkspaces();
+      const chosen = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
+      if (chosen) setCurrentWorkspaceId(chosen);
     } catch {
       /* a workspace picker in the chrome handles the empty case */
     }

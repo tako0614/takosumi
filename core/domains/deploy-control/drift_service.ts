@@ -129,7 +129,8 @@ export class DriftService {
     if (add + change + destroy <= 0) return;
     const classification = classifyDriftResourceChanges(changes);
     await this.#recordActivity({
-      spaceId: planRun.spaceId,
+      workspaceId: planRun.workspaceId,
+      spaceId: (planRun.workspaceId ?? planRun.spaceId),
       action: "installation.drift_detected",
       targetType: "installation",
       targetId:

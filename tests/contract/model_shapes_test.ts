@@ -1,5 +1,5 @@
 /**
- * Type-shape pins for the Space-direct OpenTofu Capsule DAG contract. These
+ * Type-shape pins for the Workspace-direct OpenTofu Capsule DAG contract. These
  * tests freeze the canonical field sets so
  * accidental contract drift fails loudly, mirroring the existing contract
  * test idiom.
@@ -7,7 +7,7 @@
 import { expect, test } from "bun:test";
 
 import type {
-  InstallationProviderEnvBinding,
+  CapsuleProviderEnvBinding,
   ProviderConnection,
 } from "../../contract/connections.ts";
 import type { ProviderListing } from "../../contract/providers.ts";
@@ -37,27 +37,27 @@ import type {
   DependencySnapshot,
 } from "../../contract/dependencies.ts";
 import type { Connection } from "../../contract/internal-deploy-control-api.ts";
-import type { Deployment, StateSnapshot } from "../../contract/deployments.ts";
+import type { Deployment, StateVersion } from "../../contract/deployments.ts";
 import type {
   InstallConfig,
-  Installation,
+  Capsule,
 } from "../../contract/installations.ts";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "../../contract/output-snapshots.ts";
+  Output,
+} from "../../contract/outputs.ts";
 import type { Run, RunGroup } from "../../contract/runs.ts";
 import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "../../contract/security.ts";
 import {
-  formatInstallationFullName,
-  type Space,
-} from "../../contract/spaces.ts";
+  formatCapsuleFullName,
+  type Workspace,
+} from "../../contract/workspaces.ts";
 
-test("Space shape", () => {
-  const space: Space = {
+test("Workspace shape", () => {
+  const space: Workspace = {
     id: "space_1",
     handle: "acme",
     displayName: "Acme",
@@ -67,9 +67,9 @@ test("Space shape", () => {
     updatedAt: "2026-06-06T00:00:00Z",
   };
   expect(
-    formatInstallationFullName({
-      spaceHandle: space.handle,
-      installationName: "chat",
+    formatCapsuleFullName({
+      workspaceHandle: space.handle,
+      capsuleName: "chat",
     }),
   ).toBe("@acme/chat");
 });
@@ -90,7 +90,7 @@ test("BillingPlan shape", () => {
   expect(plan.limits.quota?.resources).toBe(20);
 });
 
-test("Installation + InstallConfig shape", () => {
+test("Capsule + InstallConfig shape", () => {
   const config: InstallConfig = {
     id: "cfg_talk",
     name: "talk",
@@ -121,9 +121,10 @@ test("Installation + InstallConfig shape", () => {
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  const installation: Installation = {
+  const installation: Capsule = {
     id: "inst_talk",
-    spaceId: "space_1",
+    workspaceId: "ws_1",
+    projectId: "prj_default",
     name: "talk",
     slug: "talk",
     sourceId: "src_talk",
@@ -206,7 +207,7 @@ test("Capsule compatibility report shape", () => {
 test("unified Provider Connection + binding shape uses concrete connection ids", () => {
   const providerConnection: ProviderConnection = {
     id: "conn_space_cf",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     kind: "cloudflare_api_token",
@@ -218,7 +219,7 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
     createdAt: "2026-06-06T00:00:00Z",
     updatedAt: "2026-06-06T00:00:00Z",
   };
-  const binding: InstallationProviderEnvBinding = {
+  const binding: CapsuleProviderEnvBinding = {
     provider: "cloudflare",
     alias: "main",
     connectionId: providerConnection.id,
@@ -235,7 +236,7 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
     allowedResources: ["cloudflare_workers_script"],
     allowedDataSources: [],
   };
-  const bindings: readonly InstallationProviderEnvBinding[] = [
+  const bindings: readonly CapsuleProviderEnvBinding[] = [
     { provider: "cloudflare", alias: "main", connectionId: "conn_cf_other" },
     { provider: "cloudflare", alias: "zone", connectionId: providerConnection.id },
   ];
@@ -306,7 +307,7 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
     grantId: "sg_1",
     serviceExportId: "se_1",
     serviceBindingId: "sb_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     capability: "object.readwrite",
     rotationPolicyId: "rotate_runtime_grants",
   };
@@ -325,7 +326,7 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
 test("Connection expiry shape", () => {
   const connection: Connection = {
     id: "conn_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     provider: "cloudflare",
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     kind: "cloudflare_api_token",
@@ -344,9 +345,9 @@ test("Connection expiry shape", () => {
 test("Dependency + DependencySnapshot shape", () => {
   const dependency: Dependency = {
     id: "dep_1",
-    spaceId: "space_1",
-    producerInstallationId: "inst_core",
-    consumerInstallationId: "inst_talk",
+    workspaceId: "space_1",
+    producerCapsuleId: "inst_core",
+    consumerCapsuleId: "inst_talk",
     mode: "variable_injection",
     outputs: {
       base_domain: {
@@ -371,13 +372,13 @@ test("Dependency + DependencySnapshot shape", () => {
     dependencies: [
       {
         dependencyId: dependency.id,
-        producerInstallationId: dependency.producerInstallationId,
+        producerCapsuleId: dependency.producerCapsuleId,
         producerStateGeneration: 3,
-        producerStateSnapshotId: "state_3",
+        producerStateVersionId: "state_3",
         producerStateObjectKey:
           "spaces/space_1/installations/inst_core/envs/production/states/00000003.tfstate.enc",
         producerStateDigest: "sha256:state",
-        producerOutputSnapshotId: "out_3",
+        producerOutputId: "out_3",
         producerOutputDigest: "sha256:abc",
         valuesDigest: "sha256:def",
         values: { base_domain: "shota.example.com" },
@@ -390,16 +391,16 @@ test("Dependency + DependencySnapshot shape", () => {
   expect(snapshot.dependencies[0]?.producerStateGeneration).toBe(3);
 });
 
-test("OutputSnapshot projects raw -> space/public lanes", () => {
-  const snapshot: OutputSnapshot = {
+test("Output projects raw -> space/public lanes", () => {
+  const snapshot: Output = {
     id: "out_1",
-    spaceId: "space_1",
-    installationId: "inst_core",
+    workspaceId: "space_1",
+    capsuleId: "inst_core",
     stateGeneration: 1,
     rawOutputArtifactKey:
       "spaces/space_1/installations/inst_core/runs/run_1/outputs.raw.json.enc",
     publicOutputs: { public_origin: "https://shota.example.com" },
-    spaceOutputs: { base_domain: "shota.example.com" },
+    workspaceOutputs: { base_domain: "shota.example.com" },
     outputDigest: "sha256:abc",
     createdAt: "2026-06-06T00:00:00Z",
   };
@@ -409,9 +410,9 @@ test("OutputSnapshot projects raw -> space/public lanes", () => {
 test("OutputShare lifecycle states", () => {
   const share: OutputShare = {
     id: "share_1",
-    fromSpaceId: "space_company",
-    toSpaceId: "space_1",
-    producerInstallationId: "inst_domain",
+    fromWorkspaceId: "space_company",
+    toWorkspaceId: "space_1",
+    producerCapsuleId: "inst_domain",
     outputs: [{ name: "domain", sensitive: false }],
     status: "pending",
     createdAt: "2026-06-06T00:00:00Z",
@@ -422,8 +423,8 @@ test("OutputShare lifecycle states", () => {
 test("single Run table covers all run kinds", () => {
   const run: Run = {
     id: "run_1",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     environment: "production",
     type: "plan",
     status: "waiting_approval",
@@ -468,7 +469,7 @@ test("single Run table covers all run kinds", () => {
   };
   const group: RunGroup = {
     id: "rg_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     type: "space_update",
     status: "queued",
     graphJson: JSON.stringify({ order: [["inst_core"], ["inst_talk"]] }),
@@ -492,8 +493,8 @@ test("single Run table covers all run kinds", () => {
 test("compatibility_check Run kind is part of the unified ledger", () => {
   const run: Run = {
     id: "run_compat",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     environment: "production",
     type: "compatibility_check",
     status: "succeeded",
@@ -505,7 +506,8 @@ test("compatibility_check Run kind is part of the unified ledger", () => {
   expect(run.type).toBe("compatibility_check");
 });
 
-test("Deployment + StateSnapshot shape", () => {
+test("Deployment + StateVersion shape", () => {
+  // Retired Deployment ledger keeps its frozen legacy field names.
   const deployment: Deployment = {
     id: "dpl_1",
     spaceId: "space_1",
@@ -520,10 +522,10 @@ test("Deployment + StateSnapshot shape", () => {
     status: "active",
     createdAt: "2026-06-06T00:00:00Z",
   };
-  const state: StateSnapshot = {
+  const state: StateVersion = {
     id: "state_4",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     environment: "production",
     generation: 4,
     objectKey:
@@ -551,7 +553,7 @@ test("Billing and security ledger shapes", () => {
   };
   const reservation: CreditReservation = {
     id: "cr_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     runId: "run_1",
     estimatedCredits: 32,
     status: "reserved",
@@ -561,8 +563,8 @@ test("Billing and security ledger shapes", () => {
   };
   const usage: UsageEvent = {
     id: "usage_1",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     runId: "run_1",
     kind: "runner_minute",
     quantity: 3,
@@ -573,7 +575,7 @@ test("Billing and security ledger shapes", () => {
   };
   const autoRechargeAttempt: BillingAutoRechargeAttempt = {
     id: "takosumi-autorecharge:space_1:run_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     runId: "run_1",
     billingAccountId: "ba_1",
     idempotencyKey: "takosumi-autorecharge:space_1:run_1",
@@ -597,7 +599,7 @@ test("Billing and security ledger shapes", () => {
     adjustmentCredits: 1,
     usageEvent: {
       id: "usage_reconcile",
-      spaceId: "space_1",
+      workspaceId: "space_1",
       kind: "operation",
       quantity: 1,
       credits: 1,
@@ -609,8 +611,8 @@ test("Billing and security ledger shapes", () => {
   const mint: CredentialMintEvent = {
     id: "mint_1",
     runId: "run_1",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     connectionId: "conn_1",
     phase: "plan",
     capabilities: ["cloudflare"],
@@ -618,8 +620,8 @@ test("Billing and security ledger shapes", () => {
   };
   const finding: SecurityFinding = {
     id: "sec_1",
-    spaceId: "space_1",
-    installationId: "inst_talk",
+    workspaceId: "space_1",
+    capsuleId: "inst_talk",
     runId: "run_1",
     severity: "warning",
     type: "capsule_gate",

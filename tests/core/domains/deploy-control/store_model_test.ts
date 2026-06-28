@@ -23,7 +23,7 @@ import type {
   Installation,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/installations";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type {
@@ -32,8 +32,8 @@ import type {
 } from "takosumi-contract/dependencies";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -158,12 +158,15 @@ class ModelSqlClient implements SqlClient {
     const current = parseJsonObject(row.json);
     const currentDeployment = current?.currentDeploymentId ?? null;
     const currentStatus = current?.status;
+    // P4: the physical column is `current_state_version_id` (renamed from
+    // current_deployment_id); the in-blob guard field stays `currentDeploymentId`
+    // (the InstallationPatchGuard contract is unchanged).
     const deploymentWhere = where.find(
-      (c) => c.column === "current_deployment_id",
+      (c) => c.column === "current_state_version_id",
     );
     const guardDeploymentValue =
-      lower.includes('"current_deployment_id" is null') ||
-      lower.includes("current_deployment_id is null")
+      lower.includes('"current_state_version_id" is null') ||
+      lower.includes("current_state_version_id is null")
         ? null
         : deploymentWhere
           ? (params[deploymentWhere.indexes[0]] ?? null)
@@ -783,8 +786,8 @@ function credentialMintEvent(
   return {
     id: "credmint_1",
     runId: "run_1",
-    spaceId: "space_1",
-    installationId: "inst_1",
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
     connectionId: "conn_1",
     phase: "plan",
     capabilities: ["cloudflare"],
@@ -796,8 +799,8 @@ function credentialMintEvent(
 function securityFinding(over: Partial<SecurityFinding> = {}): SecurityFinding {
   return {
     id: "sec_1",
-    spaceId: "space_1",
-    installationId: "inst_1",
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
     runId: "run_1",
     severity: "warning",
     type: "capsule_gate",
@@ -2734,7 +2737,7 @@ test("SecurityFinding store: put/list newest-first, space-scoped, run-filtered",
       }),
     );
     await store.putSecurityFinding(
-      securityFinding({ id: "sec_other", spaceId: "space_2" }),
+      securityFinding({ id: "sec_other", workspaceId: "space_2" }),
     );
 
     expect(
@@ -2845,6 +2848,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       updatedAt: "2026-06-07T00:00:00.000Z",
     });
     expect(await store.getCreditBalance("space_1"), label).toEqual({
+      workspaceId: "space_1",
       spaceId: "space_1",
       availableUsdMicros: 42_000_000,
       reservedUsdMicros: 3_000_000,
@@ -2908,6 +2912,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
     });
     expect(await store.getCreditReservationForRun("plan_1"), label).toEqual({
       id: "creditres_1",
+      workspaceId: "space_1",
       spaceId: "space_1",
       runId: "plan_1",
       estimatedUsdMicros: 5_000_000,
@@ -3048,6 +3053,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
     expect(await store.listUsageEvents("space_1"), label).toEqual([
       {
         id: "usage_1",
+        workspaceId: "space_1",
         spaceId: "space_1",
         installationId: "inst_1",
         runId: "apply_1",

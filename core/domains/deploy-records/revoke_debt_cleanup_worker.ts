@@ -283,6 +283,7 @@ function withRevokeDebtOperationContext(
   if (!debt.resourceName || !debt.providerId) return context;
   const operationPlanDigest = debt.operationPlanDigest ?? debt.sourceKey;
   const idempotencyKey = {
+    workspaceId: debt.ownerSpaceId,
     spaceId: debt.ownerSpaceId,
     operationPlanDigest,
     journalEntryId: `revoke-debt:${debt.id}`,

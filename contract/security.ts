@@ -5,8 +5,8 @@
 export interface CredentialMintEvent {
   readonly id: string;
   readonly runId: string;
-  readonly spaceId: string;
-  readonly installationId?: string;
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
   readonly sourceId?: string;
   readonly connectionId?: string;
   readonly providerEnvId?: string;
@@ -52,8 +52,8 @@ export interface ProviderCredentialMintEvidence {
 
 export interface SecurityFinding {
   readonly id: string;
-  readonly spaceId: string;
-  readonly installationId?: string;
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
   readonly runId?: string;
   readonly severity: "info" | "warning" | "error" | "critical";
   readonly type: string;

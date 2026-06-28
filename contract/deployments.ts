@@ -1,10 +1,23 @@
 /**
- * Deployment + StateSnapshot contract (`deployments` / `state_snapshots`).
+ * @deprecated retired Deployment ledger (read-only for audit) + StateVersion
+ * alias.
  *
- * These are the OpenTofu Capsule DAG shapes: a successful apply records one
- * Deployment, one StateSnapshot generation, and the OutputSnapshot produced by
- * `tofu output -json`.
+ * The Takosumi `Deployment` ledger is RETIRED, not renamed: a successful apply
+ * Run + {@link StateVersion} + Output is now the record. The `Deployment` type
+ * is kept here ONLY so legacy `deployments` rows stay readable for audit, so its
+ * field names (`spaceId` / `installationId` / `outputSnapshotId`) deliberately
+ * still match the frozen legacy columns and are NOT migrated to the
+ * workspace/capsule vocabulary.
+ *
+ * `StateSnapshot` is renamed to `StateVersion` (see `./state-versions.ts`); the
+ * old name is re-exported below while the rename converges.
  */
+
+/** @deprecated `StateSnapshot` is renamed to `StateVersion`. */
+export type {
+  StateVersion,
+  StateVersion as StateSnapshot,
+} from "./state-versions.ts";
 
 export type DeploymentStatus =
   | "active"
@@ -13,7 +26,8 @@ export type DeploymentStatus =
   | "destroyed";
 
 /**
- * Successful apply record. Immutable once written.
+ * @deprecated Retired successful-apply record. Immutable once written; read-only
+ * for audit. New applies record a {@link StateVersion} + Output instead.
  */
 export interface Deployment {
   readonly id: string;
@@ -31,26 +45,8 @@ export interface Deployment {
 }
 
 /**
- * Public Deployment projection returned by the edge/session API. The raw
- * `outputSnapshotId` handle stays on the internal ledger shape; public reads use
- * the allowlisted `outputsPublic` projection or explicit OutputShare flows.
+ * @deprecated Public projection of the retired {@link Deployment} ledger. The
+ * raw `outputSnapshotId` handle stays on the internal ledger shape; public reads
+ * use the allowlisted `outputsPublic` projection or explicit OutputShare flows.
  */
 export type PublicDeployment = Omit<Deployment, "outputSnapshotId">;
-
-/**
- * One tfstate generation. The encrypted object lives in R2_STATE
- * under `spaces/{spaceId}/installations/{installationId}/envs/{environment}/
- * states/{generation(8 digits)}.tfstate.enc` with an atomic `current.json`.
- * UNIQUE(installation_id, environment, generation) is the generation guard.
- */
-export interface StateSnapshot {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
-  readonly environment: string;
-  readonly generation: number;
-  readonly objectKey: string;
-  readonly digest: string;
-  readonly createdByRunId: string;
-  readonly createdAt: string;
-}

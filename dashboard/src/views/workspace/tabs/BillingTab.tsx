@@ -22,11 +22,11 @@ import {
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
-import { setCurrentSpaceId } from "../../../lib/space-state.ts";
+import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import {
-  getSpaceBilling,
+  getWorkspaceBilling,
   listBillingPlans,
-  listSpaceUsage,
+  listWorkspaceUsage,
   type CreditBalance,
   type PublicBillingPlan,
   type UsageEvent,
@@ -56,14 +56,14 @@ const MODE_KEY: Record<string, MessageKey> = {
   enforce: "billing.mode.enforce",
 };
 
-export default function BillingTab(props: { readonly spaceId: string }) {
-  const [billing] = createResource(() => props.spaceId, getSpaceBilling);
+export default function BillingTab(props: { readonly workspaceId: string }) {
+  const [billing] = createResource(() => props.workspaceId, getWorkspaceBilling);
   const cloudBilling = createMemo(() => isTakosumiCloudRuntime());
   const [plans] = createResource(
     () => (cloudBilling() ? "cloud" : undefined),
     listBillingPlans,
   );
-  const [usage] = createResource(() => props.spaceId, listSpaceUsage);
+  const [usage] = createResource(() => props.workspaceId, listWorkspaceUsage);
 
   const mode = createMemo(() => billing()?.settings?.mode);
   const balance = createMemo(() => billing()?.balance);
@@ -122,8 +122,8 @@ export default function BillingTab(props: { readonly spaceId: string }) {
   >(null);
   if (typeof window !== "undefined") {
     const billingReturn = consumeBillingReturnSearch(window.location.search);
-    if (billingReturn.spaceId) {
-      setCurrentSpaceId(billingReturn.spaceId);
+    if (billingReturn.workspaceId) {
+      setCurrentWorkspaceId(billingReturn.workspaceId);
     }
     if (billingReturn.checkoutNotice) {
       setCheckoutNotice(billingReturn.checkoutNotice);
@@ -150,7 +150,7 @@ export default function BillingTab(props: { readonly spaceId: string }) {
       const result = await rpc.billing.checkout({
         subject: session.subject,
         planId: plan.id,
-        spaceId: props.spaceId,
+        workspaceId: props.workspaceId,
       });
       if (result.url) {
         location.assign(result.url);

@@ -27,14 +27,14 @@ import type { JsonValue } from "takosumi-contract";
 import type { OpenTofuDeploymentController } from "./mod.ts";
 import type { DeployControlActorContext } from "./mod.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
-import type { InstallationsService } from "../installations/mod.ts";
-import { defaultCapsuleOutputAllowlist } from "../installations/official_seed.ts";
+import type { CapsulesService } from "../capsules/mod.ts";
+import { defaultCapsuleOutputAllowlist } from "../capsules/official_seed.ts";
 import { validateInstallationProviderEnvBindings } from "../connections/mod.ts";
 
 const DEFAULT_ENVIRONMENT = "production";
 
 export interface DeployUploadDependencies {
-  readonly installations: InstallationsService;
+  readonly installations: CapsulesService;
   readonly controller: OpenTofuDeploymentController;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
@@ -76,7 +76,7 @@ export async function deployUpload(
   }
 
   // 2. Resolve or create the Installation @space/name.
-  const existingForSpace = await deps.installations.listInstallations(
+  const existingForSpace = await deps.installations.listCapsules(
     request.spaceId,
   );
   let installation = existingForSpace.find(
@@ -117,8 +117,8 @@ export async function deployUpload(
       now,
     });
     await deps.installations.putInstallConfig(config);
-    installation = await deps.installations.createInstallation({
-      spaceId: request.spaceId,
+    installation = await deps.installations.createCapsule({
+      workspaceId: request.spaceId,
       name: request.name,
       environment,
       installConfigId: config.id,
@@ -190,9 +190,11 @@ async function putProviderConnections(input: {
   readonly now: () => Date;
 }): Promise<void> {
   const nowIso = input.now().toISOString();
-  await input.deps.installations.putInstallationProviderEnvBindingSet({
+  await input.deps.installations.putCapsuleProviderEnvBindingSet({
     id: input.id,
-    spaceId: input.installation.spaceId,
+    workspaceId: input.installation.workspaceId,
+    spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
+    capsuleId: input.installation.id,
     installationId: input.installation.id,
     environment: input.installation.environment,
     bindings: input.connections,
@@ -216,7 +218,7 @@ async function reconcileUploadInstallationStatus(input: {
   readonly status: NonNullable<DeployResponse["status"]>;
 }): Promise<Installation> {
   if (input.created && input.status === "failed") {
-    return await input.deps.installations.patchInstallationStatus(
+    return await input.deps.installations.patchCapsuleStatus(
       input.installation.id,
       "error",
     );
@@ -229,7 +231,7 @@ async function markCreatedUploadInstallationError(
   installation: Installation,
 ): Promise<void> {
   try {
-    await deps.installations.patchInstallationStatus(installation.id, "error");
+    await deps.installations.patchCapsuleStatus(installation.id, "error");
   } catch {
     // Preserve the original deploy failure. A later status probe can still see
     // the failed run or the pending orphan that triggered this best-effort path.

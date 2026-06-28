@@ -183,9 +183,13 @@ export function projectPlanRun(
   return {
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
-    spaceId: planRun.spaceId,
+    workspaceId: planRun.workspaceId,
+    spaceId: (planRun.workspaceId ?? planRun.spaceId),
     ...(options.installationId
-      ? { installationId: options.installationId }
+      ? {
+          capsuleId: options.installationId,
+          installationId: options.installationId,
+        }
       : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
@@ -283,9 +287,13 @@ export function projectApplyRun(
   return {
     id: applyRun.id,
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
-    spaceId: applyRun.spaceId,
+    workspaceId: applyRun.workspaceId,
+    spaceId: (applyRun.workspaceId ?? applyRun.spaceId),
     ...(options.installationId
-      ? { installationId: options.installationId }
+      ? {
+          capsuleId: options.installationId,
+          installationId: options.installationId,
+        }
       : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
@@ -314,6 +322,7 @@ export function projectApplyRun(
 export function projectSourceSyncRun(run: SourceSyncRun): Run {
   return {
     id: run.id,
+    workspaceId: run.workspaceId,
     spaceId: run.spaceId,
     type: "source_sync",
     status: syncUnifiedStatus(run.status),

@@ -81,7 +81,7 @@ const billingWebhookEvents = accounts.table("billing_webhook_events", {
 
 const billingUsageRecords = accounts.table("billing_usage_records", {
   usageReportId: text("usage_report_id").primaryKey(),
-  installationId: text("installation_id").notNull(),
+  capsuleId: text("installation_id").notNull(),
   billingAccountId: text("billing_account_id").notNull(),
   meter: text("meter").notNull(),
   quantity: doublePrecision("quantity").notNull(),
@@ -280,7 +280,7 @@ export async function saveBillingUsageRecord(
         reportedAt: values.reportedAt,
       },
       where: and(
-        eq(billingUsageRecords.installationId, values.installationId),
+        eq(billingUsageRecords.capsuleId, values.capsuleId),
         eq(billingUsageRecords.billingAccountId, values.billingAccountId),
       ),
     })
@@ -307,14 +307,14 @@ export async function findBillingUsageRecord(
   return row ? billingUsageFromRow(row) : undefined;
 }
 
-export async function listBillingUsageRecordsForInstallation(
+export async function listBillingUsageRecordsForCapsule(
   client: PostgresQueryClient,
-  installationId: string,
+  capsuleId: string,
 ): Promise<readonly BillingUsageRecord[]> {
   const rows = (await postgresDrizzle(client, billingSchema)
     .select(billingUsageColumns)
     .from(billingUsageRecords)
-    .where(eq(billingUsageRecords.installationId, installationId))
+    .where(eq(billingUsageRecords.capsuleId, capsuleId))
     .orderBy(
       asc(billingUsageRecords.reportedAt),
       asc(billingUsageRecords.usageReportId),
@@ -436,7 +436,7 @@ const billingWebhookEventColumns = {
 
 const billingUsageColumns = {
   usage_report_id: billingUsageRecords.usageReportId,
-  installation_id: billingUsageRecords.installationId,
+  installation_id: billingUsageRecords.capsuleId,
   billing_account_id: billingUsageRecords.billingAccountId,
   meter: billingUsageRecords.meter,
   quantity: billingUsageRecords.quantity,
@@ -560,7 +560,7 @@ function billingWebhookEventValues(record: BillingWebhookEventRecord) {
 function billingUsageValues(record: BillingUsageRecord) {
   return {
     usageReportId: record.usageReportId,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     billingAccountId: record.billingAccountId,
     meter: record.meter,
     quantity: record.quantity,

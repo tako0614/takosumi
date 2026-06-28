@@ -5,7 +5,7 @@ import { recordArtifactSnapshotFromUrl } from "../../../core/api/deploy_control_
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../core/domains/sources/mod.ts";
-import { InstallationsService } from "../../../core/domains/installations/mod.ts";
+import { CapsulesService } from "../../../core/domains/capsules/mod.ts";
 
 async function makeApp() {
   const store = new InMemoryOpenTofuDeploymentStore();
@@ -19,7 +19,7 @@ async function makeApp() {
     store,
     sourcesService,
   });
-  const installationsService = new InstallationsService({ store });
+  const installationsService = new CapsulesService({ store });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {

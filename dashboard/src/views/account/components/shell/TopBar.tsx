@@ -10,15 +10,15 @@ import { A, useLocation } from "@solidjs/router";
 import { createMemo, createResource, Show } from "solid-js";
 import { Bell, Plus } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
-import { currentSpaceId } from "../../../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import {
-  type Installation,
-  listInstallations,
+  type Capsule,
+  listCapsules,
 } from "../../../../lib/control-api.ts";
 import {
-  isVisibleServiceInstallation,
+  isVisibleServiceCapsule,
   needsAttention,
-} from "../../../../lib/installations-ui.ts";
+} from "../../../../lib/capsules-ui.ts";
 import { type MessageKey, t } from "../../../../i18n/index.ts";
 
 /** Section title shown in the top bar, by route. Detail routes show the
@@ -30,7 +30,7 @@ const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/store(\/|$)/, "nav.store"],
   [/^\/cloud(\/|$)/, "nav.cloudResources"],
   [/^\/connections(\/|$)/, "nav.connections"],
-  [/^\/advanced\/workspace(\/|$)/, "nav.spaceSettings"],
+  [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
   [/^\/billing(\/|$)/, "nav.billing"],
   [/^\/runs(\/|$)/, "nav.runs"],
   [/^\/run-groups(\/|$)/, "nav.runs"],
@@ -46,16 +46,16 @@ export default function TopBar() {
     return hit ? t(hit[1]) : "";
   };
 
-  const [installations] = createResource(
-    () => currentSpaceId() || null,
-    async (spaceId): Promise<readonly Installation[]> =>
-      spaceId ? listInstallations(spaceId) : [],
+  const [capsules] = createResource(
+    () => currentWorkspaceId() || null,
+    async (workspaceId): Promise<readonly Capsule[]> =>
+      workspaceId ? listCapsules(workspaceId) : [],
   );
   const badge = createMemo(() => {
-    const list = installations();
+    const list = capsules();
     if (!list) return 0;
     return list.filter(
-      (inst) => isVisibleServiceInstallation(inst) && needsAttention(inst),
+      (inst) => isVisibleServiceCapsule(inst) && needsAttention(inst),
     ).length;
   });
 

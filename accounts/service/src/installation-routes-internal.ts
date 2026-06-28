@@ -11,7 +11,7 @@
  *   internal installation launch flow. Token issue is not a
  *   public app route; token consume remains public so installed apps can
  *   redeem the one-shot launch token.
- * - `requireInstallationAccessTokenCapability` gates internal bearer-token
+ * - `requireCapsuleAccessTokenCapability` gates internal bearer-token
  *   checks for the same flows.
  *
  * None of these are re-exported from the package barrel.
@@ -22,7 +22,7 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import type {
   ServiceGrantMaterialCapability,
-  InstallationRecord,
+  CapsuleRecord,
 } from "./ledger.ts";
 import type {
   AccountsStore,
@@ -53,14 +53,14 @@ import type { LaunchTokenOptions } from "./mod.ts";
  * export over HTTP.
  */
 export async function handleIssueLaunchToken(input: {
-  installationId: string;
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
   issuer: string;
   launchTokens: LaunchTokenOptions;
 }): Promise<Response> {
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
@@ -114,9 +114,9 @@ export async function handleIssueLaunchToken(input: {
   await input.store.saveLaunchToken({
     tokenHash,
     jti,
-    installationId: installation.installationId,
+    capsuleId: installation.capsuleId,
     accountId: installation.accountId,
-    spaceId: installation.spaceId,
+    workspaceId: installation.workspaceId,
     appId: installation.appId,
     subject,
     redirectUri: boundRedirectUri,
@@ -126,7 +126,7 @@ export async function handleIssueLaunchToken(input: {
   });
   redirect.searchParams.set("launch_token", token);
   await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: "installation.launch_token_issued",
     payload: {
       purpose,
@@ -145,13 +145,13 @@ export async function handleIssueLaunchToken(input: {
     expiresAt: new Date(expiresAt).toISOString(),
     expires_at: new Date(expiresAt).toISOString(),
     jti,
-    installation_id: installation.installationId,
+    installation_id: installation.capsuleId,
     redirect_uri: boundRedirectUri,
   });
 }
 
 export async function handleConsumeLaunchToken(input: {
-  installationId: string;
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
@@ -178,7 +178,7 @@ export async function handleConsumeLaunchToken(input: {
   const now = Date.now();
   const result = await input.store.consumeLaunchToken({
     tokenHash: await sha256Text(`takosumi-launch-token:${token}`),
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     redirectUri: redirect.toString(),
     consumedAt: now,
   });
@@ -198,7 +198,7 @@ export async function handleConsumeLaunchToken(input: {
   }
   const record = result.record;
   await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: "installation.launch_token_consumed",
     payload: {
       jti: record.jti,
@@ -211,9 +211,9 @@ export async function handleConsumeLaunchToken(input: {
   });
   return json({
     consumed: true,
-    installation_id: record.installationId,
+    installation_id: record.capsuleId,
     account_id: record.accountId,
-    space_id: record.spaceId,
+    space_id: record.workspaceId,
     app_id: record.appId,
     sub: record.subject,
     subject: record.subject,
@@ -236,7 +236,7 @@ export function launchTokenConsumeError(
 
 export async function resolveLaunchTokenPairwiseSubject(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   launchTokens: LaunchTokenOptions;
 }): Promise<TakosumiSubject | Response> {
   if (!input.launchTokens.pairwiseSubjectSecret) {
@@ -246,18 +246,18 @@ export async function resolveLaunchTokenPairwiseSubject(input: {
       503,
     );
   }
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installation.installationId,
+  const oidcClient = await input.store.findOidcClientForCapsule(
+    input.installation.capsuleId,
   );
   const clientId = oidcClient
     ? [
         input.installation.appId,
-        input.installation.installationId,
+        input.installation.capsuleId,
         oidcClient.clientId,
       ].join(":")
     : [
         input.installation.appId,
-        input.installation.installationId,
+        input.installation.capsuleId,
         "launch-token",
       ].join(":");
   return await derivePairwiseSubject({
@@ -267,10 +267,10 @@ export async function resolveLaunchTokenPairwiseSubject(input: {
   });
 }
 
-export async function requireInstallationAccessTokenCapability(input: {
+export async function requireCapsuleAccessTokenCapability(input: {
   request: Request;
   store: AccountsStore;
-  installationId: string;
+  capsuleId: string;
   capability: ServiceGrantMaterialCapability;
 }): Promise<
   { ok: true; record: TokenRecord } | { ok: false; response: Response }
@@ -284,7 +284,7 @@ export async function requireInstallationAccessTokenCapability(input: {
     if (record) await input.store.deleteToken(accessToken);
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
-  if (record.installationId !== input.installationId) {
+  if (record.capsuleId !== input.capsuleId) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
   if (!includesScope(record.scope, input.capability)) {

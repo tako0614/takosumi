@@ -6,7 +6,7 @@ import { ja } from "../../../../../../dashboard/src/i18n/ja.ts";
 
 const sourcePath = resolve(
   import.meta.dir,
-  "../../../../../../dashboard/src/views/space/tabs/BillingTab.tsx",
+  "../../../../../../dashboard/src/views/workspace/tabs/BillingTab.tsx",
 );
 
 test("BillingTab does not mask billing API failures as disabled or empty state", () => {
@@ -51,7 +51,7 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
   expect(source).toContain("<Show when={cloudBilling()}>");
   expect(source).toContain("const canStartCheckout = createMemo");
   expect(source).toContain("cloudBilling() && hasBillingCatalog()");
-  expect(source).toContain("listSpaceUsage");
+  expect(source).toContain("listWorkspaceUsage");
   expect(source).toContain('"billing.usage.title"');
   expect(source).toContain('"billing.plans.title"');
   expect(source).toContain('"billing.portal"');

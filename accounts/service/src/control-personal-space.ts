@@ -1,5 +1,5 @@
 /**
- * First-login personal-Space hook (spec §4: "初回ログイン時に個人 Space を自動
+ * First-login personal-Workspace hook (spec §4: "初回ログイン時に個人 Workspace を自動
  * 作成する") wired on the account-session bootstrap route the dashboard hits
  * first (`GET /v1/account/session/me`).
  *
@@ -15,12 +15,12 @@ import { extractAccountSessionId } from "./account-session.ts";
 
 /**
  * Resolves the presented session, derives a stable handle from the account, and
- * fires the idempotent `ensurePersonalSpace` against the deploy-control facade.
+ * fires the idempotent `ensurePersonalWorkspace` against the deploy-control facade.
  *
  * Fire-and-forget by contract: the returned promise never rejects. Callers
  * (the session/me route) MUST NOT await it on the response path.
  */
-export async function maybeEnsurePersonalSpaceForSession(input: {
+export async function maybeEnsurePersonalWorkspaceForSession(input: {
   readonly request: Request;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
@@ -33,13 +33,13 @@ export async function maybeEnsurePersonalSpaceForSession(input: {
     const session = await input.store.findAccountSession(sessionId);
     if (!session || session.expiresAt < Date.now()) return;
     const account = await input.store.findAccount(session.subject);
-    const handle = personalSpaceHandle({
+    const handle = personalWorkspaceHandle({
       subject: session.subject,
       email: account?.email,
       displayName: account?.displayName,
     });
     await operations.spaces
-      .createSpace({
+      .createWorkspace({
         handle,
         displayName: handle,
         type: "personal",
@@ -47,16 +47,16 @@ export async function maybeEnsurePersonalSpaceForSession(input: {
       })
       .catch((error) => {
         // A handle collision (`failed_precondition`) is the idempotent steady
-        // state once the personal Space exists — swallow it. The deploy-control
+        // state once the personal Workspace exists — swallow it. The deploy-control
         // facade has no accounts-side handle->space index to do a pre-check, so
-        // we lean on the unique-handle guard in `createSpace`.
+        // we lean on the unique-handle guard in `createWorkspace`.
         if (!isAlreadyTakenError(error)) {
           // Any other failure is best-effort too: log nothing here (no logger in
           // this package) and never propagate.
         }
       });
   } catch {
-    // Never let the personal-Space hook fail the session bootstrap response.
+    // Never let the personal-Workspace hook fail the session bootstrap response.
   }
 }
 
@@ -66,7 +66,7 @@ function isAlreadyTakenError(error: unknown): boolean {
 }
 
 /**
- * Derives a personal-Space handle from the account, sanitized to the spaces
+ * Derives a personal-Workspace handle from the account, sanitized to the spaces
  * handle rule (`^[a-z0-9][a-z0-9-]{1,38}$`, length 2..39). Preference order:
  *   1. displayName (slugified),
  *   2. email local-part (slugified),
@@ -74,7 +74,7 @@ function isAlreadyTakenError(error: unknown): boolean {
  * The chosen candidate is sanitized + length-clamped; an unusable candidate
  * falls through to the next source, and the final fallback is always valid.
  */
-export function personalSpaceHandle(input: {
+export function personalWorkspaceHandle(input: {
   readonly subject: string;
   readonly email?: string;
   readonly displayName?: string;

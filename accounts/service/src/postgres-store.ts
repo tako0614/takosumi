@@ -2,11 +2,11 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
   ServiceBindingMaterialRecord,
   ServiceGrantMaterialRecord,
-  InstallationEventRecord,
-  InstallationRecord,
+  CapsuleEventRecord,
+  CapsuleRecord,
   LedgerAccountRecord,
   RuntimeBindingRecord,
-  SpaceRecord,
+  WorkspaceRecord,
 } from "./ledger.ts";
 import type {
   AccountSessionRecord,
@@ -194,12 +194,12 @@ export class PostgresAccountsStore implements AccountsStore {
     return billing.findBillingUsageRecord(this.#client, usageReportId);
   }
 
-  listBillingUsageRecordsForInstallation(
-    installationId: string,
+  listBillingUsageRecordsForCapsule(
+    capsuleId: string,
   ): Promise<readonly BillingUsageRecord[]> {
-    return billing.listBillingUsageRecordsForInstallation(
+    return billing.listBillingUsageRecordsForCapsule(
       this.#client,
-      installationId,
+      capsuleId,
     );
   }
 
@@ -325,7 +325,7 @@ export class PostgresAccountsStore implements AccountsStore {
 
   consumeLaunchToken(input: {
     tokenHash: string;
-    installationId: string;
+    capsuleId: string;
     redirectUri: string;
     consumedAt: number;
   }): Promise<LaunchTokenConsumeResult> {
@@ -347,10 +347,10 @@ export class PostgresAccountsStore implements AccountsStore {
     return oidc.findOidcClient(this.#client, clientId);
   }
 
-  findOidcClientForInstallation(
-    installationId: string,
+  findOidcClientForCapsule(
+    capsuleId: string,
   ): Promise<OidcClientRecord | undefined> {
-    return oidc.findOidcClientForInstallation(this.#client, installationId);
+    return oidc.findOidcClientForCapsule(this.#client, capsuleId);
   }
 
   addRefreshChainLink(
@@ -431,44 +431,44 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.findLedgerAccount(this.#client, accountId);
   }
 
-  saveSpace(record: SpaceRecord): Promise<void> {
-    return installations.saveSpace(this.#client, record);
+  saveWorkspace(record: WorkspaceRecord): Promise<void> {
+    return installations.saveWorkspace(this.#client, record);
   }
 
-  findSpace(spaceId: string): Promise<SpaceRecord | undefined> {
-    return installations.findSpace(this.#client, spaceId);
+  findWorkspace(workspaceId: string): Promise<WorkspaceRecord | undefined> {
+    return installations.findWorkspace(this.#client, workspaceId);
   }
 
-  listSpacesForAccount(accountId: string): Promise<readonly SpaceRecord[]> {
-    return installations.listSpacesForAccount(this.#client, accountId);
+  listWorkspacesForAccount(accountId: string): Promise<readonly WorkspaceRecord[]> {
+    return installations.listWorkspacesForAccount(this.#client, accountId);
   }
 
-  listSpacesForOwner(
+  listWorkspacesForOwner(
     subject: TakosumiSubject,
-  ): Promise<readonly SpaceRecord[]> {
-    return installations.listSpacesForOwner(this.#client, subject);
+  ): Promise<readonly WorkspaceRecord[]> {
+    return installations.listWorkspacesForOwner(this.#client, subject);
   }
 
-  saveAppInstallation(record: InstallationRecord): Promise<void> {
-    return installations.saveAppInstallation(this.#client, record);
+  saveAppCapsule(record: CapsuleRecord): Promise<void> {
+    return installations.saveAppCapsule(this.#client, record);
   }
 
-  findAppInstallation(
-    installationId: string,
-  ): Promise<InstallationRecord | undefined> {
-    return installations.findAppInstallation(this.#client, installationId);
+  findAppCapsule(
+    capsuleId: string,
+  ): Promise<CapsuleRecord | undefined> {
+    return installations.findAppCapsule(this.#client, capsuleId);
   }
 
-  listAppInstallationsForSpace(
-    spaceId: string,
-  ): Promise<readonly InstallationRecord[]> {
-    return installations.listAppInstallationsForSpace(this.#client, spaceId);
+  listAppCapsulesForWorkspace(
+    workspaceId: string,
+  ): Promise<readonly CapsuleRecord[]> {
+    return installations.listAppCapsulesForWorkspace(this.#client, workspaceId);
   }
 
-  listAppInstallationsForBillingAccount(
+  listAppCapsulesForBillingAccount(
     billingAccountId: string,
-  ): Promise<readonly InstallationRecord[]> {
-    return installations.listAppInstallationsForBillingAccount(
+  ): Promise<readonly CapsuleRecord[]> {
+    return installations.listAppCapsulesForBillingAccount(
       this.#client,
       billingAccountId,
     );
@@ -490,12 +490,12 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.saveServiceBindingMaterial(this.#client, record);
   }
 
-  listServiceBindingMaterialsForInstallation(
-    installationId: string,
+  listServiceBindingMaterialsForCapsule(
+    capsuleId: string,
   ): Promise<readonly ServiceBindingMaterialRecord[]> {
-    return installations.listServiceBindingMaterialsForInstallation(
+    return installations.listServiceBindingMaterialsForCapsule(
       this.#client,
-      installationId,
+      capsuleId,
     );
   }
 
@@ -509,22 +509,22 @@ export class PostgresAccountsStore implements AccountsStore {
     return installations.findServiceGrantMaterial(this.#client, grantId);
   }
 
-  listServiceGrantMaterialsForInstallation(
-    installationId: string,
+  listServiceGrantMaterialsForCapsule(
+    capsuleId: string,
   ): Promise<readonly ServiceGrantMaterialRecord[]> {
-    return installations.listServiceGrantMaterialsForInstallation(
+    return installations.listServiceGrantMaterialsForCapsule(
       this.#client,
-      installationId,
+      capsuleId,
     );
   }
 
-  appendInstallationEvent(record: InstallationEventRecord): Promise<void> {
-    return installations.appendInstallationEvent(this.#client, record);
+  appendCapsuleEvent(record: CapsuleEventRecord): Promise<void> {
+    return installations.appendCapsuleEvent(this.#client, record);
   }
 
-  listInstallationEvents(
-    installationId: string,
-  ): Promise<readonly InstallationEventRecord[]> {
-    return installations.listInstallationEvents(this.#client, installationId);
+  listCapsuleEvents(
+    capsuleId: string,
+  ): Promise<readonly CapsuleEventRecord[]> {
+    return installations.listCapsuleEvents(this.#client, capsuleId);
   }
 }

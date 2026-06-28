@@ -88,12 +88,12 @@ function providerConnectionProviderLabel(
   );
 }
 
-export default function ConnectionsTab(props: { readonly spaceId: string }) {
+export default function ConnectionsTab(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
-  const spaceId = () => props.spaceId;
+  const workspaceId = () => props.workspaceId;
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
-    createResource(spaceId, listProviderConnections);
+    createResource(workspaceId, listProviderConnections);
   const [lastCreatedConnectionName, setLastCreatedConnectionName] =
     createSignal<string | null>(null);
   const [lastCreatedConnectionId, setLastCreatedConnectionId] = createSignal<
@@ -253,7 +253,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId;
     }
     const connection = await createConnection({
-      spaceId: spaceId(),
+      workspaceId: workspaceId(),
       provider: d.providerSource ?? d.provider,
       displayName:
         displayName().trim() || (d.providerSource ? d.label : undefined),
@@ -280,7 +280,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       if (raw.length > 0) submitValues[field.envName] = raw;
     }
     const connection = await createConnection({
-      spaceId: spaceId(),
+      workspaceId: workspaceId(),
       provider: d.providerSource ?? d.provider,
       displayName:
         displayName().trim() || (d.providerSource ? d.label : undefined),
@@ -324,7 +324,7 @@ export default function ConnectionsTab(props: { readonly spaceId: string }) {
       throw new Error(t("conn.genericEnv.oneRequired"));
     }
     const connection = await createConnection({
-      spaceId: spaceId(),
+      workspaceId: workspaceId(),
       provider: name,
       kind: "generic_env_provider",
       displayName: displayName().trim() || undefined,

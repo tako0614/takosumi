@@ -1,6 +1,6 @@
 /**
  * Workspace settings — shared values. Port of the former ControlOutputSharesView
- * body: explicit cross-Space value shares (create / approve / revoke).
+ * body: explicit cross-Workspace value shares (create / approve / revoke).
  */
 import "../../../styles/wave-b.css";
 import {
@@ -17,9 +17,9 @@ import {
   type ControlApiError,
   approveOutputShare,
   createOutputShare,
-  listInstallations,
+  listCapsules,
   listOutputShares,
-  listSpaces,
+  listWorkspaces,
   type OutputShare,
   revokeOutputShare,
 } from "../../../lib/control-api.ts";
@@ -65,29 +65,29 @@ function shareStatusLabel(status: string): string {
   return key ? t(key) : status;
 }
 
-export default function SharesTab(props: { readonly spaceId: string }) {
-  const spaceId = () => props.spaceId;
-  const [shares, { refetch }] = createResource(spaceId, listOutputShares);
-  const [spaces] = createResource(listSpaces);
-  const [installations] = createResource(spaceId, listInstallations);
+export default function SharesTab(props: { readonly workspaceId: string }) {
+  const workspaceId = () => props.workspaceId;
+  const [shares, { refetch }] = createResource(workspaceId, listOutputShares);
+  const [workspaces] = createResource(listWorkspaces);
+  const [capsules] = createResource(workspaceId, listCapsules);
 
-  const [toSpaceId, setToSpaceId] = createSignal("");
-  const [producerInstallationId, setProducerInstallationId] = createSignal("");
+  const [toWorkspaceId, setToWorkspaceId] = createSignal("");
+  const [producerCapsuleId, setProducerCapsuleId] = createSignal("");
   const [outputs, setOutputs] = createSignal<readonly OutputDraft[]>([
     emptyOutputDraft(),
   ]);
   const [sensitiveReason, setSensitiveReason] = createSignal("");
   const [formError, setFormError] = createSignal<string | null>(null);
 
-  const spaceName = createMemo(() => {
+  const workspaceName = createMemo(() => {
     const map = new Map<string, string>();
-    for (const s of spaces() ?? []) map.set(s.id, `@${s.handle}`);
+    for (const s of workspaces() ?? []) map.set(s.id, `@${s.handle}`);
     return map;
   });
 
-  const installationName = createMemo(() => {
+  const capsuleName = createMemo(() => {
     const map = new Map<string, string>();
-    for (const inst of installations() ?? []) map.set(inst.id, inst.name);
+    for (const inst of capsules() ?? []) map.set(inst.id, inst.name);
     return map;
   });
 
@@ -104,9 +104,9 @@ export default function SharesTab(props: { readonly spaceId: string }) {
       return;
     }
     await createOutputShare({
-      fromSpaceId: spaceId(),
-      toSpaceId: toSpaceId().trim(),
-      producerInstallationId: producerInstallationId().trim(),
+      fromWorkspaceId: workspaceId(),
+      toWorkspaceId: toWorkspaceId().trim(),
+      producerCapsuleId: producerCapsuleId().trim(),
       outputs: entries,
       ...(hasSensitive
         ? {
@@ -156,19 +156,24 @@ export default function SharesTab(props: { readonly spaceId: string }) {
   const columns: readonly Column<OutputShare>[] = [
     {
       header: t("shares.col.direction"),
-      cell: (share) => (
-        <span class="wb-mono">
-          <code>{spaceName().get(share.fromSpaceId) ?? share.fromSpaceId}</code>
-          <span class="muted"> → </span>
-          <code>{spaceName().get(share.toSpaceId) ?? share.toSpaceId}</code>
-        </span>
-      ),
+      cell: (share) => {
+        const from = share.fromWorkspaceId ?? share.fromSpaceId;
+        const to = share.toWorkspaceId ?? share.toSpaceId;
+        return (
+          <span class="wb-mono">
+            <code>{workspaceName().get(from) ?? from}</code>
+            <span class="muted"> → </span>
+            <code>{workspaceName().get(to) ?? to}</code>
+          </span>
+        );
+      },
     },
     {
-      header: t("shares.col.installation"),
-      cell: (share) =>
-        installationName().get(share.producerInstallationId) ??
-        share.producerInstallationId,
+      header: t("shares.col.capsule"),
+      cell: (share) => {
+        const producer = share.producerCapsuleId ?? share.producerInstallationId;
+        return capsuleName().get(producer) ?? producer;
+      },
     },
     {
       header: t("shares.col.outputs"),
@@ -211,7 +216,10 @@ export default function SharesTab(props: { readonly spaceId: string }) {
       cell: (share) => (
         <div class="wb-row-actions">
           <Show
-            when={share.status === "pending" && share.toSpaceId === spaceId()}
+            when={
+              share.status === "pending" &&
+              (share.toWorkspaceId ?? share.toSpaceId) === workspaceId()
+            }
           >
             <Button
               variant="primary"
@@ -257,20 +265,20 @@ export default function SharesTab(props: { readonly spaceId: string }) {
               }}
             >
               <div class="wb-form-row">
-                <FormField label={t("shares.create.toSpace")}>
+                <FormField label={t("shares.create.toWorkspace")}>
                   <Select
-                    value={toSpaceId()}
-                    onChange={(e) => setToSpaceId(e.currentTarget.value)}
+                    value={toWorkspaceId()}
+                    onChange={(e) => setToWorkspaceId(e.currentTarget.value)}
                   >
                     <option value="">
                       {t("shares.create.selectPlaceholder")}
                     </option>
                     <For
-                      each={(spaces() ?? []).filter((s) => s.id !== spaceId())}
+                      each={(workspaces() ?? []).filter((s) => s.id !== workspaceId())}
                     >
-                      {(space) => (
-                        <option value={space.id}>
-                          @{space.handle} — {space.displayName}
+                      {(workspace) => (
+                        <option value={workspace.id}>
+                          @{workspace.handle} — {workspace.displayName}
                         </option>
                       )}
                     </For>
@@ -278,15 +286,15 @@ export default function SharesTab(props: { readonly spaceId: string }) {
                 </FormField>
                 <FormField label={t("shares.create.producer")}>
                   <Select
-                    value={producerInstallationId()}
+                    value={producerCapsuleId()}
                     onChange={(e) =>
-                      setProducerInstallationId(e.currentTarget.value)
+                      setProducerCapsuleId(e.currentTarget.value)
                     }
                   >
                     <option value="">
                       {t("shares.create.selectPlaceholder")}
                     </option>
-                    <For each={installations() ?? []}>
+                    <For each={capsules() ?? []}>
                       {(inst) => (
                         <option value={inst.id}>
                           {inst.name} ({inst.environment})
@@ -422,7 +430,7 @@ export default function SharesTab(props: { readonly spaceId: string }) {
           <Match when={shares.error}>
             <EmptyState
               icon={<Share2 size={28} />}
-              title={t("spaceSettings.tab.shares")}
+              title={t("workspaceSettings.tab.shares")}
               message={t("common.fetchFailed", {
                 message: (shares.error as ControlApiError).message,
               })}
@@ -434,7 +442,7 @@ export default function SharesTab(props: { readonly spaceId: string }) {
               fallback={
                 <EmptyState
                   icon={<Share2 size={28} />}
-                  title={t("spaceSettings.tab.shares")}
+                  title={t("workspaceSettings.tab.shares")}
                   message={t("shares.empty")}
                 />
               }

@@ -11,7 +11,7 @@ import { useParams } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { t } from "../../i18n/index.ts";
 import { EmptyState, PageHeader, Tabs } from "../../components/ui/index.ts";
@@ -32,11 +32,11 @@ type TabId =
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 
-interface SpaceSettingsViewProps {
+interface WorkspaceSettingsViewProps {
   readonly standaloneTab?: StandaloneTabId;
 }
 
-export default function SpaceSettingsView(props: SpaceSettingsViewProps = {}) {
+export default function WorkspaceSettingsView(props: WorkspaceSettingsViewProps = {}) {
   return (
     <Page title={pageTitle(props.standaloneTab)}>
       {(session) => (
@@ -62,27 +62,27 @@ function Inner(props: {
       ? raw
       : "general";
   };
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
 
   const tabItems = () => [
     {
       href: "/advanced/workspace",
-      label: t("spaceSettings.tab.general"),
+      label: t("workspaceSettings.tab.general"),
       end: true,
     },
     {
       href: "/advanced/workspace/members",
-      label: t("spaceSettings.tab.members"),
+      label: t("workspaceSettings.tab.members"),
     },
     {
       href: "/advanced/workspace/connections",
-      label: t("spaceSettings.tab.connections"),
+      label: t("workspaceSettings.tab.connections"),
     },
     {
       href: "/advanced/workspace/billing",
       label: isTakosumiCloudRuntime()
-        ? t("spaceSettings.tab.billing")
-        : t("spaceSettings.tab.usageQuota"),
+        ? t("workspaceSettings.tab.billing")
+        : t("workspaceSettings.tab.usageQuota"),
     },
   ];
 
@@ -97,12 +97,12 @@ function Inner(props: {
       </Show>
 
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <EmptyState
             icon={<Settings2 size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+            title={t("workspace.select")}
+            message={t("workspace.selectMessage")}
           />
         }
       >
@@ -110,22 +110,22 @@ function Inner(props: {
           <div class="wa-stack">
             <Switch>
               <Match when={tab() === "general"}>
-                <GeneralTab spaceId={id()} />
+                <GeneralTab workspaceId={id()} />
               </Match>
               <Match when={tab() === "members"}>
-                <MembersTab spaceId={id()} session={props.session} />
+                <MembersTab workspaceId={id()} session={props.session} />
               </Match>
               <Match when={tab() === "connections"}>
-                <ConnectionsTab spaceId={id()} />
+                <ConnectionsTab workspaceId={id()} />
               </Match>
               <Match when={tab() === "billing"}>
-                <BillingTab spaceId={id()} />
+                <BillingTab workspaceId={id()} />
               </Match>
               <Match when={tab() === "backups"}>
-                <BackupsTab spaceId={id()} />
+                <BackupsTab workspaceId={id()} />
               </Match>
               <Match when={tab() === "shares"}>
-                <SharesTab spaceId={id()} />
+                <SharesTab workspaceId={id()} />
               </Match>
             </Switch>
           </div>
@@ -144,7 +144,7 @@ function pageTitle(tab: StandaloneTabId | undefined): string {
         ? t("billing.title")
         : t("billing.usageQuotaTitle");
     default:
-      return t("spaceSettings.title");
+      return t("workspaceSettings.title");
   }
 }
 
@@ -157,6 +157,6 @@ function pageSubtitle(tab: StandaloneTabId | undefined): string {
         ? t("billing.subtitle")
         : t("billing.usageQuotaSubtitle");
     default:
-      return t("spaceSettings.subtitle");
+      return t("workspaceSettings.subtitle");
   }
 }

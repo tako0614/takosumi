@@ -9,15 +9,15 @@
  * permission-digest / confirm helpers. Behavior is identical to the prior
  * single-file implementation; these are pure moves.
  */
-import { takosumiAccountsInstallationEventsPath } from "@takosjp/takosumi-accounts-contract";
+import { takosumiAccountsCapsuleEventsPath } from "@takosjp/takosumi-accounts-contract";
 import {
   type ServiceBindingMaterialKind,
   type ServiceBindingMaterialRecord,
   type ServiceGrantMaterialRecord,
-  type AppInstallationMode,
+  type AppCapsuleMode,
   assertValidServiceBindingMaterialRecord,
-  type InstallationEventRecord,
-  type InstallationRecord,
+  type CapsuleEventRecord,
+  type CapsuleRecord,
   isServiceBindingMaterialKind,
   isServiceGrantMaterialCapability,
 } from "./ledger.ts";
@@ -33,7 +33,7 @@ import {
   installationEnvelope,
   isMeteredBindingKind,
   isSha256HexDigest,
-  serializeInstallationEvent,
+  serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import {
   errorJson,
@@ -46,7 +46,7 @@ import {
   type DeployControlFacadeOptions,
   requestDeploymentApply,
   requestDeploymentPlanRun,
-  requestInstallationApply,
+  requestCapsuleApply,
   requestRollback,
 } from "./deploy-control-facade.ts";
 import { consoleErrorRedacted } from "./redacted-log.ts";
@@ -102,15 +102,15 @@ export function sanitizeUpstreamErrorPayload(
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
-export interface AppInstallationConfirmRecord {
+export interface AppCapsuleConfirmRecord {
   readonly permissionDigest: string;
   readonly costAck: boolean;
   readonly approvalRequired?: boolean;
   readonly expiresAt?: string;
 }
 
-export interface CoreInstallationProjection {
-  readonly installationId: string;
+export interface CoreCapsuleProjection {
+  readonly capsuleId: string;
   readonly appId: string;
   readonly sourceUrl: string;
   readonly sourceRef: string;
@@ -136,21 +136,21 @@ export interface CoreDeploymentProjection {
   readonly payload: unknown;
 }
 
-export async function applyCoreInstallationForCloudProjection(input: {
+export async function applyCoreCapsuleForCloudProjection(input: {
   deployControl: DeployControlFacadeOptions;
   appId: string | undefined;
-  spaceId: string | undefined;
+  workspaceId: string | undefined;
   source: Record<string, unknown>;
   expected: Record<string, unknown> | undefined;
   planRunId: string | undefined;
-}): Promise<CoreInstallationProjection | Response> {
+}): Promise<CoreCapsuleProjection | Response> {
   const source = coreDeployControlSourceFromCloudSource(input.source);
   if (source instanceof Response) return source;
-  if (!input.spaceId) {
-    return errorJson("invalid_request", "spaceId is required", 400);
+  if (!input.workspaceId) {
+    return errorJson("invalid_request", "workspaceId is required", 400);
   }
   const body: Record<string, unknown> = {
-    spaceId: input.spaceId,
+    workspaceId: input.workspaceId,
     source,
   };
   if (input.planRunId) {
@@ -164,7 +164,7 @@ export async function applyCoreInstallationForCloudProjection(input: {
     );
   }
   body.expected = { ...input.expected };
-  const result = await requestInstallationApply({
+  const result = await requestCapsuleApply({
     deployControl: input.deployControl,
     body,
   });
@@ -179,7 +179,7 @@ export async function applyCoreInstallationForCloudProjection(input: {
       upstream ? { upstream } : undefined,
     );
   }
-  const projection = coreInstallationProjectionFromApply(result.payload, {
+  const projection = coreCapsuleProjectionFromApply(result.payload, {
     appId: input.appId,
     source: input.source,
     expected: input.expected,
@@ -190,14 +190,14 @@ export async function applyCoreInstallationForCloudProjection(input: {
 
 export async function planCoreDeploymentForCloudProjection(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   source: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
   const body = coreDeploymentRequestBodyFromCloudBody({ source: input.source });
   if (body instanceof Response) return body;
   const result = await requestDeploymentPlanRun({
     deployControl: input.deployControl,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     body,
   });
   if (result.status < 200 || result.status >= 300) {
@@ -216,7 +216,7 @@ export async function planCoreDeploymentForCloudProjection(input: {
 
 export async function applyCoreDeploymentForCloudProjection(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   source: Record<string, unknown> | undefined;
   expected: Record<string, unknown> | undefined;
 }): Promise<CoreDeploymentProjection | Response> {
@@ -234,7 +234,7 @@ export async function applyCoreDeploymentForCloudProjection(input: {
   }
   const result = await requestDeploymentApply({
     deployControl: input.deployControl,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     body,
   });
   if (result.status < 200 || result.status >= 300) {
@@ -253,7 +253,7 @@ export async function applyCoreDeploymentForCloudProjection(input: {
 
 export async function rollbackCoreDeploymentForCloudProjection(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   deploymentId: string | undefined;
   planRunId: string | undefined;
   expected: Record<string, unknown> | undefined;
@@ -267,7 +267,7 @@ export async function rollbackCoreDeploymentForCloudProjection(input: {
   }
   const result = await requestRollback({
     deployControl: input.deployControl,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     body: {
       deploymentId: input.deploymentId,
       ...(input.planRunId ? { planRunId: input.planRunId } : {}),
@@ -348,14 +348,14 @@ export function coreDeployControlSourceFromCloudSource(
   );
 }
 
-export function coreInstallationProjectionFromApply(
+export function coreCapsuleProjectionFromApply(
   payload: unknown,
   fallback: {
     readonly appId?: string;
     readonly source?: Record<string, unknown>;
     readonly expected?: Record<string, unknown>;
   } = {},
-): CoreInstallationProjection | Response {
+): CoreCapsuleProjection | Response {
   if (!isRecord(payload)) {
     return errorJson(
       "feature_unavailable",
@@ -379,12 +379,12 @@ export function coreInstallationProjectionFromApply(
   const expected = isRecord(applyRun?.expected)
     ? applyRun.expected
     : fallback.expected;
-  const installationId =
+  const capsuleId =
     stringValue(installation?.id) ??
-    stringValue(deployment?.installationId) ??
+    stringValue(deployment?.capsuleId) ??
     stringValue(deployment?.installation_id) ??
-    stringValue(applyRun?.installationId) ??
-    stringValue(expected?.installationId);
+    stringValue(applyRun?.capsuleId) ??
+    stringValue(expected?.capsuleId);
   const appId =
     stringValue(installation?.appId) ??
     stringValue(installation?.app_id) ??
@@ -427,7 +427,7 @@ export function coreInstallationProjectionFromApply(
       payload.launch,
     now: Date.now(),
   });
-  if (!installationId || !appId || !sourceUrl || !sourceRef || !planDigest) {
+  if (!capsuleId || !appId || !sourceUrl || !sourceRef || !planDigest) {
     return errorJson(
       "feature_unavailable",
       "Takosumi installation apply response is missing installation/deployment projection fields",
@@ -435,7 +435,7 @@ export function coreInstallationProjectionFromApply(
     );
   }
   return {
-    installationId,
+    capsuleId,
     appId,
     sourceUrl,
     sourceRef,
@@ -791,7 +791,7 @@ export function activatedHttpDomainInactiveEventPayload(input: {
 }
 
 export function installationRecordFromCoreDeploymentProjection(input: {
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   projection: CoreDeploymentProjection;
   fallback?: {
     sourceGitUrl: string;
@@ -802,7 +802,7 @@ export function installationRecordFromCoreDeploymentProjection(input: {
     artifactDigest?: string;
   };
   now: number;
-}): InstallationRecord {
+}): CapsuleRecord {
   return {
     ...input.installation,
     sourceGitUrl:
@@ -836,24 +836,24 @@ export function installationRecordFromCoreDeploymentProjection(input: {
 
 export async function revisionEnvelopeResponse(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operation: "deployment" | "rollback";
-  event: InstallationEventRecord;
+  event: CapsuleEventRecord;
 }): Promise<Response> {
-  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
-    input.installation.installationId,
+  const bindings = await input.store.listServiceBindingMaterialsForCapsule(
+    input.installation.capsuleId,
   );
-  const grants = await input.store.listServiceGrantMaterialsForInstallation(
-    input.installation.installationId,
+  const grants = await input.store.listServiceGrantMaterialsForCapsule(
+    input.installation.capsuleId,
   );
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installation.installationId,
+  const oidcClient = await input.store.findOidcClientForCapsule(
+    input.installation.capsuleId,
   );
   const runtimeBinding = input.installation.runtimeBindingId
     ? await input.store.findRuntimeBinding(input.installation.runtimeBindingId)
     : undefined;
-  const events = await input.store.listInstallationEvents(
-    input.installation.installationId,
+  const events = await input.store.listCapsuleEvents(
+    input.installation.capsuleId,
   );
   return json({
     ...installationEnvelope({
@@ -863,17 +863,17 @@ export async function revisionEnvelopeResponse(input: {
       oidcClient,
       runtimeBinding,
       activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
-      eventsUrl: takosumiAccountsInstallationEventsPath(
-        input.installation.installationId,
+      eventsUrl: takosumiAccountsCapsuleEventsPath(
+        input.installation.capsuleId,
       ),
     }),
     operation: input.operation,
-    event: serializeInstallationEvent(input.event),
+    event: serializeCapsuleEvent(input.event),
   });
 }
 
-export function appInstallationRevisionPayload(
-  installation: InstallationRecord,
+export function appCapsuleRevisionPayload(
+  installation: CapsuleRecord,
 ): Record<string, unknown> {
   return {
     source: {
@@ -896,7 +896,7 @@ export function normalizeSourceGitUrl(value: string): string {
 
 export function serviceBindingMaterialRecordsFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }): readonly ServiceBindingMaterialRecord[] | Response {
   if (input.value === undefined) return [];
@@ -944,7 +944,7 @@ export function serviceBindingMaterialRecordsFromValue(input: {
     const record: ServiceBindingMaterialRecord = {
       bindingId:
         stringValue(value.serviceBindingId) ?? `bind_${crypto.randomUUID()}`,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       name,
       kind,
       configRef,
@@ -969,7 +969,7 @@ export function serviceBindingMaterialRecordsFromValue(input: {
 
 export function serviceGrantMaterialRecordsFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }): readonly ServiceGrantMaterialRecord[] | Response {
   if (input.value === undefined) return [];
@@ -1005,7 +1005,7 @@ export function serviceGrantMaterialRecordsFromValue(input: {
     records.push({
       grantId:
         stringValue(value.serviceGrantId) ?? `grant_${crypto.randomUUID()}`,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       capability,
       scope,
       grantedAt: input.now,
@@ -1014,10 +1014,10 @@ export function serviceGrantMaterialRecordsFromValue(input: {
   return records;
 }
 
-export async function appInstallationRevisionConfirmFromValue(input: {
+export async function appCapsuleRevisionConfirmFromValue(input: {
   value: unknown;
   operation: "deployment" | "rollback";
-  installationId: string;
+  capsuleId: string;
   appId: string;
   sourceGitUrl: string;
   sourceRef: string;
@@ -1047,7 +1047,7 @@ export async function appInstallationRevisionConfirmFromValue(input: {
     );
   }
   const expectedPermissionDigest =
-    await appInstallationRevisionPermissionDigest(input);
+    await appCapsuleRevisionPermissionDigest(input);
   if (!constantTimeEqual(permissionDigest, expectedPermissionDigest)) {
     return errorJson(
       "approval_digest_mismatch",
@@ -1073,9 +1073,9 @@ export async function appInstallationRevisionConfirmFromValue(input: {
   return { permissionDigest, costAck: costAck === true };
 }
 
-export async function appInstallationRevisionPermissionDigest(input: {
+export async function appCapsuleRevisionPermissionDigest(input: {
   operation: "deployment" | "rollback";
-  installationId: string;
+  capsuleId: string;
   appId: string;
   sourceGitUrl: string;
   sourceRef: string;
@@ -1089,7 +1089,7 @@ export async function appInstallationRevisionPermissionDigest(input: {
   return await sha256HexText(
     canonicalJson({
       operation: input.operation,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       appId: input.appId,
       source: {
         gitUrl: normalizeSourceGitUrl(input.sourceGitUrl),
@@ -1115,9 +1115,9 @@ export function serviceBindingMaterialKindValue(
   return isServiceBindingMaterialKind(value) ? value : undefined;
 }
 
-export function appInstallationModeValue(
+export function appCapsuleModeValue(
   value: unknown,
-): AppInstallationMode | undefined {
+): AppCapsuleMode | undefined {
   return value === "shared-cell" ||
     value === "dedicated" ||
     value === "self-hosted"

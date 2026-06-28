@@ -25,7 +25,13 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const tables = await tableNames(db);
-  for (const expected of ["spaces", "sources", "installations", "connections"]) {
+  for (const expected of [
+    "workspaces",
+    "projects",
+    "sources",
+    "capsules",
+    "connections",
+  ]) {
     expect(tables.has(expected)).toBe(true);
   }
 });
@@ -50,7 +56,7 @@ test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
   await ensureD1OpenTofuLedgerSchema(db);
   await ensureD1OpenTofuLedgerSchema(db);
   const tables = await tableNames(db);
-  expect(tables.has("installations")).toBe(true);
+  expect(tables.has("capsules")).toBe(true);
 });
 
 test("connections is created exactly once (no duplicate ensure-DDL)", async () => {

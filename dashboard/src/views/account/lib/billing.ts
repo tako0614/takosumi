@@ -2,7 +2,7 @@
  * Billing RPC for the account plane (Stripe checkout / customer portal).
  *
  * Checkout is plan-id based (spec §32): the client names an operator-offered
- * `planId` (from `GET /api/v1/billing/plans`) plus the target `spaceId`; the
+ * `planId` (from `GET /api/v1/billing/plans`) plus the target `workspaceId`; the
  * SERVER resolves the Stripe price, checkout mode, and credit metadata. The
  * redirect URLs land back on the first-class Billing screen.
  */
@@ -23,7 +23,7 @@ export interface StripePortalResult {
 export async function startStripeCheckout(input: {
   readonly subject: string;
   readonly planId: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly successUrl?: string;
   readonly cancelUrl?: string;
   readonly customerEmail?: string;
@@ -33,14 +33,14 @@ export async function startStripeCheckout(input: {
     buildBillingReturnUrl({
       origin: location.origin,
       checkout: "success",
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
     });
   const cancelUrl =
     input.cancelUrl ??
     buildBillingReturnUrl({
       origin: location.origin,
       checkout: "cancelled",
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
     });
   const body = await apiFetch<
     StripeCheckoutResult & { readonly session_id?: string }
@@ -49,7 +49,7 @@ export async function startStripeCheckout(input: {
     body: {
       subject: input.subject,
       planId: input.planId,
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
       successUrl,
       cancelUrl,
       ...(input.customerEmail ? { customerEmail: input.customerEmail } : {}),

@@ -17,13 +17,17 @@ const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
  * `opentofu-state/...` path so existing jobs/tests keep working (additive, no
  * flag-day). The `generation` is the 8-digit state generation the controller
  * owns; the DO only writes the object at the derived key and returns its digest.
- * Mirrors the contract `DispatchStateScope` ({ spaceId, installationId,
+ * Mirrors the contract `DispatchStateScope` ({ workspaceId, capsuleId,
  * environment, generation }); kept as a local interface so the DO does not pull
- * a contract import into the worker bundle.
+ * a contract import into the worker bundle. The dispatch wire is parsed
+ * canonical-first with a deprecated `spaceId`/`installationId` fallback during
+ * the noun rename; the PHYSICAL R2 key prefix (`spaces/.../installations/...`)
+ * stays frozen in lockstep with the controller key formatters so existing state
+ * objects are never orphaned.
  */
 interface StateScope {
-  readonly spaceId: string;
-  readonly installationId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly environment: string;
   readonly generation: number;
 }
@@ -50,7 +54,7 @@ interface SourceArchiveRestore {
  */
 interface DepState {
   readonly name: string;
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly environment: string;
   readonly generation: number;
   readonly objectKey: string;
@@ -1028,16 +1032,19 @@ function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
 }
 
 // ===========================================================================
-// R2_STATE keys (spec §20 / §26):
-//   spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc
-//   spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/current.json
+// R2_STATE keys (spec §20 / §26). The PHYSICAL prefix is frozen at
+// `spaces/.../installations/...` (logical Workspace/Capsule vocabulary, but the
+// on-disk segments stay byte-identical with the controller key formatters so the
+// rename never orphans existing state objects):
+//   spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/{NNNNNNNN}.tfstate.enc
+//   spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/current.json
 // The generation is owned by the controller (other lane); the DO formats it as
 // an 8-digit, zero-padded segment for the object key.
 // ===========================================================================
 
 function stateScopePrefix(scope: StateScope): string {
-  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
-    scope.installationId,
+  return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
+    scope.capsuleId,
   )}/envs/${safeKeySegment(scope.environment)}/states`;
 }
 
@@ -1049,13 +1056,14 @@ function currentStateKey(scope: StateScope): string {
   return `${stateScopePrefix(scope)}/current.json`;
 }
 
-// R2_ARTIFACTS key for the encrypted raw `tofu output -json` envelope (spec §26):
-//   spaces/{spaceId}/installations/{installationId}/runs/{runId}/outputs.raw.json.enc
+// R2_ARTIFACTS key for the encrypted raw `tofu output -json` envelope (spec §26).
+// Physical prefix frozen at `spaces/.../installations/...`:
+//   spaces/{workspaceId}/installations/{capsuleId}/runs/{runId}/outputs.raw.json.enc
 // Kept in lockstep with the controller's `rawOutputArtifactKey` formatter so the
-// recorded OutputSnapshot pointer matches the object the DO wrote.
+// recorded Output pointer matches the object the DO wrote.
 function rawOutputsKey(scope: StateScope, runId: string): string {
-  return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
-    scope.installationId,
+  return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
+    scope.capsuleId,
   )}/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
 }
 
@@ -1192,21 +1200,25 @@ function encryptedKey(key: string): string {
 function parseStateScope(requestPayload: unknown): StateScope | undefined {
   const scope = recordField(requestPayload, "stateScope");
   if (!scope) return undefined;
-  const spaceId = stringField(scope, "spaceId");
-  const installationId = stringField(scope, "installationId");
+  // Canonical-first, deprecated fallback during the noun rename (the controller
+  // emit side still populates spaceId/installationId on some dispatch paths).
+  const workspaceId =
+    stringField(scope, "workspaceId") ?? stringField(scope, "spaceId");
+  const capsuleId =
+    stringField(scope, "capsuleId") ?? stringField(scope, "installationId");
   const environment = stringField(scope, "environment");
   const generation = scope.generation;
   if (
-    !spaceId ||
-    !installationId ||
+    !workspaceId ||
+    !capsuleId ||
     !environment ||
     typeof generation !== "number"
   ) {
     throw new Error(
-      "stateScope requires spaceId, installationId, environment, and a numeric generation",
+      "stateScope requires workspaceId, capsuleId, environment, and a numeric generation",
     );
   }
-  return { spaceId, installationId, environment, generation };
+  return { workspaceId, capsuleId, environment, generation };
 }
 
 function parseSourceArchiveRestore(
@@ -1228,9 +1240,10 @@ function parseSourceArchiveRestore(
 
 // Parse the optional remote_state dependency descriptors off the dispatch
 // request. Each entry must carry a name, objectKey, digest, environment,
-// installationId, and a numeric generation; a malformed entry fails the run
-// closed (a remote_state edge cannot be silently dropped). Returns [] when the
-// dispatch carries no depStates.
+// capsuleId (deprecated installationId accepted during the rename), and a
+// numeric generation; a malformed entry fails the run closed (a remote_state
+// edge cannot be silently dropped). Returns [] when the dispatch carries no
+// depStates.
 function parseDepStates(requestPayload: unknown): readonly DepState[] {
   if (!isRecord(requestPayload)) return [];
   const raw = requestPayload.depStates;
@@ -1241,25 +1254,26 @@ function parseDepStates(requestPayload: unknown): readonly DepState[] {
   return raw.map((entry) => {
     if (!isRecord(entry)) throw new Error("depStates entry must be an object");
     const name = stringField(entry, "name");
-    const installationId = stringField(entry, "installationId");
+    const capsuleId =
+      stringField(entry, "capsuleId") ?? stringField(entry, "installationId");
     const environment = stringField(entry, "environment");
     const objectKey = stringField(entry, "objectKey");
     const digest = stringField(entry, "digest");
     const generation = entry.generation;
     if (
       !name ||
-      !installationId ||
+      !capsuleId ||
       !environment ||
       !objectKey ||
       !digest ||
       typeof generation !== "number"
     ) {
       throw new Error(
-        "depStates entry requires name, installationId, environment, " +
+        "depStates entry requires name, capsuleId, environment, " +
           "objectKey, digest, and a numeric generation",
       );
     }
-    return { name, installationId, environment, generation, objectKey, digest };
+    return { name, capsuleId, environment, generation, objectKey, digest };
   });
 }
 
@@ -1292,7 +1306,8 @@ function assertRestoreStateObjectKey(scope: StateScope, key: string): void {
 // Re-assert a dependency state objectKey is a traversal-free R2_STATE key inside
 // the producer env's state prefix (defense in depth against a crafted descriptor
 // pointing at another tenant's object). It must match the spec §20 state key
-// layout AND name the descriptor's own installationId + environment.
+// layout AND name the descriptor's own capsuleId + environment. The physical
+// key prefix stays frozen at `spaces/.../installations/...`.
 function assertDepStateObjectKey(depState: DepState): void {
   const key = depState.objectKey;
   if (
@@ -1307,7 +1322,7 @@ function assertDepStateObjectKey(depState: DepState): void {
     throw new Error(`unsafe dependency state object key: ${key}`);
   }
   const expectedSuffix = `/installations/${safeKeySegment(
-    depState.installationId,
+    depState.capsuleId,
   )}/envs/${safeKeySegment(depState.environment)}/states/`;
   if (!key.includes(expectedSuffix)) {
     throw new Error(
@@ -1343,8 +1358,8 @@ function assertSafeSourceArchiveKey(key: string): void {
 
 function planArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
-      scope.installationId,
+    return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
+      scope.capsuleId,
     )}/runs/${safeKeySegment(runId)}/plan.bin`;
   }
   return `opentofu-plan-runs/${runId.replace(/[^a-zA-Z0-9._-]+/g, "_")}/tfplan`;
@@ -1352,8 +1367,8 @@ function planArtifactKey(runId: string, scope?: StateScope): string {
 
 function planJsonArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    return `spaces/${safeKeySegment(scope.spaceId)}/installations/${safeKeySegment(
-      scope.installationId,
+    return `spaces/${safeKeySegment(scope.workspaceId)}/installations/${safeKeySegment(
+      scope.capsuleId,
     )}/runs/${safeKeySegment(runId)}/plan.json.zst`;
   }
   return `opentofu-plan-runs/${runId.replace(
@@ -1443,16 +1458,20 @@ async function stateArtifactKeys(
   if (!planRun) return [];
   const backendKey = await stateBackendKey(requestPayload);
   const keys: string[] = [];
-  const installationId = stringField(planRun, "installationId");
-  if (installationId) {
+  const capsuleId =
+    stringField(planRun, "capsuleId") ?? stringField(planRun, "installationId");
+  if (capsuleId) {
     keys.push(
-      `${backendKey}/installations/${safeKeySegment(installationId)}/terraform.tfstate`,
+      `${backendKey}/installations/${safeKeySegment(capsuleId)}/terraform.tfstate`,
     );
   }
   const source = recordField(planRun, "source");
   const sourceKey = await sourceStateKey({
     backendKey,
-    spaceId: stringField(planRun, "spaceId"),
+    // `spaceId` here is the frozen `sourceIdentity` digest field; only the read
+    // value is canonical-first (the value is the same workspace id either way).
+    spaceId:
+      stringField(planRun, "workspaceId") ?? stringField(planRun, "spaceId"),
     runnerProfileId: stringField(planRun, "runnerProfileId"),
     source,
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { officialInstallConfigs } from "../../../core/domains/installations/official_seed.ts";
+import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
 
 describe("dashboard catalog", () => {

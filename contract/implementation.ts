@@ -25,7 +25,7 @@
  */
 import type {
   Deployment,
-  Installation,
+  Capsule,
   OpenTofuModuleSource,
 } from "./internal-deploy-control-api.ts";
 import {
@@ -104,7 +104,7 @@ export interface OperatorImplementation {
   ): Promise<OperatorImplementationApplyResult>;
 
   /**
-   * Destroy a previously-materialized component. Called on Installation
+   * Destroy a previously-materialized component. Called on Capsule
    * deletion / rollback. Optional — implementations that have no destroyable
    * state can omit this hook.
    */
@@ -146,13 +146,13 @@ export interface OperatorImplementation {
   // serially across the implementation array in registration order.
   // ---------------------------------------------------------------------
 
-  /** Fires before the first Deployment of a brand-new Installation. */
+  /** Fires before the first Deployment of a brand-new Capsule. */
   onInstallStart?(
-    ctx: OperatorImplementationInstallationContext,
+    ctx: OperatorImplementationCapsuleContext,
   ): Promise<void>;
-  /** Fires after the first Deployment of a brand-new Installation succeeds. */
+  /** Fires after the first Deployment of a brand-new Capsule succeeds. */
   onInstallComplete?(
-    ctx: OperatorImplementationInstallationContext,
+    ctx: OperatorImplementationCapsuleContext,
   ): Promise<void>;
   /** Fires before every Deployment apply (including the first one). */
   onDeploymentStart?(
@@ -251,7 +251,7 @@ export interface ResolvedInputBinding {
 }
 
 export interface OperatorImplementationApplyContext {
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly componentName: string;
   readonly component: Component;
   /** OpenTofu module source used for this Deployment. */
@@ -261,7 +261,7 @@ export interface OperatorImplementationApplyContext {
   /**
    * Materials this component consumes, keyed by the local binding name as
    * declared by the reference implementation wiring. Pre-resolved by the
-   * deployControl from reference component outputs or Space-visible platform
+   * deployControl from reference component outputs or Workspace-visible platform
    * services; the consuming component's
    * `applyBinding` has
    * already been invoked and the resulting env / mount / target
@@ -295,19 +295,19 @@ export interface OperatorImplementationApplyResult {
 }
 
 export interface OutputMaterialContext {
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly componentName: string;
   readonly component: Component;
   /** Component output slot this material is projected from. */
   readonly outputName: OutputSlotName;
-  /** Publication options when this material serves an Installation output declaration. */
+  /** Publication options when this material serves an Capsule output declaration. */
   readonly options?: PublishOptions;
   /** Outputs from the preceding `apply()` call for this component. */
   readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 export interface ApplyInputBindingContext {
-  readonly installationId: string;
+  readonly capsuleId: string;
   /** Name of the consuming component. */
   readonly componentName: string;
   readonly component: Component;
@@ -322,13 +322,13 @@ export interface ApplyInputBindingContext {
 }
 
 export interface OperatorImplementationDestroyContext {
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
 
 export interface OperatorImplementationStatusContext {
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly componentName: string;
   readonly resourceHandle: string;
 }
@@ -347,13 +347,13 @@ export interface OperatorImplementationResourceStatus {
   readonly observedAt: string;
 }
 
-export interface OperatorImplementationInstallationContext {
-  readonly installation: Installation;
+export interface OperatorImplementationCapsuleContext {
+  readonly capsule: Capsule;
   readonly deployment?: Deployment;
 }
 
 export interface OperatorImplementationDeploymentContext {
-  readonly installation: Installation;
+  readonly capsule: Capsule;
   readonly deployment: Deployment;
 }
 

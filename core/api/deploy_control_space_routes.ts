@@ -4,7 +4,7 @@
  * descriptor inventory.
  */
 
-import type { CreateSpaceRequest } from "../domains/spaces/mod.ts";
+import type { CreateWorkspaceRequest } from "../domains/workspaces/mod.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   defineRoute,
@@ -35,7 +35,7 @@ export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] =
       auth: "deploy-control-token",
       operationId: "createSpace",
       openapi: {
-        requestSchema: "CreateSpaceRequest",
+        requestSchema: "CreateWorkspaceRequest",
         okStatus: "201",
         okSchema: "SpaceResponse",
       },
@@ -94,8 +94,8 @@ export function mountDeployControlSpaceRoutes(
         // Space creation is not scoped by an existing space id, so only an
         // unrestricted principal (`spaceIds: "*"`) may mint new Spaces.
         ensureSpaceCreatePermission(principal);
-        const body = await readJsonBody<CreateSpaceRequest>(c, "spaceCreate");
-        return c.json({ space: await spaces!.createSpace(body) }, 201);
+        const body = await readJsonBody<CreateWorkspaceRequest>(c, "spaceCreate");
+        return c.json({ space: await spaces!.createWorkspace(body) }, 201);
       },
     }),
   );
@@ -107,7 +107,7 @@ export function mountDeployControlSpaceRoutes(
       requireService: (deps) =>
         deps.spacesService ? undefined : "spaces not wired",
       handler: async ({ c, principal }) => {
-        const all = await spaces!.listSpaces();
+        const all = await spaces!.listWorkspaces();
         // A scoped principal only sees the Spaces it may access.
         const visible =
           principal.spaceIds === "*"
@@ -127,7 +127,7 @@ export function mountDeployControlSpaceRoutes(
       param: SPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        return c.json({ space: await spaces!.getSpace(id) }, 200);
+        return c.json({ space: await spaces!.getWorkspace(id) }, 200);
       },
     }),
   );
@@ -195,8 +195,9 @@ export function mountDeployControlSpaceRoutes(
             "displayName, policy, or archived is required",
           );
         }
-        const space = await spaces!.updateSpace(id, patch);
+        const space = await spaces!.updateWorkspace(id, patch);
         await activity?.record({
+          workspaceId: id,
           spaceId: id,
           actorId: principal.actor,
           action: "space.updated",

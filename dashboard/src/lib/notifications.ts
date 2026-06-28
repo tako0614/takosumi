@@ -9,16 +9,16 @@
  * already recorded as public-safe Activity metadata are surfaced — no invented
  * prices, formulas, or messages.
  */
-import { type ActivityEvent, listActivity, type Space } from "./control-api.ts";
+import { type ActivityEvent, listActivity, type Workspace } from "./control-api.ts";
 
-/** Max events fetched per Space and rendered in the merged feed. */
+/** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_SPACE_LIMIT = 50;
 export const NOTIF_FEED_LIMIT = 60;
 
-/** An ActivityEvent plus the Space it came from (for cross-Space labelling). */
+/** An ActivityEvent plus the Workspace it came from (for cross-Workspace labelling). */
 export interface FeedEntry {
   readonly event: ActivityEvent;
-  readonly spaceHandle: string;
+  readonly workspaceHandle: string;
 }
 
 /** Actions we treat as failures / needs-attention (danger styling + badge). */
@@ -30,17 +30,17 @@ export function isFailureAction(action: string): boolean {
   );
 }
 
-/** Load every Space's recent activity and merge it into one newest-first feed. */
+/** Load every Workspace's recent activity and merge it into one newest-first feed. */
 export async function loadNotificationFeed(
-  spaces: readonly Space[],
+  workspaces: readonly Workspace[],
 ): Promise<readonly FeedEntry[]> {
-  const perSpace = await Promise.all(
-    spaces.map(async (space): Promise<readonly FeedEntry[]> => {
-      const events = await listActivity(space.id, NOTIF_PER_SPACE_LIMIT);
-      return events.map((event) => ({ event, spaceHandle: space.handle }));
+  const perWorkspace = await Promise.all(
+    workspaces.map(async (workspace): Promise<readonly FeedEntry[]> => {
+      const events = await listActivity(workspace.id, NOTIF_PER_SPACE_LIMIT);
+      return events.map((event) => ({ event, workspaceHandle: workspace.handle }));
     }),
   );
-  return perSpace
+  return perWorkspace
     .flat()
     .sort(
       (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),

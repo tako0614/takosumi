@@ -4,13 +4,13 @@
 // do not bypass account sessions, tenant ownership, idempotency, approval
 // digest, redirect allowlists, or downstream provider validation. The generic
 // Takosumi platform (OIDC sign-in, PAT issuance, upstream OAuth, passkeys,
-// generic Installations + import, PlanRuns, deployment / rollback mutations,
+// generic Capsules + import, PlanRuns, deployment / rollback mutations,
 // export, and the installation status PATCH) is NOT launch-gated and must keep
 // working while the platform readiness is closed.
 
 import { isSha256HexDigest } from "./installation-helpers.ts";
 import { json, requestIdFrom } from "./http-helpers.ts";
-import type { InstallationRoute } from "./route-matchers.ts";
+import type { CapsuleRoute } from "./route-matchers.ts";
 
 export interface PlatformAccessPolicy {
   status: "closed" | "open";
@@ -167,8 +167,8 @@ function platformReadinessSummaryLooksSensitive(summary: string): boolean {
 // keep working for authenticated owners while the managed offering is closed.
 // Generic deployment / deployment-plan-run / rollback mutations are also part
 // of the non-gated platform and must work while the managed offering is closed.
-export function platformGuardedInstallationMutation(
-  kind: InstallationRoute["kind"],
+export function platformGuardedCapsuleMutation(
+  kind: CapsuleRoute["kind"],
   method: string,
 ): boolean {
   if (method === "POST") {

@@ -9,7 +9,7 @@ import {
   InMemoryAccountsStore,
   InMemorySharedCellWarmPool,
 } from "@takosjp/takosumi-accounts-service";
-import { createMetadataOnlyInstallationExportWorker } from "../../service/src/export-archive.ts";
+import { createMetadataOnlyCapsuleExportWorker } from "../../service/src/export-archive.ts";
 import {
   accountsLaunchTokensCleanupHelpText,
   accountsMigrateD1HelpText,
@@ -618,7 +618,7 @@ export async function runAccountsServe(
         : undefined,
       serviceGraphMaterialResolver: serviceGraphMaterialResolverConfig,
       exportWorker: exportWorkerConfig
-        ? createMetadataOnlyInstallationExportWorker({
+        ? createMetadataOnlyCapsuleExportWorker({
             ...exportWorkerConfig,
             ...(exportWorkerConfig.dataDirectory
               ? {

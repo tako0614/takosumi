@@ -99,13 +99,13 @@ describe("Installation detail deployment surface", () => {
   });
 
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
-    expect(source).toContain('<Page title={t("app.installationSub")}');
+    expect(source).toContain('<Page title={t("app.capsuleSub")}');
     expect(source).toContain("setDocumentTitle(inst.name)");
   });
 
   test("reads the Deployment ledger through the session client fn", () => {
     expect(source).toMatch(
-      /createResource\(installationId,\s*listDeployments\)/,
+      /createResource\(capsuleId,\s*listDeployments\)/,
     );
   });
 

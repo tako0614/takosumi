@@ -37,39 +37,39 @@ import {
   type BackupRecord,
   type ActivityEvent,
   type ControlApiError,
-  type InstallationProviderConnectionBinding,
-  type InstallationProviderConnectionBindings,
+  type CapsuleProviderConnectionBinding,
+  type CapsuleProviderConnectionBindings,
   type ProviderConnection,
   createDeploymentRollbackPlan,
-  createInstallationBackup,
-  destroyPlanInstallation,
+  createCapsuleBackup,
+  destroyPlanCapsule,
   extractRunId,
-  getInstallationProviderConnectionSet,
-  getInstallation,
-  getSpaceGraph,
+  getCapsuleProviderConnectionSet,
+  getCapsule,
+  getWorkspaceGraph,
   listActivity,
   listDeployments,
   listProviderConnections,
   listSources,
-  planInstallation,
-  putInstallationProviderConnectionSet,
+  planCapsule,
+  putCapsuleProviderConnectionSet,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   deploymentStatusLabel,
   deploymentTone,
-  installationStatusLabel,
-  installationTone,
+  capsuleStatusLabel,
+  capsuleTone,
   operationLabel,
   runStatusLabel,
   runTone,
 } from "../../lib/labels.ts";
 import {
-  effectiveInstallationStatus,
+  effectiveCapsuleStatus,
   isUrlString,
   launchUrlFromOutputs,
   outputLabel,
-} from "../../lib/installations-ui.ts";
+} from "../../lib/capsules-ui.ts";
 import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
@@ -90,14 +90,14 @@ import {
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
 export default function AppDetailView() {
-  return <Page title={t("app.installationSub")}>{() => <Inner />}</Page>;
+  return <Page title={t("app.capsuleSub")}>{() => <Inner />}</Page>;
 }
 
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
-  const installationId = () => params.id ?? "";
+  const capsuleId = () => params.id ?? "";
   const tab = (): TabId => {
     const raw = params.tab;
     return raw === "deploys" || raw === "settings" || raw === "danger"
@@ -105,41 +105,41 @@ function Inner() {
       : "overview";
   };
 
-  const [installation, { refetch: refetchInstallation }] = createResource(
-    installationId,
-    getInstallation,
+  const [capsule, { refetch: refetchCapsule }] = createResource(
+    capsuleId,
+    getCapsule,
   );
-  const spaceId = () => installation()?.spaceId;
+  const workspaceId = () => capsule()?.workspaceId;
   const [profile, { refetch: refetchProfile }] = createResource(
-    installationId,
-    getInstallationProviderConnectionSet,
+    capsuleId,
+    getCapsuleProviderConnectionSet,
   );
-  const [sources] = createResource(spaceId, listSources);
-  const [deployments] = createResource(installationId, listDeployments);
-  const [graph] = createResource(spaceId, getSpaceGraph);
+  const [sources] = createResource(workspaceId, listSources);
+  const [deployments] = createResource(capsuleId, listDeployments);
+  const [graph] = createResource(workspaceId, getWorkspaceGraph);
   const [providerConnections] = createResource(
-    spaceId,
+    workspaceId,
     listProviderConnections,
   );
-  const [activity] = createResource(spaceId, (id) => listActivity(id, 100));
+  const [activity] = createResource(workspaceId, (id) => listActivity(id, 100));
 
   const source = createMemo(() =>
-    (sources() ?? []).find((item) => item.id === installation()?.sourceId),
+    (sources() ?? []).find((item) => item.id === capsule()?.sourceId),
   );
   const producers = createMemo(() =>
-    dependencyRows(installation(), graph(), "producer"),
+    dependencyRows(capsule(), graph(), "producer"),
   );
   const consumers = createMemo(() =>
-    dependencyRows(installation(), graph(), "consumer"),
+    dependencyRows(capsule(), graph(), "consumer"),
   );
 
   createEffect(() => {
-    const inst = installation();
+    const inst = capsule();
     if (inst) {
       setDocumentTitle(inst.name);
       return;
     }
-    if (installation.error) {
+    if (capsule.error) {
       setDocumentTitle(t("app.notFound"));
     }
   });
@@ -151,7 +151,7 @@ function Inner() {
   );
   const currentDeployment = createMemo(() => {
     const list = deploymentHistory();
-    const currentId = installation()?.currentDeploymentId;
+    const currentId = capsule()?.currentStateVersionId;
     return (
       (currentId && list.find((d) => d.id === currentId)) ||
       list[0] ||
@@ -171,12 +171,12 @@ function Inner() {
     launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {}),
   );
 
-  /** Recent run/release events for THIS app (activity carries metadata.installationId). */
+  /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */
   const recentActivity = createMemo(() =>
     (activity() ?? [])
       .filter(
         (event) =>
-          event.metadata.installationId === installationId() &&
+          event.metadata.capsuleId === capsuleId() &&
           (event.targetType === "run" ||
             event.action.startsWith("release_activation.")),
       )
@@ -185,17 +185,17 @@ function Inner() {
 
   // --- actions ---------------------------------------------------------------
   const plan = createAction(async () => {
-    const envelope = await planInstallation(installationId());
+    const envelope = await planCapsule(capsuleId());
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
   const destroyPlan = createAction(async () => {
-    const envelope = await destroyPlanInstallation(installationId());
+    const envelope = await destroyPlanCapsule(capsuleId());
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
   const backup = createAction(async (): Promise<BackupRecord> => {
-    return await createInstallationBackup(installationId());
+    return await createCapsuleBackup(capsuleId());
   });
   const rollback = createAction(async (deploymentId: string) => {
     const envelope = await createDeploymentRollbackPlan(deploymentId);
@@ -215,7 +215,7 @@ function Inner() {
   };
 
   const tabItems = () => {
-    const base = `/services/${encodeURIComponent(installationId())}`;
+    const base = `/services/${encodeURIComponent(capsuleId())}`;
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
@@ -225,15 +225,15 @@ function Inner() {
   return (
     <AppShell>
       <Switch>
-        <Match when={installation.loading}>
+        <Match when={capsule.loading}>
           <Card>
             <Skeleton variant="block" />
           </Card>
         </Match>
-        <Match when={installation.error}>
+        <Match when={capsule.error}>
           <EmptyState
             title={t("app.notFound")}
-            message={(installation.error as ControlApiError).message}
+            message={(capsule.error as ControlApiError).message}
             action={
               <Button
                 variant="secondary"
@@ -245,18 +245,18 @@ function Inner() {
             }
           />
         </Match>
-        <Match when={installation()}>
+        <Match when={capsule()}>
           {(inst) => (
             <>
               <PageHeader
-                eyebrow={t("app.installationSub")}
+                eyebrow={t("app.capsuleSub")}
                 title={
                   <span class="wa-title-row">
                     {inst().name}
                     <StatusBadge
-                      status={effectiveInstallationStatus(inst())}
-                      label={installationStatusLabel}
-                      tone={installationTone}
+                      status={effectiveCapsuleStatus(inst())}
+                      label={capsuleStatusLabel}
+                      tone={capsuleTone}
                     />
                   </span>
                 }
@@ -317,7 +317,7 @@ function Inner() {
                       reviewBusy={plan.busy()}
                       onReview={() => void plan.run()}
                       reviewError={plan.error()}
-                      settingsHref={`/services/${encodeURIComponent(installationId())}/settings`}
+                      settingsHref={`/services/${encodeURIComponent(capsuleId())}/settings`}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -325,12 +325,12 @@ function Inner() {
                       source={source()}
                       providerConnections={profile()?.bindings}
                       availableProviderConnections={providerConnections() ?? []}
-                      installationId={installationId()}
-                      dangerHref={`/services/${encodeURIComponent(installationId())}/danger`}
+                      capsuleId={capsuleId()}
+                      dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
                       onSaved={() =>
                         void Promise.all([
                           refetchProfile(),
-                          refetchInstallation(),
+                          refetchCapsule(),
                         ])
                       }
                     />
@@ -382,11 +382,11 @@ function dependencyRows(
   inst: { readonly id: string } | undefined,
   graph:
     | {
-        readonly nodes: readonly { installationId: string; name: string }[];
+        readonly nodes: readonly { capsuleId: string; name: string }[];
         readonly edges: readonly {
           id: string;
-          producerInstallationId: string;
-          consumerInstallationId: string;
+          producerCapsuleId: string;
+          consumerCapsuleId: string;
           outputs: Record<string, { from: string; to: string }>;
         }[];
       }
@@ -395,19 +395,19 @@ function dependencyRows(
 ): readonly DependencyRow[] {
   if (!inst || !graph) return [];
   const names = new Map(
-    graph.nodes.map((node) => [node.installationId, node.name]),
+    graph.nodes.map((node) => [node.capsuleId, node.name]),
   );
   return graph.edges
     .filter((edge) =>
       side === "producer"
-        ? edge.consumerInstallationId === inst.id
-        : edge.producerInstallationId === inst.id,
+        ? edge.consumerCapsuleId === inst.id
+        : edge.producerCapsuleId === inst.id,
     )
     .map((edge) => {
       const otherId =
         side === "producer"
-          ? edge.producerInstallationId
-          : edge.consumerInstallationId;
+          ? edge.producerCapsuleId
+          : edge.consumerCapsuleId;
       return {
         id: edge.id,
         name: names.get(otherId) ?? otherId,
@@ -790,15 +790,15 @@ function ActivityEventBadge(props: { readonly action: string }) {
 
 // === settings ================================================================
 
-interface InstallationProviderConnectionRow {
+interface CapsuleProviderConnectionRow {
   readonly provider: string;
   readonly alias: string;
   readonly connectionId: string;
 }
 
 function providerConnectionToRow(
-  binding: InstallationProviderConnectionBinding,
-): InstallationProviderConnectionRow {
+  binding: CapsuleProviderConnectionBinding,
+): CapsuleProviderConnectionRow {
   return {
     provider: binding.provider,
     alias: binding.alias ?? "",
@@ -851,7 +851,7 @@ function providerDisplayName(provider: string): string {
 }
 
 function boundConnectionLabel(
-  row: InstallationProviderConnectionRow,
+  row: CapsuleProviderConnectionRow,
   providerConnections: readonly ProviderConnection[],
 ): string {
   const match = providerConnections.find(
@@ -860,7 +860,7 @@ function boundConnectionLabel(
   return match ? providerConnectionLabel(match) : t("common.none");
 }
 
-function boundProviderLabel(row: InstallationProviderConnectionRow): string {
+function boundProviderLabel(row: CapsuleProviderConnectionRow): string {
   if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
   return row.alias
     ? `${providerDisplayName(row.provider)} (${row.alias})`
@@ -868,14 +868,14 @@ function boundProviderLabel(row: InstallationProviderConnectionRow): string {
 }
 
 function buildProviderConnections(
-  rows: readonly InstallationProviderConnectionRow[],
+  rows: readonly CapsuleProviderConnectionRow[],
   options: {
     readonly providerConnections: readonly ProviderConnection[];
   },
 ):
-  | { readonly connections: InstallationProviderConnectionBindings }
+  | { readonly connections: CapsuleProviderConnectionBindings }
   | { readonly error: string } {
-  const connections: InstallationProviderConnectionBinding[] = [];
+  const connections: CapsuleProviderConnectionBinding[] = [];
   for (const [index, row] of rows.entries()) {
     const provider = row.provider.trim();
     if (!provider) {
@@ -916,14 +916,14 @@ function SettingsTab(props: {
       }
     | undefined;
   readonly providerConnections:
-    | InstallationProviderConnectionBindings
+    | CapsuleProviderConnectionBindings
     | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly dangerHref: string;
   readonly onSaved: () => void;
 }) {
-  const [rows, setRows] = createSignal<InstallationProviderConnectionRow[]>([]);
+  const [rows, setRows] = createSignal<CapsuleProviderConnectionRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
 
   createEffect(() => {
@@ -934,7 +934,7 @@ function SettingsTab(props: {
 
   const update = (
     index: number,
-    patch: Partial<InstallationProviderConnectionRow>,
+    patch: Partial<CapsuleProviderConnectionRow>,
   ) =>
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
@@ -949,8 +949,8 @@ function SettingsTab(props: {
       setFormError(providerConnections.error);
       return;
     }
-    await putInstallationProviderConnectionSet(
-      props.installationId,
+    await putCapsuleProviderConnectionSet(
+      props.capsuleId,
       providerConnections.connections,
     );
     props.onSaved();

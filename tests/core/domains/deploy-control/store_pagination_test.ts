@@ -15,7 +15,7 @@ import { OutputSharesService } from "../../../../core/domains/output-shares/mod.
 import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { UsageEvent } from "takosumi-contract/billing";
 import type { BackupRecord } from "takosumi-contract/backups";
-import type { OutputShare } from "takosumi-contract/output-snapshots";
+import type { OutputShare } from "takosumi-contract/outputs";
 
 const STORES: ReadonlyArray<[string, () => OpenTofuDeploymentStore]> = [
   ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],

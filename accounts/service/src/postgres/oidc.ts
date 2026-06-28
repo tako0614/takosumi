@@ -17,7 +17,7 @@ const installation = pgSchema("installation_v1");
 
 const oidcClients = installation.table("oidc_clients", {
   clientId: text("client_id").primaryKey(),
-  installationId: text("installation_id").notNull(),
+  capsuleId: text("installation_id").notNull(),
   serviceId: text("service_id").notNull(),
   issuerUrl: text("issuer_url").notNull(),
   redirectUris: text("redirect_uris").array().notNull(),
@@ -42,7 +42,7 @@ export async function saveOidcClient(
     .onConflictDoUpdate({
       target: oidcClients.clientId,
       set: {
-        installationId: values.installationId,
+        capsuleId: values.capsuleId,
         serviceId: values.serviceId,
         issuerUrl: values.issuerUrl,
         redirectUris: values.redirectUris,
@@ -68,14 +68,14 @@ export async function findOidcClient(
   return row ? oidcClientFromRow(row) : undefined;
 }
 
-export async function findOidcClientForInstallation(
+export async function findOidcClientForCapsule(
   client: PostgresQueryClient,
-  installationId: string,
+  capsuleId: string,
 ): Promise<OidcClientRecord | undefined> {
   const row = await postgresDrizzle(client, oidcSchema)
     .select(oidcClientColumns)
     .from(oidcClients)
-    .where(eq(oidcClients.installationId, installationId))
+    .where(eq(oidcClients.capsuleId, capsuleId))
     .limit(1)
     .then((rows) => rows[0] as OidcClientRow | undefined);
   return row ? oidcClientFromRow(row) : undefined;
@@ -83,7 +83,7 @@ export async function findOidcClientForInstallation(
 
 const oidcClientColumns = {
   client_id: oidcClients.clientId,
-  installation_id: oidcClients.installationId,
+  installation_id: oidcClients.capsuleId,
   service_id: oidcClients.serviceId,
   issuer_url: oidcClients.issuerUrl,
   redirect_uris: oidcClients.redirectUris,
@@ -98,7 +98,7 @@ const oidcClientColumns = {
 function oidcClientValues(record: OidcClientRecord) {
   return {
     clientId: record.clientId,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     serviceId: record.namespacePath,
     issuerUrl: record.issuerUrl,
     redirectUris: [...record.redirectUris],

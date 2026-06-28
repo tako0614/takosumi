@@ -29,7 +29,7 @@ export interface DriftSweepOperations {
   /** Lists ACTIVE Installations across all Spaces, capped at `limit`. */
   listActiveInstallations(
     limit: number,
-  ): Promise<readonly { readonly id: string; readonly spaceId: string }[]>;
+  ): Promise<readonly { readonly id: string; readonly workspaceId: string }[]>;
   /** Creates a Space-scoped RunGroup containing read-only §19 drift_check Runs. */
   createSpaceDriftCheck(
     spaceId: string,
@@ -67,8 +67,8 @@ export async function driftSweep(
   const bySpace = new Map<string, number>();
   for (const installation of installations) {
     bySpace.set(
-      installation.spaceId,
-      (bySpace.get(installation.spaceId) ?? 0) + 1,
+      installation.workspaceId,
+      (bySpace.get(installation.workspaceId) ?? 0) + 1,
     );
   }
   let checked = 0;

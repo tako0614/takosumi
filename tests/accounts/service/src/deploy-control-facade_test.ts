@@ -4,7 +4,7 @@ import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
-  GetInstallationResponse,
+  GetCapsuleResponse,
   ListDeploymentsResponse,
   PlanRun,
   PlanRunResponse,
@@ -12,14 +12,14 @@ import type {
 import {
   type DeployControlOperations,
   requestDeploymentApply,
-  requestInstallationApply,
-  requestInstallationPlanRun,
+  requestCapsuleApply,
+  requestCapsulePlanRun,
 } from "../../../../accounts/service/src/mod.ts";
 
 function planRun(overrides: Partial<PlanRun> = {}): PlanRun {
   return {
     id: "plan_inproc",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     source: {
       kind: "git",
       url: "https://github.com/example/hello",
@@ -61,9 +61,9 @@ function operationsStub(
     createApplyRun: reject(
       "createApplyRun",
     ) as DeployControlOperations["createApplyRun"],
-    getInstallation: reject(
-      "getInstallation",
-    ) as DeployControlOperations["getInstallation"],
+    getCapsule: reject(
+      "getCapsule",
+    ) as DeployControlOperations["getCapsule"],
     listDeployments: reject(
       "listDeployments",
     ) as DeployControlOperations["listDeployments"],
@@ -71,7 +71,7 @@ function operationsStub(
   };
 }
 
-test("requestInstallationPlanRun dispatches through typed operations, not fetch", async () => {
+test("requestCapsulePlanRun dispatches through typed operations, not fetch", async () => {
   let createPlanRunArg: CreatePlanRunRequest | undefined;
   const operations = operationsStub({
     createPlanRun: (request) => {
@@ -80,12 +80,12 @@ test("requestInstallationPlanRun dispatches through typed operations, not fetch"
     },
   });
 
-  const result = await requestInstallationPlanRun({
+  const result = await requestCapsulePlanRun({
     deployControl: {
       operations,
     },
     body: {
-      spaceId: "space_1",
+      workspaceId: "space_1",
       source: {
         kind: "git",
         url: "https://github.com/example/hello",
@@ -95,7 +95,7 @@ test("requestInstallationPlanRun dispatches through typed operations, not fetch"
   });
 
   expect(result.status).toEqual(201);
-  expect(createPlanRunArg?.spaceId).toEqual("space_1");
+  expect(createPlanRunArg?.workspaceId).toEqual("space_1");
   expect(createPlanRunArg?.operation).toEqual("create");
   const payload = result.payload as {
     kind?: string;
@@ -107,7 +107,7 @@ test("requestInstallationPlanRun dispatches through typed operations, not fetch"
   expect(payload.expected?.resolvedProviderEnvBindingsDigest).toBeUndefined();
 });
 
-test("requestInstallationPlanRun preserves provider env binding digest in expected guard", async () => {
+test("requestCapsulePlanRun preserves provider env binding digest in expected guard", async () => {
   const operations = operationsStub({
     createPlanRun: () =>
       Promise.resolve<PlanRunResponse>({
@@ -117,12 +117,12 @@ test("requestInstallationPlanRun preserves provider env binding digest in expect
       }),
   });
 
-  const result = await requestInstallationPlanRun({
+  const result = await requestCapsulePlanRun({
     deployControl: {
       operations,
     },
     body: {
-      spaceId: "space_1",
+      workspaceId: "space_1",
       source: {
         kind: "git",
         url: "https://github.com/example/hello",
@@ -140,7 +140,7 @@ test("requestInstallationPlanRun preserves provider env binding digest in expect
   );
 });
 
-test("requestInstallationApply reads the reviewed PlanRun and applies in-process", async () => {
+test("requestCapsuleApply reads the reviewed PlanRun and applies in-process", async () => {
   let appliedRequest: CreateApplyRunRequest | undefined;
   const reviewed = planRun({
     id: "plan_apply",
@@ -157,7 +157,7 @@ test("requestInstallationApply reads the reviewed PlanRun and applies in-process
         applyRun: {
           id: "apply_1",
           planRunId: "plan_apply",
-          spaceId: "space_1",
+          workspaceId: "space_1",
           operation: "create",
           runnerProfileId: "cloudflare-default",
           status: "succeeded",
@@ -170,7 +170,7 @@ test("requestInstallationApply reads the reviewed PlanRun and applies in-process
     },
   });
 
-  const result = await requestInstallationApply({
+  const result = await requestCapsuleApply({
     deployControl: {
       operations,
     },
@@ -216,7 +216,7 @@ test("in-process controller errors map to the contract HTTP status + envelope", 
     deployControl: {
       operations,
     },
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     body: { planRunId: "plan_missing" },
   });
 

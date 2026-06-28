@@ -475,7 +475,9 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.sourceSnapshotId).toEqual("snap_fixture");
   expect(planRun.installationContext).toEqual({
+    workspaceId: "space_test",
     spaceId: "space_test",
+    capsuleId: "inst_fixture",
     installationId: "inst_fixture",
     environment: "preview",
   });
@@ -490,8 +492,8 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   });
   // Plan restores against the CURRENT generation (0).
   expect(job.stateScope).toEqual({
-    spaceId: "space_test",
-    installationId: "inst_fixture",
+    workspaceId: "space_test",
+    capsuleId: "inst_fixture",
     environment: "preview",
     generation: 0,
   });
@@ -3054,8 +3056,8 @@ test("installation apply emits generation base+1, records a StateSnapshot + Depl
   expect(runner.applyJobs).toHaveLength(1);
   const applyJob = runner.applyJobs[0]!;
   expect(applyJob.stateScope).toEqual({
-    spaceId: "space_test",
-    installationId: "inst_fixture",
+    workspaceId: "space_test",
+    capsuleId: "inst_fixture",
     environment: "preview",
     generation: 1,
   });
@@ -3411,8 +3413,8 @@ test("installation apply is rejected when the state generation advanced since pl
   // Simulate a sibling apply advancing the installation state generation to 1.
   await store.putStateSnapshot({
     id: "state_sibling",
-    spaceId: "space_test",
-    installationId: "inst_fixture",
+    workspaceId: "space_test",
+    capsuleId: "inst_fixture",
     environment: "preview",
     generation: 1,
     objectKey:

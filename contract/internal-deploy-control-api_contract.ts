@@ -6,8 +6,8 @@ import type {
   Deployment,
   DeploymentOutput,
   DispatchStateScope,
-  GetInstallationResponse,
-  Installation,
+  GetCapsuleResponse,
+  Capsule,
   DeployControlErrorEnvelope,
   ListDeploymentOutputsResponse,
   ListDeploymentsResponse,
@@ -15,7 +15,7 @@ import type {
   PlanRun,
   PlanRunResponse,
   RunnerProfile,
-  StateSnapshot,
+  StateVersion,
 } from "./internal-deploy-control-api.ts";
 
 const runnerProfile = {
@@ -65,12 +65,15 @@ const runnerProfile = {
   createdAt: 1716000000000,
 } satisfies RunnerProfile;
 
-// Space-direct Installation coordinates shared across the fixtures: one
-// Installation = Capsule + generated root + tfstate + outputs, keyed
-// (spaceId, name, environment).
-const spaceId = "space_personal";
-const installationId = "ins_0123456789abcdef";
+// Workspace/Project-direct Capsule coordinates shared across the fixtures: one
+// Capsule = generated root + tfstate + outputs, keyed (projectId, name,
+// environment).
+const workspaceId = "ws_personal";
+const projectId = "prj_default";
+const capsuleId = "cap_0123456789abcdef";
 const environment = "production";
+const stateVersionId = "sst_0123456789abcdef";
+// Retired Deployment ledger keeps its frozen legacy field names.
 const outputSnapshotId = "snap_0123456789abcdef";
 
 const source = {
@@ -92,8 +95,8 @@ const deploymentOutput = {
 
 const planRun = {
   id: "plan_0123456789abcdef",
-  spaceId,
-  installationId,
+  workspaceId,
+  capsuleId,
   source,
   sourceDigest:
     "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -114,7 +117,7 @@ const planRun = {
     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   planArtifact: {
     kind: "object-storage",
-    ref: "r2://takos-artifacts/spaces/space_0123456789abcdef/installations/inst_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
+    ref: "r2://takos-artifacts/workspaces/ws_0123456789abcdef/capsules/cap_0123456789abcdef/runs/plan_0123456789abcdef/plan.bin.enc",
     digest:
       "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     contentType: "application/vnd.opentofu.plan",
@@ -124,11 +127,11 @@ const planRun = {
   providerLockDigest:
     "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
   summary: { add: 2, change: 0, destroy: 0 },
-  // Installation context the queue consumer reads to build the
-  // `stateScope` dispatch field; renamed from the retired `environmentContext`.
-  installationContext: {
-    spaceId,
-    installationId,
+  // Capsule context the queue consumer reads to build the `stateScope` dispatch
+  // field.
+  capsuleContext: {
+    workspaceId,
+    capsuleId,
     environment,
   },
   auditEvents: [
@@ -147,59 +150,60 @@ const planRun = {
   finishedAt: 1716000000002,
 } satisfies PlanRun;
 
-// Installation-scoped state location threaded onto the run dispatch payload
+// Capsule-scoped state location threaded onto the run dispatch payload.
 // An apply carries `base + 1` as the persist generation.
 const dispatchStateScope = {
-  spaceId,
-  installationId,
+  workspaceId,
+  capsuleId,
   environment,
   generation: 1,
 } satisfies DispatchStateScope;
 
-// Installation ledger record: Space-direct, ISO timestamps,
+// Capsule ledger record: Workspace/Project-direct, ISO timestamps,
 // `status: "active"`. The App/Environment/InstallProfile lanes are retired.
-const installation = {
-  id: installationId,
-  spaceId,
+const capsule = {
+  id: capsuleId,
+  workspaceId,
+  projectId,
   name: "notes",
   slug: "notes",
   sourceId: "src_0123456789abcdef",
   installType: "opentofu_module",
   installConfigId: "cfg_0123456789abcdef",
   environment,
-  currentDeploymentId: "dep_0123456789abcdef",
+  currentStateVersionId: stateVersionId,
   currentStateGeneration: 1,
   status: "active",
   createdAt: "2024-05-18T03:00:00.000Z",
   updatedAt: "2024-05-18T03:00:05.000Z",
-} satisfies Installation;
+} satisfies Capsule;
 
 // One tfstate generation. Metadata-only; the encrypted bytes live in R2_STATE.
-const stateSnapshot = {
-  id: "sst_0123456789abcdef",
-  spaceId,
-  installationId,
+const stateVersion = {
+  id: stateVersionId,
+  workspaceId,
+  capsuleId,
   environment,
   generation: 1,
   objectKey:
-    "spaces/space_personal/installations/ins_0123456789abcdef/envs/production/states/00000001.tfstate.enc",
+    "workspaces/ws_personal/capsules/cap_0123456789abcdef/envs/production/states/00000001.tfstate.enc",
   digest:
     "sha256:4444444444444444444444444444444444444444444444444444444444444444",
   createdByRunId: "apply_0123456789abcdef",
   createdAt: "2024-05-18T03:00:05.000Z",
-} satisfies StateSnapshot;
+} satisfies StateVersion;
 
-// Successful apply record: Space-direct, `outputsPublic` map,
-// `status: "active"`, ISO `createdAt`. The legacy rich Deployment (source,
-// runnerProfileId, outputs[], auditEvents) is gone.
+// Retired successful-apply record: kept read-only for audit, so it deliberately
+// still uses the frozen legacy `spaceId` / `installationId` / `outputSnapshotId`
+// field names. New applies record a StateVersion + Output instead.
 const deployment = {
   id: "dep_0123456789abcdef",
-  spaceId,
-  installationId,
+  spaceId: workspaceId,
+  installationId: capsuleId,
   environment,
   applyRunId: "apply_0123456789abcdef",
   sourceSnapshotId: "ssn_0123456789abcdef",
-  stateGeneration: stateSnapshot.generation,
+  stateGeneration: stateVersion.generation,
   outputSnapshotId,
   outputsPublic: { launch_url: deploymentOutput.value },
   status: "active",
@@ -209,9 +213,9 @@ const deployment = {
 const applyRun = {
   id: "apply_0123456789abcdef",
   planRunId: planRun.id,
-  spaceId: planRun.spaceId,
-  installationId,
-  deploymentId: deployment.id,
+  workspaceId: planRun.workspaceId,
+  capsuleId,
+  stateVersionId: stateVersion.id,
   operation: planRun.operation,
   runnerProfileId: runnerProfile.id,
   status: "succeeded",
@@ -240,7 +244,7 @@ const applyRun = {
       id: "apply_0123456789abcdef:apply.completed:1716000000005",
       type: "apply.completed",
       at: 1716000000005,
-      data: { deploymentId: deployment.id },
+      data: { stateVersionId: stateVersion.id },
     },
   ],
   createdAt: 1716000000003,
@@ -254,7 +258,7 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
   } satisfies ListRunnerProfilesResponse,
 
   createPlanRunRequest: {
-    spaceId,
+    workspaceId,
     source,
     runnerProfileId: runnerProfile.id,
     variables: { account_id: "acct_123" },
@@ -285,16 +289,16 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
 
   applyRunResponse: {
     applyRun,
-    installation,
+    capsule,
     deployment,
   } satisfies ApplyRunResponse,
 
-  getInstallationResponse: {
-    installation,
-  } satisfies GetInstallationResponse,
+  getCapsuleResponse: {
+    capsule,
+  } satisfies GetCapsuleResponse,
 
-  // StateSnapshot metadata recorded after a successful apply.
-  stateSnapshot,
+  // StateVersion metadata recorded after a successful apply.
+  stateVersion,
 
   listDeploymentsResponse: {
     deployments: [deployment],

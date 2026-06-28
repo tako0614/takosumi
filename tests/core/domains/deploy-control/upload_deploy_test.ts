@@ -28,7 +28,7 @@ import {
   SourcesService,
   uploadArchiveObjectKey,
 } from "../../../../core/domains/sources/mod.ts";
-import { InstallationsService } from "../../../../core/domains/installations/mod.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import {
   CredentialBundle,
   PhaseMintBundle,
@@ -231,7 +231,7 @@ async function setup(
         { path: "main.tf", text: options.capsuleSourceText ?? READY_CAPSULE },
       ]),
   });
-  const installations = new InstallationsService({ store });
+  const installations = new CapsulesService({ store });
   const controller = new OpenTofuDeploymentController({
     store,
     runner,

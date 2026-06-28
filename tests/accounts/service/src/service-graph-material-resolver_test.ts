@@ -55,7 +55,7 @@ test("Accounts service graph material resolver materializes OIDC public clients 
   expect(material.tokenEndpointAuthMethod).toEqual("none");
   expect(material.clientSecretRef).toEqual(undefined);
 
-  const client = store.findOidcClientForInstallation("cap_oidc");
+  const client = store.findOidcClientForCapsule("cap_oidc");
   expect(client?.namespacePath).toEqual(
     TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   );
@@ -68,7 +68,7 @@ test("Accounts service graph material resolver materializes yurucommu-style OIDC
   const resolver = createTakosumiServiceGraphMaterialResolver({
     store,
     issuer: "https://app.takosumi.test",
-    allowDeployControlInstallations: true,
+    allowDeployControlCapsules: true,
     now: () => 1_700_000_000_000,
   });
 
@@ -100,11 +100,11 @@ test("Accounts service graph material resolver materializes yurucommu-style OIDC
   expect(material.allowedScopes).toEqual(["openid", "profile", "email"]);
   expect(material.tokenEndpointAuthMethod).toEqual("none");
 
-  const client = store.findOidcClientForInstallation("cap_yurucommu");
+  const client = store.findOidcClientForCapsule("cap_yurucommu");
   expect(client?.namespacePath).toEqual(
     TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   );
-  expect(store.findAppInstallation("cap_yurucommu")?.appId).toEqual(
+  expect(store.findAppCapsule("cap_yurucommu")?.appId).toEqual(
     "yurucommu",
   );
 });
@@ -119,7 +119,7 @@ test("Accounts service graph material resolver rejects network-path redirectPath
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "inst_oidc_network_path",
+      capsuleId: "inst_oidc_network_path",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
       component: {
         kind: "worker",
@@ -135,7 +135,7 @@ test("Accounts service graph material resolver rejects network-path redirectPath
   ]);
   expect(material.redirectUris.join(" ")).not.toContain("evil.example.test");
   expect(
-    store.findOidcClientForInstallation("inst_oidc_network_path")?.redirectUris,
+    store.findOidcClientForCapsule("inst_oidc_network_path")?.redirectUris,
   ).toEqual([
     "https://cloud.example.test/oauth/callback/inst_oidc_network_path",
   ]);
@@ -151,7 +151,7 @@ test("Accounts service graph material resolver can include an operator-internal 
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "inst_oidc_internal",
+      capsuleId: "inst_oidc_internal",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     }),
   );
@@ -178,7 +178,7 @@ test("Accounts service graph material resolver never mints confidential clients 
   // which returns the plaintext once.
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "inst_oidc_secret",
+      capsuleId: "inst_oidc_secret",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
       component: {
         kind: "worker",
@@ -193,7 +193,7 @@ test("Accounts service graph material resolver never mints confidential clients 
   expect(material.tokenEndpointAuthMethod).toEqual("none");
   expect(material.clientSecretRef).toEqual(undefined);
 
-  const client = store.findOidcClientForInstallation("inst_oidc_secret");
+  const client = store.findOidcClientForCapsule("inst_oidc_secret");
   expect(client?.tokenEndpointAuthMethod).toEqual("none");
   expect(client?.clientSecretHash).toEqual(undefined);
 });
@@ -202,7 +202,7 @@ test("Accounts service graph material resolver reuses existing OIDC client", asy
   const store = new InMemoryAccountsStore();
   store.saveOidcClient({
     clientId: "toc_existing",
-    installationId: "inst_existing",
+    capsuleId: "inst_existing",
     namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     issuerUrl: "https://cloud.example.test",
     redirectUris: ["https://app.example.test/callback"],
@@ -219,7 +219,7 @@ test("Accounts service graph material resolver reuses existing OIDC client", asy
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "inst_existing",
+      capsuleId: "inst_existing",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     }),
   );
@@ -235,7 +235,7 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
   const store = new InMemoryAccountsStore();
   store.saveOidcClient({
     clientId: "toc_existing_reconcile",
-    installationId: "inst_reconcile",
+    capsuleId: "inst_reconcile",
     namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     issuerUrl: "https://cloud.example.test",
     redirectUris: ["https://app.example.test/callback"],
@@ -254,7 +254,7 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
   });
 
   const context = {
-    installationId: "inst_reconcile",
+    capsuleId: "inst_reconcile",
     componentName: "api",
     bindingName: "oidc",
     sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
@@ -277,7 +277,7 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
   expect(material.tokenEndpointAuthMethod).toEqual("client_secret_post");
   expect(material.clientSecretRef).toEqual(undefined);
 
-  const client = store.findOidcClientForInstallation("inst_reconcile");
+  const client = store.findOidcClientForCapsule("inst_reconcile");
   expect(client).toBeDefined();
   expect(client.clientId).toEqual("toc_existing_reconcile");
   expect(client.redirectUris).toEqual([
@@ -292,7 +292,7 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
   now = 1_700_000_001_111;
   await resolver.resolve(context);
   expect(
-    store.findOidcClientForInstallation("inst_reconcile")?.updatedAt,
+    store.findOidcClientForCapsule("inst_reconcile")?.updatedAt,
   ).toEqual(1_700_000_000_999);
 });
 
@@ -301,26 +301,26 @@ test("Accounts service graph material resolver can project deploy-control instal
   const resolver = createTakosumiServiceGraphMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
-    allowDeployControlInstallations: true,
+    allowDeployControlCapsules: true,
     now: () => 1_700_000_000_000,
   });
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "ins_direct",
-      spaceId: "space_direct",
+      capsuleId: "ins_direct",
+      workspaceId: "space_direct",
       appId: "app.direct",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     }),
   );
 
   expect(material).toBeDefined();
-  expect(store.findAppInstallation("ins_direct")).toBeDefined();
-  expect(store.findAppInstallation("ins_direct")?.spaceId).toEqual(
+  expect(store.findAppCapsule("ins_direct")).toBeDefined();
+  expect(store.findAppCapsule("ins_direct")?.workspaceId).toEqual(
     "space_direct",
   );
   expect(
-    store.findOidcClientForInstallation("ins_direct")?.namespacePath,
+    store.findOidcClientForCapsule("ins_direct")?.namespacePath,
   ).toEqual(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC);
 });
 
@@ -332,8 +332,8 @@ test("Accounts service graph material resolver does not reassign existing spaces
     createdAt: 1,
     updatedAt: 1,
   });
-  store.saveSpace({
-    spaceId: "space_existing",
+  store.saveWorkspace({
+    workspaceId: "space_existing",
     accountId: "acct_existing",
     kind: "personal",
     createdAt: 1,
@@ -342,14 +342,14 @@ test("Accounts service graph material resolver does not reassign existing spaces
   const resolver = createTakosumiServiceGraphMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
-    allowDeployControlInstallations: true,
+    allowDeployControlCapsules: true,
     now: () => 1_700_000_000_000,
   });
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "ins_direct_existing_space",
-      spaceId: "space_existing",
+      capsuleId: "ins_direct_existing_space",
+      workspaceId: "space_existing",
       appId: "app.direct",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
     }),
@@ -358,9 +358,9 @@ test("Accounts service graph material resolver does not reassign existing spaces
   expect(material.capability).toEqual(
     TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
   );
-  expect(store.findSpace("space_existing")?.accountId).toEqual("acct_existing");
+  expect(store.findWorkspace("space_existing")?.accountId).toEqual("acct_existing");
   expect(
-    store.findAppInstallation("ins_direct_existing_space")?.accountId,
+    store.findAppCapsule("ins_direct_existing_space")?.accountId,
   ).toEqual("acct_existing");
 });
 
@@ -374,7 +374,7 @@ test("Accounts service graph material resolver supports pathless capability disc
 
   const materials = materialCollection(
     await resolver.resolve({
-      installationId: "inst_discovery",
+      capsuleId: "inst_discovery",
       kind: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
       many: true,
       component: {
@@ -400,7 +400,7 @@ test("Accounts service graph material resolver returns empty discovery collectio
 
   expect(
     await resolver.resolve({
-      installationId: "inst_discovery_labels",
+      capsuleId: "inst_discovery_labels",
       kind: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
       labels: { capability: "docs" },
       many: true,
@@ -417,8 +417,8 @@ test("Accounts service graph material resolver projects BillingPort material", a
     createdAt: 1,
     updatedAt: 1,
   });
-  store.saveSpace({
-    spaceId: "space_1",
+  store.saveWorkspace({
+    workspaceId: "space_1",
     accountId: "acct_1",
     kind: "personal",
     createdAt: 1,
@@ -432,10 +432,10 @@ test("Accounts service graph material resolver projects BillingPort material", a
     createdAt: 1,
     updatedAt: 1,
   });
-  store.saveAppInstallation({
-    installationId: "inst_billing",
+  store.saveAppCapsule({
+    capsuleId: "inst_billing",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "app.example",
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
@@ -457,7 +457,7 @@ test("Accounts service graph material resolver projects BillingPort material", a
 
   const material = singleMaterial(
     await resolver.resolve({
-      installationId: "inst_billing",
+      capsuleId: "inst_billing",
       sourceRef: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
     }),
   );
@@ -485,7 +485,7 @@ test("Accounts service graph material resolver ignores unknown paths", async () 
 
   expect(
     await resolver.resolve({
-      installationId: "inst_unknown",
+      capsuleId: "inst_unknown",
       sourceRef: "unknown.primary.service",
     }),
   ).toEqual(undefined);
@@ -535,7 +535,7 @@ test("Accounts handler exposes token-gated service graph material resolver route
   expect(body.material.capability).toEqual(
     TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
   );
-  expect(store.findOidcClientForInstallation("cap_route")).toBeDefined();
+  expect(store.findOidcClientForCapsule("cap_route")).toBeDefined();
 });
 
 test("Accounts handler resolver route supports pathless discovery collections", async () => {
@@ -556,7 +556,7 @@ test("Accounts handler resolver route supports pathless discovery collections", 
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          installationId: "inst_route_discovery",
+          capsuleId: "inst_route_discovery",
           kind: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
           many: true,
           component: {
@@ -587,7 +587,7 @@ test("Accounts handler resolver route supports pathless discovery collections", 
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          installationId: "inst_route_discovery_empty",
+          capsuleId: "inst_route_discovery_empty",
           kind: "unknown.material@v1",
           many: true,
         }),

@@ -45,15 +45,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -64,11 +64,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -78,7 +78,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -103,19 +103,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -128,7 +128,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -139,10 +139,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -161,8 +161,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -178,12 +178,12 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleRuns(
   ctx: ControlDispatchContext,
@@ -195,10 +195,10 @@ export async function handleRuns(
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
     const run = await operations.getRun(runId);
-    const auth = await requireSpaceAccess({
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId: run.spaceId,
+      workspaceId: run.workspaceId,
       subject: ctx.session.subject,
     });
     if (!auth.ok) return auth.response;
@@ -245,7 +245,7 @@ export async function handleRuns(
       if (method !== "GET") return methodNotAllowed("GET");
       // Public, non-secret cost projection: the billing reservation values the
       // controller already computed at plan time (estimated / available credits,
-      // reservation status, credit-shortfall reasons). Space-gated above.
+      // reservation status, credit-shortfall reasons). Workspace-gated above.
       return json({ cost: await operations.getRunCost(runId) });
     }
   }
@@ -263,10 +263,12 @@ export async function handleRunGroups(
     const runGroupId = decodeURIComponent(segments[1] ?? "");
     const existing = await operations.runGroups.getRunGroup(runGroupId);
     if (!existing) return errorJson("not_found", "not found", 404);
-    const auth = await requireSpaceAccess({
+    const runGroupWorkspaceId = existing.runGroup.workspaceId;
+    if (!runGroupWorkspaceId) return errorJson("not_found", "not found", 404);
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId: existing.runGroup.spaceId,
+      workspaceId: runGroupWorkspaceId,
       subject: ctx.session.subject,
     });
     if (!auth.ok) return auth.response;
@@ -300,7 +302,7 @@ async function approveRun(
 /**
  * Applies a reviewed PlanRun on behalf of the dashboard session (§31 GUI
  * deploy). The plan run is resolved first so the apply is space-permission gated
- * via the plan's OWNING Space (a session may not apply another Space's plan);
+ * via the plan's OWNING Workspace (a session may not apply another Workspace's plan);
  * only then is the reviewed apply guard rebuilt server-side from that same plan
  * and handed to the controller, which independently re-checks every apply
  * precondition (succeeded plan / passed policy / immutable plan artifact / not a
@@ -316,10 +318,10 @@ async function applyPlanRun(
   const body = await readJsonObject(request.clone()).catch(() => null);
   const confirmDestructive = body?.confirmDestructive === true;
   const { planRun } = await operations.getPlanRun(planRunId);
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId: planRun.spaceId,
+    workspaceId: planRun.workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
@@ -351,13 +353,16 @@ async function applyPlanRun(
 function applyExpectedGuardFromPlanRun(
   planRun: PublicPlanRun,
 ): ApplyExpectedGuard {
+  // Mirror the deploy-control emit + TOCTOU digest keys EXACTLY: the guard pins
+  // the Capsule's current StateVersion (Deployment ledger retired), keyed by
+  // `capsuleId` / `currentStateVersionId`. Any divergence here from
+  // APPLY_EXPECTED_GUARD_KEYS would fail every apply with a guard mismatch.
+  const capsuleId = planRun.capsuleId ?? planRun.installationId;
   return {
     planRunId: planRun.id,
-    ...(planRun.installationId
-      ? { installationId: planRun.installationId }
-      : {}),
-    ...(planRun.installationId
-      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+    ...(capsuleId ? { capsuleId } : {}),
+    ...(capsuleId
+      ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
     runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,

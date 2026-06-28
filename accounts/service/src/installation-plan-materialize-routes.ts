@@ -11,9 +11,9 @@ import type {
 } from "./store.ts";
 import { constantTimeEqual, sha256HexText } from "./encoding.ts";
 import {
-  appInstallationMaterializeDigest,
+  appCapsuleMaterializeDigest,
   findIdempotentOperationEvent,
-  findInFlightInstallationOperation,
+  findInFlightCapsuleOperation,
   idempotencyRequestConflict,
   installationMaterializeRequestedEvent,
   installationOperationId,
@@ -24,14 +24,14 @@ import {
   serializeServiceBindingMaterial,
   serializeServiceGrantMaterial,
   serializeBillingUsageRecord,
-  serializeInstallationEvent,
+  serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import {
-  completeAppInstallationMaterializeWithWorker,
+  completeAppCapsuleMaterializeWithWorker,
   materializeAcceptedBody,
   materializePreservationSnapshot,
 } from "./installation-materialize-helpers.ts";
-import { requireInstallationAccessTokenCapability } from "./installation-routes-internal.ts";
+import { requireCapsuleAccessTokenCapability } from "./installation-routes-internal.ts";
 import {
   errorJson,
   isPlainRecord,
@@ -41,8 +41,8 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import type {
-  AppInstallationMaterializeRequest,
-  AppInstallationMaterializeWorker,
+  AppCapsuleMaterializeRequest,
+  AppCapsuleMaterializeWorker,
 } from "./mod.ts";
 import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/billing";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
@@ -50,28 +50,28 @@ import { appendLedgerEvent } from "./installation-ledger-events.ts";
 import {
   serviceBindingMaterialRecordsFromValue,
   serviceGrantMaterialRecordsFromValue,
-  appInstallationRevisionPermissionDigest,
+  appCapsuleRevisionPermissionDigest,
   normalizeSourceGitUrl,
   planCoreDeploymentForCloudProjection,
 } from "./installation-lifecycle-shared.ts";
 
-export async function handlePlanAppInstallationDeployment(input: {
-  installationId: string;
+export async function handlePlanAppCapsuleDeployment(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
   deployControl?: DeployControlFacadeOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
     return errorJson(
       "state_conflict",
-      "deployment PlanRun requires a ready Installation projection",
+      "deployment PlanRun requires a ready Capsule projection",
       409,
     );
   }
@@ -79,7 +79,7 @@ export async function handlePlanAppInstallationDeployment(input: {
     const source = isRecord(body.source) ? body.source : undefined;
     const corePlanRun = await planCoreDeploymentForCloudProjection({
       deployControl: input.deployControl,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       source,
     });
     if (corePlanRun instanceof Response) return corePlanRun;
@@ -144,20 +144,20 @@ export async function handlePlanAppInstallationDeployment(input: {
     const now = Date.now();
     const requestedBindings = serviceBindingMaterialRecordsFromValue({
       value: body.serviceBindings,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       now,
     });
     if (requestedBindings instanceof Response) return requestedBindings;
     const requestedGrants = serviceGrantMaterialRecordsFromValue({
       value: body.serviceGrants,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       now,
     });
     if (requestedGrants instanceof Response) return requestedGrants;
 
-    const permissionDigest = await appInstallationRevisionPermissionDigest({
+    const permissionDigest = await appCapsuleRevisionPermissionDigest({
       operation: "deployment",
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       appId: installation.appId,
       sourceGitUrl,
       sourceRef,
@@ -171,7 +171,7 @@ export async function handlePlanAppInstallationDeployment(input: {
 
     return json({
       operation: "deployment",
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       source: {
         url: sourceGitUrl,
         ref: sourceRef,
@@ -258,20 +258,20 @@ export async function handlePlanAppInstallationDeployment(input: {
   const now = Date.now();
   const requestedBindings = serviceBindingMaterialRecordsFromValue({
     value: body.serviceBindings,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     now,
   });
   if (requestedBindings instanceof Response) return requestedBindings;
   const requestedGrants = serviceGrantMaterialRecordsFromValue({
     value: body.serviceGrants,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     now,
   });
   if (requestedGrants instanceof Response) return requestedGrants;
 
-  const permissionDigest = await appInstallationRevisionPermissionDigest({
+  const permissionDigest = await appCapsuleRevisionPermissionDigest({
     operation: "deployment",
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     appId: installation.appId,
     sourceGitUrl,
     sourceRef,
@@ -285,7 +285,7 @@ export async function handlePlanAppInstallationDeployment(input: {
 
   return json({
     operation: "deployment",
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     source: {
       gitUrl: sourceGitUrl,
       ref: sourceRef,
@@ -307,11 +307,11 @@ export async function handlePlanAppInstallationDeployment(input: {
   });
 }
 
-export async function handleRequestAppInstallationMaterialize(input: {
-  installationId: string;
+export async function handleRequestAppCapsuleMaterialize(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
-  materializeWorker?: AppInstallationMaterializeWorker;
+  materializeWorker?: AppCapsuleMaterializeWorker;
 }): Promise<Response> {
   const idempotencyKey = requiredIdempotencyKey(input.request);
   if (idempotencyKey instanceof Response) return idempotencyKey;
@@ -344,8 +344,8 @@ export async function handleRequestAppInstallationMaterialize(input: {
   const permissionDigest = stringValue(
     confirm.permissionDigest ?? confirm.permission_digest,
   );
-  const expectedPermissionDigest = await appInstallationMaterializeDigest({
-    installationId: input.installationId,
+  const expectedPermissionDigest = await appCapsuleMaterializeDigest({
+    capsuleId: input.capsuleId,
     mode: "dedicated",
     region,
     plan,
@@ -365,7 +365,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
       409,
     );
   }
-  const requestPayload: AppInstallationMaterializeRequest = {
+  const requestPayload: AppCapsuleMaterializeRequest = {
     mode: "dedicated",
     region,
     plan,
@@ -378,8 +378,8 @@ export async function handleRequestAppInstallationMaterialize(input: {
   const requestDigest =
     await installationOperationRequestDigest(requestPayload);
 
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
@@ -390,11 +390,11 @@ export async function handleRequestAppInstallationMaterialize(input: {
   const preserveDigest = await installationOperationRequestDigest(preserve);
 
   const operationId = await installationOperationId({
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     operation: "materialize",
     idempotencyKey,
   });
-  const events = await input.store.listInstallationEvents(input.installationId);
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const existing = findIdempotentOperationEvent({
     events,
     eventType: installationMaterializeRequestedEvent,
@@ -420,7 +420,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
       202,
     );
   }
-  const inFlight = findInFlightInstallationOperation(events);
+  const inFlight = findInFlightCapsuleOperation(events);
   if (inFlight) {
     return errorJson(
       "installation_locked",
@@ -431,14 +431,14 @@ export async function handleRequestAppInstallationMaterialize(input: {
   if (installation.status !== "ready" || installation.mode !== "shared-cell") {
     return errorJson(
       "state_conflict",
-      "materialize requires a ready shared-cell Installation projection",
+      "materialize requires a ready shared-cell Capsule projection",
       409,
     );
   }
 
   const now = Date.now();
   const event = await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: installationMaterializeRequestedEvent,
     payload: {
       operationId,
@@ -453,7 +453,7 @@ export async function handleRequestAppInstallationMaterialize(input: {
     now,
   });
   if (input.materializeWorker) {
-    const workerBody = await completeAppInstallationMaterializeWithWorker({
+    const workerBody = await completeAppCapsuleMaterializeWithWorker({
       store: input.store,
       installation,
       operationId,
@@ -473,41 +473,41 @@ export async function handleRequestAppInstallationMaterialize(input: {
         preserve,
         preserveDigest,
       }),
-      event: serializeInstallationEvent(event),
+      event: serializeCapsuleEvent(event),
     },
     202,
   );
 }
 
-export async function handleReportInstallationBillingUsage(input: {
-  installationId: string;
+export async function handleReportCapsuleBillingUsage(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
-  const billingAuth = await requireInstallationAccessTokenCapability({
+  const billingAuth = await requireCapsuleAccessTokenCapability({
     request: input.request,
     store: input.store,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     capability: "billing.usage.report",
   });
   if (!billingAuth.ok) return billingAuth.response;
   const authRecord: TokenRecord = billingAuth.record;
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
     return errorJson(
       "state_conflict",
-      "usage reports require a ready Installation projection",
+      "usage reports require a ready Capsule projection",
       409,
     );
   }
   if (!installation.billingAccountId) {
     return errorJson(
       "billing_account_not_configured",
-      "usage reports require an Installation projection billingAccountId",
+      "usage reports require an Capsule projection billingAccountId",
       409,
     );
   }
@@ -522,7 +522,7 @@ export async function handleReportInstallationBillingUsage(input: {
   ) {
     return errorJson(
       "billing_account_mismatch",
-      "usage report billing account must match the Installation projection",
+      "usage report billing account must match the Capsule projection",
       409,
     );
   }
@@ -545,7 +545,7 @@ export async function handleReportInstallationBillingUsage(input: {
   const explicitReportId =
     stringValue(body.reportId) ?? stringValue(body.report_id);
   // When the caller supplies an idempotencyKey but no explicit reportId, derive
-  // the usageReportId deterministically from `${installationId}:${idempotencyKey}`
+  // the usageReportId deterministically from `${capsuleId}:${idempotencyKey}`
   // so a concurrent duplicate (same key, no reportId) claims the SAME report id
   // and is deduped ATOMICALLY by the existing usageReportId claim
   // (D1 #putIfAbsentWithIndexes / Postgres ON CONFLICT (usage_report_id)),
@@ -555,7 +555,7 @@ export async function handleReportInstallationBillingUsage(input: {
   const derivedIdempotentReportId =
     explicitReportId === undefined && idempotencyKey !== undefined
       ? `usage_${(
-          await sha256HexText(`${input.installationId}:${idempotencyKey}`)
+          await sha256HexText(`${input.capsuleId}:${idempotencyKey}`)
         ).slice("sha256:".length)}`
       : undefined;
   const usageReportId =
@@ -601,12 +601,12 @@ export async function handleReportInstallationBillingUsage(input: {
     await input.store.findBillingUsageRecord(usageReportId);
   if (existingUsageReport) {
     if (
-      existingUsageReport.installationId !== input.installationId ||
+      existingUsageReport.capsuleId !== input.capsuleId ||
       existingUsageReport.billingAccountId !== installation.billingAccountId
     ) {
       return errorJson(
         "usage_report_id_conflict",
-        "usage report id is already owned by another Installation projection",
+        "usage report id is already owned by another Capsule projection",
         409,
       );
     }
@@ -637,8 +637,8 @@ export async function handleReportInstallationBillingUsage(input: {
     idempotencyKey === undefined || explicitReportId === undefined
       ? undefined
       : (
-          await input.store.listBillingUsageRecordsForInstallation(
-            input.installationId,
+          await input.store.listBillingUsageRecordsForCapsule(
+            input.capsuleId,
           )
         ).find((record) => record.idempotencyKey === idempotencyKey);
   if (existingIdempotentReport) {
@@ -660,7 +660,7 @@ export async function handleReportInstallationBillingUsage(input: {
 
   const record: BillingUsageRecord = {
     usageReportId,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     billingAccountId: installation.billingAccountId,
     meter,
     quantity,
@@ -677,7 +677,7 @@ export async function handleReportInstallationBillingUsage(input: {
   };
   await input.store.saveBillingUsageRecord(record);
   await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: "billing.usage_reported",
     payload: {
       usageReportId: record.usageReportId,

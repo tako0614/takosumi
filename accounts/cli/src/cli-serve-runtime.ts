@@ -2,8 +2,8 @@ import { readFile, readdir } from "node:fs/promises";
 import {
   type ServiceBindingMaterializationResult,
   type ServiceBindingMaterializer,
-  type AppInstallationMaterializeWorker,
-  type AppInstallationMaterializeWorkerResult,
+  type AppCapsuleMaterializeWorker,
+  type AppCapsuleMaterializeWorkerResult,
   createOpenPlatformAccessPolicy,
   customOidcOAuthProvider,
   InMemorySharedCellWarmPool,
@@ -15,7 +15,7 @@ import {
   type ServiceGraphMaterialResolverHttpOptions,
   exportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
-import type { InstallationExportArchiveDataFile } from "../../service/src/export-archive.ts";
+import type { CapsuleExportArchiveDataFile } from "../../service/src/export-archive.ts";
 import {
   optionalEnvString,
   optionalIntegerOption,
@@ -725,13 +725,13 @@ export function staticBindingMaterializer(
     return {
       configRef: renderBindingMaterialString(
         material.configRef,
-        installation.installationId,
+        installation.capsuleId,
         binding.name,
       ),
       secretRefs: material.secretRefs?.map((value) =>
         renderBindingMaterialString(
           value,
-          installation.installationId,
+          installation.capsuleId,
           binding.name,
         ),
       ),
@@ -741,7 +741,7 @@ export function staticBindingMaterializer(
               key,
               renderBindingMaterialString(
                 value,
-                installation.installationId,
+                installation.capsuleId,
                 binding.name,
               ),
             ]),
@@ -779,7 +779,7 @@ export function bindingMaterializerPlan(input: {
 
 export function httpMaterializeWorker(
   config: HttpMaterializeWorkerConfig,
-): AppInstallationMaterializeWorker {
+): AppCapsuleMaterializeWorker {
   return async (input) => {
     const headers: Record<string, string> = {
       accept: "application/json",
@@ -823,7 +823,7 @@ function parseMaterializeWorkerJson(text: string): unknown {
 
 function materializeWorkerResultFromValue(
   value: unknown,
-): AppInstallationMaterializeWorkerResult {
+): AppCapsuleMaterializeWorkerResult {
   const result =
     isRecord(value) && isRecord(value.result) ? value.result : value;
   if (!isRecord(result)) {
@@ -841,7 +841,7 @@ function materializeWorkerResultFromValue(
 
 function parseMaterializeRuntimeTarget(
   value: unknown,
-): AppInstallationMaterializeWorkerResult["runtimeTarget"] {
+): AppCapsuleMaterializeWorkerResult["runtimeTarget"] {
   if (!isRecord(value)) {
     throw new TypeError("materialize.runtimeTarget must be an object");
   }
@@ -865,7 +865,7 @@ function parseMaterializeRuntimeTarget(
 
 function parseMaterializeContinuity(
   value: unknown,
-): AppInstallationMaterializeWorkerResult["continuity"] {
+): AppCapsuleMaterializeWorkerResult["continuity"] {
   if (!isRecord(value)) {
     throw new TypeError("materialize.continuity must be an object");
   }
@@ -887,7 +887,7 @@ function parseMaterializeContinuity(
 
 function parseMaterializePreservedServiceBindings(
   value: unknown,
-): AppInstallationMaterializeWorkerResult["continuity"]["preservedServiceBindings"] {
+): AppCapsuleMaterializeWorkerResult["continuity"]["preservedServiceBindings"] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError(
@@ -924,7 +924,7 @@ function parseMaterializePreservedServiceBindings(
 
 function parseMaterializeCutover(
   value: unknown,
-): AppInstallationMaterializeWorkerResult["continuity"]["cutover"] {
+): AppCapsuleMaterializeWorkerResult["continuity"]["cutover"] {
   if (!isRecord(value)) {
     throw new TypeError("materialize.continuity.cutover must be an object");
   }
@@ -973,18 +973,18 @@ function parseNullableRecord(
 
 export function staticExportDataProvider(
   dataDirectory: string,
-): () => Promise<readonly InstallationExportArchiveDataFile[]> {
+): () => Promise<readonly CapsuleExportArchiveDataFile[]> {
   return async () => await readStaticExportDataFiles(dataDirectory);
 }
 
 async function readStaticExportDataFiles(
   root: string,
   relativeDirectory = "",
-): Promise<readonly InstallationExportArchiveDataFile[]> {
+): Promise<readonly CapsuleExportArchiveDataFile[]> {
   const directory = relativeDirectory
     ? joinPath(root, relativeDirectory)
     : root;
-  const files: InstallationExportArchiveDataFile[] = [];
+  const files: CapsuleExportArchiveDataFile[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name === "." || entry.name === "..") continue;
     const relativePath = relativeDirectory
@@ -1015,12 +1015,12 @@ function guessMediaType(path: string): string | undefined {
 
 function renderBindingMaterialString(
   value: string,
-  installationId: string,
+  capsuleId: string,
   bindingName: string,
 ): string {
   return value
-    .replaceAll("${installation.id}", installationId)
-    .replaceAll("${installationId}", installationId)
+    .replaceAll("${installation.id}", capsuleId)
+    .replaceAll("${capsuleId}", capsuleId)
     .replaceAll("${binding.name}", bindingName)
     .replaceAll("${bindingName}", bindingName);
 }

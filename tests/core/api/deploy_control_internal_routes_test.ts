@@ -5,8 +5,8 @@ import { OpenTofuDeploymentController } from "../../../core/domains/deploy-contr
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedInstallationModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
-import type { Space } from "takosumi-contract/spaces";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 
 test("deploy_control_internal_routes — internal seam endpoints respond with 501 when controller is absent", async () => {
   const app = await createApiApp({

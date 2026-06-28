@@ -45,15 +45,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -64,11 +64,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -78,7 +78,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -103,19 +103,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -128,7 +128,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -139,10 +139,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -161,8 +161,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -171,12 +171,12 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleSources(
   ctx: ControlDispatchContext,
@@ -204,10 +204,10 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
       const { source } = await operations.getSource(sourceId);
-      const auth = await requireSpaceAccess({
+      const auth = await requireWorkspaceAccess({
         operations,
         store,
-        spaceId: source.spaceId,
+        workspaceId: source.workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -217,10 +217,10 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "GET") return methodNotAllowed("GET");
       const { source } = await operations.getSource(sourceId);
-      const auth = await requireSpaceAccess({
+      const auth = await requireWorkspaceAccess({
         operations,
         store,
-        spaceId: source.spaceId,
+        workspaceId: source.workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -232,10 +232,10 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
       const { source } = await operations.getSource(sourceId);
-      const auth = await requireSpaceAccess({
+      const auth = await requireWorkspaceAccess({
         operations,
         store,
-        spaceId: source.spaceId,
+        workspaceId: source.workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -252,8 +252,8 @@ export async function handleSources(
           400,
         );
       }
-      const installationId = stringValue(body.installationId);
-      // Curated catalog deep-link path: when no Installation exists yet, gate
+      const capsuleId = stringValue(body.capsuleId);
+      // Curated catalog deep-link path: when no Capsule exists yet, gate
       // the pre-install check against the catalog's bounded InstallConfig so a
       // vetted first-party module is judged by its own minimal allowlist
       // (the instance-wide default allowlist is never widened — see
@@ -262,7 +262,7 @@ export async function handleSources(
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
         ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
         ...(modulePath ? { modulePath } : {}),
-        ...(installationId ? { installationId } : {}),
+        ...(capsuleId ? { capsuleId } : {}),
         ...(installConfigId ? { installConfigId } : {}),
       };
       return jsonStatus(
@@ -279,10 +279,10 @@ export async function handleSources(
     if (segments.length === 2) {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       const { source } = await operations.getSource(sourceId);
-      const auth = await requireSpaceAccess({
+      const auth = await requireWorkspaceAccess({
         operations,
         store,
-        spaceId: source.spaceId,
+        workspaceId: source.workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -315,22 +315,22 @@ export async function handleCompatibilityReports(
     const reportId = decodeURIComponent(segments[1] ?? "");
     const response = await operations.getCompatibilityReport(reportId);
     const report = response.report;
-    const reportSpaceId = report.sourceId
-      ? (await operations.getSource(report.sourceId)).source.spaceId
-      : report.installationId
+    const reportWorkspaceId = report.sourceId
+      ? (await operations.getSource(report.sourceId)).source.workspaceId
+      : report.capsuleId
         ? (
-            await operations.installations.getInstallation(
-              report.installationId,
+            await operations.installations.getCapsule(
+              report.capsuleId,
             )
-          ).spaceId
+          ).workspaceId
         : undefined;
-    if (!reportSpaceId) {
+    if (!reportWorkspaceId) {
       return errorJson("not_found", "compatibility report not found", 404);
     }
-    const auth = await requireSpaceAccess({
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId: reportSpaceId,
+      workspaceId: reportWorkspaceId,
       subject: ctx.session.subject,
     });
     if (!auth.ok) return auth.response;
@@ -345,28 +345,28 @@ async function listSources(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId =
+  const workspaceId =
     stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
-  if (!spaceId) {
+  if (!workspaceId) {
     return errorJson(
       "invalid_request",
       "workspaceId query parameter is required",
       400,
     );
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  return json(await operations.listSources(spaceId, page.params));
+  return json(await operations.listSources(workspaceId, page.params));
 }
 
 async function createSource(
@@ -377,46 +377,46 @@ async function createSource(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const spaceId = stringValue(body.spaceId);
+  const workspaceId = stringValue(body.workspaceId);
   const name = stringValue(body.name);
   const sourceUrl = stringValue(body.url);
-  if (!spaceId || !name || !sourceUrl) {
+  if (!workspaceId || !name || !sourceUrl) {
     return errorJson(
       "invalid_request",
-      "spaceId, name, and url are required",
+      "workspaceId, name, and url are required",
       400,
     );
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
   const authConnectionId = stringValue(body.authConnectionId);
   if (authConnectionId) {
     const connection = await operations.getConnection(authConnectionId);
-    if (connection.scope !== "space" || connection.spaceId !== spaceId) {
-      const connectionSpaceId = connection.spaceId;
-      if (connectionSpaceId) {
-        const connectionAuth = await requireSpaceAccess({
+    if (connection.scope !== "space" || connection.workspaceId !== workspaceId) {
+      const connectionWorkspaceId = connection.workspaceId;
+      if (connectionWorkspaceId) {
+        const connectionAuth = await requireWorkspaceAccess({
           operations,
           store,
-          spaceId: connectionSpaceId,
+          workspaceId: connectionWorkspaceId,
           subject: sessionSubject,
         });
         if (!connectionAuth.ok) return connectionAuth.response;
       }
       return errorJson(
         "invalid_request",
-        "authConnectionId must belong to the target Space.",
+        "authConnectionId must belong to the target Workspace.",
         400,
       );
     }
   }
   const requestBody: CreateSourceRequest = {
-    spaceId,
+    workspaceId,
     name,
     url: sourceUrl,
     ...(stringValue(body.defaultRef)

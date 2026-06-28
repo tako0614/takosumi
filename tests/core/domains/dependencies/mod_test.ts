@@ -18,7 +18,7 @@ import {
   InstallationLeaseBusyError,
 } from "../../../../core/domains/deploy-control/installation_lease.ts";
 import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type { OutputShare, OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { OutputShare, Output as OutputSnapshot } from "takosumi-contract/outputs";
 import {
   type CreateDependencyRequest,
   DependenciesService,

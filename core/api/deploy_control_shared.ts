@@ -30,8 +30,8 @@ import {
   decodeCursor,
   type PageParams,
 } from "takosumi-contract/pagination";
-import type { SpacesService } from "../domains/spaces/mod.ts";
-import type { InstallationsService } from "../domains/installations/mod.ts";
+import type { WorkspacesService } from "../domains/workspaces/mod.ts";
+import type { CapsulesService } from "../domains/capsules/mod.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
 import type { DependenciesService } from "../domains/dependencies/mod.ts";
 import type { OutputSharesService } from "../domains/output-shares/mod.ts";
@@ -362,12 +362,12 @@ export interface DeployControlInternalRouteDependencies {
    * Spaces domain service (Core Specification §4). When unset, the Space routes
    * return 501 after successful auth.
    */
-  readonly spacesService?: SpacesService;
+  readonly spacesService?: WorkspacesService;
   /**
    * Installations domain service (Core Specification §5 / §11). When unset, the
    * Installation / InstallConfig routes return 501 after successful auth.
    */
-  readonly installationsService?: InstallationsService;
+  readonly installationsService?: CapsulesService;
   /** Internal provider resolver creation plus provider connection resolution. */
   readonly connectionsService?: ConnectionsService;
   /**
@@ -688,8 +688,9 @@ export function ensurePlanCreatePermission(
   request: CreatePlanRunRequest,
 ): void {
   const operation =
-    request.operation ?? (request.installationId ? "update" : "create");
-  ensureSpacePermission(principal, request.spaceId);
+    request.operation ??
+    (request.capsuleId ?? request.installationId ? "update" : "create");
+  ensureSpacePermission(principal, request.workspaceId ?? request.spaceId);
   ensureOperationPermission(principal, operation);
   if (request.runnerProfileId) {
     ensureRunnerProfilePermission(principal, request.runnerProfileId);
@@ -704,24 +705,26 @@ export function ensurePlanCreatePermission(
 export function ensureApplyPermission(
   principal: DeployControlPrincipal,
   planRun: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly operation: OpenTofuOperation;
     readonly runnerProfileId: string;
   },
 ): void {
-  ensureSpacePermission(principal, planRun.spaceId);
+  ensureSpacePermission(principal, planRun.workspaceId);
   ensureOperationPermission(principal, planRun.operation);
   ensureRunnerProfilePermission(principal, planRun.runnerProfileId);
 }
 
 export function ensureSpacePermission(
   principal: DeployControlPrincipal,
-  spaceId: string,
+  spaceId: string | undefined,
 ): void {
-  if (spacePermissionAllows(principal, spaceId)) return;
+  if (spaceId && spacePermissionAllows(principal, spaceId)) return;
   throw new OpenTofuControllerError(
     "permission_denied",
-    `deploy control principal ${principal.actor} cannot access space ${spaceId}`,
+    `deploy control principal ${principal.actor} cannot access space ${
+      spaceId ?? "<unknown>"
+    }`,
   );
 }
 

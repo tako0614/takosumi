@@ -216,6 +216,7 @@ export class SourceLifecycleService {
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "git",
+      workspaceId: running.workspaceId,
       spaceId: running.spaceId,
       sourceId: running.sourceId,
       url: running.url,
@@ -347,7 +348,7 @@ export class SourceLifecycleService {
     await this.#store.putCredentialMintEvent({
       id: this.#newId("credmint"),
       runId: input.runId,
-      spaceId: input.spaceId,
+      workspaceId: input.spaceId,
       sourceId: input.sourceId,
       connectionId: input.connectionId,
       phase: "source",

@@ -30,7 +30,7 @@ describe("RunsListView", () => {
 
   test("builds the list from the real Run ledger and installation API", () => {
     expect(source).toContain("listRuns");
-    expect(source).toContain("listInstallations");
+    expect(source).toContain("listCapsules");
     expect(source).toContain("rowsFromRuns");
     expect(source).toContain("RUN_LIST_LIMIT");
     expect(source).toContain(

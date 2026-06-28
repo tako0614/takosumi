@@ -30,8 +30,8 @@ function makeOps(
     listActiveInstallations: (limit) => {
       listCalls.push(limit);
       const active = overrides.active ?? [
-        { id: "inst_a", spaceId: "space_a" },
-        { id: "inst_b", spaceId: "space_a" },
+        { id: "inst_a", workspaceId: "space_a" },
+        { id: "inst_b", workspaceId: "space_a" },
       ];
       return Promise.resolve(active.slice(0, limit));
     },
@@ -49,9 +49,9 @@ function makeOps(
 test("drift sweep creates one RunGroup per space, bounded by installation limit", async () => {
   const { ops, listCalls, driftCalls } = makeOps({
     active: [
-      { id: "inst_a", spaceId: "space_a" },
-      { id: "inst_b", spaceId: "space_a" },
-      { id: "inst_c", spaceId: "space_b" },
+      { id: "inst_a", workspaceId: "space_a" },
+      { id: "inst_b", workspaceId: "space_a" },
+      { id: "inst_c", workspaceId: "space_b" },
     ],
   });
   const result = await driftSweep(ops, { limit: 2 });
@@ -70,8 +70,8 @@ test("drift sweep uses the default limit when none is given", async () => {
 test("drift sweep continues past a failing installation", async () => {
   const { ops, driftCalls } = makeOps({
     active: [
-      { id: "inst_a", spaceId: "space_a" },
-      { id: "inst_b", spaceId: "space_b" },
+      { id: "inst_a", workspaceId: "space_a" },
+      { id: "inst_b", workspaceId: "space_b" },
     ],
     failOn: new Set(["space_a"]),
   });

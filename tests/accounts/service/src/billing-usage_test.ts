@@ -19,7 +19,7 @@ test("aggregateBillingUsage window boundaries are inclusive on both ends", () =>
     overrides: Partial<BillingUsageRecord>,
   ): BillingUsageRecord => ({
     usageReportId: overrides.usageReportId ?? "u",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     billingAccountId: "bill_1",
     meter: "agent.compute.seconds",
     quantity: overrides.quantity ?? 1,
@@ -76,7 +76,7 @@ test("aggregateBillingUsage partitions rollups across billing accounts when no f
   const rollups = aggregateBillingUsage([
     {
       usageReportId: "u1",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       billingAccountId: "bill_1",
       meter: "agent.compute.seconds",
       quantity: 4,
@@ -87,7 +87,7 @@ test("aggregateBillingUsage partitions rollups across billing accounts when no f
     },
     {
       usageReportId: "u2",
-      installationId: "inst_2",
+      capsuleId: "inst_2",
       billingAccountId: "bill_2",
       meter: "agent.compute.seconds",
       quantity: 6,
@@ -99,7 +99,7 @@ test("aggregateBillingUsage partitions rollups across billing accounts when no f
     // different unit -> separate rollup even on bill_1.
     {
       usageReportId: "u3",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       billingAccountId: "bill_1",
       meter: "agent.compute.seconds",
       quantity: 5,
@@ -129,7 +129,7 @@ test("aggregateBillingUsage falls back to reportedAt when periodStart/periodEnd 
     [
       {
         usageReportId: "u_no_period",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         billingAccountId: "bill_1",
         meter: "agent.compute.tokens",
         quantity: 9,
@@ -153,7 +153,7 @@ test("aggregateBillingUsage falls back to reportedAt when periodStart/periodEnd 
     [
       {
         usageReportId: "u_no_period",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         billingAccountId: "bill_1",
         meter: "agent.compute.tokens",
         quantity: 9,

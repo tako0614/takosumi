@@ -123,7 +123,7 @@ test("authorization code nonce migration preserves OIDC nonce checks", async () 
   expect(migration).toContain("ADD COLUMN IF NOT EXISTS nonce text");
 });
 
-test("billing usage migration records metered AppInstallation usage", async () => {
+test("billing usage migration records metered AppCapsule usage", async () => {
   const migration = await readMigration("015_billing_usage_records.sql");
 
   expect(migration).toContain(

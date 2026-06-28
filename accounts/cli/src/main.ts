@@ -11,15 +11,15 @@ import {
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
 import {
-  runInstallationsExport,
-  runInstallationsExportOperation,
-  runInstallationsImportApply,
-  runInstallationsImportPlan,
-  runInstallationsInspect,
-  runInstallationsList,
-  runInstallationsMaterialize,
-  runInstallationsStatus,
-  runInstallationsUninstall,
+  runCapsulesExport,
+  runCapsulesExportOperation,
+  runCapsulesImportApply,
+  runCapsulesImportPlan,
+  runCapsulesInspect,
+  runCapsulesList,
+  runCapsulesMaterialize,
+  runCapsulesStatus,
+  runCapsulesUninstall,
 } from "./cli-installations-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
@@ -102,7 +102,7 @@ export async function main(
     return 2;
   }
   if (domain === "internal" && command === "installations") {
-    return await runInternalInstallations(rest, io);
+    return await runInternalCapsules(rest, io);
   }
   if (domain === "accounts" && command === "seed") {
     return runAccountsSeed(rest, io);
@@ -184,37 +184,37 @@ export async function main(
   return 2;
 }
 
-async function runInternalInstallations(
+async function runInternalCapsules(
   args: string[],
   io: CliIo,
 ): Promise<number> {
   const [command, ...rest] = args;
   if (command === "list") {
-    return await runInstallationsList(rest, io);
+    return await runCapsulesList(rest, io);
   }
   if (command === "inspect") {
-    return await runInstallationsInspect(rest, io);
+    return await runCapsulesInspect(rest, io);
   }
   if (command === "uninstall") {
-    return await runInstallationsUninstall(rest, io);
+    return await runCapsulesUninstall(rest, io);
   }
   if (command === "status") {
-    return await runInstallationsStatus(rest, io);
+    return await runCapsulesStatus(rest, io);
   }
   if (command === "materialize") {
-    return await runInstallationsMaterialize(rest, io);
+    return await runCapsulesMaterialize(rest, io);
   }
   if (command === "export") {
-    return await runInstallationsExport(rest, io);
+    return await runCapsulesExport(rest, io);
   }
   if (command === "export-operation") {
-    return await runInstallationsExportOperation(rest, io);
+    return await runCapsulesExportOperation(rest, io);
   }
   if (command === "import-plan") {
-    return await runInstallationsImportPlan(rest, io);
+    return await runCapsulesImportPlan(rest, io);
   }
   if (command === "import-apply") {
-    return await runInstallationsImportApply(rest, io);
+    return await runCapsulesImportApply(rest, io);
   }
   io.stderr(`Unknown internal installations command: ${args.join(" ")}`);
   return 2;

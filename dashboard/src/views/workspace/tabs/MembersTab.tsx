@@ -20,10 +20,10 @@ import {
 import { ShieldCheck, Trash2, UserPlus, Users } from "lucide-solid";
 import {
   type ControlApiError,
-  type ControlSpaceRole,
+  type ControlWorkspaceRole,
   inviteMember,
   listMembers,
-  type PublicSpaceMember,
+  type PublicWorkspaceMember,
   removeMember,
   setMemberRole,
 } from "../../../lib/control-api.ts";
@@ -45,56 +45,56 @@ import {
   Select,
 } from "../../../components/ui/index.ts";
 
-const ROLE_KEY: Record<ControlSpaceRole, MessageKey> = {
+const ROLE_KEY: Record<ControlWorkspaceRole, MessageKey> = {
   owner: "members.role.owner",
   admin: "members.role.admin",
   member: "members.role.member",
   viewer: "members.role.viewer",
 };
 
-const ROLE_ORDER: readonly ControlSpaceRole[] = [
+const ROLE_ORDER: readonly ControlWorkspaceRole[] = [
   "owner",
   "admin",
   "member",
   "viewer",
 ];
 
-const STATUS_KEY: Record<PublicSpaceMember["status"], MessageKey> = {
+const STATUS_KEY: Record<PublicWorkspaceMember["status"], MessageKey> = {
   active: "members.status.active",
   invited: "members.status.invited",
   suspended: "members.status.suspended",
 };
 
 function statusTone(
-  status: PublicSpaceMember["status"],
+  status: PublicWorkspaceMember["status"],
 ): "ok" | "info" | "muted" {
   if (status === "active") return "ok";
   if (status === "invited") return "info";
   return "muted";
 }
 
-function rolesLabel(roles: readonly ControlSpaceRole[]): string {
+function rolesLabel(roles: readonly ControlWorkspaceRole[]): string {
   if (roles.length === 0) return "—";
   return roles.map((r) => t(ROLE_KEY[r])).join("・");
 }
 
 export default function MembersTab(props: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly session: SessionRecord;
 }) {
   const { confirm } = useConfirmDialog();
   const [members, { refetch }] = createResource(
-    () => props.spaceId,
+    () => props.workspaceId,
     listMembers,
   );
   const callerSubject = () => props.session.subject;
 
-  const caller = (): PublicSpaceMember | undefined => {
+  const caller = (): PublicWorkspaceMember | undefined => {
     const subject = callerSubject();
     if (!subject) return undefined;
     return (members() ?? []).find((m) => m.accountId === subject);
   };
-  const callerRoles = (): readonly ControlSpaceRole[] =>
+  const callerRoles = (): readonly ControlWorkspaceRole[] =>
     caller()?.status === "active" ? (caller()?.roles ?? []) : [];
   const canInvite = () =>
     callerRoles().includes("owner") || callerRoles().includes("admin");
@@ -107,11 +107,11 @@ export default function MembersTab(props: {
     ).length;
 
   const [inviteEmail, setInviteEmail] = createSignal("");
-  const [inviteRole, setInviteRole] = createSignal<ControlSpaceRole>("member");
+  const [inviteRole, setInviteRole] = createSignal<ControlWorkspaceRole>("member");
   const invite = createAction(async () => {
     const email = inviteEmail().trim();
     if (!email) throw new Error(t("members.invite.emailRequired"));
-    await inviteMember(props.spaceId, {
+    await inviteMember(props.workspaceId, {
       email,
       role: inviteRole(),
     });
@@ -121,13 +121,13 @@ export default function MembersTab(props: {
   });
 
   const changeRole = createAction(
-    async (member: PublicSpaceMember, role: ControlSpaceRole) => {
-      await setMemberRole(props.spaceId, member.accountId, role);
+    async (member: PublicWorkspaceMember, role: ControlWorkspaceRole) => {
+      await setMemberRole(props.workspaceId, member.accountId, role);
       await refetch();
     },
   );
 
-  const remove = createAction(async (member: PublicSpaceMember) => {
+  const remove = createAction(async (member: PublicWorkspaceMember) => {
     const ok = await confirm({
       title: t("members.remove"),
       message: t("members.removeConfirm", { account: member.accountId }),
@@ -135,17 +135,17 @@ export default function MembersTab(props: {
       danger: true,
     });
     if (!ok) return;
-    await removeMember(props.spaceId, member.accountId);
+    await removeMember(props.workspaceId, member.accountId);
     await refetch();
   });
 
-  const isLastOwner = (member: PublicSpaceMember) =>
+  const isLastOwner = (member: PublicWorkspaceMember) =>
     member.status === "active" &&
     member.roles.includes("owner") &&
     activeOwnerCount() <= 1;
 
-  const columns = createMemo<readonly Column<PublicSpaceMember>[]>(() => {
-    const base: Column<PublicSpaceMember>[] = [
+  const columns = createMemo<readonly Column<PublicWorkspaceMember>[]>(() => {
+    const base: Column<PublicWorkspaceMember>[] = [
       {
         header: t("members.col.member"),
         cell: (member) => (
@@ -193,7 +193,7 @@ export default function MembersTab(props: {
                     onChange={(e) =>
                       void changeRole.run(
                         member,
-                        e.currentTarget.value as ControlSpaceRole,
+                        e.currentTarget.value as ControlWorkspaceRole,
                       )
                     }
                     title={
@@ -262,7 +262,7 @@ export default function MembersTab(props: {
                 <Select
                   value={inviteRole()}
                   onChange={(e) =>
-                    setInviteRole(e.currentTarget.value as ControlSpaceRole)
+                    setInviteRole(e.currentTarget.value as ControlWorkspaceRole)
                   }
                 >
                   <For each={ROLE_ORDER}>
@@ -315,7 +315,7 @@ export default function MembersTab(props: {
         <Match when={members.error}>
           <EmptyState
             icon={<Users size={28} />}
-            title={t("spaceSettings.tab.members")}
+            title={t("workspaceSettings.tab.members")}
             message={t("common.fetchFailed", {
               message: (members.error as ControlApiError).message,
             })}
@@ -327,7 +327,7 @@ export default function MembersTab(props: {
             fallback={
               <EmptyState
                 icon={<Users size={28} />}
-                title={t("spaceSettings.tab.members")}
+                title={t("workspaceSettings.tab.members")}
                 message={t("members.empty")}
               />
             }

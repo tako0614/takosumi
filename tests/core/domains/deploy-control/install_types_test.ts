@@ -698,8 +698,8 @@ test("apply dispatch carries TF_VAR_<provider>_<alias>_<arg> per-alias creds and
   expect(planMintEvents).toHaveLength(1);
   expect(planMintEvents[0]).toMatchObject({
     runId: planRun.id,
-    spaceId: "space_test",
-    installationId: "inst_fixture",
+    workspaceId: "space_test",
+    capsuleId: "inst_fixture",
     connectionId: conn.id,
     phase: "plan",
     capabilities: ["cloudflare"],

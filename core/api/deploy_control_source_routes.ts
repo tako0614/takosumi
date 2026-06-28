@@ -155,7 +155,7 @@ export function mountDeployControlSourceRoutes(
       enforceBody: true,
       handler: async ({ c, principal }) => {
         const body = await readJsonBody<CreateSourceRequest>(c, "sourceCreate");
-        ensureSpacePermission(principal, body.spaceId);
+        ensureSpacePermission(principal, body.workspaceId ?? body.spaceId);
         const response = await controller.createSource(body);
         return c.json(response, 201);
       },
@@ -260,7 +260,7 @@ export function mountDeployControlSourceRoutes(
           const existing = await controller.getInstallation(
             response.report.installationId,
           );
-          spaceId = existing.installation.spaceId;
+          spaceId = existing.capsule.workspaceId;
         } else if (response.report.sourceSnapshotId) {
           const snapshot = await controller.getSourceSnapshot(
             response.report.sourceSnapshotId,

@@ -81,7 +81,7 @@ export interface PreparedSourceLocator {
 }
 
 export interface PlatformOperationIdempotencyKey {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly operationPlanDigest: `sha256:${string}`;
   readonly journalEntryId: string;
 }
@@ -103,7 +103,7 @@ export type PlatformOperationWalStage =
   | "skip";
 
 export interface PlatformOperationRequest {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly operationId: string;
   readonly operationAttempt: number;
   readonly journalCursor: string;
@@ -141,7 +141,7 @@ export interface PlatformOperationContext {
 export function formatPlatformOperationIdempotencyKey(
   key: PlatformOperationIdempotencyKey,
 ): string {
-  return `${key.spaceId}:${key.operationPlanDigest}:${key.journalEntryId}`;
+  return `${key.workspaceId}:${key.operationPlanDigest}:${key.journalEntryId}`;
 }
 
 export interface LifecycleApplyRequest {
@@ -163,7 +163,7 @@ export interface LifecycleApplyRequest {
    * gateway targets. It is not an open public Deploy Control API extension point.
    */
   readonly spec: JsonValue;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly tenantId?: string;
   /**
    * @internal service ↔ runtime-agent RPC only. WAL-derived request token
@@ -198,7 +198,7 @@ export interface LifecycleDestroyRequest {
   /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly tenantId?: string;
   /**
    * @internal service ↔ runtime-agent RPC only. WAL-derived request token
@@ -226,7 +226,7 @@ export interface LifecycleCompensateRequest {
   /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly tenantId?: string;
   /** WAL-derived request token for the compensating operation. */
   readonly idempotencyKey?: string;
@@ -254,7 +254,7 @@ export interface LifecycleDescribeRequest {
   /** Runtime-handler-local provider selector for runtime-agent dispatch. */
   readonly provider: string;
   readonly handle: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly tenantId?: string;
 }
 

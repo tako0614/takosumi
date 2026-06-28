@@ -156,7 +156,7 @@ export function mountDeployControlActivityRoutes(
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const backup = await dependencies.backupsService!.createBackup({
-          spaceId: id,
+          workspaceId: id,
         });
         return c.json({ backup }, 201);
       },
@@ -174,11 +174,11 @@ export function mountDeployControlActivityRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const response = await dependencies.controller!.getInstallation(id);
-        ensureSpacePermission(principal, response.installation.spaceId);
+        ensureSpacePermission(principal, response.capsule.workspaceId);
         const backup = await dependencies.backupsService!.createBackup({
-          spaceId: response.installation.spaceId,
-          installationId: response.installation.id,
-          environment: response.installation.environment,
+          workspaceId: response.capsule.workspaceId,
+          capsuleId: response.capsule.id,
+          environment: response.capsule.environment,
         });
         return c.json({ backup }, 201);
       },

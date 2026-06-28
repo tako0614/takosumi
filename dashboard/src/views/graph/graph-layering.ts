@@ -7,7 +7,7 @@
  * layering); nodes in a cycle (which the backend forbids) are reported in
  * `cyclic` rather than hanging the loop.
  */
-import type { GraphNode, SpaceGraph } from "../../lib/control-api.ts";
+import type { GraphNode, WorkspaceGraph } from "../../lib/control-api.ts";
 
 export interface LayeredGraph {
   readonly layers: readonly (readonly GraphNode[])[];
@@ -17,21 +17,21 @@ export interface LayeredGraph {
   readonly producersByConsumer: ReadonlyMap<string, readonly string[]>;
 }
 
-export function layerGraph(graph: SpaceGraph): LayeredGraph {
-  const nodeById = new Map(graph.nodes.map((n) => [n.installationId, n]));
+export function layerGraph(graph: WorkspaceGraph): LayeredGraph {
+  const nodeById = new Map(graph.nodes.map((n) => [n.capsuleId, n]));
   const producers = new Map<string, Set<string>>();
   const producersByConsumer = new Map<string, string[]>();
-  for (const node of graph.nodes) producers.set(node.installationId, new Set());
+  for (const node of graph.nodes) producers.set(node.capsuleId, new Set());
   for (const edge of graph.edges) {
     producers
-      .get(edge.consumerInstallationId)
-      ?.add(edge.producerInstallationId);
+      .get(edge.consumerCapsuleId)
+      ?.add(edge.producerCapsuleId);
     const producerName =
-      nodeById.get(edge.producerInstallationId)?.name ??
-      edge.producerInstallationId;
-    const list = producersByConsumer.get(edge.consumerInstallationId) ?? [];
+      nodeById.get(edge.producerCapsuleId)?.name ??
+      edge.producerCapsuleId;
+    const list = producersByConsumer.get(edge.consumerCapsuleId) ?? [];
     list.push(producerName);
-    producersByConsumer.set(edge.consumerInstallationId, list);
+    producersByConsumer.set(edge.consumerCapsuleId, list);
   }
 
   const depth = new Map<string, number>();
@@ -40,7 +40,7 @@ export function layerGraph(graph: SpaceGraph): LayeredGraph {
   while (progress && resolved.size < graph.nodes.length) {
     progress = false;
     for (const node of graph.nodes) {
-      const id = node.installationId;
+      const id = node.capsuleId;
       if (resolved.has(id)) continue;
       const deps = producers.get(id) ?? new Set<string>();
       let maxDepth = -1;
@@ -63,10 +63,10 @@ export function layerGraph(graph: SpaceGraph): LayeredGraph {
   const maxLayer = Math.max(0, ...[...depth.values()]);
   const layers: GraphNode[][] = Array.from({ length: maxLayer + 1 }, () => []);
   for (const node of graph.nodes) {
-    const d = depth.get(node.installationId);
+    const d = depth.get(node.capsuleId);
     if (d !== undefined) layers[d]!.push(node);
   }
-  const cyclic = graph.nodes.filter((n) => !resolved.has(n.installationId));
+  const cyclic = graph.nodes.filter((n) => !resolved.has(n.capsuleId));
   return {
     layers: layers.filter((l) => l.length > 0),
     cyclic,

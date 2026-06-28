@@ -133,12 +133,13 @@ test("composed app builds accounts handler with an in-process service deploy con
       // Bearer handshake). Assert the embedded service's facade is wired in.
       operationsWired =
         typeof deployControl.operations.createPlanRun === "function" &&
-        typeof deployControl.operations.getInstallation === "function";
+        typeof deployControl.operations.getCapsule === "function";
       // The session-authed dashboard API needs the full control-plane facade
       // (`/api/v1/spaces`, connections, run groups, etc.), not just the narrow
       // plan/apply deploy-control facade above.
       controlPlaneOperationsWired =
-        typeof controlPlaneOperations.spaces.listSpacesByOwner === "function" &&
+        typeof controlPlaneOperations.spaces.listWorkspacesByOwner ===
+          "function" &&
         typeof controlPlaneOperations.connections.listProviderConnections ===
           "function";
       return spy.handler;

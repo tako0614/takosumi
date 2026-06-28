@@ -4,10 +4,10 @@
  * The `takosumi deploy` (`wrangler deploy`-style) entry point. Given an
  * already-ingested upload or prepared-artifact {@link SourceSnapshot} (see
  * `SPACE_UPLOADS_PATH` / `SPACE_ARTIFACT_SNAPSHOTS_PATH`), the control plane
- * locates or creates the target Installation `@space/name`, synthesizes a
+ * locates or creates the target Capsule `@space/name`, synthesizes a
  * default InstallConfig when one is not supplied, and starts the deploy pipeline
  * (compatibility_check -> plan -> [approve -> apply]) against that snapshot. The
- * CLI then polls the returned plan Run and, on success, reads the OutputSnapshot.
+ * CLI then polls the returned plan Run and, on success, reads the Output.
  *
  * This is the one thing the dashboard cannot do: deploy the operator's local
  * working directory. The heavy work (normalize / gate / plan / apply) still runs
@@ -17,10 +17,10 @@
 
 import type {
   OutputAllowlistEntry,
-  PublicInstallation,
+  PublicCapsule,
 } from "./installations.ts";
 import type { JsonValue } from "./types.ts";
-import type { InstallationProviderConnectionBindings } from "./connections.ts";
+import type { CapsuleProviderConnectionBindings } from "./connections.ts";
 import type { PublicRun, Run } from "./runs.ts";
 import { API_V1_PREFIX } from "./api-surface.ts";
 
@@ -50,7 +50,9 @@ export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
  * SourceSnapshot archive. It must be a safe relative path.
  */
 export interface DeployRequest {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly name: string;
   /** Defaults to `"production"` when omitted. */
   readonly environment?: string;
@@ -59,19 +61,21 @@ export interface DeployRequest {
   readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly providerConnections?: InstallationProviderConnectionBindings;
+  readonly providerConnections?: CapsuleProviderConnectionBindings;
   readonly planOnly?: boolean;
   readonly autoApprove?: boolean;
 }
 
 /**
- * Response of `POST {@link DEPLOY_PATH}`: the resolved Installation and the
+ * Response of `POST {@link DEPLOY_PATH}`: the resolved Capsule and the
  * plan Run the deploy started. Older responses may include `applyRun` when a
  * host explicitly chains the reviewed apply server-side; current public clients
  * should treat `planRun ?? run` as the authoritative follow-up Run.
  */
 export interface DeployResponse {
-  readonly installation: PublicInstallation;
+  readonly capsule?: PublicCapsule;
+  /** @deprecated Use capsule. */
+  readonly installation: PublicCapsule;
   readonly installConfigId: string;
   /** Plan Run started by this deploy. Kept as `run` for older callers. */
   readonly run: Run;
@@ -85,7 +89,7 @@ export interface DeployResponse {
     | "failed";
   /** Set when the deploy was issued as an ordered RunGroup. */
   readonly runGroupId?: string;
-  /** `true` when this `deploy` call created the Installation. */
+  /** `true` when this `deploy` call created the Capsule. */
   readonly created: boolean;
 }
 

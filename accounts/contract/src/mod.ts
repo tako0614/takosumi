@@ -36,10 +36,10 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
 /**
- * Base path of the accounts Installation projection surface.
+ * Base path of the accounts Capsule projection surface.
  *
  * This is a distribution-internal/supporting account-plane projection, not the
- * Takosumi deploy-control Installation resource served at `/api/v1/installations`.
+ * Takosumi deploy-control Capsule resource served at `/api/v1/installations`.
  * It exists so installed services can receive identity metadata, billing usage
  * endpoints, export handoff, and service-token projections from the account
  * plane without competing with the public `/api/v1` control API or
@@ -50,8 +50,8 @@ const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH =
 export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
 export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH =
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH;
-export const TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND =
-  "takosumi.accounts.installation-export-bundle@v1";
+export const TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND =
+  "takosumi.accounts.capsule-export-bundle@v1";
 
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC =
   "takosumi.identity.oidc";
@@ -185,7 +185,7 @@ export interface TakosumiAccountsListPrivacyRequestsResponse {
   requests: readonly TakosumiAccountsPrivacyRequest[];
 }
 
-export function takosumiAccountsInstallationPlanRunsPath(): string {
+export function takosumiAccountsCapsulePlanRunsPath(): string {
   return TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH;
 }
 
@@ -211,98 +211,98 @@ export function takosumiAccountsPrivacyRequestCompletePath(
   return `${takosumiAccountsPrivacyRequestPath(requestId)}/complete`;
 }
 
-export function takosumiAccountsInstallationPath(
-  installationId: string,
+export function takosumiAccountsCapsulePath(
+  capsuleId: string,
 ): string {
   return `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/${pathSegment(
-    installationId,
-    "installationId",
+    capsuleId,
+    "capsuleId",
   )}`;
 }
 
-export function takosumiAccountsInstallationStatusPath(
-  installationId: string,
+export function takosumiAccountsCapsuleStatusPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/status`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/status`;
 }
 
-export function takosumiAccountsInstallationDeploymentsPath(
-  installationId: string,
+export function takosumiAccountsCapsuleDeploymentsPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/deployments`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/deployments`;
 }
 
-export function takosumiAccountsInstallationDeploymentPlanRunsPath(
-  installationId: string,
+export function takosumiAccountsCapsuleDeploymentPlanRunsPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationDeploymentsPath(
-    installationId,
+  return `${takosumiAccountsCapsuleDeploymentsPath(
+    capsuleId,
   )}/plan-runs`;
 }
 
-export function takosumiAccountsInstallationRollbackPath(
-  installationId: string,
+export function takosumiAccountsCapsuleRollbackPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/rollback`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/rollback`;
 }
 
-export function takosumiAccountsInstallationMaterializePath(
-  installationId: string,
+export function takosumiAccountsCapsuleMaterializePath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/materialize`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/materialize`;
 }
 
-export function takosumiAccountsInstallationExportPath(
-  installationId: string,
+export function takosumiAccountsCapsuleExportPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/export`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/export`;
 }
 
-export function takosumiAccountsInstallationExportOperationPath(
-  installationId: string,
+export function takosumiAccountsCapsuleExportOperationPath(
+  capsuleId: string,
   operationId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/exports/${pathSegment(
+  return `${takosumiAccountsCapsulePath(capsuleId)}/exports/${pathSegment(
     operationId,
     "operationId",
   )}`;
 }
 
-export function takosumiAccountsInstallationExportDownloadPath(
-  installationId: string,
+export function takosumiAccountsCapsuleExportDownloadPath(
+  capsuleId: string,
   operationId: string,
 ): string {
-  return `${takosumiAccountsInstallationExportOperationPath(
-    installationId,
+  return `${takosumiAccountsCapsuleExportOperationPath(
+    capsuleId,
     operationId,
   )}/download`;
 }
 
-export function takosumiAccountsInstallationEventsPath(
-  installationId: string,
+export function takosumiAccountsCapsuleEventsPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(installationId)}/events`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/events`;
 }
 
 
-export function takosumiAccountsInstallationBillingUsageReportsPath(
-  installationId: string,
+export function takosumiAccountsCapsuleBillingUsageReportsPath(
+  capsuleId: string,
 ): string {
-  return `${takosumiAccountsInstallationPath(
-    installationId,
+  return `${takosumiAccountsCapsulePath(
+    capsuleId,
   )}/billing/usage-reports`;
 }
 
 export type TakosumiSubject = `tsub_${string}`;
 
-export type TakosumiInstallationProjectionStatus =
+export type TakosumiCapsuleProjectionStatus =
   | "installing"
   | "ready"
   | "failed"
   | "suspended"
   | "exported";
 
-export type TakosumiInstallationProjectionMode =
+export type TakosumiCapsuleProjectionMode =
   | "shared-cell"
   | "dedicated"
   | "self-hosted";
@@ -431,8 +431,8 @@ export async function sha256HexText(value: string): Promise<string> {
     .join("")}`;
 }
 
-export interface TakosumiAccountsInstallationMaterializeDigestInput {
-  readonly installationId: string;
+export interface TakosumiAccountsCapsuleMaterializeDigestInput {
+  readonly capsuleId: string;
   readonly mode: "dedicated";
   readonly region: string;
   readonly plan: Record<string, unknown>;
@@ -445,13 +445,13 @@ export interface TakosumiAccountsInstallationMaterializeDigestInput {
  * digest and rejects the request unless it byte-matches, so the dashboard and
  * the server must derive it from this single function.
  */
-export function takosumiAccountsInstallationMaterializeDigest(
-  input: TakosumiAccountsInstallationMaterializeDigestInput,
+export function takosumiAccountsCapsuleMaterializeDigest(
+  input: TakosumiAccountsCapsuleMaterializeDigestInput,
 ): Promise<string> {
   return sha256HexText(
     canonicalJson({
       operation: "materialize",
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       mode: input.mode,
       region: input.region,
       plan: input.plan,

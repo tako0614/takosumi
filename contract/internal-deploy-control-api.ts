@@ -1,19 +1,20 @@
 /**
  * Internal deploy-control compatibility seam.
  *
- * The public Takosumi v1 product vocabulary is Run / Deployment /
- * OutputSnapshot. This file keeps the in-process accounts-plane and operator
- * CLI compatibility DTOs for internal execution profiles, internal plan/apply records,
- * Installation reads, Deployment reads, policy decisions, and selected
- * non-sensitive OpenTofu output projections.
+ * The public Takosumi v1 product vocabulary is Run / StateVersion / Output (the
+ * `Deployment` ledger is retired and kept read-only for audit). This file keeps
+ * the in-process accounts-plane and operator CLI compatibility DTOs for internal
+ * execution profiles, internal plan/apply records, Capsule reads, retired
+ * Deployment reads, policy decisions, and selected non-sensitive OpenTofu output
+ * projections.
  */
 
 import type { JsonValue } from "./types.ts";
-import type { PublicInstallation } from "./installations.ts";
+import type { PublicCapsule } from "./installations.ts";
 import type { Deployment } from "./deployments.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
 import type { DeployRequest } from "./deploy.ts";
-import type { InstallationProviderEnvBindings } from "./connections.ts";
+import type { CapsuleProviderEnvBindings } from "./connections.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   ListProvidersResponse,
@@ -24,7 +25,7 @@ export type {
 // ---------------------------------------------------------------------------
 // INTERNAL deploy-control seam paths. These `/internal/v1/*` routes are the
 // internal compatibility seam the accounts plane + CLI consume (PlanRun / ApplyRun /
-// internal-execution-profile ledgers and the Installation read + its
+// internal-execution-profile ledgers and the Capsule read + its
 // deployments / deployment-outputs reads). They live under the unified
 // `/internal/v1` internal-seam prefix and are never edge-public.
 // ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ export interface InternalDeployRequest extends Omit<
   "providerConnections" | "runnerId"
 > {
   readonly runnerProfileId?: string;
-  readonly providerEnvBindings?: InstallationProviderEnvBindings;
+  readonly providerEnvBindings?: CapsuleProviderEnvBindings;
 }
 
 export type OpenTofuModuleSourceKind = "git" | "local" | "prepared";
@@ -219,9 +220,15 @@ export interface DeployControlAuditEvent {
 
 export interface PlanRun {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
-  readonly installationCurrentDeploymentId?: string | null;
+  /** @deprecated Retired Deployment ledger pointer. */
+  readonly installationCurrentDeploymentId?: string;
+  readonly capsuleCurrentStateVersionId?: string | null;
   readonly source: OpenTofuModuleSource;
   readonly sourceDigest: string;
   readonly operation: OpenTofuOperation;
@@ -239,8 +246,8 @@ export interface PlanRun {
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
   /**
-   * Capsule CompatibilityReport reviewed for this plan. Set for Installation
-   * runs when the Installation carries a compatibility report. The queue
+   * Capsule CompatibilityReport reviewed for this plan. Set for Capsule
+   * runs when the Capsule carries a compatibility report. The queue
    * consumer verifies the report before provider credential mint.
    */
   readonly compatibilityReportId?: string;
@@ -274,7 +281,7 @@ export interface PlanRun {
   /**
    * Set to the ApplyRun id once this PlanRun has been successfully applied.
    * Enforces apply-once: a succeeded PlanRun (especially a `create` plan, which
-   * otherwise allocates a fresh Installation/Deployment on every apply) may be
+   * otherwise allocates a fresh Capsule/Deployment on every apply) may be
    * applied only once. Cleared/unset means the plan has not yet been applied.
    */
   readonly appliedApplyRunId?: string;
@@ -316,23 +323,25 @@ export interface PlanRun {
   readonly resolvedProviderEnvBindingsDigest?: string;
   /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
-   * through the Installation plan/destroy-plan path. The apply consumer
+   * through the Capsule plan/destroy-plan path. The apply consumer
    * revalidates the ApplyRun's plan still references this snapshot and threads
    * the snapshot's archive into the dispatch.
    */
   readonly sourceSnapshotId?: string;
   /**
-   * Installation context this plan was created against (one Installation =
+   * Capsule context this plan was created against (one Capsule =
    * Capsule + generated root + tfstate + outputs, with `environment` as a
    * column).
    * Used by the queue consumer to attach the `stateScope` / `sourceArchive`
    * dispatch fields and by the unified Run projection. Never carries secret
    * material.
    */
-  readonly installationContext?: PlanRunInstallationContext;
+  readonly capsuleContext?: PlanRunCapsuleContext;
+  /** @deprecated Use capsuleContext. */
+  readonly installationContext?: PlanRunCapsuleContext;
   /**
    * Pinned DependencySnapshot id for an installation-driven plan whose
-   * consumer Installation declares Dependencies. Set at plan creation by the
+   * consumer Capsule declares Dependencies. Set at plan creation by the
    * installation plan path; the apply consumer re-reads the snapshot to verify
    * the producer state generations / pinned values before applying (invariant 9)
    * and the successful Deployment carries it forward. Absent for plans whose
@@ -343,7 +352,7 @@ export interface PlanRun {
   readonly dependencySnapshotId?: string;
   /**
    * RunGroup this plan belongs to. Set when the plan was
-   * created as a member of a Space-update RunGroup (`POST
+   * created as a member of a Workspace-update RunGroup (`POST
    * /internal/v1/spaces/:id/plan-update`); the apply that follows carries it
    * onto the public Run so the
    * group status can be computed from its member runs. Absent for standalone
@@ -366,15 +375,19 @@ export interface PlanRun {
 }
 
 /**
- * Installation context recorded on a PlanRun. Locates the run's Installation +
- * environment within its Space so the queue consumer can build the
- * `stateScope` dispatch field (`{ spaceId, installationId, environment,
+ * Capsule context recorded on a PlanRun. Locates the run's Capsule +
+ * environment within its Workspace so the queue consumer can build the
+ * `stateScope` dispatch field (`{ workspaceId, capsuleId, environment,
  * generation }`) the DO consumes to persist encrypted state at the R2_STATE
  * keys.
  */
-export interface PlanRunInstallationContext {
-  readonly spaceId: string;
-  readonly installationId: string;
+export interface PlanRunCapsuleContext {
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly capsuleId: string;
+  /** @deprecated Use capsuleId. */
+  readonly installationId?: string;
   readonly environment: string;
 }
 
@@ -423,9 +436,17 @@ export interface RunDiagnostic {
 export interface ApplyRun {
   readonly id: string;
   readonly planRunId: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
+  /** @deprecated Retired Deployment ledger pointer. */
   readonly deploymentId?: string;
+  /** @deprecated Retired Deployment ledger pointer. */
+  readonly installationCurrentDeploymentId?: string;
+  readonly stateVersionId?: string;
   readonly operation: OpenTofuOperation;
   readonly runnerProfileId: string;
   readonly status: RunStatus;
@@ -467,8 +488,10 @@ export interface RunApproval {
 
 export interface ApplyExpectedGuard {
   readonly planRunId: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
-  readonly currentDeploymentId?: string | null;
+  readonly currentStateVersionId?: string | null;
   readonly runnerProfileId: string;
   readonly sourceDigest: string;
   readonly variablesDigest: string;
@@ -486,16 +509,16 @@ export interface ApplyExpectedGuard {
   readonly resolvedProviderEnvBindingsDigest?: string;
 }
 
-// Installation / InstallConfig live in ./installations.ts and
-// Deployment / StateSnapshot in ./deployments.ts; this internal seam exports the
+// Capsule / InstallConfig live in ./installations.ts and
+// Deployment / StateVersion in ./deployments.ts; this internal seam exports the
 // DTO set consumed by accounts-plane and operator helper paths.
 export type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallBuildConfig,
   InstallConfig,
   InstallPrebuiltArtifactConfig,
-  Installation,
-  InstallationStatus,
+  Capsule,
+  CapsuleStatus,
   InstallType,
   OutputAllowlistEntry,
   OutputValueType,
@@ -505,8 +528,18 @@ export type {
 export type {
   Deployment,
   DeploymentStatus,
-  StateSnapshot,
+  StateVersion,
 } from "./deployments.ts";
+
+// Transient deprecated pre-rename names, still importable from this seam.
+/** @deprecated use `Capsule` / `CapsuleStatus` / `CapsuleProviderEnvBindingSet`. */
+export type {
+  Capsule as Installation,
+  CapsuleStatus as InstallationStatus,
+  CapsuleProviderEnvBindingSet as InstallationProviderEnvBindingSet,
+} from "./installations.ts";
+/** @deprecated use `StateVersion`. */
+export type { StateVersion as StateSnapshot } from "./deployments.ts";
 
 export type DeploymentOutputKind =
   | "launch_url"
@@ -539,9 +572,13 @@ export interface ListRunnerProfilesResponse {
 }
 
 export interface CreatePlanRunRequest {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly source: OpenTofuModuleSource;
   readonly runnerProfileId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly operation?: OpenTofuOperation;
   readonly variables?: Readonly<Record<string, JsonValue>>;
@@ -573,7 +610,7 @@ export interface CreatePlanRunRequest {
 
 // ---------------------------------------------------------------------------
 // Built-in first-party module bindings. The public surface stays
-// Installation / Deployment / PlanRun / ApplyRun / RunnerProfile /
+// Capsule / Deployment / PlanRun / ApplyRun / RunnerProfile /
 // DeploymentOutput; templateBinding is a service-side InstallConfig convenience
 // that produces a Takosumi-generated OpenTofu root module. These DTOs describe
 // the binding reference + rootgen output threaded onto the runner dispatch only;
@@ -683,10 +720,10 @@ export interface DispatchPrebuiltArtifactSpec {
 }
 
 /**
- * Installation-scoped state location threaded onto the run dispatch payload.
+ * Capsule-scoped state location threaded onto the run dispatch payload.
  * The OpenTofu runner DO consumes `request.stateScope` to persist OpenTofu state
  * encrypted to the canonical R2_STATE keys
- * (`spaces/{spaceId}/installations/{installationId}/envs/{environment}/states/
+ * (`spaces/{workspaceId}/installations/{capsuleId}/envs/{environment}/states/
  * {NNNNNNNN}.tfstate.enc` + `current.json`). The controller owns the generation
  * arithmetic: a plan dispatch carries the CURRENT generation (restore base); an
  * apply / destroy_apply carries `base + 1` (persist generation). Absent for runs
@@ -694,8 +731,12 @@ export interface DispatchPrebuiltArtifactSpec {
  * R2_ARTIFACTS state path.
  */
 export interface DispatchStateScope {
-  readonly spaceId: string;
-  readonly installationId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
+  readonly installationId?: string;
   readonly environment: string;
   readonly generation: number;
 }
@@ -715,24 +756,26 @@ export interface DispatchSourceArchive {
 /**
  * Remote-state dependency descriptor threaded onto a plan/apply run dispatch
  * using the `remote_state` Dependency mode. For each `remote_state` edge the
- * controller emits the StateSnapshot pinned in the PlanRun's DependencySnapshot;
+ * controller emits the StateVersion pinned in the PlanRun's DependencySnapshot;
  * the OpenTofu runner DO fetches + decrypts that producer state (the same
  * StateArtifactCrypto path as its own state restore), verifies the recorded
  * plaintext `digest`, and streams the bytes to the container which writes them
  * read-only to `/work/deps/<name>.tfstate` BEFORE init/plan/apply. `name` is the
- * producer Installation name the consumer references via `terraform_remote_state`
+ * producer Capsule name the consumer references via `terraform_remote_state`
  * (file backend over `/work/deps/<name>.tfstate`). The encrypted state bytes live
  * in R2_STATE at `objectKey`; the DO never exposes the passphrase or the
  * ciphertext to the container. Absent for runs with no `remote_state` edges.
  */
 export interface DispatchDepState {
-  /** Producer Installation name (the `/work/deps/<name>.tfstate` filename). */
+  /** Producer Capsule name (the `/work/deps/<name>.tfstate` filename). */
   readonly name: string;
-  /** Producer Installation id (audit / cross-reference only). */
-  readonly installationId: string;
+  /** Producer Capsule id (audit / cross-reference only). */
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
+  readonly installationId?: string;
   /** Producer environment (locates the R2_STATE prefix). */
   readonly environment: string;
-  /** Producer pinned StateSnapshot generation (the restored state generation). */
+  /** Producer pinned StateVersion generation (the restored state generation). */
   readonly generation: number;
   /** R2_STATE object key of the encrypted producer state at `generation`. */
   readonly objectKey: string;
@@ -740,7 +783,7 @@ export interface DispatchDepState {
   readonly digest: string;
 }
 
-// StateSnapshot lives in ./deployments.ts and is re-exported below.
+// StateVersion lives in ./deployments.ts and is re-exported below.
 
 /**
  * One resource change line projected from `tofu show -json tfplan`
@@ -783,13 +826,23 @@ export interface CreateApplyRunRequest {
 
 export interface ApplyRunResponse {
   readonly applyRun: ApplyRun;
-  readonly installation?: PublicInstallation;
+  readonly capsule?: PublicCapsule;
+  /** @deprecated Use capsule. */
+  readonly installation?: PublicCapsule;
+  /** @deprecated retired Deployment ledger read; kept for audit compatibility. */
   readonly deployment?: Deployment;
 }
 
-export interface GetInstallationResponse {
-  readonly installation: PublicInstallation;
+export interface GetCapsuleResponse {
+  readonly capsule: PublicCapsule;
+  /** @deprecated Use capsule. */
+  readonly installation?: PublicCapsule;
 }
+
+/** @deprecated use {@link GetCapsuleResponse}. */
+export type GetInstallationResponse = GetCapsuleResponse;
+/** @deprecated use {@link PlanRunCapsuleContext}. */
+export type PlanRunInstallationContext = PlanRunCapsuleContext;
 
 export interface ListDeploymentsResponse {
   readonly deployments: readonly Deployment[];

@@ -6658,7 +6658,7 @@ test("internal installations list calls Takosumi Accounts with the target space"
   const stderr: string[] = [];
   const requests: Request[] = [];
   const originalFetch = globalThis.fetch;
-  const originalSpaceId = envGet("TAKOS_SPACE_ID");
+  const originalWorkspaceId = envGet("TAKOS_SPACE_ID");
   globalThis.fetch = ((input, init) => {
     const request = new Request(input, init);
     requests.push(request);
@@ -6706,10 +6706,10 @@ test("internal installations list calls Takosumi Accounts with the target space"
     expect(JSON.parse(stdout.join("\n")).installations[0].id).toEqual("inst_1");
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalSpaceId === undefined) {
+    if (originalWorkspaceId === undefined) {
       envDelete("TAKOS_SPACE_ID");
     } else {
-      envSet("TAKOS_SPACE_ID", originalSpaceId);
+      envSet("TAKOS_SPACE_ID", originalWorkspaceId);
     }
   }
 });
@@ -6788,7 +6788,7 @@ test("internal installations inspect prints service bindings and service grants"
       "Bearer sess_accounts",
     );
     const output = stdout.join("\n");
-    expect(output.includes("Installation inst_1")).toEqual(true);
+    expect(output.includes("Capsule inst_1")).toEqual(true);
     expect(output.includes("  capsule: takos.chat")).toEqual(true);
     expect(output.includes("Service bindings:")).toEqual(true);
     expect(output.includes("auth  identity.oidc")).toEqual(true);
@@ -6867,7 +6867,7 @@ test("internal installations uninstall deletes through ledger-retained Accounts 
     expect(await requests[0]?.json()).toEqual({ reason: "user removed app" });
     expect(stdout.join("\n")).toEqual(
       [
-        "Installation inst_1",
+        "Capsule inst_1",
         "  status: suspended",
         "  revoked service grants: 1",
         "  event: installation.uninstalled",
@@ -6934,7 +6934,7 @@ test("internal installations status patches the target installation", async () =
       status: "ready",
       reason: "healthcheck passed",
     });
-    expect(stdout.join("\n")).toEqual("Installation inst_1\n  status: ready");
+    expect(stdout.join("\n")).toEqual("Capsule inst_1\n  status: ready");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -7177,7 +7177,7 @@ test("internal installations materialize posts a dedicated request", async () =>
     return Promise.resolve(
       Response.json({
         operationId: "op_materialize",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         fromMode: "shared-cell",
         toMode: "dedicated",
         trackingUrl:
@@ -7249,7 +7249,7 @@ test("internal installations materialize posts a dedicated request", async () =>
         costAck: true,
         permissionDigest: await testSha256HexDigest({
           operation: "materialize",
-          installationId: "inst_1",
+          capsuleId: "inst_1",
           mode: "dedicated",
           region: "tokyo",
           plan: {
@@ -7410,7 +7410,7 @@ test("internal installations export-operation reads operation status", async () 
     return Promise.resolve(
       Response.json({
         operationId: "op_export",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         status: "ready",
         downloadUrl: "https://exports.example/download",
       }),
@@ -7510,13 +7510,13 @@ test("internal installations import-plan emits a target restore request", async 
   await writeTextFile(
     bundleFile,
     JSON.stringify({
-      kind: "takosumi.accounts.installation-export-bundle@v1",
+      kind: "takosumi.accounts.capsule-export-bundle@v1",
       version: "v1",
       exportedAt: "2026-06-23T13:00:00.000Z",
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         billingAccountId: null,
         mode: "dedicated",
@@ -7580,9 +7580,9 @@ test("internal installations import-plan emits a target restore request", async 
         "https://selfhost.example.test",
         "--target-account",
         "acct_target",
-        "--target-space",
+        "--target-workspace",
         "space_target",
-        "--target-installation-id",
+        "--target-capsule-id",
         "inst_target",
         "--created-by-subject",
         "tsub_target",
@@ -7600,12 +7600,12 @@ test("internal installations import-plan emits a target restore request", async 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.kind).toEqual("takosumi.accounts.installation-import-plan@v1");
+    expect(plan.kind).toEqual("takosumi.accounts.capsule-import-plan@v1");
     expect(plan.sourceIssuer).toEqual("https://accounts.source.test");
     expect(plan.targetIssuer).toEqual("https://selfhost.example.test");
-    expect(plan.target.requestedInstallationId).toEqual("inst_target");
+    expect(plan.target.requestedCapsuleId).toEqual("inst_target");
     expect(plan.deployControlPlanRequest).toEqual({
-      spaceId: "space_target",
+      workspaceId: "space_target",
       source: {
         kind: "git",
         url: "https://github.com/takos/takos",
@@ -7618,9 +7618,9 @@ test("internal installations import-plan emits a target restore request", async 
         workersSubdomain: "target-subdomain",
       },
     });
-    expect(plan.request.installationId).toEqual(undefined);
+    expect(plan.request.capsuleId).toEqual(undefined);
     expect(plan.request.accountId).toEqual("acct_target");
-    expect(plan.request.spaceId).toEqual("space_target");
+    expect(plan.request.workspaceId).toEqual("space_target");
     expect(plan.request.mode).toEqual("shared-cell");
     expect(plan.request.source.url).toEqual("https://github.com/takos/takos");
     expect(plan.request.source.gitUrl).toEqual(
@@ -7655,7 +7655,7 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
   await writeTextFile(
     bundleFile,
     JSON.stringify({
-      kind: "takosumi.accounts.cloudflare-r2-installation-export@v1",
+      kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1",
       version: "v1",
       exportedAt: "2026-06-23T22:30:00.000Z",
       operationId: "op_r2_export",
@@ -7666,13 +7666,13 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
         scope: { installation: true, ledger: true, outputs: true },
       },
       bundle: {
-        kind: "takosumi.accounts.installation-export-bundle@v1",
+        kind: "takosumi.accounts.capsule-export-bundle@v1",
         version: "v1",
         exportedAt: "2026-06-23T22:30:00.000Z",
         installation: {
-          installationId: "inst_source",
+          capsuleId: "inst_source",
           accountId: "acct_source",
-          spaceId: "space_source",
+          workspaceId: "space_source",
           appId: "takos.chat",
           billingAccountId: null,
           mode: "dedicated",
@@ -7707,7 +7707,7 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
         "https://selfhost.example.test",
         "--target-account",
         "acct_target",
-        "--target-space",
+        "--target-workspace",
         "space_target",
         "--created-by-subject",
         "tsub_target",
@@ -7721,13 +7721,13 @@ test("internal installations import-plan accepts Cloudflare R2 export documents"
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     const plan = JSON.parse(stdout.join("\n"));
-    expect(plan.kind).toEqual("takosumi.accounts.installation-import-plan@v1");
-    expect(plan.request.installationId).toEqual(undefined);
+    expect(plan.kind).toEqual("takosumi.accounts.capsule-import-plan@v1");
+    expect(plan.request.capsuleId).toEqual(undefined);
     expect(plan.deployControlPlanRequest.source.url).toEqual(
       "https://github.com/takos/takos",
     );
     expect(plan.request.accountId).toEqual("acct_target");
-    expect(plan.request.spaceId).toEqual("space_target");
+    expect(plan.request.workspaceId).toEqual("space_target");
     expect(plan.request.mode).toEqual("self-hosted");
   } finally {
     globalThis.fetch = originalFetch;
@@ -7824,7 +7824,7 @@ test("internal installations import-apply creates a target plan and projection",
             status: "ready",
             installation: {
               id: "inst_target_canonical",
-              spaceId: "space_target",
+              workspaceId: "space_target",
             },
           },
           { status: 202 },
@@ -7838,13 +7838,13 @@ test("internal installations import-apply creates a target plan and projection",
   await writeTextFile(
     bundleFile,
     JSON.stringify({
-      kind: "takosumi.accounts.installation-export-bundle@v1",
+      kind: "takosumi.accounts.capsule-export-bundle@v1",
       version: "v1",
       exportedAt: "2026-06-23T13:00:00.000Z",
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         billingAccountId: null,
         mode: "dedicated",
@@ -7878,7 +7878,7 @@ test("internal installations import-apply creates a target plan and projection",
         "https://selfhost.example.test",
         "--target-account",
         "acct_target",
-        "--target-space",
+        "--target-workspace",
         "space_target",
         "--created-by-subject",
         "tsub_target",
@@ -7916,7 +7916,7 @@ test("internal installations import-apply creates a target plan and projection",
       "idem-import-apply",
     );
     expect(await requests[0]?.json()).toEqual({
-      spaceId: "space_target",
+      workspaceId: "space_target",
       name: "takos.chat-source",
       url: "https://github.com/takos/takos",
       defaultRef: "v1.2.3",
@@ -7943,7 +7943,7 @@ test("internal installations import-apply creates a target plan and projection",
       ],
     });
     expect(await requests[4]?.json()).toEqual({
-      spaceId: "space_target",
+      workspaceId: "space_target",
       source: {
         kind: "git",
         url: "https://github.com/takos/takos",
@@ -7951,7 +7951,7 @@ test("internal installations import-apply creates a target plan and projection",
         commit: "0123456789abcdef0123456789abcdef01234567",
         path: "deploy/opentofu",
       },
-      installationId: "inst_import_target",
+      capsuleId: "inst_import_target",
       operation: "create",
       requiredProviders: [
         "registry.opentofu.org/cloudflare/cloudflare",
@@ -7963,7 +7963,7 @@ test("internal installations import-apply creates a target plan and projection",
       },
     });
     const projectionRequest = await requests[5]?.json();
-    expect(projectionRequest.installationId).toEqual(undefined);
+    expect(projectionRequest.capsuleId).toEqual(undefined);
     expect(projectionRequest.planRunId).toEqual("plan_import");
     expect(projectionRequest.expected.planArtifactDigest).toEqual(
       "sha256:artifact",
@@ -8015,7 +8015,7 @@ test("internal installations import-apply reuses duplicate target installation",
               message: "installation already exists",
               details: {
                 reason: "duplicate_installation",
-                installationId: "inst_existing_target",
+                capsuleId: "inst_existing_target",
               },
             },
           },
@@ -8086,13 +8086,13 @@ test("internal installations import-apply reuses duplicate target installation",
   await writeTextFile(
     bundleFile,
     JSON.stringify({
-      kind: "takosumi.accounts.installation-export-bundle@v1",
+      kind: "takosumi.accounts.capsule-export-bundle@v1",
       version: "v1",
       exportedAt: "2026-06-23T13:00:00.000Z",
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         billingAccountId: null,
         mode: "dedicated",
@@ -8126,7 +8126,7 @@ test("internal installations import-apply reuses duplicate target installation",
         "https://selfhost.example.test",
         "--target-account",
         "acct_target",
-        "--target-space",
+        "--target-workspace",
         "space_target",
         "--created-by-subject",
         "tsub_target",
@@ -8163,7 +8163,7 @@ test("internal installations import-apply reuses duplicate target installation",
       ],
     });
     expect(await requests[4]?.json()).toMatchObject({
-      installationId: "inst_existing_target",
+      capsuleId: "inst_existing_target",
     });
     const result = JSON.parse(stdout.join("\n"));
     expect(result.planRunId).toEqual("plan_import");
@@ -8180,13 +8180,13 @@ test("internal installations import-apply rejects metadata-only upload sources",
   await writeTextFile(
     bundleFile,
     JSON.stringify({
-      kind: "takosumi.accounts.installation-export-bundle@v1",
+      kind: "takosumi.accounts.capsule-export-bundle@v1",
       version: "v1",
       exportedAt: "2026-06-23T13:00:00.000Z",
       installation: {
-        installationId: "inst_source",
+        capsuleId: "inst_source",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         billingAccountId: null,
         mode: "dedicated",
@@ -8219,7 +8219,7 @@ test("internal installations import-apply rejects metadata-only upload sources",
         "https://selfhost.example.test",
         "--target-account",
         "acct_target",
-        "--target-space",
+        "--target-workspace",
         "space_target",
         "--created-by-subject",
         "tsub_target",
@@ -8550,7 +8550,7 @@ test("accounts serve accepts a valid --port in the dry-run plan", async () => {
 // ---------------------------------------------------------------------------
 
 test("parseOptions: --key=value carries a flag-like value verbatim", () => {
-  // Space-separated form mis-parses a value that looks like a flag, so the
+  // Workspace-separated form mis-parses a value that looks like a flag, so the
   // inline `--key=value` form is the canonical way to pass it.
   const options = parseOptions(["--reason=--keep-going", "--json"]);
   expect(options.reason).toEqual("--keep-going");
@@ -8720,7 +8720,7 @@ test("operator CLI help supports Japanese output", async () => {
   }
 });
 
-test("connections create-generic-env creates a Space-owned arbitrary provider connection", async () => {
+test("connections create-generic-env creates a Workspace-owned arbitrary provider connection", async () => {
   const valuesFile = await makeTempFile({ suffix: ".json" });
   const filesFile = await makeTempFile({ suffix: ".json" });
   const scopeHintsFile = await makeTempFile({ suffix: ".json" });
@@ -8810,7 +8810,7 @@ test("connections create-generic-env creates a Space-owned arbitrary provider co
     const createBody = JSON.parse(requests[0]!.body);
     expect(createBody).toEqual({
       provider: "registry.opentofu.org/vercel/vercel",
-      spaceId: "space_1",
+      workspaceId: "space_1",
       kind: "generic_env_provider",
       authMethod: "static_secret",
       scope: "space",
@@ -8840,7 +8840,7 @@ test("connections create-generic-env creates a Space-owned arbitrary provider co
   }
 });
 
-test("connections set-cloudflare-token rejects Space-owned connection flags", async () => {
+test("connections set-cloudflare-token rejects Workspace-owned connection flags", async () => {
   const tokenFile = await makeTempFile();
   await writeTextFile(tokenFile, "cf_live_secret\n");
   const stdout: string[] = [];
@@ -8873,7 +8873,7 @@ test("connections set-cloudflare-token rejects Space-owned connection flags", as
     expect(code).toEqual(2);
     expect(stdout).toEqual([]);
     expect(stderr.join("\n")).toContain(
-      "operator CLI does not create Space-owned Provider Connection backing material",
+      "operator CLI does not create Workspace-owned Provider Connection backing material",
     );
     expect(stderr.join("\n")).not.toContain("cf_live_secret");
   } finally {
@@ -9003,7 +9003,7 @@ test("deploy resolves @handle space flags before upload and deploy", async () =>
       ),
     ).toEqual(true);
     expect(JSON.parse(requests[2]!.body)).toMatchObject({
-      spaceId: "space_me",
+      workspaceId: "space_me",
       name: "my-app",
       snapshotId: "snap_upload",
       autoApprove: true,
@@ -9090,7 +9090,7 @@ test("deploy keeps raw space ids without handle resolution", async () => {
       "GET /api/v1/runs/run_plan",
     ]);
     expect(JSON.parse(requests[1]!.body)).toMatchObject({
-      spaceId: "space_direct",
+      workspaceId: "space_direct",
       name: "app",
       snapshotId: "snap_direct",
       planOnly: true,

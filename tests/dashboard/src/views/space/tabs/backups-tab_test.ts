@@ -6,7 +6,7 @@ import { ja } from "../../../../../../dashboard/src/i18n/ja.ts";
 
 const sourcePath = resolve(
   import.meta.dir,
-  "../../../../../../dashboard/src/views/space/tabs/BackupsTab.tsx",
+  "../../../../../../dashboard/src/views/workspace/tabs/BackupsTab.tsx",
 );
 
 test("BackupsTab keeps storage object details out of the user-facing table", () => {

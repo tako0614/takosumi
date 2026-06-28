@@ -1,36 +1,51 @@
 /**
- * Installation + InstallConfig contract (`installations` / `install_configs`).
+ * InstallConfig contract (`install_configs`) + transient Capsule ledger aliases.
  *
- * An Installation is the OpenTofu execution unit directly under a Space
- * (`@space/name`): one Installation = one generated root + one OpenTofu
- * tfstate + outputs + deployments. The
- * App/Environment/InstallProfile lanes model is retired; `environment` is a
- * column on the Installation (UNIQUE(space_id, name, environment)).
+ * The Capsule ledger record (formerly `Installation`) now lives in
+ * `./capsules.ts`; this module re-exports it under the old `Installation*` names
+ * while the rename converges. `InstallConfig` (the service-side DB record
+ * describing Capsule execution policy: trust, normalization policy, variable
+ * mapping, output allowlist, policy) is NOT part of the 17-noun rename and stays
+ * here as the canonical home.
  *
- * A SourceSnapshot is normalized as an OpenTofu Capsule before plan /
- * apply. InstallConfig is the service-side DB record describing Capsule
- * execution policy (trust, normalization policy, variable mapping, output
- * allowlist, policy). User repos carry NO Takosumi manifest.
+ * A SourceSnapshot is normalized as an OpenTofu Capsule before plan / apply.
+ * User repos carry NO Takosumi manifest.
  */
 
-import type { CapsuleCompatibilityLevel } from "./capsules.ts";
+import type { InstallType } from "./capsules.ts";
+
+// ---------------------------------------------------------------------------
+// Transient deprecated re-exports of the Capsule ledger record + bindings.
+// ---------------------------------------------------------------------------
+
+export type { InstallType } from "./capsules.ts";
+
+// Canonical Capsule ledger names (re-exported so importers that already moved to
+// the new names can still resolve them through this module's subpath alias).
+export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
+
+/** @deprecated use `Capsule` from `./capsules.ts`. */
+export type { Capsule as Installation } from "./capsules.ts";
+/** @deprecated use `PublicCapsule` from `./capsules.ts`. */
+export type { PublicCapsule as PublicInstallation } from "./capsules.ts";
+/** @deprecated use `CapsuleStatus` from `./capsules.ts`. */
+export type { CapsuleStatus as InstallationStatus } from "./capsules.ts";
+
 export type {
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderEnvBindingSet,
+} from "./connections.ts";
+/** @deprecated use the `CapsuleProviderEnvBinding*` names. */
+export type {
+  CapsuleProviderEnvBinding as InstallationProviderEnvBinding,
+  CapsuleProviderEnvBindings as InstallationProviderEnvBindings,
+  CapsuleProviderEnvBindingSet as InstallationProviderEnvBindingSet,
 } from "./connections.ts";
 
-/**
- * Internal compatibility discriminator. `core` is the Space base Capsule
- * emitting shared outputs. `opentofu_root` is retained only so old direct-root
- * ledger rows can be read; new InstallConfigs are rejected at the domain-service
- * boundary.
- */
-export type InstallType =
-  | "core"
-  | "opentofu_module"
-  | "opentofu_root"
-  | "app_source";
+// ---------------------------------------------------------------------------
+// InstallConfig (NOT renamed — service-side Capsule execution config)
+// ---------------------------------------------------------------------------
 
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
@@ -49,14 +64,6 @@ export type PublicInstallConfigSourceKind =
 export type InstallConfigSourceKind =
   | PublicInstallConfigSourceKind
   | "official_template";
-
-export type InstallationStatus =
-  | "pending"
-  | "active"
-  | "stale"
-  | "error"
-  | "disabled"
-  | "destroyed";
 
 export type OutputValueType =
   | "string"
@@ -116,7 +123,7 @@ export interface PolicyConfig {
     /**
      * Require actual-install attestation that every required provider was
      * installed from the runner's configured filesystem mirror. This blocks
-     * accidental registry/network fallback when an Installation policy expects
+     * accidental registry/network fallback when a Capsule policy expects
      * offline provider installation.
      */
     readonly requireMirror: boolean;
@@ -226,11 +233,13 @@ export interface InstallConfigCatalogMetadata {
 }
 
 /**
- * Service-side install configuration. `spaceId` is absent for
- * built-in first-party configs shared across Spaces.
+ * Service-side install configuration. `workspaceId` is absent for built-in
+ * first-party configs shared across Workspaces.
  */
 export interface InstallConfig {
   readonly id: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
   readonly name: string;
   readonly sourceKind?: InstallConfigSourceKind;
@@ -259,7 +268,7 @@ export interface InstallConfig {
    * Internal seam: binds a built-in first-party config to its bundled module.
    * New runs normalize the bundled module into generatedRoot.moduleFiles, the
    * same dispatch shape used by Git-sourced OpenTofu Capsules. Absent for
-   * space-authored configs.
+   * workspace-authored configs.
    */
   readonly templateBinding?: {
     readonly templateId: string;
@@ -276,43 +285,3 @@ export type PublicInstallConfig = Omit<
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
 };
-
-/**
- * Installation ledger record.
- * 1 Installation = Capsule + generated root + tfstate + outputs;
- * `currentStateGeneration` is the generation guard cursor. The latest
- * `currentOutputSnapshotId` is an internal ledger pointer to the encrypted raw
- * output envelope and is projected out of public Installation reads; dashboard
- * output reads go through Deployment.outputsPublic or OutputShare instead.
- */
-export interface Installation {
-  readonly id: string;
-  readonly spaceId: string;
-  readonly name: string;
-  readonly slug: string;
-  /**
-   * Registered git {@link Source} this Installation tracks. Absent for no-git
-   * Installations created by `takosumi deploy`, which deploy an upload/artifact
-   * SourceSnapshot directly with no Source. A git Source is an optional
-   * attachment (the `wrangler deploy` vs Workers-Builds relationship), not a
-   * precondition for an Installation to exist.
-   */
-  readonly sourceId?: string;
-  readonly installType: InstallType;
-  readonly installConfigId: string;
-  readonly environment: string;
-  readonly currentDeploymentId?: string;
-  readonly currentStateGeneration: number;
-  readonly currentOutputSnapshotId?: string;
-  readonly compatibilityReportId?: string;
-  readonly compatibilityStatus?: CapsuleCompatibilityLevel;
-  readonly status: InstallationStatus;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-/** Public Installation projection returned by `/api` and dashboard session routes. */
-export type PublicInstallation = Omit<
-  Installation,
-  "installType" | "currentOutputSnapshotId"
->;

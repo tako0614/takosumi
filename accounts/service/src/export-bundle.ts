@@ -1,16 +1,16 @@
 import {
   normalizeIssuer,
-  TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+  TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type ServiceBindingMaterialKind,
   type ServiceBindingMaterialRecord,
   type ServiceGrantMaterialRecord,
-  type AppInstallationMode,
-  type AppInstallationStatus,
-  type InstallationEventRecord,
-  type InstallationRecord,
+  type AppCapsuleMode,
+  type AppCapsuleStatus,
+  type CapsuleEventRecord,
+  type CapsuleRecord,
   isServiceBindingMaterialKind,
   type RuntimeBindingRecord,
 } from "./ledger.ts";
@@ -47,18 +47,18 @@ const SERVICE_GRANT_MATERIAL_CAPABILITIES = [
 
 export type JsonObject = Record<string, unknown>;
 
-export interface AccountsInstallationExportBundle {
-  readonly kind: typeof TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND;
+export interface AccountsCapsuleExportBundle {
+  readonly kind: typeof TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND;
   readonly version: "v1";
   readonly exportedAt: string;
   readonly installation: {
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly accountId: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly appId: string;
     readonly billingAccountId: string | null;
-    readonly mode: AppInstallationMode;
-    readonly status: AppInstallationStatus;
+    readonly mode: AppCapsuleMode;
+    readonly status: AppCapsuleStatus;
   };
   readonly source: {
     readonly gitUrl: string;
@@ -75,18 +75,18 @@ export interface AccountsInstallationExportBundle {
   readonly events: readonly ExportEventRef[];
 }
 
-export interface CloudflareR2InstallationExportDocument {
-  readonly kind: "takosumi.accounts.cloudflare-r2-installation-export@v1";
+export interface CloudflareR2CapsuleExportDocument {
+  readonly kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1";
   readonly version: "v1";
   readonly exportedAt: string;
   readonly operationId: string;
   readonly request: JsonObject;
-  readonly bundle: AccountsInstallationExportBundle;
+  readonly bundle: AccountsCapsuleExportBundle;
 }
 
 export interface ExportRuntimeTarget {
   readonly runtimeTargetId: string;
-  readonly mode: AppInstallationMode;
+  readonly mode: AppCapsuleMode;
   readonly targetType: RuntimeBindingRecord["targetType"];
   readonly targetId: string;
 }
@@ -128,66 +128,66 @@ export interface ExportEventRef {
   readonly createdAt: string;
 }
 
-export interface BuildInstallationExportBundleInput {
-  readonly installation: InstallationRecord;
+export interface BuildCapsuleExportBundleInput {
+  readonly installation: CapsuleRecord;
   readonly runtimeBinding?: RuntimeBindingRecord;
   readonly bindings?: readonly ServiceBindingMaterialRecord[];
   readonly grants?: readonly ServiceGrantMaterialRecord[];
   readonly oidcClient?: OidcClientRecord;
-  readonly events?: readonly InstallationEventRecord[];
+  readonly events?: readonly CapsuleEventRecord[];
   readonly exportedAt?: string;
 }
 
-export interface PlanInstallationImportInput {
-  readonly bundle: AccountsInstallationExportBundle;
+export interface PlanCapsuleImportInput {
+  readonly bundle: AccountsCapsuleExportBundle;
   readonly targetIssuer: string;
   readonly targetAccountId: string;
-  readonly targetSpaceId: string;
+  readonly targetWorkspaceId: string;
   readonly createdBySubject: TakosumiSubject;
-  readonly targetInstallationId?: string;
-  readonly mode?: AppInstallationMode;
+  readonly targetCapsuleId?: string;
+  readonly mode?: AppCapsuleMode;
 }
 
-export interface InstallationImportPlan {
-  readonly kind: "takosumi.accounts.installation-import-plan@v1";
-  readonly bundleKind: typeof TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND;
+export interface CapsuleImportPlan {
+  readonly kind: "takosumi.accounts.capsule-import-plan@v1";
+  readonly bundleKind: typeof TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND;
   readonly sourceIssuer: string | null;
   readonly targetIssuer: string;
   readonly target?: {
-    readonly requestedInstallationId?: string;
+    readonly requestedCapsuleId?: string;
   };
   readonly deployControlPlanRequest: JsonObject;
   readonly accountsProjectionRequestTemplate: JsonObject;
   readonly request: JsonObject;
 }
 
-export interface CollectInstallationExportBundleInput {
+export interface CollectCapsuleExportBundleInput {
   readonly store: AccountsStore;
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly exportedAt?: string;
 }
 
-export async function collectInstallationExportBundle(
-  input: CollectInstallationExportBundleInput,
-): Promise<AccountsInstallationExportBundle | undefined> {
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+export async function collectCapsuleExportBundle(
+  input: CollectCapsuleExportBundleInput,
+): Promise<AccountsCapsuleExportBundle | undefined> {
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation) return undefined;
   const runtimeBinding = installation.runtimeBindingId
     ? await input.store.findRuntimeBinding(installation.runtimeBindingId)
     : undefined;
-  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
-    input.installationId,
+  const bindings = await input.store.listServiceBindingMaterialsForCapsule(
+    input.capsuleId,
   );
-  const grants = await input.store.listServiceGrantMaterialsForInstallation(
-    input.installationId,
+  const grants = await input.store.listServiceGrantMaterialsForCapsule(
+    input.capsuleId,
   );
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installationId,
+  const oidcClient = await input.store.findOidcClientForCapsule(
+    input.capsuleId,
   );
-  const events = await input.store.listInstallationEvents(input.installationId);
-  return buildInstallationExportBundle({
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
+  return buildCapsuleExportBundle({
     installation,
     runtimeBinding,
     bindings,
@@ -198,17 +198,17 @@ export async function collectInstallationExportBundle(
   });
 }
 
-export function buildInstallationExportBundle(
-  input: BuildInstallationExportBundleInput,
-): AccountsInstallationExportBundle {
+export function buildCapsuleExportBundle(
+  input: BuildCapsuleExportBundleInput,
+): AccountsCapsuleExportBundle {
   return {
-    kind: TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    kind: TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
     version: "v1",
     exportedAt: input.exportedAt ?? new Date().toISOString(),
     installation: {
-      installationId: input.installation.installationId,
+      capsuleId: input.installation.capsuleId,
       accountId: input.installation.accountId,
-      spaceId: input.installation.spaceId,
+      workspaceId: input.installation.workspaceId,
       appId: input.installation.appId,
       billingAccountId: input.installation.billingAccountId ?? null,
       mode: input.installation.mode,
@@ -276,17 +276,17 @@ export function buildInstallationExportBundle(
   };
 }
 
-export function planInstallationImport(
-  input: PlanInstallationImportInput,
-): InstallationImportPlan {
-  if (input.bundle.kind !== TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND) {
+export function planCapsuleImport(
+  input: PlanCapsuleImportInput,
+): CapsuleImportPlan {
+  if (input.bundle.kind !== TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND) {
     throw new TypeError("unsupported installation export bundle kind");
   }
   const targetIssuer = normalizeIssuer(input.targetIssuer);
   const sourceIssuer = input.bundle.oidcClient
     ? normalizeIssuer(input.bundle.oidcClient.issuerUrl)
     : null;
-  const targetInstallationId = input.targetInstallationId;
+  const targetCapsuleId = input.targetCapsuleId;
   const rewrite = (value: unknown): unknown =>
     sourceIssuer ? rewriteIssuer(value, sourceIssuer, targetIssuer) : value;
   const oidcClient = input.bundle.oidcClient;
@@ -301,7 +301,7 @@ export function planInstallationImport(
     artifactDigest: input.bundle.source.artifactDigest,
   };
   const deployControlPlanRequest: JsonObject = {
-    spaceId: input.targetSpaceId,
+    workspaceId: input.targetWorkspaceId,
     source: {
       kind: "git",
       url: input.bundle.source.gitUrl,
@@ -312,7 +312,7 @@ export function planInstallationImport(
   };
   const accountsProjectionRequestTemplate: JsonObject = {
     accountId: input.targetAccountId,
-    spaceId: input.targetSpaceId,
+    workspaceId: input.targetWorkspaceId,
     appId: input.bundle.installation.appId,
     source: sourceRequest,
     mode: input.mode ?? "self-hosted",
@@ -357,12 +357,12 @@ export function planInstallationImport(
   };
 
   return {
-    kind: "takosumi.accounts.installation-import-plan@v1",
-    bundleKind: TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    kind: "takosumi.accounts.capsule-import-plan@v1",
+    bundleKind: TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
     sourceIssuer,
     targetIssuer,
-    ...(targetInstallationId
-      ? { target: { requestedInstallationId: targetInstallationId } }
+    ...(targetCapsuleId
+      ? { target: { requestedCapsuleId: targetCapsuleId } }
       : {}),
     deployControlPlanRequest,
     accountsProjectionRequestTemplate,
@@ -449,13 +449,13 @@ function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const INSTALLATION_MODES: readonly AppInstallationMode[] = [
+const INSTALLATION_MODES: readonly AppCapsuleMode[] = [
   "shared-cell",
   "dedicated",
   "self-hosted",
 ];
 
-const INSTALLATION_STATUSES: readonly AppInstallationStatus[] = [
+const INSTALLATION_STATUSES: readonly AppCapsuleStatus[] = [
   "installing",
   "ready",
   "failed",
@@ -470,29 +470,29 @@ const TOKEN_AUTH_METHODS: readonly OidcClientRecord["tokenEndpointAuthMethod"][]
   ["client_secret_basic", "client_secret_post", "none"];
 
 /**
- * Validate an unknown value against the `AccountsInstallationExportBundle`
+ * Validate an unknown value against the `AccountsCapsuleExportBundle`
  * shape and return the typed bundle.
  *
  * Throws `TypeError` with a path-prefixed message on the first invalid field
  * so HTTP handlers can surface the failure as a 400 response.
  */
-export function parseAccountsInstallationExportBundle(
+export function parseAccountsCapsuleExportBundle(
   value: unknown,
-): AccountsInstallationExportBundle {
+): AccountsCapsuleExportBundle {
   const bundle = requireRecord(value, "bundle");
-  if (bundle.kind !== TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND) {
+  if (bundle.kind !== TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND) {
     throw new TypeError(
-      `bundle.kind must be ${TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND}`,
+      `bundle.kind must be ${TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND}`,
     );
   }
   if (bundle.version !== "v1") {
     throw new TypeError(`bundle.version must be "v1"`);
   }
   return {
-    kind: TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+    kind: TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
     version: "v1",
     exportedAt: requireString(bundle.exportedAt, "bundle.exportedAt"),
-    installation: parseInstallationFields(bundle.installation),
+    installation: parseCapsuleFields(bundle.installation),
     source: parseSourceFields(bundle.source),
     runtimeTarget: parseExportRuntimeTarget(bundle.runtimeTarget),
     oidcClient: parseExportOidcClient(bundle.oidcClient),
@@ -509,37 +509,37 @@ export function parseAccountsInstallationExportBundle(
  * The Cloudflare/R2 profile emits an age-encrypted JSON document instead; its
  * canonical `bundle` member is the same bundle shape and is accepted here.
  */
-export function parseAccountsInstallationExportBundleInput(
+export function parseAccountsCapsuleExportBundleInput(
   value: unknown,
-): AccountsInstallationExportBundle {
+): AccountsCapsuleExportBundle {
   const document = requireRecord(value, "bundle input");
-  if (document.kind === TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND) {
-    return parseAccountsInstallationExportBundle(document);
+  if (document.kind === TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND) {
+    return parseAccountsCapsuleExportBundle(document);
   }
   if (
-    document.kind === "takosumi.accounts.cloudflare-r2-installation-export@v1"
+    document.kind === "takosumi.accounts.cloudflare-r2-capsule-export@v1"
   ) {
     if (document.version !== "v1") {
       throw new TypeError(`bundle input.version must be "v1"`);
     }
-    return parseAccountsInstallationExportBundle(document.bundle);
+    return parseAccountsCapsuleExportBundle(document.bundle);
   }
   throw new TypeError(
-    `bundle input.kind must be ${TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND} or takosumi.accounts.cloudflare-r2-installation-export@v1`,
+    `bundle input.kind must be ${TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND} or takosumi.accounts.cloudflare-r2-capsule-export@v1`,
   );
 }
 
-function parseInstallationFields(
+function parseCapsuleFields(
   value: unknown,
-): AccountsInstallationExportBundle["installation"] {
+): AccountsCapsuleExportBundle["installation"] {
   const record = requireRecord(value, "bundle.installation");
   return {
-    installationId: requireString(
-      record.installationId,
-      "bundle.installation.installationId",
+    capsuleId: requireString(
+      record.capsuleId,
+      "bundle.installation.capsuleId",
     ),
     accountId: requireString(record.accountId, "bundle.installation.accountId"),
-    spaceId: requireString(record.spaceId, "bundle.installation.spaceId"),
+    workspaceId: requireString(record.workspaceId, "bundle.installation.workspaceId"),
     appId: requireString(record.appId, "bundle.installation.appId"),
     billingAccountId: parseNullableString(
       record.billingAccountId,
@@ -560,7 +560,7 @@ function parseInstallationFields(
 
 function parseSourceFields(
   value: unknown,
-): AccountsInstallationExportBundle["source"] {
+): AccountsCapsuleExportBundle["source"] {
   const record = requireRecord(value, "bundle.source");
   return {
     gitUrl: requireString(record.gitUrl, "bundle.source.gitUrl"),

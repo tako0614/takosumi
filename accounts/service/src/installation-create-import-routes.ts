@@ -5,21 +5,21 @@
  * god-file; behavior is identical to the prior single-file handlers.
  */
 import {
-  takosumiAccountsInstallationEventsPath,
-  takosumiAccountsInstallationPath,
+  takosumiAccountsCapsuleEventsPath,
+  takosumiAccountsCapsulePath,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type ServiceBindingMaterialKind,
   type ServiceBindingMaterialRecord,
   type ServiceGrantMaterialRecord,
-  type InstallationRecord,
-  type SpaceKind,
+  type CapsuleRecord,
+  type WorkspaceKind,
   assertValidServiceBindingMaterialRecord,
 } from "./ledger.ts";
 import type { AccountsStore, OidcClientRecord } from "./store.ts";
 import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import {
-  appInstallationPermissionDigest,
+  appCapsulePermissionDigest,
   installationActivatedHttpDomainEvent,
   installationEnvelope,
   isMeteredBindingKind,
@@ -36,7 +36,7 @@ import {
 } from "./installation-routes-internal.ts";
 import {
   errorJson,
-  appInstallationStatusValue,
+  appCapsuleStatusValue,
   booleanValue,
   isRecord,
   json,
@@ -52,12 +52,12 @@ import type {
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
 import {
-  type AppInstallationConfirmRecord,
+  type AppCapsuleConfirmRecord,
   activatedHttpDomainEventPayload,
   serviceBindingMaterialRecordsFromValue,
   serviceGrantMaterialRecordsFromValue,
-  appInstallationModeValue,
-  applyCoreInstallationForCloudProjection,
+  appCapsuleModeValue,
+  applyCoreCapsuleForCloudProjection,
 } from "./installation-lifecycle-shared.ts";
 import { consoleErrorRedacted } from "./redacted-log.ts";
 
@@ -79,7 +79,7 @@ const SECRET_BEARING_SERVICE_BINDING_ENV_SUFFIXES = [
 const SECRET_BEARING_SERVICE_BINDING_ENV_VALUE_PATTERN =
   /\b(?:Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+|\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)=/i;
 
-export async function handleCreateAppInstallation(input: {
+export async function handleCreateAppCapsule(input: {
   request: Request;
   store: AccountsStore;
   issuer: string;
@@ -93,7 +93,7 @@ export async function handleCreateAppInstallation(input: {
   if (!input.deployControl) {
     return errorJson(
       "deploy_control_required",
-      "Installation projection creation requires the Takosumi deploy-control ledger.",
+      "Capsule projection creation requires the Takosumi deploy-control ledger.",
       503,
     );
   }
@@ -101,9 +101,9 @@ export async function handleCreateAppInstallation(input: {
   const source = isRecord(body.source) ? body.source : {};
   const expected = isRecord(body.expected) ? body.expected : undefined;
   const now = Date.now();
-  const requestedInstallationId = stringValue(body.installationId);
+  const requestedCapsuleId = stringValue(body.capsuleId);
   const accountId = stringValue(body.accountId);
-  const spaceId = stringValue(body.spaceId);
+  const workspaceId = stringValue(body.workspaceId);
   let appId = stringValue(body.appId);
   let sourceGitUrl = stringValue(source.gitUrl) ?? stringValue(source.url);
   let sourceRef = stringValue(source.ref);
@@ -123,19 +123,19 @@ export async function handleCreateAppInstallation(input: {
     stringValue(body.planRunId) ??
     stringValue(body.plan_run_id) ??
     stringValue(expected?.planRunId);
-  const mode = appInstallationModeValue(body.mode);
+  const mode = appCapsuleModeValue(body.mode);
   const billingAccountId = stringValue(
     body.billingAccountId ?? body.billing_account_id,
   );
   const createdBySubject = takosumiSubjectValue(body.createdBySubject);
-  if (!accountId || !spaceId || !mode || !createdBySubject) {
+  if (!accountId || !workspaceId || !mode || !createdBySubject) {
     return errorJson(
       "invalid_request",
-      "accountId, spaceId, mode, and createdBySubject are required",
+      "accountId, workspaceId, mode, and createdBySubject are required",
       400,
     );
   }
-  const billingGuard = await assertBillingAllowsInstallationCreate({
+  const billingGuard = await assertBillingAllowsCapsuleCreate({
     store: input.store,
     accountId,
     billingAccountId,
@@ -143,14 +143,14 @@ export async function handleCreateAppInstallation(input: {
     mode,
   });
   if (billingGuard) return billingGuard;
-  const existingSpace = await input.store.findSpace(spaceId);
-  if (existingSpace && existingSpace.accountId !== accountId) {
+  const existingWorkspace = await input.store.findWorkspace(workspaceId);
+  if (existingWorkspace && existingWorkspace.accountId !== accountId) {
     return errorJson("space_account_mismatch", "space account mismatch", 409);
   }
-  if (requestedInstallationId) {
+  if (requestedCapsuleId) {
     return errorJson(
       "invalid_request",
-      "installationId is assigned by Takosumi deploy control for this Accounts facade",
+      "capsuleId is assigned by Takosumi deploy control for this Accounts facade",
       400,
     );
   }
@@ -173,17 +173,17 @@ export async function handleCreateAppInstallation(input: {
   }
   const preflightBindings = serviceBindingMaterialRecordsFromValue({
     value: body.serviceBindings,
-    installationId: "inst_core_apply_preflight",
+    capsuleId: "inst_core_apply_preflight",
     now,
   });
   if (preflightBindings instanceof Response) return preflightBindings;
   const preflightGrants = serviceGrantMaterialRecordsFromValue({
     value: body.serviceGrants,
-    installationId: "inst_core_apply_preflight",
+    capsuleId: "inst_core_apply_preflight",
     now,
   });
   if (preflightGrants instanceof Response) return preflightGrants;
-  const preflightConfirm = await appInstallationConfirmFromValue({
+  const preflightConfirm = await appCapsuleConfirmFromValue({
     value: body.confirm,
     bindings: preflightBindings,
     grants: preflightGrants,
@@ -191,15 +191,15 @@ export async function handleCreateAppInstallation(input: {
   if (preflightConfirm instanceof Response) return preflightConfirm;
   const preflightOidcClient = await oidcClientCreateRequestFromValue({
     value: body.oidcClients ?? body.oidcClient,
-    installationId: "inst_core_apply_preflight",
+    capsuleId: "inst_core_apply_preflight",
     defaultIssuer: input.issuer,
     now,
   });
   if (preflightOidcClient instanceof Response) return preflightOidcClient;
-  const coreApply = await applyCoreInstallationForCloudProjection({
+  const coreApply = await applyCoreCapsuleForCloudProjection({
     deployControl: input.deployControl,
     appId,
-    spaceId,
+    workspaceId,
     source,
     expected,
     planRunId,
@@ -212,10 +212,10 @@ export async function handleCreateAppInstallation(input: {
   sourcePath = coreApply.sourcePath ?? sourcePath;
   planDigest = coreApply.planDigest;
   artifactDigest = coreApply.artifactDigest;
-  const installationId = coreApply.installationId;
-  // Deploy-control assigns the canonical Installation id. The projection row is
+  const capsuleId = coreApply.capsuleId;
+  // Deploy-control assigns the canonical Capsule id. The projection row is
   // a secondary accounts-plane view and must not overwrite another projection.
-  if (await input.store.findAppInstallation(installationId)) {
+  if (await input.store.findAppCapsule(capsuleId)) {
     return errorJson(
       "installation_already_exists",
       "installation already exists",
@@ -224,7 +224,7 @@ export async function handleCreateAppInstallation(input: {
   }
   if (
     !accountId ||
-    !spaceId ||
+    !workspaceId ||
     !appId ||
     !sourceGitUrl ||
     !sourceRef ||
@@ -235,7 +235,7 @@ export async function handleCreateAppInstallation(input: {
   ) {
     return errorJson(
       "invalid_request",
-      "accountId, spaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planDigest, mode, and createdBySubject are required",
+      "accountId, workspaceId, appId, source.gitUrl/url, source.ref, source.commit, source.planDigest, mode, and createdBySubject are required",
       400,
     );
   }
@@ -256,19 +256,19 @@ export async function handleCreateAppInstallation(input: {
 
   const status = coreApply
     ? "ready"
-    : (appInstallationStatusValue(body.status) ?? "installing");
+    : (appCapsuleStatusValue(body.status) ?? "installing");
   let runtimeBinding = runtimeBindingFromValue({
     value: body.runtimeTarget,
-    installationId,
+    capsuleId,
     mode,
     now,
   });
   let runtimeBindingAutoAssigned = false;
   if (!runtimeBinding && mode === "shared-cell" && input.sharedCellRuntime) {
     runtimeBinding = await input.sharedCellRuntime({
-      installationId,
+      capsuleId,
       accountId,
-      spaceId,
+      workspaceId,
       appId,
       createdBySubject,
       now,
@@ -281,7 +281,7 @@ export async function handleCreateAppInstallation(input: {
       );
     }
     if (
-      runtimeBinding.installationId !== installationId ||
+      runtimeBinding.capsuleId !== capsuleId ||
       runtimeBinding.mode !== "shared-cell" ||
       runtimeBinding.targetType !== "shared-cell"
     ) {
@@ -297,7 +297,7 @@ export async function handleCreateAppInstallation(input: {
     runtimeBinding?.runtimeBindingId ?? stringValue(body.runtimeTargetId);
   const bindingsResult = serviceBindingMaterialRecordsFromValue({
     value: body.serviceBindings,
-    installationId,
+    capsuleId,
     now,
   });
   if (bindingsResult instanceof Response) return bindingsResult;
@@ -307,11 +307,11 @@ export async function handleCreateAppInstallation(input: {
   if (bindingDeclarations instanceof Response) return bindingDeclarations;
   const grantsResult = serviceGrantMaterialRecordsFromValue({
     value: body.serviceGrants,
-    installationId,
+    capsuleId,
     now,
   });
   if (grantsResult instanceof Response) return grantsResult;
-  const confirmResult = await appInstallationConfirmFromValue({
+  const confirmResult = await appCapsuleConfirmFromValue({
     value: body.confirm,
     bindings: bindingsResult,
     grants: grantsResult,
@@ -319,7 +319,7 @@ export async function handleCreateAppInstallation(input: {
   if (confirmResult instanceof Response) return confirmResult;
   const oidcClientResult = await oidcClientCreateRequestFromValue({
     value: body.oidcClients ?? body.oidcClient,
-    installationId,
+    capsuleId,
     defaultIssuer: input.issuer,
     now,
   });
@@ -327,14 +327,14 @@ export async function handleCreateAppInstallation(input: {
   const bindings = materializeOidcClientBinding({
     bindings: bindingsResult,
     oidcClient: oidcClientResult,
-    installationId,
+    capsuleId,
     now,
   });
   if (bindings instanceof Response) return bindings;
   const launchTokenMaterialization = materializeLaunchTokenBindings({
     bindings,
     launchTokens: input.launchTokens,
-    installationId,
+    capsuleId,
     now,
   });
   if (launchTokenMaterialization instanceof Response) {
@@ -380,9 +380,9 @@ export async function handleCreateAppInstallation(input: {
       );
     }
   }
-  if (!existingSpace) {
-    await input.store.saveSpace({
-      spaceId,
+  if (!existingWorkspace) {
+    await input.store.saveWorkspace({
+      workspaceId,
       accountId,
       kind: spaceKindValue(body.spaceKind) ?? "personal",
       displayName: stringValue(body.spaceDisplayName),
@@ -391,23 +391,23 @@ export async function handleCreateAppInstallation(input: {
     });
     // Read-back guard mirroring the LedgerAccount claim check above. The store's
     // ON CONFLICT(space_id) DO UPDATE SET account_id would otherwise let a
-    // concurrent create with the same spaceId but a different accountId silently
+    // concurrent create with the same workspaceId but a different accountId silently
     // re-own this space, leaving this installation pointing at a space owned by
     // another account.
-    const confirmedSpace = await input.store.findSpace(spaceId);
-    if (!confirmedSpace || confirmedSpace.accountId !== accountId) {
+    const confirmedWorkspace = await input.store.findWorkspace(workspaceId);
+    if (!confirmedWorkspace || confirmedWorkspace.accountId !== accountId) {
       return errorJson(
         "space_claim_conflict",
-        "spaceId was claimed by another account while creating this one",
+        "workspaceId was claimed by another account while creating this one",
         409,
       );
     }
   }
 
-  const installation: InstallationRecord = {
-    installationId,
+  const installation: CapsuleRecord = {
+    capsuleId,
     accountId,
-    spaceId,
+    workspaceId,
     appId,
     sourceGitUrl,
     sourceRef,
@@ -433,7 +433,7 @@ export async function handleCreateAppInstallation(input: {
       now,
     });
   if (bindingMaterialization instanceof Response) return bindingMaterialization;
-  await input.store.saveAppInstallation(installation);
+  await input.store.saveAppCapsule(installation);
   if (runtimeBinding) await input.store.saveRuntimeBinding(runtimeBinding);
   for (const binding of bindingMaterialization.bindings) {
     await input.store.saveServiceBindingMaterial(binding);
@@ -445,12 +445,12 @@ export async function handleCreateAppInstallation(input: {
     await input.store.saveOidcClient(oidcClientResult.client);
   }
   await appendLedgerEvent(input.store, {
-    installationId,
+    capsuleId,
     eventType: "installation.created",
     payload: {
       appId,
       accountId,
-      spaceId,
+      workspaceId,
       mode,
       status,
       ...(billingAccountId ? { billingAccountId } : {}),
@@ -459,7 +459,7 @@ export async function handleCreateAppInstallation(input: {
   });
   if (coreApply?.activatedHttpDomain) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: installationActivatedHttpDomainEvent,
       payload: activatedHttpDomainEventPayload(coreApply.activatedHttpDomain),
       now,
@@ -467,7 +467,7 @@ export async function handleCreateAppInstallation(input: {
   }
   if (confirmResult) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "installation.approved",
       payload: {
         permissionDigest: confirmResult.permissionDigest,
@@ -484,7 +484,7 @@ export async function handleCreateAppInstallation(input: {
   }
   if (oidcClientResult) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "oidc_client.registered",
       payload: {
         clientId: oidcClientResult.client.clientId,
@@ -501,13 +501,13 @@ export async function handleCreateAppInstallation(input: {
       now,
     });
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "service_binding.materialized",
       payload: {
         serviceBinding: oidcClientResult.binding,
         kind: "identity.oidc",
         configRef: oidcBindingConfigRef({
-          installationId,
+          capsuleId,
           binding: oidcClientResult.binding,
           clientId: oidcClientResult.client.clientId,
         }),
@@ -518,7 +518,7 @@ export async function handleCreateAppInstallation(input: {
   }
   if (runtimeBindingAutoAssigned && runtimeBinding) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "runtime_target.assigned",
       payload: {
         runtimeTargetId: runtimeBinding.runtimeBindingId,
@@ -531,7 +531,7 @@ export async function handleCreateAppInstallation(input: {
   }
   for (const binding of launchTokenMaterialization.materialized) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "service_binding.materialized",
       payload: {
         serviceBinding: binding.name,
@@ -544,7 +544,7 @@ export async function handleCreateAppInstallation(input: {
   }
   for (const binding of bindingMaterialization.materialized) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "service_binding.materialized",
       payload: {
         serviceBinding: binding.name,
@@ -563,7 +563,7 @@ export async function handleCreateAppInstallation(input: {
     runtimeBinding,
     oidcClient: oidcClientResult?.client,
     activatedHttpDomain: coreApply?.activatedHttpDomain,
-    eventsUrl: takosumiAccountsInstallationEventsPath(installationId),
+    eventsUrl: takosumiAccountsCapsuleEventsPath(capsuleId),
   });
   return json(
     {
@@ -574,14 +574,14 @@ export async function handleCreateAppInstallation(input: {
     },
     202,
     {
-      location: takosumiAccountsInstallationPath(installationId),
+      location: takosumiAccountsCapsulePath(capsuleId),
     },
   );
 }
 
 async function oidcClientCreateRequestFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   defaultIssuer: string;
   now: number;
 }): Promise<
@@ -655,7 +655,7 @@ async function oidcClientCreateRequestFromValue(input: {
     binding,
     client: {
       clientId: stringValue(value.clientId) ?? `toc_${crypto.randomUUID()}`,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       namespacePath,
       issuerUrl,
       redirectUris,
@@ -672,7 +672,7 @@ async function oidcClientCreateRequestFromValue(input: {
 function materializeOidcClientBinding(input: {
   bindings: readonly ServiceBindingMaterialRecord[];
   oidcClient: { binding: string; client: OidcClientRecord } | undefined;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }): readonly ServiceBindingMaterialRecord[] | Response {
   if (!input.oidcClient) return input.bindings;
@@ -690,7 +690,7 @@ function materializeOidcClientBinding(input: {
   const materialized: ServiceBindingMaterialRecord = {
     ...binding,
     configRef: oidcBindingConfigRef({
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       binding: binding.name,
       clientId: input.oidcClient.client.clientId,
     }),
@@ -709,23 +709,23 @@ function materializeOidcClientBinding(input: {
 }
 
 function bindingRef(
-  installationId: string,
+  capsuleId: string,
   binding: string,
   ...segments: string[]
 ): string {
   const tail = segments.map((s) => encodeURIComponent(s)).join("/");
   return `takosumi-accounts://installations/${encodeURIComponent(
-    installationId,
+    capsuleId,
   )}/service-bindings/${encodeURIComponent(binding)}/${tail}`;
 }
 
 function oidcBindingConfigRef(input: {
-  installationId: string;
+  capsuleId: string;
   binding: string;
   clientId: string;
 }): string {
   return bindingRef(
-    input.installationId,
+    input.capsuleId,
     input.binding,
     "oidc-client",
     input.clientId,
@@ -735,7 +735,7 @@ function oidcBindingConfigRef(input: {
 function materializeLaunchTokenBindings(input: {
   bindings: readonly ServiceBindingMaterialRecord[];
   launchTokens: LaunchTokenOptions | undefined;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }):
   | {
@@ -756,7 +756,7 @@ function materializeLaunchTokenBindings(input: {
     const next: ServiceBindingMaterialRecord = {
       ...binding,
       configRef: launchTokenBindingConfigRef({
-        installationId: input.installationId,
+        capsuleId: input.capsuleId,
         binding: binding.name,
       }),
       secretRefs: [],
@@ -780,17 +780,17 @@ function materializeLaunchTokenBindings(input: {
 }
 
 function launchTokenBindingConfigRef(input: {
-  installationId: string;
+  capsuleId: string;
   binding: string;
 }): string {
-  return bindingRef(input.installationId, input.binding, "launch-token");
+  return bindingRef(input.capsuleId, input.binding, "launch-token");
 }
 
 async function materializeConfiguredServiceBindingMaterials(input: {
   bindings: readonly ServiceBindingMaterialRecord[];
   declarations: ReadonlyMap<string, Record<string, unknown>>;
   materializer?: ServiceBindingMaterializer;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   issuer: string;
   now: number;
 }): Promise<
@@ -967,11 +967,11 @@ function serviceBindingMaterialDeclarationsFromValue(
   return declarations;
 }
 
-async function appInstallationConfirmFromValue(input: {
+async function appCapsuleConfirmFromValue(input: {
   value: unknown;
   bindings: readonly ServiceBindingMaterialRecord[];
   grants: readonly ServiceGrantMaterialRecord[];
-}): Promise<AppInstallationConfirmRecord | Response | undefined> {
+}): Promise<AppCapsuleConfirmRecord | Response | undefined> {
   if (input.value === undefined) return undefined;
   if (!isRecord(input.value)) {
     return errorJson("invalid_confirm", "confirm must be an object", 400);
@@ -998,7 +998,7 @@ async function appInstallationConfirmFromValue(input: {
       400,
     );
   }
-  const expectedPermissionDigest = await appInstallationPermissionDigest(input);
+  const expectedPermissionDigest = await appCapsulePermissionDigest(input);
   if (permissionDigest !== expectedPermissionDigest) {
     return errorJson(
       "approval_digest_mismatch",
@@ -1026,13 +1026,13 @@ async function appInstallationConfirmFromValue(input: {
   };
 }
 
-function spaceKindValue(value: unknown): SpaceKind | undefined {
+function spaceKindValue(value: unknown): WorkspaceKind | undefined {
   return value === "personal" || value === "team" || value === "org"
     ? value
     : undefined;
 }
 
-async function assertBillingAllowsInstallationCreate(input: {
+async function assertBillingAllowsCapsuleCreate(input: {
   store: AccountsStore;
   accountId: string;
   billingAccountId: string | undefined;

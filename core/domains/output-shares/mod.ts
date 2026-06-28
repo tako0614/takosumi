@@ -36,8 +36,8 @@
 import type {
   OutputShare,
   OutputShareEntry,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
 import type { JsonValue } from "takosumi-contract";
 import {
   type Page,
@@ -89,9 +89,15 @@ export interface SensitiveOutputResolver {
 
 /** Create-share request: the public {@link OutputShare} minus the service-assigned fields. */
 export interface CreateOutputShareRequest {
-  readonly fromSpaceId: string;
-  readonly toSpaceId: string;
-  readonly producerInstallationId: string;
+  readonly fromWorkspaceId: string;
+  /** @deprecated Use fromWorkspaceId. */
+  readonly fromSpaceId?: string;
+  readonly toWorkspaceId: string;
+  /** @deprecated Use toWorkspaceId. */
+  readonly toSpaceId?: string;
+  readonly producerCapsuleId: string;
+  /** @deprecated Use producerCapsuleId. */
+  readonly producerInstallationId?: string;
   readonly outputs: readonly CreateOutputShareEntry[];
   readonly sensitivePolicy?: SensitiveOutputSharePolicy;
 }
@@ -136,15 +142,18 @@ export class OutputSharesService {
    * approves it.
    */
   async createShare(request: CreateOutputShareRequest): Promise<OutputShare> {
-    requireNonEmptyString(request.fromSpaceId, "fromSpaceId");
-    requireNonEmptyString(request.toSpaceId, "toSpaceId");
-    requireNonEmptyString(
-      request.producerInstallationId,
-      "producerInstallationId",
-    );
+    // Accept both the new Workspace/Capsule field names and the transient
+    // deprecated Space/Installation names until the rename converges.
+    const fromWorkspaceId = request.fromWorkspaceId ?? request.fromSpaceId ?? "";
+    const toWorkspaceId = request.toWorkspaceId ?? request.toSpaceId ?? "";
+    const producerCapsuleId =
+      request.producerCapsuleId ?? request.producerInstallationId ?? "";
+    requireNonEmptyString(fromWorkspaceId, "fromWorkspaceId");
+    requireNonEmptyString(toWorkspaceId, "toWorkspaceId");
+    requireNonEmptyString(producerCapsuleId, "producerCapsuleId");
     // A "share" within one Space is a Dependency, not an OutputShare: the
     // cross-Space boundary is the whole point of the grant.
-    if (request.fromSpaceId === request.toSpaceId) {
+    if (fromWorkspaceId === toWorkspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "an output share must cross a Space boundary (fromSpaceId must differ " +
@@ -161,29 +170,29 @@ export class OutputSharesService {
     const entries = normalizeEntries(request.outputs, request.sensitivePolicy);
 
     const producer = await this.#store.getInstallation(
-      request.producerInstallationId,
+      producerCapsuleId,
     );
     if (!producer) {
       throw new OpenTofuControllerError(
         "not_found",
-        `producer installation ${request.producerInstallationId} not found`,
+        `producer installation ${producerCapsuleId} not found`,
       );
     }
     // The producer must belong to the granting Space: a Space can only share the
     // outputs of its OWN Installations.
-    if (producer.spaceId !== request.fromSpaceId) {
+    if (producer.spaceId !== fromWorkspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `producer installation ${request.producerInstallationId} belongs to ` +
-          `space ${producer.spaceId}, not the granting space ${request.fromSpaceId}`,
+        `producer installation ${producerCapsuleId} belongs to ` +
+          `space ${producer.spaceId}, not the granting space ${fromWorkspaceId}`,
       );
     }
     // The consumer Space must exist (you cannot grant to nothing).
-    const toSpace = await this.#store.getSpace(request.toSpaceId);
+    const toSpace = await this.#store.getSpace(toWorkspaceId);
     if (!toSpace) {
       throw new OpenTofuControllerError(
         "not_found",
-        `consumer space ${request.toSpaceId} not found`,
+        `consumer space ${toWorkspaceId} not found`,
       );
     }
 
@@ -193,7 +202,7 @@ export class OutputSharesService {
     // require explicit policy plus a host resolver that re-checks the encrypted
     // raw output artifact before plan-time published_output injection.
     const latest = await this.#store.getLatestOutputSnapshot(
-      request.producerInstallationId,
+      producerCapsuleId,
     );
     const available = new Set(
       latest ? Object.keys(latest.spaceOutputs) : [],
@@ -227,9 +236,9 @@ export class OutputSharesService {
         const resolved = await this.#sensitiveOutputResolver.resolve({
           outputSnapshot: latest,
           outputName: entry.name,
-          fromSpaceId: request.fromSpaceId,
-          toSpaceId: request.toSpaceId,
-          producerInstallationId: request.producerInstallationId,
+          fromSpaceId: fromWorkspaceId,
+          toSpaceId: toWorkspaceId,
+          producerInstallationId: producerCapsuleId,
         });
         if (!resolved) {
           throw new OpenTofuControllerError(
@@ -243,9 +252,12 @@ export class OutputSharesService {
 
     const share: OutputShare = {
       id: this.#newId("oshare"),
-      fromSpaceId: request.fromSpaceId,
-      toSpaceId: request.toSpaceId,
-      producerInstallationId: request.producerInstallationId,
+      fromWorkspaceId,
+      fromSpaceId: fromWorkspaceId,
+      toWorkspaceId,
+      toSpaceId: toWorkspaceId,
+      producerCapsuleId,
+      producerInstallationId: producerCapsuleId,
       outputs: entries,
       status: "pending",
       createdAt: this.#now(),
@@ -255,6 +267,7 @@ export class OutputSharesService {
     // GRANTING Space (fromSpaceId, the side that authorizes the share). Names +
     // aliases only — never output VALUES.
     await this.#activity.record({
+      workspaceId: created.fromSpaceId,
       spaceId: created.fromSpaceId,
       action: "output_share.created",
       targetType: "output_share",
@@ -276,11 +289,13 @@ export class OutputSharesService {
    * (`fromSpaceId === spaceId`) and the grants it RECEIVED (`toSpaceId ===
    * spaceId`) — de-duplicated and ordered oldest-first.
    */
-  async listForSpace(spaceId: string): Promise<readonly OutputShare[]> {
-    requireNonEmptyString(spaceId, "spaceId");
+  async listForWorkspace(
+    workspaceId: string,
+  ): Promise<readonly OutputShare[]> {
+    requireNonEmptyString(workspaceId, "workspaceId");
     const [granted, received] = await Promise.all([
-      this.#store.listOutputSharesFromSpace(spaceId),
-      this.#store.listOutputSharesToSpace(spaceId),
+      this.#store.listOutputSharesFromSpace(workspaceId),
+      this.#store.listOutputSharesToSpace(workspaceId),
     ]);
     const byId = new Map<string, OutputShare>();
     for (const share of [...granted, ...received]) byId.set(share.id, share);
@@ -289,17 +304,30 @@ export class OutputSharesService {
     );
   }
 
+  /** @deprecated transient alias for {@link listForWorkspace}. */
+  async listForSpace(spaceId: string): Promise<readonly OutputShare[]> {
+    return await this.listForWorkspace(spaceId);
+  }
+
   /**
    * Keyset-paged {@link listForSpace} (spec §30). The from-space + to-space
    * grants are a small set, so the union is materialized, de-duplicated, and
    * sorted by `(createdAt, id)` (by {@link listForSpace}), then bounded with the
    * in-memory keyset pager — a keyset across the UNION query would be unsound.
    */
+  async listForWorkspacePage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<OutputShare>> {
+    return pageSorted(await this.listForWorkspace(workspaceId), params);
+  }
+
+  /** @deprecated transient alias for {@link listForWorkspacePage}. */
   async listForSpacePage(
     spaceId: string,
     params: PageParams,
   ): Promise<Page<OutputShare>> {
-    return pageSorted(await this.listForSpace(spaceId), params);
+    return await this.listForWorkspacePage(spaceId, params);
   }
 
   /** Reads an OutputShare by id (used by routes for space-permission gating). */
@@ -335,6 +363,7 @@ export class OutputSharesService {
     };
     const stored = await this.#store.putOutputShare(active);
     await this.#activity.record({
+      workspaceId: stored.toSpaceId,
       spaceId: stored.toSpaceId,
       action: "output_share.approved",
       targetType: "output_share",
@@ -375,6 +404,7 @@ export class OutputSharesService {
     // Activity (§27 / §34): an OutputShare was revoked. Recorded against the
     // granting Space (the side that owns the grant).
     await this.#activity.record({
+      workspaceId: stored.fromSpaceId,
       spaceId: stored.fromSpaceId,
       action: "output_share.revoked",
       targetType: "output_share",

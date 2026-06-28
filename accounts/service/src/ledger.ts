@@ -1,6 +1,6 @@
 import type {
-  TakosumiInstallationProjectionMode,
-  TakosumiInstallationProjectionStatus,
+  TakosumiCapsuleProjectionMode,
+  TakosumiCapsuleProjectionStatus,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 
@@ -9,7 +9,7 @@ import type {
  * the public surface. These kinds remain only as internal implementation
  * details of the account-plane service binding material ledger so existing
  * import/export/OIDC helper flows keep their continuity; new public APIs use
- * ServiceExport, ServiceBinding, ServiceGrant, and OutputSnapshot.
+ * ServiceExport, ServiceBinding, ServiceGrant, and Output.
  */
 const SERVICE_BINDING_MATERIAL_KINDS = [
   "identity.oidc",
@@ -56,9 +56,9 @@ const SERVICE_GRANT_MATERIAL_CAPABILITIES = [
 export type ServiceGrantMaterialCapability =
   (typeof SERVICE_GRANT_MATERIAL_CAPABILITIES)[number];
 
-export type AppInstallationStatus = TakosumiInstallationProjectionStatus;
-export type AppInstallationMode = TakosumiInstallationProjectionMode;
-export type SpaceKind = "personal" | "team" | "org";
+export type AppCapsuleStatus = TakosumiCapsuleProjectionStatus;
+export type AppCapsuleMode = TakosumiCapsuleProjectionMode;
+export type WorkspaceKind = "personal" | "team" | "org";
 
 export interface LedgerAccountRecord {
   accountId: string;
@@ -68,10 +68,10 @@ export interface LedgerAccountRecord {
   updatedAt: number;
 }
 
-export interface SpaceRecord {
-  spaceId: string;
+export interface WorkspaceRecord {
+  workspaceId: string;
   accountId: string;
-  kind: SpaceKind;
+  kind: WorkspaceKind;
   displayName?: string;
   createdAt: number;
   updatedAt: number;
@@ -80,13 +80,13 @@ export interface SpaceRecord {
 /**
  * Internal account-plane installation projection record. It is keyed by the same
  * installation id so identity, billing, export, and service-token material can
- * follow a deploy-control Installation, but it is not the public Installation
+ * follow a deploy-control Capsule, but it is not the public Capsule
  * model.
  */
-export interface InstallationRecord {
-  installationId: string;
+export interface CapsuleRecord {
+  capsuleId: string;
   accountId: string;
-  spaceId: string;
+  workspaceId: string;
   appId: string;
   sourceGitUrl: string;
   sourceRef: string;
@@ -94,10 +94,10 @@ export interface InstallationRecord {
   sourcePath?: string;
   planDigest: string;
   artifactDigest?: string;
-  mode: AppInstallationMode;
+  mode: AppCapsuleMode;
   runtimeBindingId?: string;
   billingAccountId?: string;
-  status: AppInstallationStatus;
+  status: AppCapsuleStatus;
   createdBySubject: TakosumiSubject;
   createdAt: number;
   updatedAt: number;
@@ -107,12 +107,12 @@ export interface InstallationRecord {
  * @internal v1 contract reset: RuntimeBinding is no longer a public concept.
  * Retained for internal ledger storage so existing service projection rows
  * continue to materialize. New code must not introduce this type to the public
- * Installation / Deployment surface.
+ * Capsule / Deployment surface.
  */
 export interface RuntimeBindingRecord {
   runtimeBindingId: string;
-  installationId: string;
-  mode: AppInstallationMode;
+  capsuleId: string;
+  mode: AppCapsuleMode;
   targetType: "shared-cell" | "dedicated" | "self-hosted";
   targetId: string;
   createdAt: number;
@@ -126,7 +126,7 @@ export interface RuntimeBindingRecord {
  */
 export interface ServiceBindingMaterialRecord {
   bindingId: string;
-  installationId: string;
+  capsuleId: string;
   name: string;
   kind: ServiceBindingMaterialKind;
   configRef: string;
@@ -142,7 +142,7 @@ export interface ServiceBindingMaterialRecord {
  */
 export interface ServiceGrantMaterialRecord {
   grantId: string;
-  installationId: string;
+  capsuleId: string;
   capability: ServiceGrantMaterialCapability;
   scope: Record<string, unknown>;
   grantedAt: number;
@@ -154,9 +154,9 @@ export interface ServiceGrantMaterialRecord {
  * the account-plane projection surface exposes events via the
  * `/v1/installation-projections/{id}/events` view envelope, not this row shape.
  */
-export interface InstallationEventRecord {
+export interface CapsuleEventRecord {
   eventId: string;
-  installationId: string;
+  capsuleId: string;
   eventType: string;
   payload: Record<string, unknown>;
   previousEventHash?: string;
@@ -164,37 +164,37 @@ export interface InstallationEventRecord {
   createdAt: number;
 }
 
-export interface AppInstallationLedgerStore {
+export interface AppCapsuleLedgerStore {
   saveLedgerAccount(record: LedgerAccountRecord): void | Promise<void>;
   findLedgerAccount(
     accountId: string,
   ): LedgerAccountRecord | undefined | Promise<LedgerAccountRecord | undefined>;
-  saveSpace(record: SpaceRecord): void | Promise<void>;
-  findSpace(
-    spaceId: string,
-  ): SpaceRecord | undefined | Promise<SpaceRecord | undefined>;
-  listSpacesForAccount(
+  saveWorkspace(record: WorkspaceRecord): void | Promise<void>;
+  findWorkspace(
+    workspaceId: string,
+  ): WorkspaceRecord | undefined | Promise<WorkspaceRecord | undefined>;
+  listWorkspacesForAccount(
     accountId: string,
-  ): readonly SpaceRecord[] | Promise<readonly SpaceRecord[]>;
+  ): readonly WorkspaceRecord[] | Promise<readonly WorkspaceRecord[]>;
   /**
-   * Lists the Spaces whose owning ledger account is legally owned by `subject`
+   * Lists the Workspaces whose owning ledger account is legally owned by `subject`
    * (i.e. `LedgerAccountRecord.legalOwnerSubject === subject`). Used by the
    * dashboard session `GET /api/v1/spaces` to scope the legal-owner branch of
-   * Space visibility without scanning every Space.
+   * Workspace visibility without scanning every Workspace.
    */
-  listSpacesForOwner(
+  listWorkspacesForOwner(
     subject: TakosumiSubject,
-  ): readonly SpaceRecord[] | Promise<readonly SpaceRecord[]>;
-  saveAppInstallation(record: InstallationRecord): void | Promise<void>;
-  findAppInstallation(
-    installationId: string,
-  ): InstallationRecord | undefined | Promise<InstallationRecord | undefined>;
-  listAppInstallationsForSpace(
-    spaceId: string,
-  ): readonly InstallationRecord[] | Promise<readonly InstallationRecord[]>;
-  listAppInstallationsForBillingAccount(
+  ): readonly WorkspaceRecord[] | Promise<readonly WorkspaceRecord[]>;
+  saveAppCapsule(record: CapsuleRecord): void | Promise<void>;
+  findAppCapsule(
+    capsuleId: string,
+  ): CapsuleRecord | undefined | Promise<CapsuleRecord | undefined>;
+  listAppCapsulesForWorkspace(
+    workspaceId: string,
+  ): readonly CapsuleRecord[] | Promise<readonly CapsuleRecord[]>;
+  listAppCapsulesForBillingAccount(
     billingAccountId: string,
-  ): readonly InstallationRecord[] | Promise<readonly InstallationRecord[]>;
+  ): readonly CapsuleRecord[] | Promise<readonly CapsuleRecord[]>;
   saveRuntimeBinding(record: RuntimeBindingRecord): void | Promise<void>;
   findRuntimeBinding(
     runtimeBindingId: string,
@@ -205,8 +205,8 @@ export interface AppInstallationLedgerStore {
   saveServiceBindingMaterial(
     record: ServiceBindingMaterialRecord,
   ): void | Promise<void>;
-  listServiceBindingMaterialsForInstallation(
-    installationId: string,
+  listServiceBindingMaterialsForCapsule(
+    capsuleId: string,
   ):
     | readonly ServiceBindingMaterialRecord[]
     | Promise<readonly ServiceBindingMaterialRecord[]>;
@@ -219,19 +219,19 @@ export interface AppInstallationLedgerStore {
     | ServiceGrantMaterialRecord
     | undefined
     | Promise<ServiceGrantMaterialRecord | undefined>;
-  listServiceGrantMaterialsForInstallation(
-    installationId: string,
+  listServiceGrantMaterialsForCapsule(
+    capsuleId: string,
   ):
     | readonly ServiceGrantMaterialRecord[]
     | Promise<readonly ServiceGrantMaterialRecord[]>;
-  appendInstallationEvent(
-    record: InstallationEventRecord,
+  appendCapsuleEvent(
+    record: CapsuleEventRecord,
   ): void | Promise<void>;
-  listInstallationEvents(
-    installationId: string,
+  listCapsuleEvents(
+    capsuleId: string,
   ):
-    | readonly InstallationEventRecord[]
-    | Promise<readonly InstallationEventRecord[]>;
+    | readonly CapsuleEventRecord[]
+    | Promise<readonly CapsuleEventRecord[]>;
 }
 
 export interface ValidationIssue {
@@ -240,8 +240,8 @@ export interface ValidationIssue {
 }
 
 export const APP_INSTALLATION_STATUS_TRANSITIONS: Record<
-  AppInstallationStatus,
-  readonly AppInstallationStatus[]
+  AppCapsuleStatus,
+  readonly AppCapsuleStatus[]
 > = {
   installing: ["ready", "failed", "suspended"],
   ready: ["suspended", "exported", "failed"],
@@ -423,21 +423,21 @@ export function assertValidServiceBindingMaterialDeclaration(
   }
 }
 
-export function canTransitionAppInstallationStatus(
-  from: AppInstallationStatus,
-  to: AppInstallationStatus,
+export function canTransitionAppCapsuleStatus(
+  from: AppCapsuleStatus,
+  to: AppCapsuleStatus,
 ): boolean {
   return from === to || APP_INSTALLATION_STATUS_TRANSITIONS[from].includes(to);
 }
 
-export function transitionAppInstallationStatus(
-  installation: InstallationRecord,
-  status: AppInstallationStatus,
+export function transitionAppCapsuleStatus(
+  installation: CapsuleRecord,
+  status: AppCapsuleStatus,
   now: number = Date.now(),
-): InstallationRecord {
-  if (!canTransitionAppInstallationStatus(installation.status, status)) {
+): CapsuleRecord {
+  if (!canTransitionAppCapsuleStatus(installation.status, status)) {
     throw new TypeError(
-      `invalid Installation projection status transition: ${installation.status} -> ${status}`,
+      `invalid Capsule projection status transition: ${installation.status} -> ${status}`,
     );
   }
   if (installation.status === status) return installation;
@@ -448,17 +448,17 @@ export function transitionAppInstallationStatus(
   };
 }
 
-export async function buildInstallationEvent(input: {
+export async function buildCapsuleEvent(input: {
   eventId?: string;
-  installationId: string;
+  capsuleId: string;
   eventType: string;
   payload?: Record<string, unknown>;
   previousEventHash?: string;
   createdAt?: number;
-}): Promise<InstallationEventRecord> {
+}): Promise<CapsuleEventRecord> {
   const record = {
     eventId: input.eventId ?? `evt_${crypto.randomUUID()}`,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: input.eventType,
     payload: input.payload ?? {},
     previousEventHash: input.previousEventHash,
@@ -470,15 +470,15 @@ export async function buildInstallationEvent(input: {
   };
 }
 
-export async function verifyInstallationEventHashChain(
-  events: readonly InstallationEventRecord[],
+export async function verifyCapsuleEventHashChain(
+  events: readonly CapsuleEventRecord[],
 ): Promise<boolean> {
   let previousEventHash: string | undefined;
   for (const event of events) {
     if (event.previousEventHash !== previousEventHash) return false;
     const expected = await installationEventHash({
       eventId: event.eventId,
-      installationId: event.installationId,
+      capsuleId: event.capsuleId,
       eventType: event.eventType,
       payload: event.payload,
       previousEventHash: event.previousEventHash,
@@ -691,7 +691,7 @@ function validateLaunchTokenBinding(
 
 async function installationEventHash(input: {
   eventId: string;
-  installationId: string;
+  capsuleId: string;
   eventType: string;
   payload: Record<string, unknown>;
   previousEventHash?: string;

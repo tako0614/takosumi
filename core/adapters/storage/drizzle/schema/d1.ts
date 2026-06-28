@@ -26,7 +26,30 @@ export const spaces = sqliteTable(
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [uniqueIndex("spaces_handle_unique").on(table.handle)],
+  (table) => [uniqueIndex("workspaces_handle_unique").on(table.handle)],
+);
+
+// P4 17-noun rename: NEW Workspace-owned Project grouping. Capsules live under a
+// Project (`capsules.project_id`); a default Project is backfilled per Workspace
+// so pre-Project Capsules keep a stable owner.
+export const projects = sqliteTable(
+  names.projects,
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("projects_workspace_slug_unique").on(
+      table.workspaceId,
+      table.slug,
+    ),
+    index("projects_workspace_idx").on(table.workspaceId),
+  ],
 );
 
 export const sources = sqliteTable(
@@ -118,15 +141,25 @@ export const installations = sqliteTable(
   names.installations,
   {
     id: text("id").primaryKey(),
+    // P4 column decision (D1 capsules): space_id, current_output_snapshot_id and
+    // the slug/install_type columns are KEPT physical (drizzle-mapped, deferred
+    // to convergence slice 7). The Drizzle property names also stay unchanged so
+    // the worker store and store.ts contract are untouched. Only the two
+    // genuinely-new/renamed columns move physically:
+    //   - current_deployment_id -> current_state_version_id (retired-Deployment
+    //     value-translation target; the property keeps the old name and maps to
+    //     the new physical column).
+    //   - project_id ADDED (Workspace-owned Project pointer, backfilled).
     spaceId: text("space_id").notNull(),
+    projectId: text("project_id"),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
-    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
     sourceId: text("source_id"),
     installType: text("install_type").notNull(),
     installConfigId: text("install_config_id").notNull(),
     environment: text("environment").notNull(),
-    currentDeploymentId: text("current_deployment_id"),
+    currentDeploymentId: text("current_state_version_id"),
     currentStateGeneration: integer("current_state_generation")
       .notNull()
       .default(0),
@@ -137,13 +170,14 @@ export const installations = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("installations_space_name_environment_unique").on(
+    uniqueIndex("capsules_space_name_environment_unique").on(
       table.spaceId,
       table.name,
       table.environment,
     ),
-    index("installations_space_idx").on(table.spaceId),
-    index("installations_current_deployment_idx").on(table.currentDeploymentId),
+    index("capsules_space_idx").on(table.spaceId),
+    index("capsules_project_idx").on(table.projectId),
+    index("capsules_current_state_version_idx").on(table.currentDeploymentId),
   ],
 );
 
@@ -241,7 +275,7 @@ export const outputSnapshots = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("output_snapshots_installation_idx").on(table.installationId),
+    index("outputs_installation_idx").on(table.installationId),
   ],
 );
 
@@ -320,9 +354,9 @@ export const stateSnapshots = sqliteTable(
   },
   (table) => [
     uniqueIndex(
-      "state_snapshots_installation_environment_generation_unique",
+      "state_versions_installation_environment_generation_unique",
     ).on(table.installationId, table.environment, table.generation),
-    index("state_snapshots_installation_idx").on(table.installationId),
+    index("state_versions_installation_idx").on(table.installationId),
   ],
 );
 

@@ -10,8 +10,8 @@ import {
   createSignal,
   Show,
 } from "solid-js";
-import { listSpaces, updateSpace } from "../../../lib/control-api.ts";
-import { setCurrentSpaceId } from "../../../lib/space-state.ts";
+import { listWorkspaces, updateWorkspace } from "../../../lib/control-api.ts";
+import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -24,10 +24,10 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 
-export default function GeneralTab(props: { readonly spaceId: string }) {
-  const [spaces, { refetch }] = createResource(listSpaces);
-  const space = createMemo(() =>
-    (spaces() ?? []).find((item) => item.id === props.spaceId),
+export default function GeneralTab(props: { readonly workspaceId: string }) {
+  const [workspaces, { refetch }] = createResource(listWorkspaces);
+  const workspace = createMemo(() =>
+    (workspaces() ?? []).find((item) => item.id === props.workspaceId),
   );
   const [displayNameDraft, setDisplayNameDraft] = createSignal("");
   const [saving, setSaving] = createSignal(false);
@@ -36,7 +36,7 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
   const [saveMessage, setSaveMessage] = createSignal<string | null>(null);
 
   createEffect(() => {
-    const current = space();
+    const current = workspace();
     if (!current) return;
     setDisplayNameDraft(current.displayName);
     setSaveError(null);
@@ -45,20 +45,20 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
 
   const save = async (event: Event) => {
     event.preventDefault();
-    const current = space();
+    const current = workspace();
     if (!current) return;
     const displayName = displayNameDraft().trim();
     if (!displayName) {
-      setSaveError(t("spaceSettings.general.nameRequired"));
+      setSaveError(t("workspaceSettings.general.nameRequired"));
       return;
     }
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
     try {
-      await updateSpace(current.id, { displayName });
+      await updateWorkspace(current.id, { displayName });
       await refetch();
-      setSaveMessage(t("spaceSettings.general.saved"));
+      setSaveMessage(t("workspaceSettings.general.saved"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -67,15 +67,15 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
   };
 
   const archive = async () => {
-    const current = space();
+    const current = workspace();
     if (!current) return;
-    if ((spaces() ?? []).length <= 1) {
-      setSaveError(t("spaceSettings.general.archiveLastError"));
+    if ((workspaces() ?? []).length <= 1) {
+      setSaveError(t("workspaceSettings.general.archiveLastError"));
       return;
     }
     if (
       typeof window !== "undefined" &&
-      !window.confirm(t("spaceSettings.general.archiveConfirm"))
+      !window.confirm(t("workspaceSettings.general.archiveConfirm"))
     ) {
       return;
     }
@@ -83,13 +83,13 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
     setSaveError(null);
     setSaveMessage(null);
     try {
-      await updateSpace(current.id, { archived: true });
-      setCurrentSpaceId("");
+      await updateWorkspace(current.id, { archived: true });
+      setCurrentWorkspaceId("");
       await refetch();
       if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event("takosumi:spaces-changed"));
+        window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
-      setSaveMessage(t("spaceSettings.general.archived"));
+      setSaveMessage(t("workspaceSettings.general.archived"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -99,9 +99,9 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
 
   return (
     <Card>
-      <CardHeader title={t("spaceSettings.tab.general")} />
+      <CardHeader title={t("workspaceSettings.tab.general")} />
       <Show
-        when={space()}
+        when={workspace()}
         fallback={<p class="muted">{t("common.loading")}</p>}
       >
         {(current) => (
@@ -109,18 +109,18 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
             <KVList
               items={[
                 {
-                  label: t("spaceSettings.general.handle"),
+                  label: t("workspaceSettings.general.handle"),
                   value: <code>@{current().handle}</code>,
                 },
                 {
-                  label: t("spaceSettings.general.updated"),
+                  label: t("workspaceSettings.general.updated"),
                   value: formatDateTime(current().updatedAt),
                 },
               ]}
             />
             <CardSection>
               <form class="wc-form" onSubmit={save}>
-                <FormField label={t("spaceSettings.general.displayName")}>
+                <FormField label={t("workspaceSettings.general.displayName")}>
                   <Input
                     value={displayNameDraft()}
                     onInput={(e) => setDisplayNameDraft(e.currentTarget.value)}
@@ -128,16 +128,16 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                 </FormField>
                 <details class="wb-disclosure wc-advanced-settings">
                   <summary>
-                    {t("spaceSettings.general.advancedDetails")}
+                    {t("workspaceSettings.general.advancedDetails")}
                   </summary>
                   <KVList
                     items={[
                       {
-                        label: t("spaceSettings.general.type"),
+                        label: t("workspaceSettings.general.type"),
                         value: <code>{current().type}</code>,
                       },
                       {
-                        label: t("spaceSettings.general.owner"),
+                        label: t("workspaceSettings.general.owner"),
                         value: <code>{current().ownerUserId}</code>,
                       },
                     ]}
@@ -147,12 +147,12 @@ export default function GeneralTab(props: { readonly spaceId: string }) {
                       variant="danger"
                       type="button"
                       busy={archiving()}
-                      disabled={archiving() || (spaces() ?? []).length <= 1}
+                      disabled={archiving() || (workspaces() ?? []).length <= 1}
                       onClick={archive}
                     >
                       {archiving()
                         ? t("common.saving")
-                        : t("spaceSettings.general.archive")}
+                        : t("workspaceSettings.general.archive")}
                     </Button>
                   </div>
                 </details>

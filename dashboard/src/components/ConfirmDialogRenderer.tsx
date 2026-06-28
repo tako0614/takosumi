@@ -13,7 +13,7 @@ import {
  * on that shell, so it ships this lightweight overlay driven by the dashboard's
  * own `confirm-dialog` signal store and styled only with the `--tg-*` tokens
  * that travel in account.css. Mounted once from `AppShell`, so it is present on
- * every account / installations screen both standalone and when the dashboard
+ * every account / capsules screen both standalone and when the dashboard
  * is consumed in-process via the takos web vite alias.
  */
 export function ConfirmDialogRenderer() {

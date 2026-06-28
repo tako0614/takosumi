@@ -1,9 +1,9 @@
 import type { RuntimeBindingRecord } from "./ledger.ts";
 
 export interface SharedCellRuntimeAllocationInput {
-  installationId: string;
+  capsuleId: string;
   accountId: string;
-  spaceId: string;
+  workspaceId: string;
   appId: string;
   createdBySubject: string;
   now: number;
@@ -24,7 +24,7 @@ export interface SharedCellWarmPoolSlot {
 type MutableSharedCellWarmPoolSlot = {
   cellId: string;
   capacity: number;
-  assignedInstallations: Set<string>;
+  assignedCapsules: Set<string>;
 };
 
 export class InMemorySharedCellWarmPool {
@@ -43,7 +43,7 @@ export class InMemorySharedCellWarmPool {
       return {
         cellId: slot.cellId,
         capacity: slot.capacity,
-        assignedInstallations: new Set<string>(),
+        assignedCapsules: new Set<string>(),
       };
     });
   }
@@ -52,18 +52,18 @@ export class InMemorySharedCellWarmPool {
     input: SharedCellRuntimeAllocationInput,
   ): RuntimeBindingRecord | undefined {
     const existing = this.#slots.find((slot) =>
-      slot.assignedInstallations.has(input.installationId),
+      slot.assignedCapsules.has(input.capsuleId),
     );
     const slot =
       existing ??
       this.#slots.find(
         (candidate) =>
-          candidate.assignedInstallations.size < candidate.capacity,
+          candidate.assignedCapsules.size < candidate.capacity,
       );
     if (!slot) return undefined;
-    slot.assignedInstallations.add(input.installationId);
+    slot.assignedCapsules.add(input.capsuleId);
     return sharedCellRuntimeBinding({
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       cellId: slot.cellId,
       now: input.now,
     });
@@ -72,28 +72,28 @@ export class InMemorySharedCellWarmPool {
   availableSlots(): readonly SharedCellWarmPoolSlot[] {
     return this.#slots.map((slot) => ({
       cellId: slot.cellId,
-      capacity: slot.capacity - slot.assignedInstallations.size,
+      capacity: slot.capacity - slot.assignedCapsules.size,
     }));
   }
 }
 
 export function sharedCellRuntimeBinding(input: {
-  installationId: string;
+  capsuleId: string;
   cellId: string;
   now: number;
 }): RuntimeBindingRecord {
-  if (!isValidRuntimeId(input.installationId)) {
-    throw new TypeError("installationId must be usable in runtime binding ids");
+  if (!isValidRuntimeId(input.capsuleId)) {
+    throw new TypeError("capsuleId must be usable in runtime binding ids");
   }
   if (!isValidCellId(input.cellId)) {
     throw new TypeError("cellId must be a stable id");
   }
   return {
-    runtimeBindingId: `rtb_${input.installationId}_shared_cell`,
-    installationId: input.installationId,
+    runtimeBindingId: `rtb_${input.capsuleId}_shared_cell`,
+    capsuleId: input.capsuleId,
     mode: "shared-cell",
     targetType: "shared-cell",
-    targetId: `shared-cell://${input.cellId}/namespaces/${input.installationId}`,
+    targetId: `shared-cell://${input.cellId}/namespaces/${input.capsuleId}`,
     createdAt: input.now,
     updatedAt: input.now,
   };

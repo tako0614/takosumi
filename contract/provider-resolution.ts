@@ -169,7 +169,7 @@ export interface RuntimeGrantProjection {
   readonly grantId: string;
   readonly serviceExportId: string;
   readonly serviceBindingId: string;
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly capability: string;
   readonly expiresAt?: IsoTimestamp;
   readonly rotationPolicyId?: string;

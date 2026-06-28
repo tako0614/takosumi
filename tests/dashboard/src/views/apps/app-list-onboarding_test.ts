@@ -11,12 +11,12 @@ const read = (rel: string) =>
 
 const appListSource = read("views/apps/AppListView.tsx");
 const appViewsCssSource = read("styles/app-views.css");
-const installationsUiSource = read("lib/installations-ui.ts");
+const installationsUiSource = read("lib/capsules-ui.ts");
 
 describe("AppListView app launcher", () => {
   test("first-run home onboards to add a service", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
-    expect(appListSource).toContain("visibleInstallations().length > 0");
+    expect(appListSource).toContain("visibleCapsules().length > 0");
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
@@ -31,15 +31,15 @@ describe("AppListView app launcher", () => {
     );
     expect(installationsUiSource).toContain("export interface AppSurface");
     expect(installationsUiSource).toContain(
-      "export function isVisibleServiceInstallation",
+      "export function isVisibleServiceCapsule",
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
     expect(appListSource).toContain("appSurfacesFromOutputs");
-    expect(appListSource).toContain("surfacesByInstallation");
+    expect(appListSource).toContain("surfacesByCapsule");
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");
-    expect(appListSource).toContain("isVisibleServiceInstallation");
+    expect(appListSource).toContain("isVisibleServiceCapsule");
     // Phone-home-screen launcher: an icon grid + a trailing add tile.
     expect(appListSource).toContain('class="av-launcher"');
     expect(appListSource).toContain('class="av-tile"');
