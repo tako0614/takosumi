@@ -14,6 +14,7 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
@@ -1217,9 +1218,16 @@ const AI_GATEWAY_RUNTIME_SERVICE_SCOPES = [
   "ai.chat",
   "ai.embeddings",
 ] as const;
-const AI_GATEWAY_RUNTIME_SERVICE_SCOPE_SET = new Set<string>(
-  AI_GATEWAY_RUNTIME_SERVICE_SCOPES,
-);
+const CLOUDFLARE_COMPAT_RUNTIME_SERVICE_SCOPES = [
+  "cloudflare.compat.read",
+  "cloudflare.compat.write",
+] as const;
+const RUNTIME_SERVICE_SCOPE_POLICIES = {
+  [TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY]:
+    AI_GATEWAY_RUNTIME_SERVICE_SCOPES,
+  [TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT]:
+    CLOUDFLARE_COMPAT_RUNTIME_SERVICE_SCOPES,
+} as const;
 const DEFAULT_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 15 * 60;
 const MAX_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 60 * 60;
 
@@ -1230,7 +1238,8 @@ async function handleRotateRuntimeServiceToken(input: {
   store: AccountsStore;
   runtimeServiceTokens?: RuntimeServiceTokenOptions;
 }): Promise<Response> {
-  if (input.serviceId !== TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY) {
+  const serviceScopes = runtimeServiceScopesFor(input.serviceId);
+  if (!serviceScopes) {
     return errorJson(
       "platform_service_not_found",
       "platform service not found",
@@ -1246,11 +1255,11 @@ async function handleRotateRuntimeServiceToken(input: {
   }
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const scopes = runtimeServiceTokenScopesValue(body.scopes);
+  const scopes = runtimeServiceTokenScopesValue(body.scopes, serviceScopes);
   if (!scopes) {
     return errorJson(
       "invalid_request",
-      "scopes must be omitted or a non-empty subset of the AI Gateway runtime scopes",
+      "scopes must be omitted or a non-empty subset of the runtime service scopes",
       400,
     );
   }
@@ -1300,15 +1309,17 @@ async function handleRotateRuntimeServiceToken(input: {
 
 function runtimeServiceTokenScopesValue(
   value: unknown,
+  serviceScopes: readonly string[],
 ): readonly string[] | undefined {
-  if (value === undefined) return AI_GATEWAY_RUNTIME_SERVICE_SCOPES;
+  if (value === undefined) return serviceScopes;
   if (!Array.isArray(value) || value.length < 1) return undefined;
   const scopes: string[] = [];
   const seen = new Set<string>();
+  const allowed = new Set(serviceScopes);
   for (const scope of value) {
     if (
       typeof scope !== "string" ||
-      !AI_GATEWAY_RUNTIME_SERVICE_SCOPE_SET.has(scope) ||
+      !allowed.has(scope) ||
       seen.has(scope)
     ) {
       return undefined;
@@ -1317,6 +1328,14 @@ function runtimeServiceTokenScopesValue(
     scopes.push(scope);
   }
   return scopes;
+}
+
+function runtimeServiceScopesFor(
+  serviceId: string,
+): readonly string[] | undefined {
+  return RUNTIME_SERVICE_SCOPE_POLICIES[
+    serviceId as keyof typeof RUNTIME_SERVICE_SCOPE_POLICIES
+  ];
 }
 
 function runtimeServiceTokenTtlSecondsValue(input: {

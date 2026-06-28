@@ -112,6 +112,14 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
       estimatedCostUsdMicrosPerMillionUnits: 500_000,
       minimumChargeUsdMicros: 2,
     },
+    {
+      meterIdPrefix: "cloudflare:queues:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
   ],
 });
 
@@ -1031,6 +1039,159 @@ test("cloud extension usage headers are priced, recorded, and stripped from clie
   expect(recorded).toEqual([
     {
       spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:workers_script:deploy",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "deploy",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 1_000,
+        source: "resource_meter",
+        createdAt: periodEnd,
+      }),
+    },
+  ]);
+});
+
+test("cloud extension usage headers price Cloudflare Queue meters", async () => {
+  const periodStart = "2026-06-28T10:00:00.000Z";
+  const periodEnd = "2026-06-28T10:00:01.000Z";
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/queues",
+      { method: "POST" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () =>
+          Response.json(
+            { success: true },
+            {
+              status: 201,
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_cloud",
+                "x-takosumi-cloud-usage-period-start": periodStart,
+                "x-takosumi-cloud-usage-period-end": periodEnd,
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "cloudflare:queues:create",
+                    resourceFamily: "cloudflare.queues",
+                    resourceId: "queues:jobs",
+                    operation: "create",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(201);
+  expect(response.headers.has("x-takosumi-cloud-usage-meters")).toBe(false);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:queues:create",
+        resourceFamily: "cloudflare.queues",
+        resourceId: "queues:jobs",
+        operation: "create",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 500,
+        source: "resource_meter",
+        createdAt: periodEnd,
+      }),
+    },
+  ]);
+});
+
+test("cloud extension usage headers use token Workspace context when the extension omits a Workspace header", async () => {
+  const periodStart = "2026-06-28T10:00:00.000Z";
+  const periodEnd = "2026-06-28T10:00:01.000Z";
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () =>
+          Response.json(
+            { success: true },
+            {
+              status: 201,
+              headers: {
+                "x-takosumi-cloud-usage-period-start": periodStart,
+                "x-takosumi-cloud-usage-period-end": periodEnd,
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "cloudflare:workers_script:deploy",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:api",
+                    operation: "deploy",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      subject: "svc:takosumi-cloud:inst_cloud",
+      spaceId: "space_from_token",
+      installationId: "inst_cloud",
+      scopes: ["admin"],
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(201);
+  expect(await response.json()).toEqual({ success: true });
+  expect(response.headers.has("x-takosumi-cloud-usage-meters")).toBe(false);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_from_token",
       input: expect.objectContaining({
         installationId: "inst_cloud",
         meterId: "cloudflare:workers_script:deploy",

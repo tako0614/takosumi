@@ -9,6 +9,7 @@ import {
   takosumiAccountsCapsulePath,
   takosumiAccountsCapsuleServiceRotateTokenPath,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT,
   takosumiAccountsPrivacyRequestCompletePath,
   takosumiAccountsPrivacyRequestPath,
 } from "@takosjp/takosumi-accounts-contract";
@@ -3008,6 +3009,105 @@ test("accounts handler rotates an AI Gateway runtime service token for an owned 
     client_id: "takosumi-cloud-extensions",
     sub: "svc:takosumi.ai.gateway:inst_runtime",
     scope: "ai.models.read ai.chat ai.embeddings",
+    takosumi: {
+      installation_id: "inst_runtime",
+      app_id: "example.runtime",
+      space_id: "space_runtime",
+      role: "runtime",
+    },
+  });
+});
+
+test("accounts handler rotates a Cloudflare compat runtime service token for provider runs", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    clients: [
+      {
+        clientId: "takosumi-cloud-extensions",
+        redirectUris: ["https://app.takosumi.test/oauth/callback"],
+        clientSecret: "client-secret",
+      },
+    ],
+    runtimeServiceTokens: {
+      introspectionClientId: "takosumi-cloud-extensions",
+    },
+  });
+  const sessionId = seedAccountSession(store, "tsub_runtime_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_runtime_owner",
+    "acct_runtime",
+    "space_runtime",
+  );
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_runtime",
+    accountId: "acct_runtime",
+    workspaceId: "space_runtime",
+    appId: "example.runtime",
+    sourceGitUrl: "https://github.com/example/runtime",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:runtime",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_runtime_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
+        "inst_runtime",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          scopes: ["cloudflare.compat.read", "cloudflare.compat.write"],
+          ttlSeconds: 900,
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(body.token_type).toEqual("Bearer");
+  expect(body.token).toStartWith("taksrv_");
+  expect(body.scope).toEqual(
+    "cloudflare.compat.read cloudflare.compat.write",
+  );
+  expect(body.service).toEqual({
+    id: "takosumi.cloudflare.compat",
+    status: "active",
+    scopes: ["cloudflare.compat.read", "cloudflare.compat.write"],
+  });
+
+  const introspection = await handler(
+    new Request(`${testIssuer}/oauth/introspect`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: body.token,
+        client_id: "takosumi-cloud-extensions",
+        client_secret: "client-secret",
+      }),
+    }),
+  );
+  expect(introspection.status).toEqual(200);
+  const introspectionBody = await introspection.json();
+  expect(introspectionBody).toMatchObject({
+    active: true,
+    client_id: "takosumi-cloud-extensions",
+    sub: "svc:takosumi.cloudflare.compat:inst_runtime",
+    scope: "cloudflare.compat.read cloudflare.compat.write",
     takosumi: {
       installation_id: "inst_runtime",
       app_id: "example.runtime",
