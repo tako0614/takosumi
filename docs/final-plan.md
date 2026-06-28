@@ -812,6 +812,12 @@ parallel. If an operator shares one cache path across independent runner
 processes or containers, the operator must provide the external isolation or
 file lock for that substrate.
 
+Runner results expose phase timings for Git host policy, source ref resolution,
+SourceSnapshot reuse, clone/archive work, provider init, plan, apply, output,
+and compatibility checks. Takosumi uses those timings for app-install-style
+progress and performance diagnosis; the timings do not make Takosumi an app
+artifact builder or release pipeline.
+
 ## 11. Runner
 
 Runner responsibilities:
