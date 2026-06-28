@@ -297,7 +297,9 @@ async function listInstallConfigs(
   // (createdAt, id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
     (config) =>
-      config.workspaceId === undefined && isSelectableInstallConfig(config),
+      config.workspaceId === undefined &&
+      config.spaceId === undefined &&
+      isSelectableInstallConfig(config),
   );
   if (workspaceId !== undefined) {
     const auth = await requireWorkspaceAccess({
@@ -331,7 +333,8 @@ async function listInstallConfigs(
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {
   if (config.internal?.reason === "per_install_overrides") return false;
-  if (config.workspaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+  const scopedId = config.workspaceId ?? config.spaceId;
+  if (scopedId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
     return false;
   }
   return true;

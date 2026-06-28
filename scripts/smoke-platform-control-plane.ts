@@ -125,12 +125,19 @@ type JsonSmokeValue =
   | boolean
   | readonly JsonSmokeValue[]
   | { readonly [key: string]: JsonSmokeValue };
+type SmokeOutputAllowlistType =
+  | "string"
+  | "url"
+  | "hostname"
+  | "number"
+  | "boolean"
+  | "json";
 type SmokeOutputAllowlist = Readonly<
   Record<
     string,
     {
       readonly from: string;
-      readonly type?: string;
+      readonly type: SmokeOutputAllowlistType;
       readonly required?: boolean;
     }
   >
@@ -409,6 +416,9 @@ interface InstallConfigRecord {
   readonly id?: string;
   readonly sourceKind?: string;
   readonly name?: string;
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+  readonly internal?: { readonly reason?: string };
 }
 
 export interface SmokeProviderConnectionListEntry {
@@ -521,6 +531,11 @@ interface FailureCleanupResult {
   readonly attempted: true;
   readonly cloudflareWorkerGone: boolean;
   readonly installationMarkedError: boolean;
+  readonly destroyAttempted?: boolean;
+  readonly destroyPlanRunId?: string;
+  readonly destroyApplyRunId?: string;
+  readonly destroySucceeded?: boolean;
+  readonly destroyError?: string;
   readonly error?: string;
 }
 
@@ -1152,43 +1167,21 @@ export async function runPlatformControlPlaneSmoke(
     }
 
     beginStep("destroy");
-    const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "DELETE",
-      path: `${API_PREFIX}/installations/${encodeURIComponent(installationId)}`,
+    const destroyResult = await destroySmokeInstallation(options, {
+      installationId,
+      reason: "Layer-2 platform-control-plane smoke cleanup",
+      verifyCloudflareWorkerGone:
+        options.verificationMode === "cloudflare-worker",
     });
-    destroyPlanRunId = destroyPlan.run.id;
-    const reviewedDestroyPlan = await pollRun(options, destroyPlanRunId);
-    if (reviewedDestroyPlan.status !== "waiting_approval") {
-      throw new Error(
-        `destroy plan ${destroyPlanRunId} ended as ${reviewedDestroyPlan.status}; expected waiting_approval`,
-      );
-    }
-    runTimings.push(smokeRunTiming("destroy_plan", reviewedDestroyPlan));
-    await requestJson({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "POST",
-      path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlanRunId)}/approve`,
-      body: { reason: "Layer-2 platform-control-plane smoke cleanup" },
-    });
-    const destroyApply = await requestJson<{ readonly run: RunRecord }>({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "POST",
-      path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlanRunId)}/apply`,
-      body: { confirmDestructive: true },
-    });
-    destroyApplyRunId = destroyApply.run.id;
-    const completedDestroy = await pollRun(options, destroyApplyRunId);
-    policyStatus = publicPolicyStatus(completedDestroy);
-    assertRunSucceeded(completedDestroy, "destroy apply");
-    runTimings.push(smokeRunTiming("destroy_apply", completedDestroy));
-    if (options.verificationMode === "cloudflare-worker") {
-      await assertCloudflareWorkerGone(options);
-      await assertPublicWorkerUrlGone(options);
-    }
+    destroyPlanRunId = destroyResult.destroyPlanRun.id;
+    destroyApplyRunId = destroyResult.destroyApplyRun.id;
+    policyStatus = publicPolicyStatus(destroyResult.destroyApplyRun);
+    runTimings.push(
+      smokeRunTiming("destroy_plan", destroyResult.destroyPlanRun),
+    );
+    runTimings.push(
+      smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
+    );
     completeStep("destroy");
 
     if (connectionId && !options.keepConnection) {
@@ -1242,11 +1235,7 @@ export async function runPlatformControlPlaneSmoke(
       cloudflareResourcePreflight,
       publicUrlChecks,
       capsuleGateStatus: "passed",
-      policyStatus:
-        completedApply.policyStatus === "deny" ||
-        completedDestroy.policyStatus === "deny"
-          ? failPolicy()
-          : "passed",
+      policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
       workerUrl:
         options.verificationMode === "cloudflare-worker"
           ? publicWorkerUrl(options)
@@ -1282,9 +1271,50 @@ export async function runPlatformControlPlaneSmoke(
       applyRunId &&
       !destroyApplyRunId
     ) {
-      failureCleanup = await cleanupAppliedSmokeFailure(options, {
-        installationId,
-      });
+      beginStep("destroy");
+      try {
+        const destroyResult = await destroySmokeInstallation(options, {
+          installationId,
+          reason:
+            "Layer-2 platform-control-plane smoke cleanup after verification failure",
+          verifyCloudflareWorkerGone: false,
+        });
+        destroyPlanRunId = destroyResult.destroyPlanRun.id;
+        destroyApplyRunId = destroyResult.destroyApplyRun.id;
+        runTimings.push(
+          smokeRunTiming("destroy_plan", destroyResult.destroyPlanRun),
+        );
+        runTimings.push(
+          smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
+        );
+        completeStep("destroy");
+        failureCleanup = {
+          attempted: true,
+          cloudflareWorkerGone: await assertCloudflareWorkerGoneForCleanup(
+            options,
+          ),
+          installationMarkedError: false,
+          destroyAttempted: true,
+          destroyPlanRunId,
+          destroyApplyRunId,
+          destroySucceeded: true,
+        };
+      } catch (destroyError) {
+        connectionRevokeSkippedReason =
+          "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
+        const fallbackCleanup = await cleanupAppliedSmokeFailure(options, {
+          installationId,
+        });
+        failureCleanup = {
+          ...fallbackCleanup,
+          destroyAttempted: true,
+          destroySucceeded: false,
+          destroyError:
+            destroyError instanceof Error
+              ? destroyError.message
+              : String(destroyError),
+        };
+      }
     } else {
       await markPendingSmokeInstallationError(options, {
         spaceId,
@@ -1463,7 +1493,7 @@ function failedNextAction(input: {
     return "The deploy request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the compatibility check or plan creation step that did not return.";
   }
   if (input.connectionRevokeSkippedReason !== undefined) {
-    return "Inspect the timed-out run, confirm/cancel any active execution, revoke the recorded Provider Connection, and remove any temporary Cloudflare resources before rerunning the smoke.";
+    return "Inspect the failed cleanup run, destroy the recorded Capsule after fixing the blocker, then revoke the retained ProviderConnection and rerun the smoke.";
   }
   return "Inspect the recorded run and installation ids, confirm any temporary Cloudflare resources are destroyed, then rerun the smoke after the blocking run reaches a terminal state.";
 }
@@ -1859,16 +1889,37 @@ async function findGenericCapsuleInstallConfigId(
       spaceId,
     )}`,
   });
-  const match = (response.installConfigs ?? []).find(
-    (config) =>
-      typeof config.id === "string" && config.sourceKind === "generic_capsule",
-  );
+  const configs = response.installConfigs ?? [];
+  const match = configs.find(isSelectableGenericCapsuleInstallConfig);
   if (!match?.id) {
+    const scopedGenericCount = configs.filter(
+      (config) =>
+        typeof config.id === "string" &&
+        config.sourceKind === "generic_capsule",
+    ).length;
     throw new Error(
-      "generic_capsule install config was not available to the scratch Workspace",
+      "selectable generic_capsule install config was not available to the scratch Workspace" +
+        (scopedGenericCount > 0
+          ? `; saw ${scopedGenericCount} scoped/non-selectable generic config(s)`
+          : ""),
     );
   }
   return match.id;
+}
+
+export function isSelectableGenericCapsuleInstallConfig(
+  config: InstallConfigRecord,
+): config is InstallConfigRecord & { readonly id: string } {
+  if (typeof config.id !== "string") return false;
+  if (config.sourceKind !== "generic_capsule") return false;
+  if (config.internal?.reason === "per_install_overrides") return false;
+  if (
+    (config.workspaceId !== undefined || config.spaceId !== undefined) &&
+    /^icfg_[0-9a-f]{16}$/iu.test(config.id)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 async function createSourceInstallation(
@@ -1954,6 +2005,62 @@ async function ensurePlanReadyForApply(
   });
   if (TERMINAL_RUN_STATUSES.has(approved.run.status)) return approved.run;
   return await pollRun(options, planRunId);
+}
+
+async function destroySmokeInstallation(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly installationId: string;
+    readonly reason: string;
+    readonly verifyCloudflareWorkerGone: boolean;
+  },
+): Promise<{
+  readonly destroyPlanRun: RunRecord;
+  readonly destroyApplyRun: RunRecord;
+}> {
+  const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
+      input.installationId,
+    )}/destroy-plan`,
+    body: {
+      ...(options.runnerProfileId
+        ? { runnerProfileId: options.runnerProfileId }
+        : {}),
+    },
+  });
+  const reviewedDestroyPlan = await pollRun(options, destroyPlan.run.id);
+  if (reviewedDestroyPlan.status !== "waiting_approval") {
+    throw new Error(
+      `destroy plan ${destroyPlan.run.id} ended as ${reviewedDestroyPlan.status}; expected waiting_approval`,
+    );
+  }
+  await requestJson({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlan.run.id)}/approve`,
+    body: { reason: input.reason },
+  });
+  const destroyApply = await requestJson<{ readonly run: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlan.run.id)}/apply`,
+    body: { confirmDestructive: true },
+  });
+  const completedDestroy = await pollRun(options, destroyApply.run.id);
+  assertRunSucceeded(completedDestroy, "destroy apply");
+  if (input.verifyCloudflareWorkerGone) {
+    await assertCloudflareWorkerGone(options);
+    await assertPublicWorkerUrlGone(options);
+  }
+  return {
+    destroyPlanRun: reviewedDestroyPlan,
+    destroyApplyRun: completedDestroy,
+  };
 }
 
 async function deploySnapshot(
@@ -2095,6 +2202,19 @@ async function cleanupAppliedSmokeFailure(
     installationMarkedError,
     ...(cleanupError ? { error: cleanupError } : {}),
   };
+}
+
+async function assertCloudflareWorkerGoneForCleanup(
+  options: PlatformControlPlaneSmokeOptions,
+): Promise<boolean> {
+  try {
+    const deleted = await cloudflareScriptRequest(options, "DELETE");
+    if (deleted.status === 404 || deleted.ok) return true;
+    await assertCloudflareWorkerGone(options);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function pollRun(
@@ -3482,7 +3602,11 @@ function parseOutputAllowlist(
 ): SmokeOutputAllowlist {
   const out: Record<
     string,
-    { from: string; type?: string; required?: boolean }
+    {
+      from: string;
+      type: SmokeOutputAllowlistType;
+      required?: boolean;
+    }
   > = {};
   for (const [name, spec] of Object.entries(value)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
@@ -3500,15 +3624,33 @@ function parseOutputAllowlist(
         `output allowlist ${name}.from must be an OpenTofu output identifier`,
       );
     }
+    if (!isOutputAllowlistType(spec.type)) {
+      throw new Error(
+        `output allowlist ${name}.type must be one of string, url, hostname, number, boolean, json`,
+      );
+    }
     out[name] = {
       from: spec.from,
-      ...(typeof spec.type === "string" ? { type: spec.type } : {}),
+      type: spec.type,
       ...(typeof spec.required === "boolean"
         ? { required: spec.required }
         : {}),
     };
   }
   return out;
+}
+
+function isOutputAllowlistType(
+  value: unknown,
+): value is SmokeOutputAllowlistType {
+  return (
+    value === "string" ||
+    value === "url" ||
+    value === "hostname" ||
+    value === "number" ||
+    value === "boolean" ||
+    value === "json"
+  );
 }
 
 function parsePublicUrlChecks(

@@ -3705,6 +3705,19 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
           createdAt: "2026-01-01T00:00:02Z",
           updatedAt: "2026-01-01T00:00:02Z",
         },
+        {
+          id: "icfg_fedcba9876543210",
+          spaceId: "space_a",
+          name: "legacy-space-config",
+          sourceKind: "generic_capsule",
+          installType: "opentofu_module",
+          trustLevel: "trusted",
+          variableMapping: { project_name: "space-leak" },
+          outputAllowlist: {},
+          policy: {},
+          createdAt: "2026-01-01T00:00:03Z",
+          updatedAt: "2026-01-01T00:00:03Z",
+        },
       ];
     }
     return [
@@ -3976,6 +3989,12 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
     operations,
   });
   expect(createResp?.status).toEqual(201);
+  expect(
+    (operations.calls.createSource?.[0] as { workspaceId?: string }).workspaceId,
+  ).toEqual("space_a");
+  expect(
+    (operations.calls.createSource?.[0] as { spaceId?: string }).spaceId,
+  ).toEqual("space_a");
   expect(
     (operations.calls.createSource?.[0] as { authConnectionId?: string })
       .authConnectionId,
@@ -4367,6 +4386,7 @@ test("Connections create: registers a Workspace-owned connection; token never ec
   // The facade was called with a Workspace-scoped cloudflare_api_token request.
   const passed = operations.calls.createConnection?.[0] as {
     workspaceId?: string;
+    spaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
@@ -4374,6 +4394,7 @@ test("Connections create: registers a Workspace-owned connection; token never ec
     values?: Record<string, string>;
   };
   expect(passed.workspaceId).toEqual("space_a");
+  expect(passed.spaceId).toEqual("space_a");
   expect(passed.provider).toEqual("cloudflare");
   expect(passed.kind).toEqual("cloudflare_api_token");
   // Forced Workspace scope regardless of the caller-supplied `scope: "operator"`.
@@ -4524,12 +4545,14 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
 
   const passed = operations.calls.createConnection?.[0] as {
     workspaceId?: string;
+    spaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
     values?: Record<string, string>;
   };
   expect(passed.workspaceId).toEqual("space_a");
+  expect(passed.spaceId).toEqual("space_a");
   expect(passed.provider).toEqual(provider);
   expect(passed.kind).toEqual("generic_env_provider");
   expect(passed.scope).toEqual("space");

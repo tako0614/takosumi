@@ -165,7 +165,7 @@ export function projectOutputAllowlistSpaceOutputs(
     if (!outputValueMatchesType(entry.value, spec.type)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `output ${spec.from} does not match declared projection type ${spec.type}`,
+        `output ${spec.from} does not match declared projection type ${spec.type} (actual ${describeJsonValueType(entry.value)})`,
       );
     }
     if (
@@ -249,6 +249,12 @@ function outputValueMatchesType(
     case "json":
       return true;
   }
+}
+
+function describeJsonValueType(value: JsonValue): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 function templateOutputValueMatchesType(
