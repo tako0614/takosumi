@@ -96,7 +96,7 @@ function Inner() {
             onClick={() => void refetch()}
             disabled={!isTakosumiCloudRuntime() || snapshot.loading}
           >
-            {t("common.retry")}
+            {t("common.refresh")}
           </Button>
         }
       />
@@ -653,11 +653,6 @@ function ResourcesCard(props: {
                               <span class="av-cloud-token-name">
                                 {item.name || item.id}
                               </span>
-                              <Show when={item.id && item.id !== item.name}>
-                                <span class="muted av-cloud-res-id">
-                                  {item.id}
-                                </span>
-                              </Show>
                             </div>
                             <div class="av-actions">
                               <Show when={item.id}>
@@ -685,7 +680,7 @@ function ResourcesCard(props: {
                                     )
                                   }
                                 >
-                                  {t("common.copy")}
+                                  {t("cloudResources.resources.copyId")}
                                 </Button>
                               </Show>
                               <Button

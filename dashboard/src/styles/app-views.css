@@ -85,11 +85,6 @@
   min-width: 0;
   gap: var(--tg-s-2);
 }
-.av-cloud-res-id {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  overflow-wrap: anywhere;
-}
 .av-cloud-res-more {
   display: inline-flex;
   width: fit-content;
