@@ -160,6 +160,12 @@ The allowed performance mechanisms are:
   provider/data-source logic, but Takosumi does not decide what that artifact
   means.
 
+Runner responses include phase timing evidence for source resolution/reuse,
+provider init, plan, apply, output, and compatibility checks. The dashboard can
+map those internal timings to app-install phases and operators can see whether
+time is going to Git/source archive work, provider installation, OpenTofu plan,
+or provider apply.
+
 UI progress should show user-level phases such as preparing, checking access,
 planning, installing, finishing, and ready. OpenTofu logs, plan JSON, provider
 bindings, state, and audit evidence remain available in details/advanced views.

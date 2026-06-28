@@ -1,6 +1,6 @@
-# core (first-party base-installation module)
+# core (first-party base Capsule module)
 #
-# The base Installation under a Space (spec §5/§10). For MVP this is a pure
+# The base Capsule module for a Workspace / Project. For MVP this is a pure
 # value-plumbing module: it derives generic service origins from a single
 # `base_domain` input and exposes them as outputs. It declares NO
 # providers and creates NO cloud resources, so it plans against an empty

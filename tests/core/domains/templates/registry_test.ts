@@ -29,7 +29,13 @@ test("built-in registry resolves but does not list the legacy worker build modul
   expect(worker.build?.commands).toContain("bun run build");
 });
 
-test("built-in registry resolves the core base-installation module", () => {
+test("active built-in registry modules never define Takosumi-owned build dispatch", () => {
+  for (const template of defaultTemplateRegistry.list()) {
+    expect(template.build).toBeUndefined();
+  }
+});
+
+test("built-in registry resolves the core base Capsule module", () => {
   const core = defaultTemplateRegistry.require("core", "1.0.0");
   expect(core.source.localModulePath).toEqual("/app/templates/core/module");
   // core is a pure value-plumbing module: zero providers, zero resource types.

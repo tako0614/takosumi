@@ -8,9 +8,9 @@ function hcl(strings: TemplateStringsArray): string {
   return strings[0] ?? "";
 }
 
-const coreMainTf = hcl`# core (first-party base-installation module)
+const coreMainTf = hcl`# core (first-party base Capsule module)
 #
-# The base Installation under a Space (spec §5/§10). For MVP this is a pure
+# The base Capsule module for a Workspace / Project. For MVP this is a pure
 # value-plumbing module: it derives generic service origins from a single
 # \`base_domain\` input and exposes them as outputs. It declares NO
 # providers and creates NO cloud resources, so it plans against an empty
@@ -247,7 +247,7 @@ variable "compatibilityDate" {
 # so the module stays free of backticks and \`$\${}\` interpolation.
 locals {
   worker_module = <<-EOT
-    export default { async fetch() { return new Response('<!doctype html><meta charset="utf-8"><title>Hello from Takosumi</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:36rem;margin:12vh auto;padding:0 1.5rem;color:#1a1a1a}</style><h1>It works</h1><p>This Worker was provisioned by a Takosumi Installation: reviewed plan, applied, live.</p><p>Edit the capsule and re-deploy to make it yours.</p>', { headers: { 'content-type': 'text/html; charset=utf-8' } }); } };
+    export default { async fetch() { return new Response('<!doctype html><meta charset="utf-8"><title>Hello from Takosumi</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:36rem;margin:12vh auto;padding:0 1.5rem;color:#1a1a1a}</style><h1>It works</h1><p>This Worker was provisioned by a Takosumi Capsule: reviewed plan, applied, live.</p><p>Edit the capsule and re-deploy to make it yours.</p>', { headers: { 'content-type': 'text/html; charset=utf-8' } }); } };
   EOT
 }
 

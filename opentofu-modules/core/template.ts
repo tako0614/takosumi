@@ -1,7 +1,7 @@
 /**
  * First-party Capsule module: core.
  *
- * The base Installation under a Space (spec §5/§10). Authored as TypeScript
+ * The base Capsule module for a Workspace / Project. Authored as TypeScript
  * catalog data (the service cannot read the filesystem in Workers). The
  * `module/` directory next to this file is the human-readable OpenTofu surface
  * and is baked into the runner image at `source.localModulePath`. Keep this
@@ -15,10 +15,10 @@ import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const coreTemplate: TemplateDefinition = {
   id: "core",
-  name: "Takos Core (base installation)",
+  name: "Takos Core (base capsule)",
   version: "1.0.0",
   description:
-    "Base installation under a Space: derives generic service origins from a base domain. No cloud resources.",
+    "Base Capsule module: derives generic service origins from a base domain. No cloud resources.",
   source: {
     localModulePath: "/app/templates/core/module",
   },

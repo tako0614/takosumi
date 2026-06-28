@@ -4,7 +4,15 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { chmod, cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type {
   JsonRecord,
@@ -32,9 +40,7 @@ import {
   assertRealPathInsideSourceRoot,
   shredCredentialDir,
 } from "./util.ts";
-import {
-  redactCredentialOutput,
-} from "./redaction.ts";
+import { redactCredentialOutput } from "./redaction.ts";
 import {
   readResponseBytesWithCap,
   runRequiredCommand,
@@ -58,10 +64,8 @@ import {
   sourceCredentialRedactionValues,
   baseCommandEnv,
 } from "./credentials.ts";
-import {
-  workspaceForRun,
-  writeModuleInfo,
-} from "./artifacts.ts";
+import { workspaceForRun, writeModuleInfo } from "./artifacts.ts";
+import { RunnerPhaseTimer, withPhaseTimings } from "./timing.ts";
 import {
   parseRunnerProfile,
   positiveIntegerLimitFromProfile,
@@ -94,7 +98,6 @@ export async function ensureSourceAvailable(
 // shreds them afterward. Credentials are NEVER embedded in the URL and NEVER
 // logged.
 // ===========================================================================
-
 
 export function isSourceSyncRequest(request: unknown): boolean {
   return stringField(request, "action") === "source_sync";
@@ -182,7 +185,9 @@ function parseReusableSourceSnapshot(
     !Number.isSafeInteger(archiveSizeBytes) ||
     archiveSizeBytes <= 0
   ) {
-    throw new Error("reuseSnapshot.archiveSizeBytes must be a positive integer");
+    throw new Error(
+      "reuseSnapshot.archiveSizeBytes must be a positive integer",
+    );
   }
   return {
     id,
@@ -216,6 +221,7 @@ export async function runSourceSync(
   await rm(workspace.root, { recursive: true, force: true });
   await mkdir(workspace.root, { recursive: true });
   const credentialDir = join(workspace.root, "source-credentials");
+  const timer = new RunnerPhaseTimer();
 
   try {
     // SECURITY (SSRF): assertSourceUrlPolicy (run in parseSourceSyncSource) only
@@ -224,75 +230,91 @@ export async function runSourceSync(
     // is private/loopback/link-local — the same DNS-rebinding protection the
     // plan/apply git path gets via assertHttpsSourceUrl. Fails closed when the
     // host cannot be resolved.
-    await assertResolvedHostNotBlocked(
-      sourceUrlHost(source.url),
-      "source URL host",
+    await timer.measure("source_host_policy", () =>
+      assertResolvedHostNotBlocked(
+        sourceUrlHost(source.url),
+        "source URL host",
+      ),
     );
-    const gitContext = await prepareSourceGitContext(
-      source,
-      credentials,
-      credentialDir,
+    const gitContext = await timer.measure("source_git_credentials", () =>
+      prepareSourceGitContext(source, credentials, credentialDir),
     );
-    const resolvedCommit = await resolveSourceCommit(source, gitContext);
+    const resolvedCommit = await timer.measure("source_ref_resolve", () =>
+      resolveSourceCommit(source, gitContext),
+    );
     if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
-      return {
-        runId,
-        action: "source_sync",
-        status: "succeeded",
-        exitCode: 0,
-        resolvedCommit,
-        archiveDigest: reuseSnapshot.archiveDigest,
-        archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
-        sourceArchive: {
-          kind: "object-storage",
-          archiveObjectKey: reuseSnapshot.archiveObjectKey,
-          digest: reuseSnapshot.archiveDigest,
-          contentType: "application/zstd",
-          sizeBytes: reuseSnapshot.archiveSizeBytes,
-          reusedFromSnapshotId: reuseSnapshot.id,
+      await timer.measure("source_snapshot_reuse", async () => undefined);
+      return withPhaseTimings(
+        {
+          runId,
+          action: "source_sync",
+          status: "succeeded",
+          exitCode: 0,
+          resolvedCommit,
+          archiveDigest: reuseSnapshot.archiveDigest,
+          archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
+          sourceArchive: {
+            kind: "object-storage",
+            archiveObjectKey: reuseSnapshot.archiveObjectKey,
+            digest: reuseSnapshot.archiveDigest,
+            contentType: "application/zstd",
+            sizeBytes: reuseSnapshot.archiveSizeBytes,
+            reusedFromSnapshotId: reuseSnapshot.id,
+          },
         },
-      };
+        timer,
+      );
     }
-    await shallowCloneAtCommit(
-      source,
-      resolvedCommit,
-      workspace.sourceRoot,
-      gitContext,
+    await timer.measure("source_clone", () =>
+      shallowCloneAtCommit(
+        source,
+        resolvedCommit,
+        workspace.sourceRoot,
+        gitContext,
+      ),
     );
-    const subtree = await resolveSourceSubtree(
-      workspace.sourceRoot,
-      source.path,
+    const subtree = await timer.measure("source_subtree", () =>
+      resolveSourceSubtree(workspace.sourceRoot, source.path),
     );
     const archivePath = sourceArchivePath(workspace);
-    await createDeterministicArchive(subtree, archivePath, gitContext);
-    const archiveBytes = await readFile(archivePath);
+    await timer.measure("source_archive", () =>
+      createDeterministicArchive(subtree, archivePath, gitContext),
+    );
+    const archiveBytes = await timer.measure("source_archive_read", () =>
+      readFile(archivePath),
+    );
     if (archiveBytes.byteLength > maxArchiveBytes) {
       throw new Error(
         `source archive ${archiveBytes.byteLength} bytes exceeds limit ${maxArchiveBytes}`,
       );
     }
-    const archiveDigest = await digestBytes(archiveBytes);
+    const archiveDigest = await timer.measure("source_archive_digest", () =>
+      digestBytes(archiveBytes),
+    );
     // The archive is left at sourceArchivePath; the DO pulls it via
     // GET /runs/{runId}/artifacts/source-archive and persists to R2_SOURCE under
     // archiveObjectKey (mirrors the tfplan pull-then-persist protocol). The key
     // is echoed back so the DO knows where to write.
-    return {
-      runId,
-      action: "source_sync",
-      status: "succeeded",
-      exitCode: 0,
-      resolvedCommit,
-      archiveDigest,
-      archiveSizeBytes: archiveBytes.byteLength,
-      sourceArchive: {
-        kind: "runner-local",
-        ref: `runner-local://${runId}/source-archive`,
-        archiveObjectKey,
-        digest: archiveDigest,
-        contentType: "application/zstd",
-        sizeBytes: archiveBytes.byteLength,
+    return withPhaseTimings(
+      {
+        runId,
+        action: "source_sync",
+        status: "succeeded",
+        exitCode: 0,
+        resolvedCommit,
+        archiveDigest,
+        archiveSizeBytes: archiveBytes.byteLength,
+        sourceArchive: {
+          kind: "runner-local",
+          ref: `runner-local://${runId}/source-archive`,
+          archiveObjectKey,
+          digest: archiveDigest,
+          contentType: "application/zstd",
+          sizeBytes: archiveBytes.byteLength,
+        },
       },
-    };
+      timer,
+    );
   } finally {
     await shredCredentialDir(credentialDir);
   }
@@ -563,7 +585,6 @@ export function sourceArchiveZstdLevel(): number {
 export function sourceArchivePath(workspace: RunWorkspace): string {
   return join(workspace.root, "source.tar.zst");
 }
-
 
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;

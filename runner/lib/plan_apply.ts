@@ -42,6 +42,7 @@ import {
   resolveModulePath,
 } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
+import { RunnerPhaseTimer, withPhaseTimings } from "./timing.ts";
 import {
   readOpenTofuPlanJson,
   readOpenTofuOutputsIn,
@@ -85,44 +86,6 @@ import {
   summaryFromPlanJson,
   resourceChangesFromPlanJson,
 } from "./providers.ts";
-
-interface RunnerPhaseTiming {
-  readonly phase: string;
-  readonly startedAt: string;
-  readonly finishedAt: string;
-  readonly durationMs: number;
-}
-
-class RunnerPhaseTimer {
-  readonly #timings: RunnerPhaseTiming[] = [];
-
-  async measure<T>(phase: string, run: () => Promise<T>): Promise<T> {
-    const startedAtMs = Date.now();
-    try {
-      return await run();
-    } finally {
-      const finishedAtMs = Date.now();
-      this.#timings.push({
-        phase,
-        startedAt: new Date(startedAtMs).toISOString(),
-        finishedAt: new Date(finishedAtMs).toISOString(),
-        durationMs: Math.max(0, finishedAtMs - startedAtMs),
-      });
-    }
-  }
-
-  json(): readonly RunnerPhaseTiming[] {
-    return this.#timings;
-  }
-}
-
-function withPhaseTimings(
-  payload: JsonRecord,
-  timer: RunnerPhaseTimer,
-): JsonRecord {
-  const phaseTimings = timer.json();
-  return phaseTimings.length > 0 ? { ...payload, phaseTimings } : payload;
-}
 
 export async function runPlan(
   runId: string,

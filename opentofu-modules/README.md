@@ -7,7 +7,7 @@ not build app source or interpret deployable artifacts.
 
 ## Where modules live
 
-The provider-agnostic `core` base-installation module lives here under
+The provider-agnostic `core` base Capsule module lives here under
 `opentofu-modules/core/`. Provider-specific modules live with their provider
 implementation under `providers/<provider>/modules/<id>/`:
 
@@ -49,12 +49,13 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 
 ## Modules
 
-| id                       | build | providers               | outputs.public                                                          |
-| ------------------------ | ----- | ----------------------- | ----------------------------------------------------------------------- |
-| `core`                   | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
-| `cloudflare-r2-storage`  | —     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
-| `cloudflare-static-site` | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
-| `aws-s3-storage`         | —     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
+| id                        | build | providers               | outputs.public                                                          |
+| ------------------------- | ----- | ----------------------- | ----------------------------------------------------------------------- |
+| `core`                    | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
+| `cloudflare-hello-worker` | —     | `cloudflare/cloudflare` | `script_name`, `workers_dev_url`                                        |
+| `cloudflare-r2-storage`   | —     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
+| `cloudflare-static-site`  | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
+| `aws-s3-storage`          | —     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
 
 ## Adding a first-party Capsule module
 

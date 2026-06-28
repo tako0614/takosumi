@@ -39,6 +39,19 @@ const LEGACY_CATALOG: readonly TemplateDefinition[] = [
   cloudflareWorkerServiceTemplate,
 ];
 
+function assertActiveCatalogHasNoBuildDispatch(
+  catalog: readonly TemplateDefinition[],
+): void {
+  for (const template of catalog) {
+    if (template.build !== undefined) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `active first-party Capsule module ${template.id}@${template.version} must not define Takosumi-owned build dispatch`,
+      );
+    }
+  }
+}
+
 function registryKey(id: string, version: string): string {
   return `${id}@${version}`;
 }
@@ -61,6 +74,7 @@ function buildRegistry(
   return map;
 }
 
+assertActiveCatalogHasNoBuildDispatch(ACTIVE_CATALOG);
 const REGISTRY = buildRegistry([...ACTIVE_CATALOG, ...LEGACY_CATALOG]);
 
 export class TemplateRegistry {

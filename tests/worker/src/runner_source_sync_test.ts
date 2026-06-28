@@ -1,3 +1,5 @@
+import { rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   assertSafeArchiveObjectKey,
@@ -7,6 +9,8 @@ import {
   parseSourceCredentials,
   parseSourceSyncSource,
 } from "../../../runner/entrypoint.ts";
+import { RUN_ROOT } from "../../../runner/lib/constants.ts";
+import { runSourceSync } from "../../../runner/lib/source_sync.ts";
 
 // ---------------------------------------------------------------------------
 // URL policy (spec 7.1) — defense-in-depth re-check inside the runner.
@@ -262,4 +266,68 @@ test("parseSourceCredentials returns empty for an absent credentials field", () 
     env: {},
     files: [],
   });
+});
+
+test("runSourceSync reuses an unchanged snapshot without cloning or archiving", async () => {
+  const runId = `source_reuse_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const previousFetch = globalThis.fetch;
+  const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
+  try {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ Answer: [{ type: 1, data: "140.82.112.3" }] }),
+        { headers: { "content-type": "application/dns-json" } },
+      )) as typeof fetch;
+
+    const result = await runSourceSync(runId, {
+      action: "source_sync",
+      source: {
+        url: "https://github.com/acme/repo.git",
+        ref: resolvedCommit,
+        path: ".",
+      },
+      archiveObjectKey:
+        "spaces/space_1/sources/src_new/snapshots/snap_new/source.tar.zst",
+      reuseSnapshot: {
+        id: "snap_prev",
+        resolvedCommit,
+        archiveObjectKey:
+          "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+        archiveDigest: `sha256:${"b".repeat(64)}`,
+        archiveSizeBytes: 2048,
+      },
+    });
+
+    expect(result).toMatchObject({
+      runId,
+      action: "source_sync",
+      status: "succeeded",
+      exitCode: 0,
+      resolvedCommit,
+      archiveDigest: `sha256:${"b".repeat(64)}`,
+      archiveSizeBytes: 2048,
+      sourceArchive: {
+        kind: "object-storage",
+        archiveObjectKey:
+          "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+        reusedFromSnapshotId: "snap_prev",
+      },
+    });
+    expect(
+      (result.phaseTimings as Array<{ phase: string }>).map(
+        (timing) => timing.phase,
+      ),
+    ).toEqual([
+      "source_host_policy",
+      "source_git_credentials",
+      "source_ref_resolve",
+      "source_snapshot_reuse",
+    ]);
+    await expect(stat(join(root, "source.tar.zst"))).rejects.toThrow();
+    await expect(stat(join(root, "source"))).rejects.toThrow();
+  } finally {
+    globalThis.fetch = previousFetch;
+    await rm(root, { recursive: true, force: true });
+  }
 });
