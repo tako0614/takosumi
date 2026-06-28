@@ -749,6 +749,16 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
           basePath: "/gateway/ai/v1",
           bindingName: "TAKOSUMI_CLOUD_AI",
           requiredScopes: ["ai.chat"],
+          fallbackUsage: [
+            {
+              pathTemplate: "/chat/completions",
+              methods: ["POST"],
+              meterIdPrefix: "ai:",
+              kind: "ai_request",
+              quantity: 1,
+              operationByMethod: { POST: "chat" },
+            },
+          ],
         },
         { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
       ]),
@@ -758,6 +768,16 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
       basePath: "/gateway/ai/v1",
       bindingName: "TAKOSUMI_CLOUD_AI",
       requiredScopes: ["ai.chat"],
+      fallbackUsage: [
+        {
+          pathTemplate: "/chat/completions",
+          methods: ["POST"],
+          meterIdPrefix: "ai:",
+          kind: "ai_request",
+          quantity: 1,
+          operationByMethod: { POST: "chat" },
+        },
+      ],
     },
     { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
   ]);
@@ -947,6 +967,210 @@ test("cloud extension requiredScopes gate token auth", async () => {
     }),
   );
   expect(session.status).toBe(200);
+});
+
+test("cloud extension usage headers are priced, recorded, and stripped from client responses", async () => {
+  const periodStart = "2026-06-28T10:00:00.000Z";
+  const periodEnd = "2026-06-28T10:00:01.000Z";
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () =>
+          Response.json(
+            { success: true },
+            {
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_cloud",
+                "x-takosumi-cloud-usage-period-start": periodStart,
+                "x-takosumi-cloud-usage-period-end": periodEnd,
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "cloudflare:workers_script:deploy",
+                    resourceFamily: "cloudflare.workers_script",
+                    resourceId: "script:api",
+                    operation: "deploy",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                    usdMicros: 99_999_999,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      subject: "svc",
+      spaceId: "space_cloud",
+      scopes: ["admin"],
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ success: true });
+  expect(response.headers.get("x-takosumi-cloud-usage-space-id")).toBeNull();
+  expect(response.headers.get("x-takosumi-cloud-usage-meters")).toBeNull();
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:workers_script:deploy",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "deploy",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 1_000,
+        source: "resource_meter",
+        createdAt: periodEnd,
+      }),
+    },
+  ]);
+});
+
+test("cloud extension fallback usage records successful extension calls without upstream usage headers", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      {
+        method: "PUT",
+        headers: {
+          "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+          "x-takosumi-cloud-billing-installation-id": "inst_cloud",
+        },
+      },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => Response.json({ success: true }, { status: 201 }),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT", "PATCH", "GET", "DELETE"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: {
+            PUT: "deploy",
+            PATCH: "deploy",
+            GET: "read",
+            DELETE: "delete",
+          },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(201);
+  expect(await response.json()).toEqual({ success: true });
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:workers_script:deploy",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "deploy",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 1_000,
+        source: "resource_meter",
+      }),
+    },
+  ]);
+});
+
+test("cloud extension usage metering fails closed for unknown meters", async () => {
+  const recorded: unknown[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_AI: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl" },
+            {
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_cloud",
+                "x-takosumi-cloud-usage-period-start":
+                  "2026-06-28T10:00:00.000Z",
+                "x-takosumi-cloud-usage-period-end":
+                  "2026-06-28T10:00:01.000Z",
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    meterId: "unknown:meter",
+                    kind: "ai_request",
+                    quantity: 1,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      subject: "svc",
+      spaceId: "space_cloud",
+      scopes: ["admin"],
+    }),
+    async (_spaceId, input) => {
+      recorded.push(input);
+    },
+  );
+
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_usage_metering_failed",
+    reason: "usage_price_missing",
+  });
+  expect(recorded).toEqual([]);
 });
 
 test("cloud extension authenticates personal access tokens through accounts introspection", async () => {

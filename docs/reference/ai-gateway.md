@@ -6,9 +6,9 @@ control plane that runs existing providers as-is; it does not provide model
 gateway services as part of the public OSS contract.
 
 The Cloud extension is a Takosumi Cloud operator-backed, OpenAI-compatible
-runtime profile projected through Service Graph. It lets a deployed Capsule
-runtime use one Takosumi endpoint and one rotated Service Graph service token
-while Takosumi Cloud keeps operator-held AI credentials in platform secrets.
+runtime profile. It lets a deployed Capsule runtime use one Takosumi endpoint
+and one rotated runtime service token while Takosumi Cloud keeps operator-held
+AI credentials in platform secrets.
 For Cloudflare Unified Billing that credential is a Cloudflare API token; for
 direct/BYOK profiles it is the provider API key. The OSS platform worker
 carries only a fail-closed route seam and an optional
@@ -43,7 +43,7 @@ service that will consume the model API; runtime model access is granted after d
 
 ## Cloud Extension Contract
 
-Service Graph projection:
+Runtime service projection:
 
 - service id: `takosumi.ai.gateway`
 - capability: `ai.model`
@@ -64,14 +64,14 @@ OpenAI-compatible routes:
 | `POST /gateway/ai/v1/chat/completions` | `ai.chat`        | forwards chat completions to an upstream |
 | `POST /gateway/ai/v1/embeddings`       | `ai.embeddings`  | forwards embeddings to an upstream       |
 
-Runtime calls should use a current `takosumi.ai.gateway` Service Graph service
-token as `Authorization: Bearer <taksrv_...>`. The platform worker introspects
-that token with the Cloud extension confidential client, verifies the
-`ai.model` capability plus the endpoint scope, strips the raw bearer token, and
-forwards only a sanitized request to the closed AI Gateway worker. Failed auth
-or insufficient-scope requests are forwarded without raw account/session/service
-credentials and without the pre-authenticated header, so the downstream worker
-fails closed without seeing the original credential.
+Runtime calls should use a current `takosumi.ai.gateway` runtime service token
+as `Authorization: Bearer <taksrv_...>`. The platform worker introspects that
+token with the Cloud extension confidential client, verifies the endpoint
+scope, strips the raw bearer token, and forwards only a sanitized request to the
+closed AI Gateway worker. Failed auth or insufficient-scope requests are
+forwarded without raw account/session/service credentials and without the
+pre-authenticated header, so the downstream worker fails closed without seeing
+the original credential.
 Operator/dashboard sessions and Takosumi personal access tokens are accepted
 only for owner/operator smoke and diagnostics; deployed Capsule runtimes should
 not receive account sessions, PATs, Cloudflare API tokens, or direct upstream
@@ -106,10 +106,14 @@ If these headers are present but the ledger write fails, the platform route
 fails closed with `502` rather than returning an unmetered success. Billing and
 Stripe reconciliation use the Workspace usage ledger as the source of truth.
 
-Tokens are rotated through the installation Service Graph service projection.
-That route is intentionally not documented as a stable Takosumi OSS customer
-API while the public model migrates to Workspace / Project / Capsule /
-StateVersion / Output terminology.
+Tokens are rotated through the account-plane Capsule projection route:
+
+```text
+POST /v1/installation-projections/:capsuleId/services/takosumi.ai.gateway/rotate-token
+```
+
+This is a supporting runtime-token vending route for the hosted Cloud extension,
+not a stable Takosumi OSS customer API or a restored Service Graph catalog.
 
 Body:
 
@@ -316,10 +320,10 @@ the Takosumi Cloud private `smoke:cloud-extensions` command with
 
 AI Gateway billing readiness is proven through the usage ledger, not response
 headers. The platform strips internal usage headers before returning the
-OpenAI-compatible response, so GA smoke should rotate a Service Graph runtime
-token, call chat/embeddings, then read the target Workspace usage ledger and
+OpenAI-compatible response, so GA smoke should rotate a runtime service token,
+call chat/embeddings, then read the target Workspace usage ledger and
 confirm a new `source: "resource_meter"` / `kind: "ai_request"` event for the
-same Installation. Use `--require-ai-service-graph-token
+same Installation. Use `--require-ai-runtime-service-token
 --ai-service-installation-id <id> --require-ai-usage-ledger
 --ai-usage-workspace-id <workspace-id>` for that strict check.
 
@@ -331,17 +335,17 @@ There are two different keys:
 | ------------------------------------- | ---------------------------- | --------------------------------------------------- |
 | Cloudflare AI Gateway API token       | operator platform worker env | authorizes Cloudflare Unified Billing REST profiles |
 | direct/BYOK upstream provider API key | operator platform worker env | authorizes Takosumi to call a provider directly     |
-| Service Graph service token           | Capsule runtime projection   | authorizes that runtime to call the gateway         |
+| Runtime service token                 | Capsule runtime projection   | authorizes that runtime to call the gateway         |
 
 The Capsule runtime never receives the Cloudflare API token or a direct upstream provider key. It receives only the
-rotated Service Graph token and the gateway base URL. The gateway injects the operator-held credential at request time
+rotated runtime service token and the gateway base URL. The gateway injects the operator-held credential at request time
 and strips hop-by-hop or unsafe response headers before returning the upstream response.
 
 ## Failure Model
 
 - Cloud extension not mounted on the platform worker: `404 { "error": "not found" }`
 - invalid gateway config: `500 gateway_misconfigured`
-- missing or stale Service Graph token: `401 invalid_token`
+- missing or stale runtime service token: `401 invalid_token`
 - missing endpoint scope: `403 insufficient_scope`
 - unknown model or wrong endpoint for a model alias: `404 model_not_found`
 - upstream network failure: `502 upstream_unavailable`

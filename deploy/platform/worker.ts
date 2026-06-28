@@ -38,7 +38,14 @@ import {
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
-import type { BillingSettings } from "takosumi-contract/billing";
+import type {
+  BillingSettings,
+  UsageEventKind,
+  UsageResourceMetadata,
+  UsageResourceMetadataValue,
+} from "takosumi-contract/billing";
+import type { TakosumiOperations } from "../../core/bootstrap.ts";
+import type { RecordMeteredUsageInput } from "../../core/domains/deploy-control/mod.ts";
 import {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -85,6 +92,12 @@ function deployControlSeam(env: PlatformEnv) {
 async function controlPlaneOperationsFor(
   env: PlatformEnv,
 ): Promise<ControlPlaneOperations> {
+  return await deployControlSeam(env).operations();
+}
+
+async function takosumiOperationsFor(
+  env: PlatformEnv,
+): Promise<TakosumiOperations> {
   return await deployControlSeam(env).operations();
 }
 
@@ -918,6 +931,14 @@ export async function handlePlatformCloudExtensionRouteRequest(
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
   sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
+  usageRecorder: PlatformCloudExtensionUsageRecorder = async (
+    spaceId,
+    input,
+  ) => {
+    await (
+      await takosumiOperationsFor(env)
+    ).recordMeteredUsage(spaceId, input);
+  },
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
@@ -929,7 +950,14 @@ export async function handlePlatformCloudExtensionRouteRequest(
   );
   if (!authContext.ok) return authContext.response;
   const upstreamResponse = await binding.fetch(authContext.request);
-  return responseForPlatformCloudExtensionClient(upstreamResponse);
+  return await responseForPlatformCloudExtensionClient(
+    authContext.request,
+    upstreamResponse,
+    env,
+    route,
+    authContext.session,
+    usageRecorder,
+  );
 }
 
 export interface PlatformCloudExtensionSessionContext {
@@ -955,6 +983,10 @@ const PLATFORM_CLOUD_EXTENSION_SCOPES_HEADER = "x-takosumi-cloud-scopes";
 const PLATFORM_CLOUD_EXTENSION_INSTALLATION_ID_HEADER =
   "x-takosumi-cloud-installation-id";
 const PLATFORM_CLOUD_EXTENSION_SPACE_ID_HEADER = "x-takosumi-cloud-space-id";
+const PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER =
+  "x-takosumi-cloud-billing-workspace-id";
+const PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER =
+  "x-takosumi-cloud-billing-installation-id";
 
 const PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS = [
   "authorization",
@@ -1076,12 +1108,576 @@ function clonePlatformCloudExtensionRequest(
   });
 }
 
-function responseForPlatformCloudExtensionClient(response: Response): Response {
+export type PlatformCloudExtensionUsageRecorder = (
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+) => Promise<void>;
+
+async function responseForPlatformCloudExtensionClient(
+  request: Request,
+  response: Response,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
+): Promise<Response> {
+  const usageResult = await recordPlatformCloudExtensionUsage(
+    request,
+    response,
+    env,
+    route,
+    session,
+    usageRecorder,
+  );
+  if (!usageResult.ok) return usageResult.response;
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers: new Headers(response.headers),
+    headers: platformCloudExtensionClientHeaders(response.headers),
   });
+}
+
+const PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER =
+  "x-takosumi-cloud-usage-space-id";
+const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER =
+  "x-takosumi-cloud-usage-period-start";
+const PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER =
+  "x-takosumi-cloud-usage-period-end";
+const PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER =
+  "x-takosumi-cloud-usage-meters";
+const PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS = [
+  PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER,
+  PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+] as const;
+
+interface PlatformCloudUsageMeter {
+  readonly installationId?: string;
+  readonly meterId: string;
+  readonly resourceFamily?: string;
+  readonly resourceId?: string;
+  readonly operation?: string;
+  readonly resourceMetadata?: UsageResourceMetadata;
+  readonly kind: string;
+  readonly quantity: number;
+  readonly usdMicros?: number;
+  readonly credits?: number;
+}
+
+interface PlatformCloudUsagePriceBook {
+  readonly minimumGrossMarginBps: number;
+  readonly meters: readonly PlatformCloudUsagePriceBookMeter[];
+}
+
+interface PlatformCloudUsagePriceBookMeter {
+  readonly meterId?: string;
+  readonly meterIdPrefix?: string;
+  readonly kind: string;
+  readonly chargeUsdMicrosPerUnit?: number;
+  readonly chargeUsdMicrosPerMillionUnits?: number;
+  readonly estimatedCostUsdMicrosPerUnit?: number;
+  readonly estimatedCostUsdMicrosPerMillionUnits?: number;
+  readonly minimumChargeUsdMicros?: number;
+}
+
+async function recordPlatformCloudExtensionUsage(
+  request: Request,
+  response: Response,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  if (!response.ok) return { ok: true };
+  const usage = platformCloudExtensionUsageEnvelope(
+    request,
+    response,
+    route,
+    session,
+  );
+  if (!usage) return { ok: true };
+  const { rawMeters, spaceId, periodStart, periodEnd } = usage;
+  if (!spaceId) {
+    return platformCloudExtensionUsageFailure("usage_workspace_id_missing");
+  }
+  if (session.spaceId && session.spaceId !== spaceId) {
+    return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
+  }
+  if (!periodStart || !periodEnd || Date.parse(periodEnd) < Date.parse(periodStart)) {
+    return platformCloudExtensionUsageFailure("usage_period_invalid");
+  }
+  const meters = parsePlatformCloudUsageMeters(rawMeters);
+  if (!meters.ok) return platformCloudExtensionUsageFailure(meters.error);
+  const priceBook = parsePlatformCloudUsagePriceBook(
+    env.TAKOSUMI_CLOUD_USAGE_PRICE_BOOK,
+  );
+  if (!priceBook.ok) return platformCloudExtensionUsageFailure(priceBook.error);
+
+  for (const [index, meter] of meters.value.entries()) {
+    const kind = platformCloudUsageEventKind(meter.kind);
+    if (!kind) {
+      return platformCloudExtensionUsageFailure("usage_kind_unsupported");
+    }
+    const usdMicros = pricePlatformCloudUsageMeter(meter, priceBook.value);
+    if (!usdMicros.ok) {
+      return platformCloudExtensionUsageFailure(usdMicros.error);
+    }
+    const input: RecordMeteredUsageInput = {
+      ...(meter.installationId ? { installationId: meter.installationId } : {}),
+      meterId: meter.meterId,
+      ...(meter.resourceFamily
+        ? { resourceFamily: meter.resourceFamily }
+        : {}),
+      ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
+      ...(meter.operation ? { operation: meter.operation } : {}),
+      ...(meter.resourceMetadata
+        ? { resourceMetadata: meter.resourceMetadata }
+        : {}),
+      kind,
+      quantity: meter.quantity,
+      usdMicros: usdMicros.value,
+      source: "resource_meter",
+      idempotencyKey: [
+        "cloud-extension",
+        route.basePath,
+        spaceId,
+        periodStart,
+        periodEnd,
+        index,
+        meter.meterId,
+      ].join(":"),
+      createdAt: periodEnd,
+    };
+    try {
+      await usageRecorder(spaceId, input);
+    } catch {
+      return platformCloudExtensionUsageFailure("usage_record_failed");
+    }
+  }
+  return { ok: true };
+}
+
+interface PlatformCloudUsageEnvelope {
+  readonly rawMeters: string;
+  readonly spaceId?: string;
+  readonly periodStart?: string;
+  readonly periodEnd?: string;
+}
+
+function platformCloudExtensionUsageEnvelope(
+  request: Request,
+  response: Response,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+): PlatformCloudUsageEnvelope | undefined {
+  const rawMeters = response.headers.get(
+    PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER,
+  );
+  if (rawMeters) {
+    return {
+      rawMeters,
+      spaceId: safePlatformCloudExtensionContextId(
+        response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER),
+      ),
+      periodStart: isoHeaderValue(
+        response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER),
+      ),
+      periodEnd: isoHeaderValue(
+        response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER),
+      ),
+    };
+  }
+
+  const meter = fallbackPlatformCloudUsageMeter(request, route, session);
+  if (!meter) return undefined;
+  const periodEndMs = Date.now();
+  return {
+    rawMeters: JSON.stringify([meter]),
+    spaceId:
+      session.spaceId ??
+      safePlatformCloudExtensionContextId(
+        request.headers.get(PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER),
+      ),
+    periodStart: new Date(periodEndMs - 1).toISOString(),
+    periodEnd: new Date(periodEndMs).toISOString(),
+  };
+}
+
+function fallbackPlatformCloudUsageMeter(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+): PlatformCloudUsageMeter | undefined {
+  const rules = route.fallbackUsage ?? [];
+  if (rules.length === 0) return undefined;
+  const url = new URL(request.url);
+  const suffix = url.pathname.slice(route.basePath.length) || "/";
+  const method = request.method.toUpperCase();
+  for (const rule of rules) {
+    if (rule.methods && !rule.methods.includes(method)) continue;
+    const match = matchPlatformCloudExtensionUsageTemplate(
+      suffix,
+      rule.pathTemplate,
+    );
+    if (!match) continue;
+    const operation =
+      rule.operationByMethod?.[method] ?? method.toLowerCase();
+    const resourceIdParam = rule.resourceIdParam ?? "resourceId";
+    const rawResourceId = match[resourceIdParam];
+    const installationId =
+      session.installationId ??
+      safePlatformCloudExtensionContextId(
+        request.headers.get(
+          PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
+        ),
+      );
+    return {
+      meterId: `${rule.meterIdPrefix}${operation}`,
+      ...(rule.resourceFamily ? { resourceFamily: rule.resourceFamily } : {}),
+      ...(rawResourceId
+        ? {
+            resourceId: `${rule.resourceIdPrefix ?? ""}${rawResourceId}`,
+          }
+        : {}),
+      operation,
+      kind: rule.kind,
+      quantity: rule.quantity,
+      ...(installationId ? { installationId } : {}),
+    };
+  }
+  return undefined;
+}
+
+function matchPlatformCloudExtensionUsageTemplate(
+  suffix: string,
+  template: string,
+): Record<string, string> | undefined {
+  const pathSegments = pathSegmentsForUsageMatch(suffix);
+  const templateSegments = pathSegmentsForUsageMatch(template);
+  if (pathSegments.length !== templateSegments.length) return undefined;
+  const params: Record<string, string> = {};
+  for (const [index, templateSegment] of templateSegments.entries()) {
+    const pathSegment = pathSegments[index];
+    if (pathSegment === undefined) return undefined;
+    if (templateSegment === "*") continue;
+    if (templateSegment.startsWith(":")) {
+      const key = templateSegment.slice(1);
+      if (!key) return undefined;
+      params[key] = pathSegment;
+      continue;
+    }
+    if (templateSegment !== pathSegment) return undefined;
+  }
+  return params;
+}
+
+function pathSegmentsForUsageMatch(path: string): readonly string[] {
+  return path
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+}
+
+function platformCloudExtensionClientHeaders(source: Headers): Headers {
+  const headers = new Headers(source);
+  for (const header of PLATFORM_CLOUD_EXTENSION_USAGE_HEADERS) {
+    headers.delete(header);
+  }
+  return headers;
+}
+
+function platformCloudExtensionUsageFailure(
+  reason: string,
+): { readonly ok: false; readonly response: Response } {
+  return {
+    ok: false,
+    response: Response.json(
+      {
+        error: "cloud_extension_usage_metering_failed",
+        reason,
+      },
+      { status: 502 },
+    ),
+  };
+}
+
+function parsePlatformCloudUsageMeters(
+  raw: string,
+): { readonly ok: true; readonly value: readonly PlatformCloudUsageMeter[] } | {
+  readonly ok: false;
+  readonly error: string;
+} {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "usage_meters_invalid_json" };
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > 32) {
+    return { ok: false, error: "usage_meters_invalid" };
+  }
+  const meters: PlatformCloudUsageMeter[] = [];
+  for (const entry of parsed) {
+    const record = objectRecord(entry);
+    const meterId = optionalMeterString(record.meterId);
+    const kind = optionalMeterString(record.kind);
+    const quantity = numberValue(record.quantity);
+    if (!meterId || !kind || quantity === undefined || quantity < 0) {
+      return { ok: false, error: "usage_meter_invalid" };
+    }
+    const resourceMetadata = usageMetadata(record.resourceMetadata);
+    if (resourceMetadata === undefined && record.resourceMetadata !== undefined) {
+      return { ok: false, error: "usage_resource_metadata_invalid" };
+    }
+    const meter: PlatformCloudUsageMeter = {
+      meterId,
+      kind,
+      quantity,
+      ...(safePlatformCloudExtensionContextId(valueString(record.installationId))
+        ? {
+            installationId: safePlatformCloudExtensionContextId(
+              valueString(record.installationId),
+            ),
+          }
+        : {}),
+      ...(optionalMeterString(record.resourceFamily)
+        ? { resourceFamily: optionalMeterString(record.resourceFamily) }
+        : {}),
+      ...(optionalMeterString(record.resourceId)
+        ? { resourceId: optionalMeterString(record.resourceId) }
+        : {}),
+      ...(optionalMeterString(record.operation)
+        ? { operation: optionalMeterString(record.operation) }
+        : {}),
+      ...(resourceMetadata ? { resourceMetadata } : {}),
+      ...(nonNegativeSafeInteger(record.usdMicros)
+        ? { usdMicros: Number(record.usdMicros) }
+        : {}),
+      ...(numberValue(record.credits) !== undefined
+        ? { credits: numberValue(record.credits) }
+        : {}),
+    };
+    meters.push(meter);
+  }
+  return { ok: true, value: meters };
+}
+
+function parsePlatformCloudUsagePriceBook(
+  raw: unknown,
+): { readonly ok: true; readonly value: PlatformCloudUsagePriceBook } | {
+  readonly ok: false;
+  readonly error: string;
+} {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { ok: false, error: "usage_price_book_missing" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "usage_price_book_invalid_json" };
+  }
+  const record = objectRecord(parsed);
+  const minimumGrossMarginBps = nonNegativeSafeInteger(
+    record.minimumGrossMarginBps,
+  )
+    ? Number(record.minimumGrossMarginBps)
+    : 0;
+  if (minimumGrossMarginBps >= 10_000) {
+    return { ok: false, error: "usage_price_book_margin_invalid" };
+  }
+  const rawMeters = record.meters;
+  if (!Array.isArray(rawMeters) || rawMeters.length === 0) {
+    return { ok: false, error: "usage_price_book_meters_missing" };
+  }
+  const meters: PlatformCloudUsagePriceBookMeter[] = [];
+  for (const entry of rawMeters) {
+    const row = objectRecord(entry);
+    const meterId = optionalMeterString(row.meterId);
+    const meterIdPrefix = optionalMeterString(row.meterIdPrefix);
+    const kind = optionalMeterString(row.kind);
+    if (!kind || Boolean(meterId) === Boolean(meterIdPrefix)) {
+      return { ok: false, error: "usage_price_book_meter_invalid" };
+    }
+    const chargePerUnit = optionalNonNegativeInteger(
+      row.chargeUsdMicrosPerUnit,
+    );
+    const chargePerMillion = optionalNonNegativeInteger(
+      row.chargeUsdMicrosPerMillionUnits,
+    );
+    const costPerUnit = optionalNonNegativeInteger(
+      row.estimatedCostUsdMicrosPerUnit,
+    );
+    const costPerMillion = optionalNonNegativeInteger(
+      row.estimatedCostUsdMicrosPerMillionUnits,
+    );
+    if (
+      (chargePerUnit === undefined) === (chargePerMillion === undefined) ||
+      (costPerUnit === undefined) === (costPerMillion === undefined)
+    ) {
+      return { ok: false, error: "usage_price_book_meter_invalid" };
+    }
+    const charge = chargePerUnit ?? chargePerMillion ?? 0;
+    const cost = costPerUnit ?? costPerMillion ?? 0;
+    if (!grossMarginAllowed(charge, cost, minimumGrossMarginBps)) {
+      return { ok: false, error: "usage_price_book_margin_too_low" };
+    }
+    meters.push({
+      ...(meterId ? { meterId } : {}),
+      ...(meterIdPrefix ? { meterIdPrefix } : {}),
+      kind,
+      ...(chargePerUnit !== undefined
+        ? { chargeUsdMicrosPerUnit: chargePerUnit }
+        : {}),
+      ...(chargePerMillion !== undefined
+        ? { chargeUsdMicrosPerMillionUnits: chargePerMillion }
+        : {}),
+      ...(costPerUnit !== undefined
+        ? { estimatedCostUsdMicrosPerUnit: costPerUnit }
+        : {}),
+      ...(costPerMillion !== undefined
+        ? { estimatedCostUsdMicrosPerMillionUnits: costPerMillion }
+        : {}),
+      ...(optionalNonNegativeInteger(row.minimumChargeUsdMicros) !== undefined
+        ? {
+            minimumChargeUsdMicros: optionalNonNegativeInteger(
+              row.minimumChargeUsdMicros,
+            ),
+          }
+        : {}),
+    });
+  }
+  return { ok: true, value: { minimumGrossMarginBps, meters } };
+}
+
+function pricePlatformCloudUsageMeter(
+  meter: PlatformCloudUsageMeter,
+  priceBook: PlatformCloudUsagePriceBook,
+): { readonly ok: true; readonly value: number } | {
+  readonly ok: false;
+  readonly error: string;
+} {
+  const entry = priceBook.meters.find(
+    (candidate) =>
+      candidate.kind === meter.kind &&
+      (candidate.meterId === meter.meterId ||
+        (candidate.meterIdPrefix !== undefined &&
+          meter.meterId.startsWith(candidate.meterIdPrefix))),
+  );
+  if (!entry) return { ok: false, error: "usage_price_missing" };
+  const raw =
+    entry.chargeUsdMicrosPerUnit !== undefined
+      ? Math.ceil(meter.quantity * entry.chargeUsdMicrosPerUnit)
+      : Math.ceil(
+          (meter.quantity * (entry.chargeUsdMicrosPerMillionUnits ?? 0)) /
+            1_000_000,
+        );
+  const minimum =
+    meter.quantity > 0 ? (entry.minimumChargeUsdMicros ?? 0) : 0;
+  const usdMicros = Math.max(raw, minimum);
+  if (!Number.isSafeInteger(usdMicros) || usdMicros < 0) {
+    return { ok: false, error: "usage_price_invalid" };
+  }
+  return { ok: true, value: usdMicros };
+}
+
+function grossMarginAllowed(
+  chargeUsdMicros: number,
+  estimatedCostUsdMicros: number,
+  minimumGrossMarginBps: number,
+): boolean {
+  return (
+    chargeUsdMicros * (10_000 - minimumGrossMarginBps) >=
+    estimatedCostUsdMicros * 10_000
+  );
+}
+
+function platformCloudUsageEventKind(value: string): UsageEventKind | undefined {
+  switch (value) {
+    case "runner_minute":
+    case "artifact_storage_gb_hour":
+    case "backup_storage_gb_hour":
+    case "egress_gb":
+    case "operation":
+    case "gateway_compute":
+    case "gateway_storage_gb_hour":
+    case "ai_request":
+    case "ai_input_token":
+    case "ai_output_token":
+      return value;
+  }
+  return undefined;
+}
+
+function usageMetadata(value: unknown): UsageResourceMetadata | undefined {
+  if (value === undefined) return {};
+  const record = objectRecord(value);
+  if (record !== value) return undefined;
+  const normalized: Record<string, UsageResourceMetadataValue> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (!key.trim()) return undefined;
+    if (
+      entry !== null &&
+      typeof entry !== "string" &&
+      typeof entry !== "number" &&
+      typeof entry !== "boolean"
+    ) {
+      return undefined;
+    }
+    if (typeof entry === "number" && !Number.isFinite(entry)) {
+      return undefined;
+    }
+    normalized[key] = entry;
+  }
+  return normalized;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function optionalMeterString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 256 ? trimmed : undefined;
+}
+
+function safePlatformCloudExtensionContextId(
+  value: string | null | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.:-]{1,128}$/u.test(trimmed) ? trimmed : undefined;
+}
+
+function isoHeaderValue(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
+function valueString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegativeSafeInteger(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    Number.isFinite(value) &&
+    value >= 0
+  );
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return nonNegativeSafeInteger(value) ? Number(value) : undefined;
 }
 
 export async function verifyPlatformCloudExtensionSession(

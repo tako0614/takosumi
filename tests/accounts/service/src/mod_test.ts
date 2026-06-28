@@ -7,6 +7,8 @@ import {
   takosumiAccountsCapsuleDeploymentPlanRunsPath,
   takosumiAccountsCapsuleEventsPath,
   takosumiAccountsCapsulePath,
+  takosumiAccountsCapsuleServiceRotateTokenPath,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
   takosumiAccountsPrivacyRequestCompletePath,
   takosumiAccountsPrivacyRequestPath,
 } from "@takosjp/takosumi-accounts-contract";
@@ -237,6 +239,7 @@ function testCapsuleRouteNeedsAccountBearer(
       kind === "deployment-plan-run" ||
       kind === "rollback" ||
       kind === "materialize" ||
+      kind === "service-rotate-token" ||
       kind === "export")
   ) {
     return true;
@@ -2915,6 +2918,203 @@ test("accounts handler requires session auth and valid scopes for personal acces
     }),
   );
   expect(invalidScopeResponse.status).toEqual(400);
+});
+
+test("accounts handler rotates an AI Gateway runtime service token for an owned Capsule projection", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    clients: [
+      {
+        clientId: "takosumi-cloud-extensions",
+        redirectUris: ["https://app.takosumi.test/oauth/callback"],
+        clientSecret: "client-secret",
+      },
+    ],
+    runtimeServiceTokens: {
+      introspectionClientId: "takosumi-cloud-extensions",
+    },
+  });
+  const sessionId = seedAccountSession(store, "tsub_runtime_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_runtime_owner",
+    "acct_runtime",
+    "space_runtime",
+  );
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_runtime",
+    accountId: "acct_runtime",
+    workspaceId: "space_runtime",
+    appId: "example.runtime",
+    sourceGitUrl: "https://github.com/example/runtime",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:runtime",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_runtime_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
+        "inst_runtime",
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          scopes: ["ai.models.read", "ai.chat", "ai.embeddings"],
+          ttlSeconds: 900,
+        }),
+      },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(body.token_type).toEqual("Bearer");
+  expect(body.token).toStartWith("taksrv_");
+  expect(body.scope).toEqual("ai.models.read ai.chat ai.embeddings");
+  expect(body.service).toEqual({
+    id: "takosumi.ai.gateway",
+    status: "active",
+    scopes: ["ai.models.read", "ai.chat", "ai.embeddings"],
+  });
+
+  const introspection = await handler(
+    new Request(`${testIssuer}/oauth/introspect`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: body.token,
+        client_id: "takosumi-cloud-extensions",
+        client_secret: "client-secret",
+      }),
+    }),
+  );
+  expect(introspection.status).toEqual(200);
+  const introspectionBody = await introspection.json();
+  expect(introspectionBody).toMatchObject({
+    active: true,
+    client_id: "takosumi-cloud-extensions",
+    sub: "svc:takosumi.ai.gateway:inst_runtime",
+    scope: "ai.models.read ai.chat ai.embeddings",
+    takosumi: {
+      installation_id: "inst_runtime",
+      app_id: "example.runtime",
+      space_id: "space_runtime",
+      role: "runtime",
+    },
+  });
+});
+
+test("accounts handler constrains AI Gateway runtime service token rotation", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_runtime_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_runtime_owner",
+    "acct_runtime",
+    "space_runtime",
+  );
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_runtime",
+    accountId: "acct_runtime",
+    workspaceId: "space_runtime",
+    appId: "example.runtime",
+    sourceGitUrl: "https://github.com/example/runtime",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:runtime",
+    mode: "shared-cell",
+    status: "ready",
+    createdBySubject: "tsub_runtime_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.savePersonalAccessToken("takpat_read_runtime", {
+    tokenId: "pat_read_runtime",
+    tokenPrefix: "takpat_read",
+    subject: "tsub_runtime_owner",
+    name: "read only",
+    scopes: ["read"],
+    createdAt: now,
+  });
+  const path = `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
+    "inst_runtime",
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  )}`;
+  const configuredHandler = createAccountsHandler({
+    store,
+    runtimeServiceTokens: {
+      introspectionClientId: "takosumi-cloud-extensions",
+    },
+  });
+  const unconfiguredHandler = createAccountsHandler({ store });
+
+  const readOnlyPat = await configuredHandler(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takpat_read_runtime",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ scopes: ["ai.chat"], ttlSeconds: 900 }),
+    }),
+  );
+  expect(readOnlyPat.status).toEqual(403);
+
+  const invalidScope = await configuredHandler(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ scopes: ["admin"], ttlSeconds: 900 }),
+    }),
+  );
+  expect(invalidScope.status).toEqual(400);
+
+  const unconfigured = await unconfiguredHandler(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ scopes: ["ai.chat"], ttlSeconds: 900 }),
+    }),
+  );
+  expect(unconfigured.status).toEqual(503);
+
+  const unknownService = await configuredHandler(
+    new Request(
+      `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
+        "inst_runtime",
+        "takosumi.storage.workspace",
+      )}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ scopes: ["ai.chat"], ttlSeconds: 900 }),
+      },
+    ),
+  );
+  expect(unknownService.status).toEqual(404);
 });
 
 test("accounts handler records privacy export requests for the signed-in account", async () => {

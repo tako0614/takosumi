@@ -7,11 +7,13 @@
 // service binding. The OSS worker stays Cloud-feature-agnostic — it never names
 // a Cloud feature (no AI Gateway, no Cloudflare compatibility, no managed
 // resource enum). Which paths exist, which binding each proxies to, and which
-// scopes they require are supplied entirely by the operator/Cloud via the
-// `TAKOSUMI_CLOUD_EXTENSIONS` env var. When that env is empty or unset, every
-// extension path 404s.
+// scopes they require, and any operator-supplied fallback metering rules are
+// supplied entirely by the operator/Cloud via the `TAKOSUMI_CLOUD_EXTENSIONS`
+// env var. When that env is empty or unset, every extension path 404s.
 //
-// Descriptors are intentionally opaque: `{ basePath, bindingName, requiredScopes? }`.
+// Descriptors are intentionally generic: `{ basePath, bindingName,
+// requiredScopes?, fallbackUsage? }`. The OSS seam records priced usage from the
+// generic descriptor shape, but never names a concrete Cloud feature.
 
 export interface PlatformCloudExtensionRoute {
   /** Path prefix this descriptor matches (and proxies to its binding). */
@@ -23,6 +25,27 @@ export interface PlatformCloudExtensionRoute {
    * When omitted, any authenticated platform session may reach the binding.
    */
   readonly requiredScopes?: readonly string[];
+  /**
+   * Optional generic metering fallback for closed Cloud extensions that have not
+   * yet emitted platform usage headers. The rule describes path/method matching
+   * and customer-facing meter names; it does not encode any provider-specific
+   * behavior in OSS code.
+   */
+  readonly fallbackUsage?: readonly PlatformCloudExtensionFallbackUsageRule[];
+}
+
+export interface PlatformCloudExtensionFallbackUsageRule {
+  /** Path template relative to `basePath`; supports literal segments, `*`, and `:param`. */
+  readonly pathTemplate: `/${string}`;
+  /** HTTP methods this rule applies to. Omitted means every method. */
+  readonly methods?: readonly string[];
+  readonly meterIdPrefix: string;
+  readonly resourceFamily?: string;
+  readonly resourceIdPrefix?: string;
+  readonly resourceIdParam?: string;
+  readonly kind: string;
+  readonly quantity: number;
+  readonly operationByMethod?: Readonly<Record<string, string>>;
 }
 
 export const PLATFORM_CLOUD_EXTENSIONS_ENV = "TAKOSUMI_CLOUD_EXTENSIONS";
@@ -83,10 +106,15 @@ function platformCloudExtensionRouteFromJson(
     record.requiredScopes,
     label,
   );
+  const fallbackUsage = platformCloudExtensionFallbackUsage(
+    record.fallbackUsage,
+    label,
+  );
   return {
     basePath: basePath as `/${string}`,
     bindingName,
     ...(requiredScopes ? { requiredScopes } : {}),
+    ...(fallbackUsage ? { fallbackUsage } : {}),
   };
 }
 
@@ -107,6 +135,128 @@ function platformCloudExtensionRequiredScopes(
     return scope.trim();
   });
   return scopes.length > 0 ? scopes : undefined;
+}
+
+function platformCloudExtensionFallbackUsage(
+  value: unknown,
+  label: string,
+): readonly PlatformCloudExtensionFallbackUsageRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label}.fallbackUsage must be an array of objects`);
+  }
+  const rules = value.map((entry, index) =>
+    platformCloudExtensionFallbackUsageRuleFromJson(
+      entry,
+      `${label}.fallbackUsage[${index}]`,
+    ),
+  );
+  return rules.length > 0 ? rules : undefined;
+}
+
+function platformCloudExtensionFallbackUsageRuleFromJson(
+  value: unknown,
+  label: string,
+): PlatformCloudExtensionFallbackUsageRule {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const pathTemplate = record.pathTemplate;
+  if (
+    typeof pathTemplate !== "string" ||
+    !pathTemplate.startsWith("/") ||
+    pathTemplate.includes("//")
+  ) {
+    throw new TypeError(
+      `${label}.pathTemplate must be a path template starting with "/"`,
+    );
+  }
+  const meterIdPrefix = nonEmptyString(record.meterIdPrefix);
+  if (!meterIdPrefix) {
+    throw new TypeError(`${label}.meterIdPrefix must be a non-empty string`);
+  }
+  const kind = nonEmptyString(record.kind);
+  if (!kind) {
+    throw new TypeError(`${label}.kind must be a non-empty string`);
+  }
+  const methods = platformCloudExtensionFallbackUsageMethods(
+    record.methods,
+    label,
+  );
+  const operationByMethod = platformCloudExtensionOperationByMethod(
+    record.operationByMethod,
+    label,
+  );
+  const quantity =
+    typeof record.quantity === "number" &&
+    Number.isFinite(record.quantity) &&
+    record.quantity >= 0
+      ? record.quantity
+      : 1;
+  return {
+    pathTemplate: pathTemplate as `/${string}`,
+    ...(methods ? { methods } : {}),
+    meterIdPrefix,
+    ...(nonEmptyString(record.resourceFamily)
+      ? { resourceFamily: nonEmptyString(record.resourceFamily) }
+      : {}),
+    ...(typeof record.resourceIdPrefix === "string" &&
+    record.resourceIdPrefix.length > 0
+      ? { resourceIdPrefix: record.resourceIdPrefix }
+      : {}),
+    ...(nonEmptyString(record.resourceIdParam)
+      ? { resourceIdParam: nonEmptyString(record.resourceIdParam) }
+      : {}),
+    kind,
+    quantity,
+    ...(operationByMethod ? { operationByMethod } : {}),
+  };
+}
+
+function platformCloudExtensionFallbackUsageMethods(
+  value: unknown,
+  label: string,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label}.methods must be an array of strings`);
+  }
+  const methods = value.map((method) => {
+    const normalized = nonEmptyString(method)?.toUpperCase();
+    if (!normalized) {
+      throw new TypeError(`${label}.methods entries must be non-empty strings`);
+    }
+    return normalized;
+  });
+  return methods.length > 0 ? methods : undefined;
+}
+
+function platformCloudExtensionOperationByMethod(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label}.operationByMethod must be an object`);
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const normalized: Record<string, string> = {};
+  for (const [method, operation] of entries) {
+    const normalizedMethod = method.trim().toUpperCase();
+    const normalizedOperation = nonEmptyString(operation);
+    if (!normalizedMethod || !normalizedOperation) {
+      throw new TypeError(
+        `${label}.operationByMethod must map methods to non-empty strings`,
+      );
+    }
+    normalized[normalizedMethod] = normalizedOperation;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function matchPlatformCloudExtensionRoute(

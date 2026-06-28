@@ -13,6 +13,7 @@ import {
   TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
@@ -106,7 +107,7 @@ import {
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
   type StripeBillingCheckoutOptions,
 } from "./billing-checkout.ts";
-import { constantTimeEqual } from "./encoding.ts";
+import { base64UrlEncodeBytes, constantTimeEqual } from "./encoding.ts";
 import {
   extractAccountSessionId,
   handleAccountSessionMeDelete,
@@ -264,6 +265,7 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
+  runtimeServiceTokens?: RuntimeServiceTokenOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -309,6 +311,7 @@ export interface EphemeralAccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
+  runtimeServiceTokens?: RuntimeServiceTokenOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -343,6 +346,12 @@ export interface ServiceGraphMaterialResolverHttpOptions {
   readonly billingPortalUrl?: string;
   readonly internalUrl?: string;
   readonly allowDeployControlCapsules?: boolean;
+}
+
+export interface RuntimeServiceTokenOptions {
+  readonly introspectionClientId: string;
+  readonly defaultTtlSeconds?: number;
+  readonly maxTtlSeconds?: number;
 }
 
 export interface AccountsServerOptions extends AccountsHandlerOptions {
@@ -557,6 +566,7 @@ export async function createEphemeralAccountsHandler(
     controlPlaneOperations: options.controlPlaneOperations,
     publicBillingPlans: options.publicBillingPlans,
     billingCheckout: options.billingCheckout,
+    runtimeServiceTokens: options.runtimeServiceTokens,
     bindingMaterializer: options.bindingMaterializer,
     sharedCellRuntime: options.sharedCellRuntime,
     materializeWorker: options.materializeWorker,
@@ -1140,6 +1150,18 @@ export function createAccountsHandler(
         });
       }
       if (
+        installationRoute.kind === "service-rotate-token" &&
+        request.method === "POST"
+      ) {
+        return await handleRotateRuntimeServiceToken({
+          capsuleId: installationRoute.capsuleId,
+          serviceId: installationRoute.serviceId,
+          request,
+          store,
+          runtimeServiceTokens: options.runtimeServiceTokens,
+        });
+      }
+      if (
         installationRoute.kind === "billing-usage-reports" &&
         request.method === "POST"
       ) {
@@ -1188,6 +1210,155 @@ export function createAccountsHandler(
     const response = await inner(request);
     return withSecurityHeaders(response, isProductionIssuer);
   };
+}
+
+const AI_GATEWAY_RUNTIME_SERVICE_SCOPES = [
+  "ai.models.read",
+  "ai.chat",
+  "ai.embeddings",
+] as const;
+const AI_GATEWAY_RUNTIME_SERVICE_SCOPE_SET = new Set<string>(
+  AI_GATEWAY_RUNTIME_SERVICE_SCOPES,
+);
+const DEFAULT_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 15 * 60;
+const MAX_RUNTIME_SERVICE_TOKEN_TTL_SECONDS = 60 * 60;
+
+async function handleRotateRuntimeServiceToken(input: {
+  capsuleId: string;
+  serviceId: string;
+  request: Request;
+  store: AccountsStore;
+  runtimeServiceTokens?: RuntimeServiceTokenOptions;
+}): Promise<Response> {
+  if (input.serviceId !== TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY) {
+    return errorJson(
+      "platform_service_not_found",
+      "platform service not found",
+      404,
+    );
+  }
+  if (!input.runtimeServiceTokens?.introspectionClientId) {
+    return errorJson(
+      "feature_unavailable",
+      "Runtime service token rotation is not configured.",
+      503,
+    );
+  }
+  const body = await readJsonObject(input.request);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const scopes = runtimeServiceTokenScopesValue(body.scopes);
+  if (!scopes) {
+    return errorJson(
+      "invalid_request",
+      "scopes must be omitted or a non-empty subset of the AI Gateway runtime scopes",
+      400,
+    );
+  }
+  const ttlSeconds = runtimeServiceTokenTtlSecondsValue({
+    value: body.ttlSeconds ?? body.ttl_seconds,
+    defaultTtlSeconds: input.runtimeServiceTokens.defaultTtlSeconds,
+    maxTtlSeconds: input.runtimeServiceTokens.maxTtlSeconds,
+  });
+  if (ttlSeconds === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "ttlSeconds must be a positive integer within the runtime token maximum",
+      400,
+    );
+  }
+  const installation = await input.store.findAppCapsule(input.capsuleId);
+  if (!installation) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
+  const now = Date.now();
+  const expiresAt = now + ttlSeconds * 1000;
+  const token = generateRuntimeServiceToken();
+  await input.store.saveAccessToken(token, {
+    clientId: input.runtimeServiceTokens.introspectionClientId,
+    subject: `svc:${input.serviceId}:${input.capsuleId}`,
+    takosumiSubject: installation.createdBySubject,
+    capsuleId: installation.capsuleId,
+    appId: installation.appId,
+    workspaceId: installation.workspaceId,
+    role: "runtime",
+    scope: scopes.join(" "),
+    expiresAt,
+  });
+  return json({
+    token,
+    token_type: "Bearer",
+    expires_in: ttlSeconds,
+    expires_at: new Date(expiresAt).toISOString(),
+    scope: scopes.join(" "),
+    service: {
+      id: input.serviceId,
+      status: "active",
+      scopes,
+    },
+  });
+}
+
+function runtimeServiceTokenScopesValue(
+  value: unknown,
+): readonly string[] | undefined {
+  if (value === undefined) return AI_GATEWAY_RUNTIME_SERVICE_SCOPES;
+  if (!Array.isArray(value) || value.length < 1) return undefined;
+  const scopes: string[] = [];
+  const seen = new Set<string>();
+  for (const scope of value) {
+    if (
+      typeof scope !== "string" ||
+      !AI_GATEWAY_RUNTIME_SERVICE_SCOPE_SET.has(scope) ||
+      seen.has(scope)
+    ) {
+      return undefined;
+    }
+    seen.add(scope);
+    scopes.push(scope);
+  }
+  return scopes;
+}
+
+function runtimeServiceTokenTtlSecondsValue(input: {
+  value: unknown;
+  defaultTtlSeconds?: number;
+  maxTtlSeconds?: number;
+}): number | "invalid" {
+  const defaultTtlSeconds = checkedPositiveInteger(
+    input.defaultTtlSeconds,
+    DEFAULT_RUNTIME_SERVICE_TOKEN_TTL_SECONDS,
+  );
+  const maxTtlSeconds = checkedPositiveInteger(
+    input.maxTtlSeconds,
+    MAX_RUNTIME_SERVICE_TOKEN_TTL_SECONDS,
+  );
+  if (input.value === undefined) {
+    return Math.min(defaultTtlSeconds, maxTtlSeconds);
+  }
+  if (
+    typeof input.value !== "number" ||
+    !Number.isInteger(input.value) ||
+    input.value <= 0 ||
+    input.value > maxTtlSeconds
+  ) {
+    return "invalid";
+  }
+  return input.value;
+}
+
+function checkedPositiveInteger(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return Number.isInteger(value) && value !== undefined && value > 0
+    ? value
+    : fallback;
+}
+
+function generateRuntimeServiceToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `taksrv_${base64UrlEncodeBytes(bytes)}`;
 }
 
 function billingCheckoutSmokeAllowed(
@@ -1494,6 +1665,7 @@ function installationRouteAccountAccess(
       route.kind === "deployment-plan-run" ||
       route.kind === "rollback" ||
       route.kind === "materialize" ||
+      route.kind === "service-rotate-token" ||
       route.kind === "export") &&
     method === "POST"
   ) {
