@@ -2873,7 +2873,7 @@ test("controller drives the enforcement port through plan reserve and apply capt
   expect(captureRunBillingCalls).toHaveLength(1);
   expect(captureRunBillingCalls[0]).toMatchObject({
     spaceId: "space_test",
-    planRunId: planRun.id,
+    runId: planRun.id,
     applyRunId: applyRun.id,
   });
   expect((await store.getCreditReservationForRun(planRun.id))?.status).toBe(

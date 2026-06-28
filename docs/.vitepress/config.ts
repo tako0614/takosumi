@@ -80,7 +80,6 @@ export default defineConfig({
     "final-plan.md",
     "core-spec.md",
     "core-conformance.md",
-    "service-graph-spec.md",
     "operations/**/*.md",
     "reference/ai-gateway.md",
     "reference/gateway-opentofu-architecture.md",

@@ -45,7 +45,8 @@ export async function deployUpload(
   request: InternalDeployRequest,
   context: DeployControlActorContext = {},
 ): Promise<DeployResponse> {
-  requireNonEmptyString(request.spaceId, "spaceId");
+  const workspaceId = request.workspaceId ?? request.spaceId;
+  requireNonEmptyString(workspaceId, "spaceId");
   requireNonEmptyString(request.name, "name");
   requireNonEmptyString(request.snapshotId, "snapshotId");
   const newId = deps.newId ?? defaultId;
@@ -67,18 +68,16 @@ export async function deployUpload(
   const snapshot = await deps.controller.getSourceSnapshot(request.snapshotId);
   if (
     (snapshot.origin !== "upload" && snapshot.origin !== "artifact") ||
-    snapshot.spaceId !== request.spaceId
+    snapshot.workspaceId !== workspaceId
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `snapshot ${request.snapshotId} is not an upload/artifact snapshot in space ${request.spaceId}`,
+      `snapshot ${request.snapshotId} is not an upload/artifact snapshot in space ${workspaceId}`,
     );
   }
 
   // 2. Resolve or create the Installation @space/name.
-  const existingForSpace = await deps.installations.listCapsules(
-    request.spaceId,
-  );
+  const existingForSpace = await deps.installations.listCapsules(workspaceId);
   let installation = existingForSpace.find(
     (row) => row.name === request.name && row.environment === environment,
   );
@@ -89,7 +88,7 @@ export async function deployUpload(
     if (installation.sourceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation @${request.spaceId}/${request.name} is bound to a git ` +
+        `installation @${workspaceId}/${request.name} is bound to a git ` +
           `Source; deploy through its Source instead of an upload`,
       );
     }
@@ -108,7 +107,7 @@ export async function deployUpload(
   } else {
     const config = buildDefaultInstallConfig({
       id: newId("icfg"),
-      spaceId: request.spaceId,
+      spaceId: workspaceId,
       name: request.name,
       vars: request.vars,
       outputAllowlist: request.outputAllowlist,
@@ -118,7 +117,7 @@ export async function deployUpload(
     });
     await deps.installations.putInstallConfig(config);
     installation = await deps.installations.createCapsule({
-      workspaceId: request.spaceId,
+      workspaceId,
       name: request.name,
       environment,
       installConfigId: config.id,
@@ -193,7 +192,7 @@ async function putProviderConnections(input: {
   await input.deps.installations.putCapsuleProviderEnvBindingSet({
     id: input.id,
     workspaceId: input.installation.workspaceId,
-    spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
+    spaceId: input.installation.workspaceId ?? input.installation.spaceId,
     capsuleId: input.installation.id,
     installationId: input.installation.id,
     environment: input.installation.environment,
@@ -278,8 +277,7 @@ function buildDefaultInstallConfig(input: {
   readonly name: string;
   readonly vars: Readonly<Record<string, JsonValue>> | undefined;
   readonly outputAllowlist:
-    | InternalDeployRequest["outputAllowlist"]
-    | undefined;
+    InternalDeployRequest["outputAllowlist"] | undefined;
   readonly runnerProfileId: string | undefined;
   readonly modulePath: string | undefined;
   readonly now: () => Date;

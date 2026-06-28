@@ -425,7 +425,7 @@ function runReleaseCommand(
       ? { TAKOSUMI_CAPSULE_ID: payload.installation.id }
       : {}),
     ...(payload.deployment?.id
-      ? { TAKOSUMI_DEPLOYMENT_ID: payload.deployment.id }
+      ? { TAKOSUMI_STATE_VERSION_ID: payload.deployment.id }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({

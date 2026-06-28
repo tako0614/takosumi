@@ -1,9 +1,9 @@
 # Takosumi Core Spec
 
-Last updated: 2026-06-19
+Last updated: 2026-06-28
 
-This document is the current OSS core specification. Product direction is fixed
-by [Takosumi Final Plan](./final-plan.md).
+This document is the current OSS core specification and describes the live model.
+Product direction is fixed by [Takosumi Final Plan](./final-plan.md).
 
 ## Definition
 
@@ -82,10 +82,15 @@ closed Takosumi Cloud operator modules
 | Runner             | Local/docker/remote/operator/cloud execution worker                        |
 | AuditEvent         | Actor/action/target/result evidence                                        |
 
-Existing internal names such as `Space`, `Installation`, and `ProviderEnv` are
-legacy implementation names while the codebase is being migrated. New public
-docs and UI should use Workspace, Project, Capsule, ProviderConnection,
-ProviderBinding, CredentialRecipe, Run, StateVersion, Output, and AuditEvent.
+This is the live public model. The retired `Space` / `Installation` /
+`StateSnapshot` / `OutputSnapshot` / `ProviderEnv` / `Deployment` /
+Provider Catalog names from the previous architecture have been renamed to this
+model across contract, core, runner, dashboard, and storage (with non-destructive
+rename-aside migrations on both storage engines). Docs and UI use Workspace,
+Project, Capsule, ProviderConnection, ProviderBinding, CredentialRecipe, Run,
+StateVersion, Output, and AuditEvent. A few internal helpers (such as the
+`SourceSnapshot` archive type and `InstallConfig` service-side config record)
+keep descriptive names that are not public product nouns.
 
 ## Source And First-Deploy Fast Path
 
@@ -349,7 +354,7 @@ runner activator runs `executor = "runner"` argv commands in the restored source
 snapshot and injects only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`,
 `TAKOSUMI_RELEASE_CONTEXT_JSON`, `TAKOSUMI_RELEASE_RUN_ID`,
 `TAKOSUMI_APPLY_RUN_ID`, `TAKOSUMI_CAPSULE_ID`, and
-`TAKOSUMI_DEPLOYMENT_ID`. `TAKOSUMI_RELEASE_CONTEXT_JSON` is a generic
+`TAKOSUMI_STATE_VERSION_ID`. `TAKOSUMI_RELEASE_CONTEXT_JSON` is a generic
 `takosumi.release-context@v1` object with release/apply/deployment ids and the
 same non-sensitive outputs; it is not a provider-specific or DB-specific
 contract. Provider credentials
@@ -398,24 +403,29 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 
 ## Cloud-Only Boundary
 
-Compatibility Gateway and managed resources are not part of OSS Takosumi.
+Compatibility Gateway and managed resources are not part of OSS Takosumi. They
+live only in the closed `takosumi-cloud` package, which composes on top of OSS
+through an additive route proxy and the billing/quota ports (one-way Cloud->OSS).
 
 The following belong only to closed Takosumi Cloud:
 
 ```text
 Cloudflare Compatibility Gateway
+Takosumi AI Gateway
 Takosumi Managed Edge Worker
 Takosumi Object Storage
 Takosumi App Database
 Takosumi KV
 Takosumi Queue
 Takosumi Cloud Container
-official billing/quota/usage/support
+official (enforced) billing/quota/usage/support
 official resource pools
 ```
 
 OSS code must not expose provider-compatible Gateway endpoints, default Gateway
-runner profiles, run-key minting, or managed resource backends.
+runner profiles, run-key minting, managed resource backends, or enforced billing
+gates. OSS billing is `disabled` or `showback` only; it estimates and records
+without ever blocking apply.
 
 ## MVP Order
 

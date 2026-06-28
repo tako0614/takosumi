@@ -16,7 +16,7 @@ inputs:
     description: Takosumi API bearer for /api/v1 upload, deploy, and run reads.
     required: true
   providers:
-    description: Comma-separated provider connection bindings, e.g. cloudflare=pcn_cf or cloudflare=takos_provided.
+    description: Comma-separated provider bindings to ProviderConnection ids, e.g. cloudflare=pcn_cf. Omit a provider to fall through to the operator default connection.
     required: true
   mode:
     description: apply or plan.
