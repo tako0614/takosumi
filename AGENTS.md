@@ -51,24 +51,27 @@ The two in-process entry points (consumed by both targets) are:
 
 ## Public Surface
 
-Takosumi's customer-facing model is the **17-noun** vocabulary, current and load-bearing: **Workspace / Project /
+Takosumi's customer-facing model is the **17-noun** vocabulary, current and load-bearing — **14 persisted
+entities/nouns** plus the **3 guarded Run operations** (Plan / Apply / Destroy): **Workspace / Project /
 Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run / Plan / Apply / Destroy /
-StateVersion / Output / Runner / AuditEvent / Operator**. The old Space / Installation / OutputSnapshot / StateSnapshot /
+StateVersion / Output / Runner / AuditEvent / Operator**. Plan / Apply / Destroy are not separate ledgers or entities:
+they are the guarded `RunType` operations recorded as `Run` ledger entries (see `Run` below). The old Space / Installation / OutputSnapshot / StateSnapshot /
 Deployment / Provider Catalog / `own_key` / `takos_provided` / Gateway / Service Graph names are retired; do not
 reintroduce them as product nouns.
 
 - `Workspace`: user/team boundary for projects, provider connections, secrets, state isolation, and audit.
 - `Project`: one product, service, application, or infrastructure group.
 - `Capsule`: one OpenTofu/Terraform module execution unit, usually sourced from Git URL + ref + path.
-- `Source`: Git URL / branch / ref / commit / subdirectory path / tarball / upload input.
+- `Source`: Git URL / branch / ref / commit / subdirectory path. Upload/prepared-source snapshots are internal/operator compatibility only, not the public Source model.
 - `ProviderConnection`: provider credential configuration stored in Takosumi and resolved into temporary env/file
   material only while a Run executes.
 - `CredentialRecipe`: provider-specific env/file/pre-run action definition for running an existing Terraform/OpenTofu
   provider. This replaces the old compat-pack idea in OSS.
 - `ProviderBinding`: provider address or alias to ProviderConnection mapping.
 - `Secret`: encrypted backing material. Secret values are write-only to APIs and redacted from logs.
-- `Run`: one init / validate / plan / apply / destroy / refresh / output execution with source snapshot, provider
-  bindings, logs, outputs, state version, actor, and timestamps.
+- `Run`: one execution recorded as a single `Run` ledger entry carrying a `RunType` operation (init / validate / plan /
+  apply / destroy / refresh / output) — so Plan / Apply / Destroy are Run operations, not separate ledgers or entities —
+  with source snapshot, provider bindings, logs, outputs, state version, actor, and timestamps.
 - `StateVersion`: persisted Capsule state generation.
 - `Output`: captured `tofu output -json`, optionally wired into another Capsule's inputs.
 - `Runner`: local/docker/remote/operator/cloud execution boundary for checkout, OpenTofu execution, log streaming,
@@ -114,7 +117,9 @@ run, and credential values / secret outputs are never stored as public ledger va
 Policy evaluates OpenTofu plan JSON in layers (workspace/project policy / capsule policy / provider allowlist /
 provider connection policy / lockfile and mirror policy / module source policy / data-source allowlist / resource-type
 allowlist / scope boundary / action policy / dependency policy / output policy / quota). The runner is the security
-sandbox for git clone / build / OpenTofu execution.
+sandbox for source checkout, generated-root materialization, OpenTofu execution, state capture, output capture, and
+cleanup. App builds and release artifact publication belong in the app repo, CI/release pipeline, or OpenTofu module
+inputs, not in Takosumi runner dispatch semantics.
 
 Do not add OSS code paths that require Takosumi Gateway, Cloudflare WfP, managed resources, or Takosumi-issued
 provider-compatible endpoints. If code needs that behavior, it belongs to `takosumi-cloud/` behind Seam A / Seam B.

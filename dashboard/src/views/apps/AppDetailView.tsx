@@ -167,8 +167,15 @@ function Inner() {
   const otherPublicOutputs = createMemo(() =>
     publicOutputs().filter(([, value]) => !isUrlString(value)),
   );
+  const serviceOpenable = createMemo(
+    () =>
+      capsule()?.status !== "destroyed" &&
+      currentDeployment()?.status !== "destroyed",
+  );
   const launchUrl = createMemo(() =>
-    launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {}),
+    serviceOpenable()
+      ? launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {})
+      : undefined,
   );
 
   /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */
@@ -291,6 +298,7 @@ function Inner() {
                       publicLinkOutputs={publicLinkOutputs()}
                       otherPublicOutputs={otherPublicOutputs()}
                       hasDeployment={currentDeployment() !== undefined}
+                      serviceOpenable={serviceOpenable()}
                       outputsLoading={deployments.loading}
                       producers={producers()}
                       consumers={consumers()}
@@ -328,10 +336,7 @@ function Inner() {
                       capsuleId={capsuleId()}
                       dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
                       onSaved={() =>
-                        void Promise.all([
-                          refetchProfile(),
-                          refetchCapsule(),
-                        ])
+                        void Promise.all([refetchProfile(), refetchCapsule()])
                       }
                     />
                   </Match>
@@ -394,9 +399,7 @@ function dependencyRows(
   side: "producer" | "consumer",
 ): readonly DependencyRow[] {
   if (!inst || !graph) return [];
-  const names = new Map(
-    graph.nodes.map((node) => [node.capsuleId, node.name]),
-  );
+  const names = new Map(graph.nodes.map((node) => [node.capsuleId, node.name]));
   return graph.edges
     .filter((edge) =>
       side === "producer"
@@ -405,9 +408,7 @@ function dependencyRows(
     )
     .map((edge) => {
       const otherId =
-        side === "producer"
-          ? edge.producerCapsuleId
-          : edge.consumerCapsuleId;
+        side === "producer" ? edge.producerCapsuleId : edge.consumerCapsuleId;
       return {
         id: edge.id,
         name: names.get(otherId) ?? otherId,
@@ -419,6 +420,7 @@ function OverviewTab(props: {
   readonly publicLinkOutputs: readonly [string, unknown][];
   readonly otherPublicOutputs: readonly [string, unknown][];
   readonly hasDeployment: boolean;
+  readonly serviceOpenable: boolean;
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
@@ -428,7 +430,11 @@ function OverviewTab(props: {
       <Card>
         <CardHeader
           title={t("app.outputs.title")}
-          subtitle={t("app.outputs.subtitle")}
+          subtitle={
+            props.serviceOpenable
+              ? t("app.outputs.subtitle")
+              : t("app.outputs.deletedSubtitle")
+          }
         />
         <Switch>
           <Match when={props.outputsLoading}>
@@ -445,7 +451,9 @@ function OverviewTab(props: {
             <KVList
               items={props.publicLinkOutputs.map(([name, value]) => ({
                 label: outputLabel(name),
-                value: <OutputValue value={value} />,
+                value: (
+                  <OutputValue value={value} openable={props.serviceOpenable} />
+                ),
               }))}
             />
           </Match>
@@ -456,7 +464,7 @@ function OverviewTab(props: {
             <KVList
               items={props.otherPublicOutputs.map(([name, value]) => ({
                 label: outputLabel(name),
-                value: <OutputValue value={value} />,
+                value: <OutputValue value={value} openable={false} />,
               }))}
             />
           </details>
@@ -510,10 +518,13 @@ function DependencyList(props: {
 }
 
 /** Public output value: http(s) → prominent link; otherwise monospace text. */
-function OutputValue(props: { readonly value: unknown }): JSX.Element {
+function OutputValue(props: {
+  readonly value: unknown;
+  readonly openable?: boolean;
+}): JSX.Element {
   return (
     <Switch fallback={<code>{stringifyOutput(props.value)}</code>}>
-      <Match when={isUrlString(props.value)}>
+      <Match when={isUrlString(props.value) && props.openable !== false}>
         <span class="wa-output-url">
           <Button
             variant="primary"
@@ -528,6 +539,11 @@ function OutputValue(props: { readonly value: unknown }): JSX.Element {
             <summary>{t("app.output.url")}</summary>
             <code>{props.value as string}</code>
           </details>
+        </span>
+      </Match>
+      <Match when={isUrlString(props.value)}>
+        <span class="wa-output-url">
+          <code>{props.value as string}</code>
         </span>
       </Match>
       <Match when={typeof props.value === "string"}>
@@ -915,9 +931,7 @@ function SettingsTab(props: {
         readonly status: string;
       }
     | undefined;
-  readonly providerConnections:
-    | CapsuleProviderConnectionBindings
-    | undefined;
+  readonly providerConnections: CapsuleProviderConnectionBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
   readonly dangerHref: string;

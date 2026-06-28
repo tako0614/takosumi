@@ -104,9 +104,7 @@ describe("Installation detail deployment surface", () => {
   });
 
   test("reads the Deployment ledger through the session client fn", () => {
-    expect(source).toMatch(
-      /createResource\(capsuleId,\s*listDeployments\)/,
-    );
+    expect(source).toMatch(/createResource\(capsuleId,\s*listDeployments\)/);
   });
 
   test("surfaces ONLY allowlist-projected public outputs (no sensitive)", () => {
@@ -140,5 +138,14 @@ describe("Installation detail deployment surface", () => {
     // view renders url-shaped values through the OutputValue link button.
     expect(source).toContain("outputLabel");
     expect(source).toMatch(/href=\{props\.value as string\}/);
+  });
+
+  test("does not offer stale open links for deleted services", () => {
+    expect(source).toContain("serviceOpenable");
+    expect(source).toContain('capsule()?.status !== "destroyed"');
+    expect(source).toContain('currentDeployment()?.status !== "destroyed"');
+    expect(source).toContain('t("app.outputs.deletedSubtitle")');
+    expect(source).toContain("openable={props.serviceOpenable}");
+    expect(source).toContain("props.openable !== false");
   });
 });

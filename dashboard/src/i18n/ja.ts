@@ -221,6 +221,8 @@ export const ja = {
   "app.backToList": "一覧へ",
   "app.outputs.title": "公開リンク",
   "app.outputs.subtitle": "開ける画面やアドレスがある場合に表示します。",
+  "app.outputs.deletedSubtitle":
+    "このサービスは削除済みです。以前のアドレスは記録としてだけ表示します。",
   "app.outputs.empty": "デプロイ後に表示されます。",
   "app.outputs.none": "このサービスには公開リンクがありません。",
   "app.outputs.valuesTitle": "その他の値",
