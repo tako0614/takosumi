@@ -32,6 +32,7 @@ import {
   type LoginEmailAllowlist,
   sharedCellRuntimeBinding,
   type SharedCellRuntimeAllocator,
+  type StripeBillingCheckoutOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -125,7 +126,9 @@ export interface CloudflareWorkerEnv {
   // Shared deploy-control bearer for the in-process transport; must match the
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_MATERIALIZE_DRILL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN?: string;
@@ -168,6 +171,7 @@ export interface CreateCloudflareWorkerOptions {
   readonly controlPlaneOperations?: (
     env: CloudflareWorkerEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
+  readonly stripeFetch?: typeof fetch;
 }
 
 export interface R2Bucket {
@@ -429,6 +433,7 @@ async function buildAccountsHandler(
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     publicBillingPlans: parsePublicBillingPlans(env),
+    billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -1040,6 +1045,72 @@ function parsePublicBillingPlans(
       priceDisplay: entry.priceDisplay,
     };
   });
+}
+
+function parseStripeBillingCheckout(
+  env: CloudflareWorkerEnv,
+  stripeFetch?: typeof fetch,
+): StripeBillingCheckoutOptions | undefined {
+  const stripeSecretKey = optionalString(
+    env.TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY,
+  );
+  const rawPlans = optionalString(env.TAKOSUMI_BILLING_PLANS);
+  const rawRedirectAllowlist = optionalString(
+    env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
+  );
+  const smokeToken = optionalString(
+    env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN,
+  );
+  const configured = Boolean(
+    stripeSecretKey || rawRedirectAllowlist || smokeToken,
+  );
+  if (!configured) return undefined;
+  if (!stripeSecretKey) {
+    throw new TypeError(
+      "Stripe billing checkout requires TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY",
+    );
+  }
+  if (!rawPlans) {
+    throw new TypeError(
+      "Stripe billing checkout requires TAKOSUMI_BILLING_PLANS",
+    );
+  }
+  if (!rawRedirectAllowlist) {
+    throw new TypeError(
+      "Stripe billing checkout requires TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawPlans);
+  } catch {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
+  }
+  return {
+    stripeSecretKey,
+    plans: parsed.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new TypeError(
+          `TAKOSUMI_BILLING_PLANS[${index}] must be an object`,
+        );
+      }
+      const id = optionalString(entry.id);
+      const kind = optionalString(entry.kind);
+      const stripePriceId = optionalString(entry.stripePriceId);
+      if (!id || !kind || !stripePriceId) {
+        throw new TypeError(
+          `TAKOSUMI_BILLING_PLANS[${index}] must include id, kind, and stripePriceId for checkout`,
+        );
+      }
+      return { id, kind, stripePriceId };
+    }),
+    redirectAllowlist: splitList(rawRedirectAllowlist),
+    smokeToken,
+    ...(stripeFetch ? { fetch: stripeFetch } : {}),
+  };
 }
 
 function parseR2ExportWorker(
