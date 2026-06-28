@@ -368,6 +368,7 @@ async function createControlConnection(
   );
   const createRequest: CreateConnectionRequest = {
     workspaceId,
+    spaceId: workspaceId,
     provider: normalizedProvider,
     // Cloudflare gets the dedicated api-token kind; source Git gets the source
     // credential kind; anything else is the generic-env provider kind.

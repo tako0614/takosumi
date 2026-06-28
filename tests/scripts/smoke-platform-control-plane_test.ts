@@ -3,6 +3,7 @@ import {
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
   dryRunResult,
   isSmokeProviderConnectionMatch,
+  isSelectableGenericCapsuleInstallConfig,
   resolveOptions,
   shouldMarkPendingSmokeInstallationError,
 } from "../../scripts/smoke-platform-control-plane.ts";
@@ -402,6 +403,55 @@ test("platform control-plane smoke can require public URL checks for generic Ope
     },
   ]);
   expect(result.inputs.publicUrlCheckNames).toEqual(["launch"]);
+});
+
+test("platform control-plane smoke rejects untyped output allowlist entries before live API calls", async () => {
+  await expect(
+    resolveOptions(
+      {
+        dryRun: true,
+        url: "https://app-staging.takosumi.com",
+        space: "@scratch",
+        appName: "takosumi-untyped-output-test",
+        cloudflareConnectionMode: "none",
+        verificationMode: "opentofu",
+        outputAllowlistJson: JSON.stringify({
+          launch_url: { from: "launch_url", required: true },
+        }),
+      },
+      {
+        TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      },
+    ),
+  ).rejects.toThrow(
+    "output allowlist launch_url.type must be one of string, url, hostname, number, boolean, json",
+  );
+});
+
+test("platform control-plane smoke ignores scoped generic Capsule config remnants", () => {
+  expect(
+    isSelectableGenericCapsuleInstallConfig({
+      id: "icfg_0123456789abcdef",
+      sourceKind: "generic_capsule",
+      spaceId: "space_old",
+      name: "old-upload",
+    }),
+  ).toBe(false);
+  expect(
+    isSelectableGenericCapsuleInstallConfig({
+      id: "icfg_0123456789abcdef",
+      sourceKind: "generic_capsule",
+      workspaceId: "space_old",
+      name: "old-config",
+    }),
+  ).toBe(false);
+  expect(
+    isSelectableGenericCapsuleInstallConfig({
+      id: "generic-opentofu-capsule",
+      sourceKind: "generic_capsule",
+      name: "Generic OpenTofu Capsule",
+    }),
+  ).toBe(true);
 });
 
 test("platform control-plane smoke uses configured public checks for app Workers", async () => {

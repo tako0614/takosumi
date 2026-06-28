@@ -417,6 +417,7 @@ async function createSource(
   }
   const requestBody: CreateSourceRequest = {
     workspaceId,
+    spaceId: workspaceId,
     name,
     url: sourceUrl,
     ...(stringValue(body.defaultRef)
