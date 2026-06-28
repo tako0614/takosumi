@@ -4895,7 +4895,7 @@ export class RunEngine {
         commandCount: commands.length,
         outputCount: Object.keys(nonSensitiveOutputs).length,
       });
-      throw error;
+      return;
     }
     if (result.status === "skipped") return;
     await this.#recordReleaseActivationActivity({
@@ -4911,12 +4911,6 @@ export class RunEngine {
       commandCount: commands.length,
       outputCount: Object.keys(nonSensitiveOutputs).length,
     });
-    if (result.status !== "succeeded") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `pre-destroy release activation ended as ${result.status}`,
-      );
-    }
   }
 
   async #recordReleaseActivationActivity(input: {

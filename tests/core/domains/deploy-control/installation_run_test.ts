@@ -2421,6 +2421,73 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   ]);
 });
 
+test("pre-destroy release command failures do not block OpenTofu destroy", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          pre_destroy: [
+            {
+              id: "delete-worker",
+              executor: "operator",
+              command: ["bun", "run", "takosumi:release", "--", "--destroy"],
+              working_directory: ".",
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      outputAllowlist: {
+        launch_url: { from: "launch_url", type: "url" },
+        takosumi_release: { from: "takosumi_release", type: "json" },
+      },
+    },
+  });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () =>
+        Promise.resolve({
+          status: "failed",
+          message: "worker artifact was already absent",
+        }),
+    },
+  });
+
+  const create = await controller.createInstallationPlan("inst_fixture");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  const destroy =
+    await controller.createInstallationDestroyPlan("inst_fixture");
+  await controller.approveRun(destroy.planRun.id);
+  const { applyRun, installation } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(installation?.status).toBe("destroyed");
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.failed",
+  );
+  expect(activity?.metadata).toMatchObject({
+    commandCount: 1,
+    message: "worker artifact was already absent",
+  });
+});
+
 test("pre-destroy release commands fail destroy when no release activator is configured", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(
