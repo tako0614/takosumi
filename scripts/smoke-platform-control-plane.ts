@@ -151,6 +151,12 @@ type PublicUrlCheckResult = {
   readonly bodyIncludes: readonly string[];
   readonly bodyDigest: string;
 };
+type SmokeStepTiming = {
+  readonly step: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+};
 
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
@@ -197,6 +203,9 @@ export interface PlatformControlPlaneSmokeResult {
   readonly kind: typeof PLATFORM_CONTROL_PLANE_SMOKE_KIND;
   readonly status: "passed" | "dry_run" | "failed";
   readonly generatedAt: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
   readonly serviceUrl: string;
   readonly scratchSpaceId: string;
   readonly capsuleModule: string;
@@ -207,6 +216,8 @@ export interface PlatformControlPlaneSmokeResult {
   readonly steps: readonly string[];
   /** Checkpoints that were actually completed before the result was written. */
   readonly completedSteps: readonly string[];
+  /** Per-checkpoint wall-clock timings for deploy-speed regressions. */
+  readonly stepTimings: readonly SmokeStepTiming[];
   readonly appName: string;
   readonly environment: string;
   readonly connectionId?: string;
@@ -768,10 +779,15 @@ export async function resolveOptions(
 export function dryRunResult(
   options: PlatformControlPlaneSmokeOptions,
 ): PlatformControlPlaneSmokeResult {
+  const generatedAt = new Date().toISOString();
+  const steps = requiredSteps(options);
   return {
     kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
     status: "dry_run",
-    generatedAt: new Date().toISOString(),
+    generatedAt,
+    startedAt: generatedAt,
+    finishedAt: generatedAt,
+    durationMs: 0,
     serviceUrl: options.url,
     scratchSpaceId: options.space,
     capsuleModule: capsuleLabel(options),
@@ -782,8 +798,14 @@ export function dryRunResult(
         : "space_scoped_provider_connection",
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
-    steps: requiredSteps(options),
-    completedSteps: requiredSteps(options),
+    steps,
+    completedSteps: steps,
+    stepTimings: steps.map((step) => ({
+      step,
+      startedAt: generatedAt,
+      finishedAt: generatedAt,
+      durationMs: 0,
+    })),
     appName: options.appName,
     environment: options.environment,
     ...(options.backupRestoreRehearsal
@@ -875,10 +897,31 @@ export function dryRunResult(
 export async function runPlatformControlPlaneSmoke(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<PlatformControlPlaneSmokeResult> {
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
   const spaceId = await resolveSpaceId(options);
   const completedSteps: string[] = [];
+  const stepTimings: SmokeStepTiming[] = [];
+  const stepStartedAtMs = new Map<string, number>();
+  const stepStartedAt = new Map<string, string>();
+  const beginStep = (step: string): void => {
+    if (stepStartedAtMs.has(step)) return;
+    const nowMs = Date.now();
+    stepStartedAtMs.set(step, nowMs);
+    stepStartedAt.set(step, new Date(nowMs).toISOString());
+  };
   const completeStep = (step: string): void => {
     if (!completedSteps.includes(step)) completedSteps.push(step);
+    if (stepTimings.some((timing) => timing.step === step)) return;
+    const finishedAtMs = Date.now();
+    const startedAtMsForStep = stepStartedAtMs.get(step) ?? finishedAtMs;
+    stepTimings.push({
+      step,
+      startedAt:
+        stepStartedAt.get(step) ?? new Date(startedAtMsForStep).toISOString(),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      durationMs: Math.max(0, finishedAtMs - startedAtMsForStep),
+    });
   };
   let connectionId: string | undefined;
   let providerConnectionId: string | undefined;
@@ -913,6 +956,8 @@ export async function runPlatformControlPlaneSmoke(
 
   try {
     if (options.cloudflareConnectionMode !== "none") {
+      beginStep("spaceScopedProviderConnection");
+      beginStep("connectionVerified");
       const connection = await createSpaceCloudflareConnection(
         options,
         spaceId,
@@ -921,17 +966,26 @@ export async function runPlatformControlPlaneSmoke(
       providerConnectionId = connection.providerConnectionId;
       completeStep("spaceScopedProviderConnection");
       if (options.cloudflareConnectionMode === "generic-env") {
+        beginStep("genericEnvProviderConnection");
         completeStep("genericEnvProviderConnection");
       }
       completeStep("connectionVerified");
     } else {
+      beginStep("providerConnectionNotRequired");
       completeStep("providerConnectionNotRequired");
     }
     if (options.cloudflareResourcePreflight !== "none") {
+      beginStep("cloudflareResourcePreflight");
       cloudflareResourcePreflight =
         await assertCloudflareResourcePreflight(options);
       completeStep("cloudflareResourcePreflight");
     }
+    if (options.sourceMode === "git") {
+      beginStep("sourceRegistered");
+      beginStep("sourceSynced");
+    }
+    beginStep("scratchInstall");
+    beginStep("plan");
     const deploy =
       options.sourceMode === "git"
         ? await deployGitSourceCapsule(options, {
@@ -952,11 +1006,12 @@ export async function runPlatformControlPlaneSmoke(
       completeStep("sourceSynced");
     }
     completeStep("scratchInstall");
-    completeStep("plan");
     capsuleGateStatus = "passed";
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
     policyStatus = publicPolicyStatus(completedPlan);
     assertRunSucceeded(completedPlan, "plan");
+    completeStep("plan");
+    beginStep("apply");
     const applyRun =
       deploy.applyRun ??
       (
@@ -973,6 +1028,7 @@ export async function runPlatformControlPlaneSmoke(
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     completeStep("apply");
+    beginStep("deploymentLedgerVerified");
     if (options.verificationMode === "cloudflare-worker") {
       deploymentLedger = await assertDeploymentLedger(options, {
         spaceId,
@@ -980,15 +1036,17 @@ export async function runPlatformControlPlaneSmoke(
         applyRunId,
       });
     } else {
-      completeStep("opentofuApplyVerified");
+      beginStep("opentofuApplyVerified");
       deploymentLedger = await assertGenericDeploymentLedger(options, {
         spaceId,
         installationId,
         applyRunId,
       });
+      completeStep("opentofuApplyVerified");
     }
     completeStep("deploymentLedgerVerified");
     if (options.requireReleaseActivation) {
+      beginStep("releaseActivationVerified");
       releaseActivation = await assertReleaseActivation(options, {
         spaceId,
         applyRunId,
@@ -997,8 +1055,10 @@ export async function runPlatformControlPlaneSmoke(
       completeStep("releaseActivationVerified");
     }
     if (options.verificationMode === "cloudflare-worker") {
+      beginStep("deploymentVerified");
       await assertCloudflareWorkerExists(options);
       completeStep("deploymentVerified");
+      beginStep("publicUrlVerified");
       if (options.publicUrlChecks.length > 0) {
         publicUrlChecks = await assertConfiguredPublicUrls(
           options,
@@ -1013,6 +1073,7 @@ export async function runPlatformControlPlaneSmoke(
       options.verificationMode === "opentofu" &&
       options.publicUrlChecks.length > 0
     ) {
+      beginStep("publicUrlVerified");
       publicUrlChecks = await assertConfiguredPublicUrls(
         options,
         deploymentLedger.outputsPublic,
@@ -1020,6 +1081,7 @@ export async function runPlatformControlPlaneSmoke(
       completeStep("publicUrlVerified");
     }
     if (options.backupRestoreRehearsal) {
+      beginStep("backupRestoreRehearsal");
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
         spaceId,
         installationId,
@@ -1027,6 +1089,7 @@ export async function runPlatformControlPlaneSmoke(
       completeStep("backupRestoreRehearsal");
     }
 
+    beginStep("destroy");
     const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
       baseUrl: options.url,
       token: options.accountSessionToken,
@@ -1065,6 +1128,7 @@ export async function runPlatformControlPlaneSmoke(
     completeStep("destroy");
 
     if (connectionId && !options.keepConnection) {
+      beginStep("connectionRevoked");
       connectionRevoked = await revokeConnection(options, connectionId);
       if (!connectionRevoked) {
         throw new Error(
@@ -1073,10 +1137,15 @@ export async function runPlatformControlPlaneSmoke(
       }
       completeStep("connectionRevoked");
     }
+    const finishedAtMs = Date.now();
+    const finishedAt = new Date(finishedAtMs).toISOString();
     return {
       kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
       status: "passed",
-      generatedAt: new Date().toISOString(),
+      generatedAt: finishedAt,
+      startedAt,
+      finishedAt,
+      durationMs: Math.max(0, finishedAtMs - startedAtMs),
       serviceUrl: options.url,
       scratchSpaceId: spaceId,
       capsuleModule: capsuleLabel(options),
@@ -1089,6 +1158,7 @@ export async function runPlatformControlPlaneSmoke(
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
       completedSteps,
+      stepTimings,
       appName: options.appName,
       environment: options.environment,
       connectionId,
@@ -1164,13 +1234,17 @@ export async function runPlatformControlPlaneSmoke(
       !connectionRevoked &&
       !connectionRevokeSkippedReason
     ) {
+      beginStep("connectionRevoked");
       connectionRevoked = await revokeConnection(options, connectionId);
       if (connectionRevoked) completeStep("connectionRevoked");
     }
   }
   return failedResult(options, {
+    startedAt,
+    startedAtMs,
     spaceId,
     completedSteps,
+    stepTimings,
     connectionId,
     providerConnectionId,
     installationId,
@@ -1201,8 +1275,11 @@ export async function runPlatformControlPlaneSmoke(
 function failedResult(
   options: PlatformControlPlaneSmokeOptions,
   input: {
+    readonly startedAt: string;
+    readonly startedAtMs: number;
     readonly spaceId: string;
     readonly completedSteps: readonly string[];
+    readonly stepTimings: readonly SmokeStepTiming[];
     readonly connectionId?: string;
     readonly providerConnectionId?: string;
     readonly sourceId?: string;
@@ -1232,10 +1309,15 @@ function failedResult(
     readonly error: unknown;
   },
 ): PlatformControlPlaneSmokeResult {
+  const finishedAtMs = Date.now();
+  const finishedAt = new Date(finishedAtMs).toISOString();
   return {
     kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
     status: "failed",
-    generatedAt: new Date().toISOString(),
+    generatedAt: finishedAt,
+    startedAt: input.startedAt,
+    finishedAt,
+    durationMs: Math.max(0, finishedAtMs - input.startedAtMs),
     serviceUrl: options.url,
     scratchSpaceId: input.spaceId,
     capsuleModule: capsuleLabel(options),
@@ -1248,6 +1330,7 @@ function failedResult(
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     completedSteps: input.completedSteps,
+    stepTimings: input.stepTimings,
     appName: options.appName,
     environment: options.environment,
     connectionId: input.connectionId,
@@ -3992,9 +4075,14 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("self-test result is missing release activation evidence");
   }
+  const failedStartedAtMs = Date.now();
+  const failedStartedAt = new Date(failedStartedAtMs).toISOString();
   const failed = failedResult(options, {
+    startedAt: failedStartedAt,
+    startedAtMs: failedStartedAtMs,
     spaceId: "space_selftest",
     completedSteps: [],
+    stepTimings: [],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
@@ -4017,8 +4105,24 @@ async function runSelfTest(): Promise<void> {
     throw new Error("self-test leaked secret-looking failure details");
   }
   const deployTimeout = failedResult(options, {
+    startedAt: failedStartedAt,
+    startedAtMs: failedStartedAtMs,
     spaceId: "space_selftest",
     completedSteps: ["spaceScopedProviderConnection", "connectionVerified"],
+    stepTimings: [
+      {
+        step: "spaceScopedProviderConnection",
+        startedAt: failedStartedAt,
+        finishedAt: failedStartedAt,
+        durationMs: 0,
+      },
+      {
+        step: "connectionVerified",
+        startedAt: failedStartedAt,
+        finishedAt: failedStartedAt,
+        durationMs: 0,
+      },
+    ],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
