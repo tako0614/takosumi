@@ -25,7 +25,7 @@ import type {
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
-import type { CloudflareWorkerEnv } from "./bindings.ts";
+import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { createCloudflareD1DeployStores } from "./d1_deploy_stores.ts";
 import { createCloudflareD1OpenTofuDeploymentStore } from "./d1_opentofu_store.ts";
 import { CloudflareD1SnapshotStorageDriver } from "./d1_storage.ts";
@@ -66,8 +66,9 @@ export async function createWorkerServiceApp(
     runtimeEnv,
     storage,
   });
-  const enqueueRun = openTofuRunEnqueuer(env);
-  const enqueueSourceSync = openTofuSourceSyncEnqueuer(env);
+  const enqueueRun = openTofuRunOwnerEnqueuer(env) ?? openTofuRunEnqueuer(env);
+  const enqueueSourceSync =
+    openTofuRunOwnerSourceSyncEnqueuer(env) ?? openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
   const opentofuRunner = new CloudflareContainerOpenTofuRunner(env, {
     observability: adapters.observability,
@@ -255,10 +256,84 @@ function durableObjectInstallationCoordination(
 }
 
 /**
- * Builds the producer half of the async run lifecycle: enqueues a
- * run-dispatch message onto `RUN_QUEUE`. Returns undefined when
- * the queue is not bound, so the controller falls back to its inline dispatcher.
- * The message carries only the run identity (never variables or credentials).
+ * Fast async run lifecycle: schedule the per-run owner DO directly when the
+ * binding exists. The owner already persists only run identity, owns retries,
+ * and performs long dispatch from its alarm, so routing through Queue first only
+ * adds delivery latency on the first deploy path.
+ */
+function openTofuRunOwnerEnqueuer(
+  env: CloudflareWorkerEnv,
+): EnqueueRun | undefined {
+  if (!env.RUN_OWNER) return undefined;
+  return async (dispatch) => {
+    await scheduleOpenTofuRunOwner(env, {
+      action: dispatch.action,
+      runId: dispatch.runId,
+      spaceId: dispatch.spaceId,
+      messageId: directRunOwnerMessageId(dispatch.runId),
+      queueAttempt: 1,
+    });
+  };
+}
+
+function openTofuRunOwnerSourceSyncEnqueuer(
+  env: CloudflareWorkerEnv,
+): EnqueueSourceSync | undefined {
+  if (!env.RUN_OWNER) return undefined;
+  return async (dispatch) => {
+    await scheduleOpenTofuRunOwner(env, {
+      action: "source_sync",
+      runId: dispatch.runId,
+      spaceId: dispatch.spaceId,
+      messageId: directRunOwnerMessageId(dispatch.runId),
+      queueAttempt: 1,
+    });
+  };
+}
+
+async function scheduleOpenTofuRunOwner(
+  env: CloudflareWorkerEnv,
+  dispatch: {
+    readonly action: OpenTofuRunAction;
+    readonly runId: string;
+    readonly spaceId: string;
+    readonly queueAttempt: number;
+    readonly messageId: string;
+  },
+): Promise<void> {
+  const namespace = env.RUN_OWNER;
+  if (!namespace) {
+    throw new Error("RUN_OWNER binding is not configured");
+  }
+  const response = await namespace
+    .get(namespace.idFromName(dispatch.runId))
+    .fetch(
+      new Request("https://opentofu-run-owner/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run-owner.start@v1",
+          action: dispatch.action,
+          runId: dispatch.runId,
+          spaceId: dispatch.spaceId,
+          queueAttempt: dispatch.queueAttempt,
+          messageId: dispatch.messageId,
+        }),
+      }),
+    );
+  if (!response.ok) {
+    throw new Error("opentofu run owner scheduling failed");
+  }
+}
+
+function directRunOwnerMessageId(runId: string): string {
+  return `direct:${runId}:${Date.now().toString(36)}`;
+}
+
+/**
+ * Queue fallback for async run lifecycle. Used only when RUN_OWNER is absent
+ * but RUN_QUEUE is still bound. The message carries only the run identity
+ * (never variables or credentials).
  */
 function openTofuRunEnqueuer(env: CloudflareWorkerEnv): EnqueueRun | undefined {
   const queue = env.RUN_QUEUE;
