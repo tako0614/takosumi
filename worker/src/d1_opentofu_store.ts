@@ -610,31 +610,34 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   // -- Installation -----------------------------------------------------------
 
   async putInstallation(installation: Installation): Promise<Installation> {
+    const normalized = normalizeInstallationRecord(installation);
     await this.#drizzleUpsert(schema.installations, {
-      id: installation.id,
-      spaceId: installation.spaceId,
-      name: installation.name,
-      slug: installation.slug,
-      sourceId: installation.sourceId ?? null,
-      installType: installation.installType,
-      installConfigId: installation.installConfigId,
-      environment: installation.environment,
-      currentDeploymentId: installation.currentDeploymentId ?? null,
-      currentStateGeneration: installation.currentStateGeneration,
-      currentOutputSnapshotId: installation.currentOutputSnapshotId ?? null,
-      status: installation.status,
-      recordJson: installation,
-      createdAt: installation.createdAt,
-      updatedAt: installation.updatedAt,
+      id: normalized.id,
+      spaceId: normalized.workspaceId,
+      name: normalized.name,
+      slug: normalized.slug,
+      sourceId: normalized.sourceId ?? null,
+      installType: normalized.installType,
+      installConfigId: normalized.installConfigId,
+      environment: normalized.environment,
+      currentDeploymentId: normalized.currentDeploymentId ?? null,
+      currentStateGeneration: normalized.currentStateGeneration,
+      currentOutputSnapshotId: normalized.currentOutputSnapshotId ?? null,
+      status: normalized.status,
+      recordJson: normalized,
+      createdAt: normalized.createdAt,
+      updatedAt: normalized.updatedAt,
     });
-    return installation;
+    return normalized;
   }
 
   async getInstallation(id: string): Promise<Installation | undefined> {
-    return await this.#drizzleFirstJson<Installation>(
-      schema.installations,
-      schema.installations.recordJson,
-      eq(schema.installations.id, id),
+    return normalizeOptionalInstallationRecord(
+      await this.#drizzleFirstJson<Installation>(
+        schema.installations,
+        schema.installations.recordJson,
+        eq(schema.installations.id, id),
+      ),
     );
   }
 
@@ -643,32 +646,36 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     name: string,
     environment: string,
   ): Promise<Installation | undefined> {
-    return await this.#drizzleFirstJson<Installation>(
-      schema.installations,
-      schema.installations.recordJson,
-      and(
-        eq(schema.installations.spaceId, spaceId),
-        eq(schema.installations.name, name),
-        eq(schema.installations.environment, environment),
+    return normalizeOptionalInstallationRecord(
+      await this.#drizzleFirstJson<Installation>(
+        schema.installations,
+        schema.installations.recordJson,
+        and(
+          eq(schema.installations.spaceId, spaceId),
+          eq(schema.installations.name, name),
+          eq(schema.installations.environment, environment),
+        ),
       ),
     );
   }
 
   async listInstallations(spaceId?: string): Promise<readonly Installation[]> {
-    return await this.#drizzleManyJson<Installation>(
-      schema.installations,
-      schema.installations.recordJson,
-      {
-        where:
-          spaceId === undefined
-            ? undefined
-            : eq(schema.installations.spaceId, spaceId),
-        orderBy: [
-          asc(schema.installations.createdAt),
-          asc(schema.installations.id),
-        ],
-      },
-    );
+    return (
+      await this.#drizzleManyJson<Installation>(
+        schema.installations,
+        schema.installations.recordJson,
+        {
+          where:
+            spaceId === undefined
+              ? undefined
+              : eq(schema.installations.spaceId, spaceId),
+          orderBy: [
+            asc(schema.installations.createdAt),
+            asc(schema.installations.id),
+          ],
+        },
+      )
+    ).map(normalizeInstallationRecord);
   }
 
   async listInstallationsPage(
@@ -693,7 +700,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows, limit);
+    return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
   }
 
   async patchInstallation(
@@ -728,7 +735,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         currentStateGeneration: updated.currentStateGeneration,
         currentOutputSnapshotId: updated.currentOutputSnapshotId ?? null,
         status: updated.status,
-        recordJson: updated,
+        recordJson: normalizeInstallationRecord(updated),
         updatedAt: updated.updatedAt,
       })
       .where(
@@ -746,7 +753,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         ),
       )
       .run();
-    if (changes(result as D1Result) > 0) return updated;
+    if (changes(result as D1Result) > 0) {
+      return normalizeInstallationRecord(updated);
+    }
     const actual = await this.getInstallation(id);
     if (!actual) return undefined;
     throw new InstallationPatchGuardConflict({
@@ -1269,54 +1278,61 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
+    const normalized = normalizeSourceSnapshotRecord(snapshot);
     await this.#drizzleUpsert(schema.sourceSnapshots, {
-      id: snapshot.id,
-      sourceId: snapshot.sourceId ?? null,
-      recordJson: snapshot,
-      fetchedAt: snapshot.fetchedAt,
+      id: normalized.id,
+      sourceId: normalized.sourceId ?? null,
+      recordJson: normalized,
+      fetchedAt: normalized.fetchedAt,
     });
-    return snapshot;
+    return normalized;
   }
 
   async getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
-    return await this.#drizzleFirstJson<SourceSnapshot>(
-      schema.sourceSnapshots,
-      schema.sourceSnapshots.recordJson,
-      eq(schema.sourceSnapshots.id, id),
+    return normalizeOptionalSourceSnapshotRecord(
+      await this.#drizzleFirstJson<SourceSnapshot>(
+        schema.sourceSnapshots,
+        schema.sourceSnapshots.recordJson,
+        eq(schema.sourceSnapshots.id, id),
+      ),
     );
   }
 
   async listSourceSnapshots(
     sourceId: string,
   ): Promise<readonly SourceSnapshot[]> {
-    return await this.#drizzleManyJson<SourceSnapshot>(
-      schema.sourceSnapshots,
-      schema.sourceSnapshots.recordJson,
-      {
-        where: eq(schema.sourceSnapshots.sourceId, sourceId),
-        orderBy: [
-          asc(schema.sourceSnapshots.fetchedAt),
-          asc(schema.sourceSnapshots.id),
-        ],
-      },
-    );
+    return (
+      await this.#drizzleManyJson<SourceSnapshot>(
+        schema.sourceSnapshots,
+        schema.sourceSnapshots.recordJson,
+        {
+          where: eq(schema.sourceSnapshots.sourceId, sourceId),
+          orderBy: [
+            asc(schema.sourceSnapshots.fetchedAt),
+            asc(schema.sourceSnapshots.id),
+          ],
+        },
+      )
+    ).map(normalizeSourceSnapshotRecord);
   }
 
   async listSourceSnapshotsBySourceIds(
     sourceIds: readonly string[],
   ): Promise<readonly SourceSnapshot[]> {
     if (sourceIds.length === 0) return [];
-    return await this.#drizzleManyJson<SourceSnapshot>(
-      schema.sourceSnapshots,
-      schema.sourceSnapshots.recordJson,
-      {
-        where: inArray(schema.sourceSnapshots.sourceId, [...sourceIds]),
-        orderBy: [
-          asc(schema.sourceSnapshots.fetchedAt),
-          asc(schema.sourceSnapshots.id),
-        ],
-      },
-    );
+    return (
+      await this.#drizzleManyJson<SourceSnapshot>(
+        schema.sourceSnapshots,
+        schema.sourceSnapshots.recordJson,
+        {
+          where: inArray(schema.sourceSnapshots.sourceId, [...sourceIds]),
+          orderBy: [
+            asc(schema.sourceSnapshots.fetchedAt),
+            asc(schema.sourceSnapshots.id),
+          ],
+        },
+      )
+    ).map(normalizeSourceSnapshotRecord);
   }
 
   async listSourceSnapshotsPage(
@@ -1341,10 +1357,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         limit: limit + 1,
       },
     );
-    return pageFromProbeBy(rows, limit, (s) => ({
-      createdAt: s.fetchedAt,
-      id: s.id,
-    }));
+    return pageFromProbeBy(
+      rows.map(normalizeSourceSnapshotRecord),
+      limit,
+      (s) => ({
+        createdAt: s.fetchedAt,
+        id: s.id,
+      }),
+    );
   }
 
   async putCapsuleCompatibilityReport(
@@ -3373,6 +3393,45 @@ function creditAmountUsdMicros(input: CreditAmountInput): number {
     throw new TypeError("usdMicros must be a positive integer");
   }
   return legacyCreditsToUsdMicros(input.credits);
+}
+
+function workspaceKeyOf(scope: {
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+}): string {
+  return scope.workspaceId ?? scope.spaceId ?? "";
+}
+
+function normalizeOptionalInstallationRecord(
+  installation: Installation | undefined,
+): Installation | undefined {
+  return installation ? normalizeInstallationRecord(installation) : undefined;
+}
+
+function normalizeInstallationRecord(installation: Installation): Installation {
+  const workspaceId = workspaceKeyOf(installation);
+  return {
+    ...installation,
+    workspaceId,
+    spaceId: workspaceId,
+  };
+}
+
+function normalizeOptionalSourceSnapshotRecord(
+  snapshot: SourceSnapshot | undefined,
+): SourceSnapshot | undefined {
+  return snapshot ? normalizeSourceSnapshotRecord(snapshot) : undefined;
+}
+
+function normalizeSourceSnapshotRecord(
+  snapshot: SourceSnapshot,
+): SourceSnapshot {
+  const workspaceId = workspaceKeyOf(snapshot);
+  return {
+    ...snapshot,
+    workspaceId,
+    spaceId: workspaceId,
+  };
 }
 
 function normalizeCreditBalance(balance: CreditBalance): CreditBalance {

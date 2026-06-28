@@ -104,8 +104,10 @@ import {
 } from "./http-helpers.ts";
 import {
   handleStripeBillingCheckout,
+  handleStripeBillingPortal,
   TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
   type StripeBillingCheckoutOptions,
 } from "./billing-checkout.ts";
 import { base64UrlEncodeBytes, constantTimeEqual } from "./encoding.ts";
@@ -798,6 +800,27 @@ export function createAccountsHandler(
         store,
         operations: options.controlPlaneOperations,
         checkout: options.billingCheckout,
+      });
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      if (!options.billingCheckout) {
+        return errorJson(
+          "feature_unavailable",
+          "Stripe billing portal is not configured.",
+          503,
+          request,
+        );
+      }
+      if (!billingCheckoutSmokeAllowed(request, options.billingCheckout)) {
+        const blocked = platformAccessBlocked(options.platformAccess);
+        if (blocked) return blocked;
+      }
+      return await handleStripeBillingPortal({
+        request,
+        store,
+        portal: options.billingCheckout,
       });
     }
 
